@@ -1,0 +1,153 @@
+package mmu
+
+import (
+	"github.com/sarchlab/akita/v3/mem/mem"
+	"github.com/sarchlab/akita/v3/mem/vm"
+	"github.com/sarchlab/akita/v3/sim"
+)
+
+// A Builder can build MMU component
+type Builder struct {
+	engine                   sim.Engine
+	freq                     sim.Freq
+	log2PageSize             uint64
+	pageTable                vm.PageTable
+	migrationServiceProvider sim.Port
+	maxNumReqInFlight        int
+	pageWalkingLatency       int
+	InnerLoop                map[uint64]uint64
+	MiddleLoop               map[uint64]uint64
+	topModule                sim.Port
+	walkCoalescingEnabled    bool
+	// GMMUCacheTable           map[uint64]sim.Port
+	GMMUCacheTable *mem.MultiPageFinder
+}
+
+// MakeBuilder creates a new builder
+func MakeBuilder() Builder {
+	return Builder{
+		freq:                  1 * sim.GHz,
+		log2PageSize:          12,
+		maxNumReqInFlight:     16,
+		walkCoalescingEnabled: true,
+	}
+}
+
+// WithTopModule sets the top module that the MMU is attached to.
+func (b Builder) WithMMUTopModule(topModule sim.Port) Builder {
+	b.topModule = topModule
+	return b
+}
+
+func (b Builder) WithInnerLoop(innerLoop map[uint64]uint64) Builder {
+	b.InnerLoop = innerLoop
+	return b
+}
+
+func (b Builder) WithMiddleLoop(middleLoop map[uint64]uint64) Builder {
+	b.MiddleLoop = middleLoop
+	return b
+}
+
+func (b Builder) WithGMMUCacheTable(gmmuCacheTable *mem.MultiPageFinder) Builder {
+	b.GMMUCacheTable = gmmuCacheTable
+	return b
+}
+
+func (b Builder) WithL2TLBTable(l2TLBTable *mem.MultiPageFinder) Builder {
+	b.GMMUCacheTable = l2TLBTable
+	return b
+}
+
+func (b Builder) WithWalkCoalescing(enabled bool) Builder {
+	b.walkCoalescingEnabled = enabled
+	return b
+}
+
+// WithEngine sets the engine to be used with the MMU
+func (b Builder) WithEngine(engine sim.Engine) Builder {
+	b.engine = engine
+	return b
+}
+
+// WithFreq sets the frequency that the MMU to work at
+func (b Builder) WithFreq(freq sim.Freq) Builder {
+	b.freq = freq
+	return b
+}
+
+// WithLog2PageSize sets the page size that the mmu support.
+func (b Builder) WithLog2PageSize(log2PageSize uint64) Builder {
+	b.log2PageSize = log2PageSize
+	return b
+}
+
+// WithPageTable sets the page table that the MMU uses.
+func (b Builder) WithPageTable(pageTable vm.PageTable) Builder {
+	b.pageTable = pageTable
+	return b
+}
+
+// WithMigrationServiceProvider sets the destination port that can perform
+// page migration.
+func (b Builder) WithMigrationServiceProvider(p sim.Port) Builder {
+	b.migrationServiceProvider = p
+	return b
+}
+
+// WithMaxNumReqInFlight sets the number of requests can be concurrently
+// processed by the MMU.
+func (b Builder) WithMaxNumReqInFlight(n int) Builder {
+	b.maxNumReqInFlight = n
+	return b
+}
+
+// WithPageWalkingLatency sets the number of cycles required for walking a page
+// table.
+func (b Builder) WithPageWalkingLatency(n int) Builder {
+	b.pageWalkingLatency = n
+	return b
+}
+
+// Build returns a newly created MMU component
+func (b Builder) Build(name string) *MMU {
+	mmu := new(MMU)
+	mmu.TickingComponent = *sim.NewTickingComponent(
+		name, b.engine, b.freq, mmu)
+
+	b.createPorts(name, mmu)
+	b.createPageTable(mmu)
+	b.configureInternalStates(mmu)
+
+	return mmu
+}
+
+func (b Builder) configureInternalStates(mmu *MMU) {
+	mmu.MigrationServiceProvider = b.migrationServiceProvider
+	mmu.migrationQueueSize = 4096
+	mmu.maxRequestsInFlight = b.maxNumReqInFlight
+	mmu.latency = b.pageWalkingLatency
+	mmu.PageAccessedByDeviceID = make(map[uint64][]uint64)
+	mmu.GMMUCacheTable = b.GMMUCacheTable
+	mmu.TopModule = b.topModule
+	mmu.log2PageSize = b.log2PageSize
+	mmu.walkCoalescingEnabled = b.walkCoalescingEnabled
+}
+
+func (b Builder) createPageTable(mmu *MMU) {
+	if b.pageTable != nil {
+		mmu.pageTable = b.pageTable
+	} else {
+		mmu.pageTable = vm.NewPageTable(b.log2PageSize)
+	}
+}
+
+func (b Builder) createPorts(name string, mmu *MMU) {
+	mmu.topPort = sim.NewLimitNumMsgPort(mmu, 4096, name+".ToTop")
+	mmu.AddPort("Top", mmu.topPort)
+	mmu.migrationPort = sim.NewLimitNumMsgPort(mmu, 1, name+".MigrationPort")
+	mmu.AddPort("Migration", mmu.migrationPort)
+
+	mmu.topSender = sim.NewBufferedSender(
+		mmu.topPort, sim.NewBuffer(name+".TopSenderBuffer", 4096))
+}

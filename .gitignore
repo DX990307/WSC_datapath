@@ -1,0 +1,22 @@
+# Build outputs
+akkalat/baseline/baseline
+akkalat/baseline/*.test
+**/*.test
+
+# Experiment outputs
+akkalat/results/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Editor and OS files
+.DS_Store
+.vscode/
+.git/
+
+# Go workspace cache/artifacts
+.gocache/
+**/.gocache/
+bin/
+dist/
