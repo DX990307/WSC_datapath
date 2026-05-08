@@ -26,6 +26,7 @@ type EmuGPUBuilder struct {
 	log2PageSize     uint64
 	memOffset        uint64
 	memCapacity      uint64
+	gpuID            uint64
 	gpuName          string
 	gpu              *sim.Domain
 	storage          *mem.Storage
@@ -103,6 +104,11 @@ func (b EmuGPUBuilder) WithMemTracing() EmuGPUBuilder {
 	return b
 }
 
+func (b EmuGPUBuilder) WithGPUID(gpuID uint64) EmuGPUBuilder {
+	b.gpuID = gpuID
+	return b
+}
+
 // Build creates a very simple GPU for emulation purposes
 func (b EmuGPUBuilder) Build(name string) *GPU {
 	b.clear()
@@ -114,6 +120,7 @@ func (b EmuGPUBuilder) Build(name string) *GPU {
 	b.populateExternalPorts()
 
 	return &GPU{
+		GPUID:            b.gpuID,
 		Domain:           b.gpu,
 		CommandProcessor: b.commandProcessor,
 	}
@@ -175,6 +182,7 @@ func (b *EmuGPUBuilder) buildGPU() {
 	b.commandProcessor = cp.MakeBuilder().
 		WithEngine(b.engine).
 		WithFreq(1 * sim.GHz).
+		WithGPUID(b.gpuID).
 		Build(b.gpuName + ".CommandProcessor")
 
 	b.gpu = sim.NewDomain(b.gpuName)

@@ -60,4 +60,3 @@ func loadKernel(hsaco **insts.HsaCo, kernelBytes []byte, name string) {
 // 	// o.driver.Remap(o.ctx, uint64(t.ptr), uint64(t.NumElement()*sizeOfFloat32), gpuid)
 
 // 	return t
-}

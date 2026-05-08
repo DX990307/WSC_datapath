@@ -3,6 +3,7 @@ package kernels
 import (
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/mgpusim/v3/insts"
+	"github.com/sarchlab/mgpusim/v3/profiler"
 )
 
 // A Grid is a running instance of a kernel.
@@ -57,6 +58,13 @@ type Wavefront struct {
 	InitExecMask  uint64
 
 	WorkItems []*WorkItem
+
+	Skip       bool
+	Predtime   sim.VTimeInSec
+	Issuetime  sim.VTimeInSec
+	Finishtime sim.VTimeInSec
+	WfFeature  *profiler.WavefrontFeature
+	Wf_feature *profiler.WavefrontFeature
 }
 
 // NewWavefront returns a new Wavefront.
@@ -64,6 +72,8 @@ func NewWavefront() *Wavefront {
 	wf := new(Wavefront)
 	wf.UID = sim.GetIDGenerator().Generate()
 	wf.WorkItems = make([]*WorkItem, 0, 64)
+	wf.WfFeature = new(profiler.WavefrontFeature)
+	wf.Wf_feature = wf.WfFeature
 	return wf
 }
 

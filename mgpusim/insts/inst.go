@@ -331,8 +331,9 @@ func (i Inst) dsString() string {
 	return s
 }
 
-//nolint:gocyclo
 // String returns the disassembly of an instruction
+//
+//nolint:gocyclo
 func (i Inst) String(file *elf.File) string {
 	switch i.FormatType {
 	case SOP2:
@@ -364,5 +365,21 @@ func (i Inst) String(file *elf.File) string {
 	default:
 		log.Panic("Unknown instruction format type.")
 		return i.InstName
+	}
+}
+
+// InstWidth returns the number of logical instruction slots represented by an
+// instruction for sampling/profiling purposes.
+func (i Inst) InstWidth() uint32 {
+	const vectorSize = 1
+
+	switch i.FormatType {
+	case SOP1, SOP2, SOPC, SOPK, SOPP, SMEM:
+		return 1
+	case VOP1, VOP2, VOP3a, VOP3b, VOPC, FLAT, DS:
+		return vectorSize
+	default:
+		log.Panic("Unknown instruction format type.")
+		return vectorSize
 	}
 }

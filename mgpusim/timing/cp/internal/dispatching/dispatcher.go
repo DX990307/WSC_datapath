@@ -7,8 +7,10 @@ import (
 	"github.com/sarchlab/akita/v3/monitoring"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
+	"github.com/sarchlab/mgpusim/v3/emu"
 	"github.com/sarchlab/mgpusim/v3/kernels"
 	"github.com/sarchlab/mgpusim/v3/protocol"
+	"github.com/sarchlab/mgpusim/v3/samples/sampledrunner"
 	"github.com/sarchlab/mgpusim/v3/timing/cp/internal/resource"
 )
 
@@ -28,6 +30,7 @@ type DispatcherImpl struct {
 
 	cp                     tracing.NamedHookable
 	name                   string
+	gpuID                  uint64
 	respondingPort         sim.Port
 	dispatchingPort        sim.Port
 	alg                    algorithm
@@ -36,6 +39,8 @@ type DispatcherImpl struct {
 	cycleLeft              int
 	numDispatchedWGs       int
 	numCompletedWGs        int
+	numDispatchedWFs       uint64
+	numCompletedWFs        uint64
 	inflightWGs            map[string]dispatchLocation
 	originalReqs           map[string]*protocol.MapWGReq
 	latencyTable           []int
@@ -60,20 +65,164 @@ func (d *DispatcherImpl) IsDispatching() bool {
 	return d.dispatching != nil
 }
 
+func (d *DispatcherImpl) staticAnalysisKernelSampled() {
+	if !*sampledrunner.BranchSampledFlag {
+		return
+	}
+
+	staticCU := emu.StaticComputeUnitForGPU(d.gpuID)
+	if staticCU == nil {
+		sampledrunner.PhotonDebugf(
+			fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+			"branch static analysis skipped: no static compute unit")
+		return
+	}
+	if d.alg.NumWG() == 0 {
+		sampledrunner.PhotonDebugf(
+			fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+			"branch static analysis skipped: no workgroups")
+		return
+	}
+
+	currWG := d.alg.Next()
+	if !currWG.valid {
+		sampledrunner.PhotonDebugf(
+			fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+			"branch static analysis skipped: no dispatchable WG")
+		return
+	}
+	defer d.alg.FreeResources(currWG)
+
+	reqBuilder := protocol.MapWGReqBuilder{}.
+		WithWG(currWG.wg).
+		WithPID(d.dispatching.PID)
+	for _, l := range currWG.locations {
+		reqBuilder = reqBuilder.AddWf(l)
+	}
+
+	staticCU.Reset()
+	staticCU.AnalysisKernel(reqBuilder.Build())
+	if branchEngine := sampledrunner.BranchSampledEngineForGPU(d.gpuID); branchEngine != nil {
+		branchEngine.SetStaticComputeUnit(staticCU)
+	}
+	sampledrunner.PhotonDebugf(
+		fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+		"branch static analysis complete bbls=%d",
+		len(staticCU.Bbvset))
+}
+
+func (d *DispatcherImpl) analysisKernelSampled() (wgNumToSkip, wfPerWG uint64) {
+	if emu.Bbvcomputeunit == nil {
+		sampledrunner.PhotonDebugf(
+			fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+			"sample analysis skipped: no BBV compute unit")
+		return 0, 0
+	}
+
+	numWG := uint64(d.alg.NumWG())
+	var analyzedWGs uint64
+	for wgIdx := uint64(0); d.alg.HasNext(); wgIdx++ {
+		currWG := d.alg.Next()
+		if !currWG.valid {
+			break
+		}
+		stopAfterWG := false
+
+		if wfPerWG == 0 {
+			wfPerWG = uint64(len(currWG.locations))
+			emu.Bbvcomputeunit.Wfnum = numWG * wfPerWG
+		}
+
+		if wgIdx%100 == 0 {
+			reqBuilder := protocol.MapWGReqBuilder{}.
+				WithWG(currWG.wg).
+				WithPID(d.dispatching.PID)
+			for _, l := range currWG.locations {
+				reqBuilder = reqBuilder.AddWf(l)
+			}
+
+			emu.Bbvcomputeunit.RunWG(reqBuilder.Build())
+			analyzedWGs++
+			stopAfterWG = (*sampledrunner.BranchSampledFlag ||
+				*sampledrunner.SampledRunnerFlag) &&
+				wgIdx > *sampledrunner.KernelSampledThreshold
+		}
+
+		d.alg.FreeResources(currWG)
+
+		if stopAfterWG {
+			break
+		}
+	}
+
+	bbvs := emu.Bbvcomputeunit.GetAllonlineBBVs()
+	if branchEngine := sampledrunner.BranchSampledEngineForGPU(d.gpuID); branchEngine != nil {
+		branchEngine.Analysis(bbvs)
+	}
+
+	if wfPerWG > 0 && *sampledrunner.KernelSampledFlag {
+		if kernelEngine := sampledrunner.KernelSampledEngineForGPU(d.gpuID); kernelEngine != nil {
+			wfNumToSkip := kernelEngine.Analysis(bbvs, numWG*wfPerWG)
+			wgNumToSkip = wfNumToSkip / wfPerWG
+		}
+	}
+
+	sampledrunner.PhotonDebugf(
+		fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+		"sample analysis complete analyzedWGs=%d bbvs=%d wfPerWG=%d wgSkip=%d",
+		analyzedWGs,
+		len(bbvs),
+		wfPerWG,
+		wgNumToSkip)
+	return wgNumToSkip, wfPerWG
+}
+
 // StartDispatching lets the dispatcher to start dispatch another kernel.
 func (d *DispatcherImpl) StartDispatching(req *protocol.LaunchKernelReq) {
 	d.mustNotBeDispatchingAnotherKernel()
 
-	d.alg.StartNewKernel(kernels.KernelLaunchInfo{
+	info := kernels.KernelLaunchInfo{
 		CodeObject: req.HsaCo,
 		Packet:     req.Packet,
 		PacketAddr: req.PacketAddress,
 		WGFilter:   req.WGFilter,
-	})
+	}
+	d.alg.StartNewKernel(info)
 	d.dispatching = req
+
+	if *sampledrunner.SampledRunnerFlag ||
+		*sampledrunner.BranchSampledFlag ||
+		*sampledrunner.KernelSampledFlag {
+		packet := info.Packet
+		workgroupSize := int(packet.WorkgroupSizeX) *
+			int(packet.WorkgroupSizeY) *
+			int(packet.WorkgroupSizeZ)
+		wfNums := d.alg.NumWG() * workgroupSize / 64
+		if sampledTimeEngine := sampledrunner.SampledTimeEngineForGPU(d.gpuID); sampledTimeEngine != nil {
+			sampledTimeEngine.SetTargetCompletedWfs(uint64(wfNums))
+		}
+	}
+
+	if *sampledrunner.BranchSampledFlag {
+		d.staticAnalysisKernelSampled()
+		d.alg.StartNewKernel(info)
+	}
+
+	kernelEngine := sampledrunner.KernelSampledEngineForGPU(d.gpuID)
+	shouldAnalyze := *sampledrunner.BranchSampledFlag ||
+		(*sampledrunner.KernelSampledFlag &&
+			kernelEngine != nil &&
+			kernelEngine.HistorySize() > 0)
+	if shouldAnalyze &&
+		uint64(d.alg.NumWG()) > *sampledrunner.KernelSampledThreshold {
+		d.analysisKernelSampled()
+		d.alg.StartNewKernel(info)
+	}
 
 	d.numDispatchedWGs = 0
 	d.numCompletedWGs = 0
+	d.numDispatchedWFs = 0
+	d.numCompletedWFs = 0
 
 	d.initializeProgressBar(req.ID)
 }
@@ -140,6 +289,7 @@ func (d *DispatcherImpl) processMessagesFromCU(now sim.VTimeInSec) bool {
 			d.alg.FreeResources(location)
 			delete(d.inflightWGs, rspToID)
 			d.numCompletedWGs++
+			d.numCompletedWFs += uint64(len(location.locations))
 			if d.numCompletedWGs == d.alg.NumWG() {
 				d.cycleLeft = d.constantKernelOverhead
 			}
@@ -208,6 +358,11 @@ func (d *DispatcherImpl) completeKernel(now sim.VTimeInSec) (
 		}
 
 		tracing.TraceReqComplete(req, d.cp)
+		if (*sampledrunner.BranchSampledFlag ||
+			*sampledrunner.KernelSampledFlag) &&
+			emu.Bbvcomputeunit != nil {
+			emu.Bbvcomputeunit.FFlush()
+		}
 
 		return true
 	}
@@ -220,13 +375,16 @@ func (d *DispatcherImpl) dispatchNextWG(
 ) (madeProgress bool) {
 	if !d.currWG.valid {
 		if !d.alg.HasNext() {
+			d.enableDisabledSampleEngines()
 			return false
 		}
 
 		d.currWG = d.alg.Next()
 		if !d.currWG.valid {
+			d.enableDisabledSampleEngines()
 			return false
 		}
+		d.enableDisabledSampleEngines()
 	}
 
 	reqBuilder := protocol.MapWGReqBuilder{}.
@@ -235,7 +393,59 @@ func (d *DispatcherImpl) dispatchNextWG(
 		WithSendTime(now).
 		WithPID(d.dispatching.PID).
 		WithWG(d.currWG.wg)
-	for _, l := range d.currWG.locations {
+
+	wfIntervalTime := sim.VTimeInSec(0)
+	wfSkip := false
+	sampledEngine := sampledrunner.SampledEngineForGPU(d.gpuID)
+	if *sampledrunner.SampledRunnerFlag && sampledEngine != nil {
+		wfIntervalTime, wfSkip = sampledEngine.Predict()
+		if wfSkip {
+			sampledrunner.PhotonDebugf(
+				fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+				"wf sampled dispatch prediction skip=true pred=%.3fns",
+				wfIntervalTime*1e9)
+		} else {
+			sampledrunner.PhotonVerbosef(
+				fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+				"wf sampled dispatch prediction skip=false pred=%.3fns",
+				wfIntervalTime*1e9)
+		}
+	}
+
+	kernelSkip := false
+	kernelEngine := sampledrunner.KernelSampledEngineForGPU(d.gpuID)
+	if *sampledrunner.KernelSampledFlag &&
+		kernelEngine != nil {
+		kernelSkip = kernelEngine.EnableSampled()
+		if kernelSkip {
+			sampledrunner.PhotonDebugf(
+				fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+				"kernel sampled dispatch enabled")
+		} else {
+			sampledrunner.PhotonVerbosef(
+				fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+				"kernel sampled dispatch disabled")
+		}
+	}
+
+	for idx, l := range d.currWG.locations {
+		skip := kernelSkip
+		intervalTime := sim.VTimeInSec(0)
+		if kernelSkip {
+			wfIdx := uint64(idx + d.numDispatchedWGs*len(d.currWG.locations))
+			intervalTime, _ = kernelEngine.Predict(wfIdx)
+			sampledrunner.PhotonDebugf(
+				fmt.Sprintf("GPU%d.Dispatcher", d.gpuID),
+				"kernel sampled wf marked skip wfidx=%d pred=%.3fns",
+				wfIdx,
+				intervalTime*1e9)
+		}
+		if !skip && *sampledrunner.SampledRunnerFlag {
+			skip = wfSkip
+			intervalTime = wfIntervalTime
+		}
+		l.Wavefront.Skip = skip
+		l.Wavefront.Predtime = intervalTime
 		reqBuilder = reqBuilder.AddWf(l)
 	}
 	req := reqBuilder.Build()
@@ -246,9 +456,13 @@ func (d *DispatcherImpl) dispatchNextWG(
 	if err == nil {
 		d.currWG.valid = false
 		d.numDispatchedWGs++
+		d.numDispatchedWFs += uint64(len(d.currWG.locations))
 		d.inflightWGs[req.ID] = d.currWG
 		d.originalReqs[req.ID] = req
 		d.cycleLeft = d.latencyTable[len(d.currWG.locations)]
+		if sampledTimeEngine := sampledrunner.SampledTimeEngineForGPU(d.gpuID); sampledTimeEngine != nil {
+			sampledTimeEngine.UpdateMaxWFS(d.numDispatchedWFs - d.numCompletedWFs)
+		}
 
 		if d.progressBar != nil {
 			d.progressBar.IncrementInProgress(1)
@@ -261,4 +475,20 @@ func (d *DispatcherImpl) dispatchNextWG(
 	}
 
 	return false
+}
+
+func (d *DispatcherImpl) enableDisabledSampleEngines() {
+	if *sampledrunner.SampledRunnerFlag {
+		if sampledEngine := sampledrunner.SampledEngineForGPU(d.gpuID); sampledEngine != nil &&
+			sampledEngine.IfDisable() {
+			sampledEngine.Enable()
+		}
+	}
+
+	if *sampledrunner.BranchSampledFlag {
+		if branchEngine := sampledrunner.BranchSampledEngineForGPU(d.gpuID); branchEngine != nil &&
+			branchEngine.IfDisable() {
+			branchEngine.Enable()
+		}
+	}
 }

@@ -1,9 +1,7 @@
 package runner
 
 import (
-	"regexp"
 	"sort"
-	"strconv"
 
 	"github.com/sarchlab/mgpusim/v3/timing/cu"
 )
@@ -37,19 +35,17 @@ func (r *Runner) reportInstCount() {
 	for _, t := range r.instCountTracers {
 		// kernelTime := float64(r.kernelTimeCounter.BusyTime())
 		// float64(r.kernelTimeCounter.BusyTime())
-		cuName := t.cu.Name()
-		gpuID := regexp.MustCompile(`GPU\[(\d+)\]`)
-		match := gpuID.FindStringSubmatch(cuName)
-		num, err := strconv.Atoi(match[1])
-		if err != nil {
-			return
+		computeUnit, ok := t.cu.(*cu.ComputeUnit)
+		if !ok {
+			continue
 		}
-		if num > 23 {
-			num = num - 1
+		gpuIndex := int(computeUnit.GPUID) - 1
+		if gpuIndex < 0 || gpuIndex >= len(r.perGPUKernelTimeCounter) {
+			continue
 		}
-		kernelTime := float64(r.perGPUKernelTimeCounter[num].BusyTime())
+		kernelTime := float64(r.perGPUKernelTimeCounter[gpuIndex].BusyTime())
 
-		cuFreq := float64(t.cu.(*cu.ComputeUnit).Freq)
+		cuFreq := float64(computeUnit.Freq)
 		numCycle := kernelTime * cuFreq
 
 		r.metricsCollector.Collect(
@@ -107,6 +103,9 @@ func (r *Runner) reportExecutionTime() {
 			"total_time", float64(r.platform.Engine.CurrentTime()))
 
 		for i, c := range r.perGPUKernelTimeCounter {
+			if i >= len(r.platform.GPUs) {
+				break
+			}
 			r.metricsCollector.Collect(
 				r.platform.GPUs[i].CommandProcessor.Name(),
 				"kernel_time", float64(c.BusyTime()))

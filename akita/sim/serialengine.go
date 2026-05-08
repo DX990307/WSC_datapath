@@ -14,6 +14,7 @@ type SerialEngine struct {
 	time           VTimeInSec
 	queue          EventQueue
 	secondaryQueue EventQueue
+	sampledQueue   EventQueue
 
 	isPaused     bool
 	isPausedLock sync.Mutex
@@ -30,9 +31,22 @@ func NewSerialEngine() *SerialEngine {
 
 	e.queue = NewEventQueue()
 	e.secondaryQueue = NewEventQueue()
+	e.sampledQueue = NewEventQueue()
 	//e.queue = NewInsertionQueue()
 
 	return e
+}
+
+// Clear removes all pending events from the engine.
+func (e *SerialEngine) Clear() {
+	e.queue = NewEventQueue()
+	e.secondaryQueue = NewEventQueue()
+	e.sampledQueue = NewEventQueue()
+}
+
+// DisabledSampled removes all pending sampled events.
+func (e *SerialEngine) DisabledSampled() {
+	e.sampledQueue = NewEventQueue()
 }
 
 // Schedule register an event to be happen in the future
@@ -40,6 +54,12 @@ func (e *SerialEngine) Schedule(evt Event) {
 	now := e.readNow()
 	if evt.Time() < now {
 		log.Panic("scheduling an event earlier than current time")
+	}
+
+	if sampledEvt, ok := evt.(interface{ IsSampledEvent() bool }); ok &&
+		sampledEvt.IsSampledEvent() {
+		e.sampledQueue.Push(evt)
+		return
 	}
 
 	if evt.IsSecondary() {
@@ -103,28 +123,34 @@ func (e *SerialEngine) Run() error {
 }
 
 func (e *SerialEngine) noMoreEvent() bool {
-	return e.queue.Len() == 0 && e.secondaryQueue.Len() == 0
+	return e.queue.Len() == 0 &&
+		e.secondaryQueue.Len() == 0 &&
+		e.sampledQueue.Len() == 0
+}
+
+func (e *SerialEngine) earliestQueue(q1, q2 EventQueue) EventQueue {
+	if q1.Len() == 0 {
+		return q2
+	}
+
+	if q2.Len() == 0 {
+		return q1
+	}
+
+	q1Evt := q1.Peek()
+	q2Evt := q2.Peek()
+
+	if q1Evt.Time() <= q2Evt.Time() {
+		return q1
+	}
+
+	return q2
 }
 
 func (e *SerialEngine) nextEvent() Event {
-	if e.queue.Len() == 0 {
-		return e.secondaryQueue.Pop()
-	}
-
-	if e.secondaryQueue.Len() == 0 {
-		return e.queue.Pop()
-	}
-
-	primaryEvt := e.queue.Peek()
-	secondaryEvt := e.secondaryQueue.Peek()
-
-	if primaryEvt.Time() <= secondaryEvt.Time() {
-		e.queue.Pop()
-		return primaryEvt
-	}
-
-	e.secondaryQueue.Pop()
-	return secondaryEvt
+	q := e.earliestQueue(e.queue, e.secondaryQueue)
+	q = e.earliestQueue(q, e.sampledQueue)
+	return q.Pop()
 }
 
 // Pause prevents the SerialEngine to trigger more events.

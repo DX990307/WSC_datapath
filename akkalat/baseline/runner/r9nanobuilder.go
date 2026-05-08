@@ -979,6 +979,7 @@ func (b *R9NanoGPUBuilder) buildCP() {
 	builder := cp.MakeBuilder().
 		WithEngine(b.engine).
 		WithFreq(b.freq).
+		WithGPUID(b.gpuID).
 		WithMonitor(b.monitor).
 		WithPerfAnalyzer(b.perfAnalyzer)
 

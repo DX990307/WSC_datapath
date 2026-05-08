@@ -18,6 +18,10 @@ import (
 	"github.com/sarchlab/akita/v3/tracing"
 	"github.com/sarchlab/mgpusim/v3/benchmarks"
 	"github.com/sarchlab/mgpusim/v3/driver"
+	"github.com/sarchlab/mgpusim/v3/emu"
+	"github.com/sarchlab/mgpusim/v3/profiler"
+	"github.com/sarchlab/mgpusim/v3/samples/sampledrunner"
+	"github.com/sarchlab/mgpusim/v3/timing/cp"
 	"github.com/tebeka/atexit"
 )
 
@@ -109,10 +113,36 @@ func (r *Runner) Init() *Runner {
 
 	log.SetFlags(log.Llongfile | log.Ldate | log.Ltime)
 
+	sampledrunner.InitSampledEngine()
+	sampledrunner.InitIPCSampledEngine()
+	sampledrunner.InitKernelSampledEngine()
+	profiler.InitInstCount()
+	profiler.InitGlobalInstFeature()
+	profiler.InitInstProfiler()
+	profiler.InitBranchFeature()
+	profiler.InitWfFeature()
+	profiler.InitWallTime()
+	profiler.LoadWGFeatureVec()
+
 	if r.Timing {
 		r.buildTimingPlatform()
 	} else {
 		r.buildEmuPlatform()
+	}
+
+	sampledrunner.ClearGPUSampledEngines()
+	for _, gpu := range r.platform.GPUs {
+		cp, ok := gpu.CommandProcessor.(*cp.CommandProcessor)
+		if !ok || cp == nil {
+			continue
+		}
+
+		sampledrunner.InitGPUSampledEngines(
+			gpu.GPUID,
+			cp.Engine,
+			cp.Freq,
+			emu.StaticComputeUnitForGPU(gpu.GPUID),
+		)
 	}
 
 	r.createUnifiedGPUs()

@@ -15,6 +15,9 @@ import (
 	"github.com/sarchlab/akita/v3/tracing"
 	"github.com/sarchlab/mgpusim/v3/benchmarks"
 	"github.com/sarchlab/mgpusim/v3/driver"
+	"github.com/sarchlab/mgpusim/v3/emu"
+	"github.com/sarchlab/mgpusim/v3/profiler"
+	"github.com/sarchlab/mgpusim/v3/samples/sampledrunner"
 	"github.com/tebeka/atexit"
 )
 
@@ -65,10 +68,35 @@ func (r *Runner) Init() *Runner {
 
 	log.SetFlags(log.Llongfile | log.Ldate | log.Ltime)
 
+	sampledrunner.InitSampledEngine()
+	sampledrunner.InitIPCSampledEngine()
+	sampledrunner.InitKernelSampledEngine()
+	profiler.InitInstCount()
+	profiler.InitGlobalInstFeature()
+	profiler.InitInstProfiler()
+	profiler.InitBranchFeature()
+	profiler.InitWfFeature()
+	profiler.InitWallTime()
+	profiler.LoadWGFeatureVec()
+
 	if r.Timing {
 		r.buildTimingPlatform()
 	} else {
 		r.buildEmuPlatform()
+	}
+
+	sampledrunner.ClearGPUSampledEngines()
+	for _, gpu := range r.platform.GPUs {
+		if gpu.CommandProcessor == nil {
+			continue
+		}
+
+		sampledrunner.InitGPUSampledEngines(
+			gpu.GPUID,
+			gpu.CommandProcessor.Engine,
+			gpu.CommandProcessor.Freq,
+			emu.StaticComputeUnitForGPU(gpu.GPUID),
+		)
 	}
 
 	r.createUnifiedGPUs()

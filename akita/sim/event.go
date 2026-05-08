@@ -18,10 +18,11 @@ type Event interface {
 
 // EventBase provides the basic fields and getters for other events
 type EventBase struct {
-	ID        string
-	time      VTimeInSec
-	handler   Handler
-	secondary bool
+	ID           string
+	time         VTimeInSec
+	handler      Handler
+	secondary    bool
+	sampledEvent bool
 }
 
 // NewEventBase creates a new EventBase
@@ -31,6 +32,18 @@ func NewEventBase(t VTimeInSec, handler Handler) *EventBase {
 	e.time = t
 	e.handler = handler
 	e.secondary = false
+	e.sampledEvent = false
+	return e
+}
+
+// NewSampledEventBase creates a new EventBase for sampled events.
+func NewSampledEventBase(t VTimeInSec, handler Handler) *EventBase {
+	e := new(EventBase)
+	e.ID = GetIDGenerator().Generate()
+	e.time = t
+	e.handler = handler
+	e.secondary = false
+	e.sampledEvent = true
 	return e
 }
 
@@ -57,6 +70,12 @@ func (e EventBase) Handler() Handler {
 // IsSecondary returns true if the event is a secondary event.
 func (e EventBase) IsSecondary() bool {
 	return e.secondary
+}
+
+// IsSampledEvent returns true if the event should be handled by the sampled
+// event queue.
+func (e EventBase) IsSampledEvent() bool {
+	return e.sampledEvent
 }
 
 // A Handler defines a domain for the events.

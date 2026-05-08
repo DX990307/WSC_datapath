@@ -5,9 +5,9 @@ import (
 
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
-	"github.com/sarchlab/mgpusim/v3/emu"
 	"github.com/sarchlab/mgpusim/v3/insts"
 	"github.com/sarchlab/mgpusim/v3/kernels"
+	"github.com/sarchlab/mgpusim/v3/utils"
 )
 
 // WfState marks what state that wavefront it in.
@@ -15,11 +15,12 @@ type WfState int
 
 // A list of all possible WfState
 const (
-	WfDispatching WfState = iota // Dispatching in progress, not ready to run
-	WfReady                      // Allow the scheduler to schedule instruction
-	WfRunning                    // Instruction in fight
-	WfCompleted                  // Wavefront completed
-	WfAtBarrier                  // Wavefront at barrier
+	WfDispatching      WfState = iota // Dispatching in progress, not ready to run
+	WfReady                           // Allow the scheduler to schedule instruction
+	WfRunning                         // Instruction in fight
+	WfCompleted                       // Wavefront completed
+	WfAtBarrier                       // Wavefront at barrier
+	WfSampledCompleted                // Wavefront completed by sampled timing
 )
 
 // A Wavefront in the timing package contains the information of the progress
@@ -32,10 +33,12 @@ type Wavefront struct {
 
 	pid            vm.PID
 	State          WfState
-	inst           *Inst          // The instruction that is being executed
-	scratchpad     emu.Scratchpad // A temp data buf that is shared by different stages
-	LastFetchTime  sim.VTimeInSec // The time that the last instruction was fetched
-	CompletedLanes int            // The number of lanes that is completed in the SIMD unit
+	SampledLevel   utils.SampledLevel
+	Sampled_level  utils.SampledLevel
+	inst           *Inst            // The instruction that is being executed
+	scratchpad     utils.Scratchpad // A temp data buf that is shared by different stages
+	LastFetchTime  sim.VTimeInSec   // The time that the last instruction was fetched
+	CompletedLanes int              // The number of lanes that is completed in the SIMD unit
 
 	InstBuffer        []byte
 	InstBufferStartPC uint64
@@ -63,6 +66,8 @@ func NewWavefront(raw *kernels.Wavefront) *Wavefront {
 	wf := new(Wavefront)
 	wf.Wavefront = raw
 
+	wf.SampledLevel = utils.TimeModel
+	wf.Sampled_level = utils.TimeModel
 	wf.scratchpad = make([]byte, 4096)
 	wf.InstBuffer = make([]byte, 0, 256)
 
@@ -92,8 +97,13 @@ func (wf *Wavefront) ManagedInst() *Inst {
 	return wf.inst
 }
 
+// GetPC returns the current program counter.
+func (wf *Wavefront) GetPC() uint64 {
+	return wf.PC
+}
+
 // Scratchpad returns the scratchpad of the wavefront
-func (wf *Wavefront) Scratchpad() emu.Scratchpad {
+func (wf *Wavefront) Scratchpad() utils.Scratchpad {
 	return wf.scratchpad
 }
 

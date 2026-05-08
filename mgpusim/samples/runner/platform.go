@@ -24,6 +24,7 @@ type Platform struct {
 
 // A GPU is a collection of GPU internal Components
 type GPU struct {
+	GPUID            uint64
 	Domain           *sim.Domain
 	CommandProcessor *cp.CommandProcessor
 	RDMAEngine       *rdma.Comp

@@ -260,6 +260,7 @@ func (b *R9NanoGPUBuilder) createGPU(name string, id uint64) {
 	b.gpuName = name
 
 	b.gpu = &GPU{}
+	b.gpu.GPUID = id
 	b.gpu.Domain = sim.NewDomain(b.gpuName)
 	b.gpuID = id
 }
@@ -795,6 +796,7 @@ func (b *R9NanoGPUBuilder) buildCP() {
 	builder := cp.MakeBuilder().
 		WithEngine(b.engine).
 		WithFreq(b.freq).
+		WithGPUID(b.gpuID).
 		WithMonitor(b.monitor).
 		WithPerfAnalyzer(b.perfAnalyzer)
 

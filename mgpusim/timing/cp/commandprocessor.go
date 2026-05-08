@@ -7,7 +7,9 @@ import (
 	"github.com/sarchlab/akita/v3/mem/vm/tlb"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
+	"github.com/sarchlab/mgpusim/v3/profiler"
 	"github.com/sarchlab/mgpusim/v3/protocol"
+	"github.com/sarchlab/mgpusim/v3/samples/sampledrunner"
 	"github.com/sarchlab/mgpusim/v3/timing/cp/internal/dispatching"
 	"github.com/sarchlab/mgpusim/v3/timing/cp/internal/resource"
 	"github.com/sarchlab/mgpusim/v3/timing/pagemigrationcontroller"
@@ -20,11 +22,13 @@ import (
 type CommandProcessor struct {
 	*sim.TickingComponent
 
+	GPUID              uint64
 	Dispatchers        []dispatching.Dispatcher
 	DMAEngine          sim.Port
 	Driver             sim.Port
 	TLBs               []sim.Port
 	CUs                []sim.Port
+	samplingCUs        []samplingCU
 	AddressTranslators []sim.Port
 	RDMA               sim.Port
 	PMC                sim.Port
@@ -77,9 +81,16 @@ type CUInterfaceForCP interface {
 	ControlPort() sim.Port
 }
 
+type samplingCU interface {
+	ResetForSampling()
+}
+
 // RegisterCU allows the Command Processor to control the CU.
 func (p *CommandProcessor) RegisterCU(cu CUInterfaceForCP) {
 	p.CUs = append(p.CUs, cu.ControlPort())
+	if samplingCU, ok := cu.(samplingCU); ok {
+		p.samplingCUs = append(p.samplingCUs, samplingCU)
+	}
 	for _, d := range p.Dispatchers {
 		d.RegisterCU(cu)
 	}
@@ -149,6 +160,7 @@ func (p *CommandProcessor) processReqFromDriver(now sim.VTimeInSec) bool {
 
 	switch req := msg.(type) {
 	case *protocol.LaunchKernelReq:
+		p.resetForSampling()
 		return p.processLaunchKernelReq(now, req)
 	case *protocol.FlushReq:
 		return p.processFlushReq(now, req)
@@ -229,6 +241,18 @@ func (p *CommandProcessor) processRspFromCUs(now sim.VTimeInSec) bool {
 	return false
 }
 
+func (p *CommandProcessor) resetForSampling() {
+	if !*sampledrunner.SampledRunnerFlag &&
+		!*sampledrunner.BranchSampledFlag &&
+		!*sampledrunner.KernelSampledFlag {
+		return
+	}
+
+	for _, cu := range p.samplingCUs {
+		cu.ResetForSampling()
+	}
+}
+
 func (p *CommandProcessor) processRspFromCaches(now sim.VTimeInSec) bool {
 	msg := p.ToCaches.Peek()
 	if msg == nil {
@@ -300,6 +324,15 @@ func (p *CommandProcessor) processLaunchKernelReq(
 
 	if d == nil {
 		return false
+	}
+
+	sampledrunner.ResetGPUSampledEngines(p.GPUID)
+	if *profiler.WfProfilingFlag && profiler.Wffinalfeature != nil {
+		profiler.Wffinalfeature.Reset()
+		profiler.Wffinalfeature.CollectKernelStart(now)
+	}
+	if kernelEngine := sampledrunner.KernelSampledEngineForGPU(p.GPUID); kernelEngine != nil {
+		kernelEngine.CollectKernelStart(now)
 	}
 
 	d.StartDispatching(req)

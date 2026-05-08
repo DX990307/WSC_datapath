@@ -17,6 +17,7 @@ import (
 type Builder struct {
 	freq           sim.Freq
 	engine         sim.Engine
+	gpuID          uint64
 	visTracer      tracing.Tracer
 	monitor        *monitoring.Monitor
 	perfAnalyzer   *analysis.PerfAnalyzer
@@ -51,6 +52,11 @@ func (b Builder) WithFreq(freq sim.Freq) Builder {
 	return b
 }
 
+func (b Builder) WithGPUID(gpuID uint64) Builder {
+	b.gpuID = gpuID
+	return b
+}
+
 // WithMonitor sets the monitor used to show progress bars.
 func (b Builder) WithMonitor(monitor *monitoring.Monitor) Builder {
 	b.monitor = monitor
@@ -70,6 +76,7 @@ func (b Builder) WithPerfAnalyzer(
 func (b Builder) Build(name string) *CommandProcessor {
 	cp := new(CommandProcessor)
 	cp.TickingComponent = sim.NewTickingComponent(name, b.engine, b.freq, cp)
+	cp.GPUID = b.gpuID
 
 	b.createPorts(cp, name)
 
@@ -142,6 +149,7 @@ func (b *Builder) buildDispatchers(cp *CommandProcessor) {
 	cuResourcePool := resource.NewCUResourcePool()
 	builder := dispatching.MakeBuilder().
 		WithCP(cp).
+		WithGPUID(b.gpuID).
 		WithAlg("round-robin").
 		WithCUResourcePool(cuResourcePool).
 		WithDispatchingPort(cp.ToCUs).

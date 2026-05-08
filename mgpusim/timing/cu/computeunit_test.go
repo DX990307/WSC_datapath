@@ -28,6 +28,15 @@ func (m *mockScheduler) Resume() {
 func (m *mockScheduler) Flush() {
 }
 
+func (m *mockScheduler) StopNewCode() {
+}
+
+func (m *mockScheduler) StartNewCode() {
+}
+
+func (m *mockScheduler) removeAllWfFromBuffer(wg *wavefront.WorkGroup) {
+}
+
 type mockDecoder struct {
 	Inst *insts.Inst
 }

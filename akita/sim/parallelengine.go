@@ -59,6 +59,33 @@ func NewParallelEngine() *ParallelEngine {
 	return e
 }
 
+// Clear removes all pending events from the engine.
+func (e *ParallelEngine) Clear() {
+	numQueues := len(e.queues)
+	if numQueues == 0 {
+		numQueues = runtime.GOMAXPROCS(0)
+	}
+
+	e.queues = make([]EventQueue, 0, numQueues)
+	e.queueChan = make(chan EventQueue, numQueues)
+	e.secondaryQueues = make([]EventQueue, 0, numQueues)
+	e.secondaryQueueChan = make(chan EventQueue, numQueues)
+
+	for i := 0; i < numQueues; i++ {
+		queue := NewEventQueue()
+		e.queueChan <- queue
+		e.queues = append(e.queues, queue)
+
+		secondaryQueue := NewEventQueue()
+		e.secondaryQueueChan <- secondaryQueue
+		e.secondaryQueues = append(e.secondaryQueues, secondaryQueue)
+	}
+}
+
+// DisabledSampled is a compatibility hook for sampled simulations.
+func (e *ParallelEngine) DisabledSampled() {
+}
+
 // func (e *ParallelEngine) spawnWorkers() {
 // 	for i := 0; i < e.maxGoRoutine; i++ {
 // 		go e.worker()

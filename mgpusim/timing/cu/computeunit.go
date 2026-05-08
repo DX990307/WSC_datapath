@@ -1,6 +1,7 @@
 package cu
 
 import (
+	"fmt"
 	"log"
 	"reflect"
 
@@ -11,8 +12,11 @@ import (
 	"github.com/sarchlab/mgpusim/v3/emu"
 	"github.com/sarchlab/mgpusim/v3/insts"
 	"github.com/sarchlab/mgpusim/v3/kernels"
+	"github.com/sarchlab/mgpusim/v3/profiler"
 	"github.com/sarchlab/mgpusim/v3/protocol"
+	"github.com/sarchlab/mgpusim/v3/samples/sampledrunner"
 	"github.com/sarchlab/mgpusim/v3/timing/wavefront"
+	"github.com/sarchlab/mgpusim/v3/utils"
 )
 
 // A ComputeUnit in the timing package provides a detailed and accurate
@@ -20,6 +24,8 @@ import (
 type ComputeUnit struct {
 	*sim.TickingComponent
 
+	Id           int
+	GPUID        uint64
 	WfDispatcher WfDispatcher
 	Decoder      emu.Decoder
 	WfPools      []*WavefrontPool
@@ -71,6 +77,10 @@ type ComputeUnit struct {
 
 	currentFlushReq   *protocol.CUPipelineFlushReq
 	currentRestartReq *protocol.CUPipelineRestartReq
+
+	inflightInst               map[string]int
+	wftime                     map[string]sim.VTimeInSec
+	setAllWfsPausedForSampling bool
 }
 
 // ControlPort returns the port that can receive controlling messages from the
@@ -114,6 +124,10 @@ func (cu *ComputeUnit) Tick(now sim.VTimeInSec) bool {
 
 	madeProgress := false
 
+	if *sampledrunner.SampledRunnerFlag || *sampledrunner.BranchSampledFlag {
+		cu.stopTimeModel(now)
+	}
+
 	madeProgress = cu.runPipeline(now) || madeProgress
 	madeProgress = cu.sendToACE(now) || madeProgress
 	madeProgress = cu.sendToCP(now) || madeProgress
@@ -121,6 +135,199 @@ func (cu *ComputeUnit) Tick(now sim.VTimeInSec) bool {
 	madeProgress = cu.doFlush(now) || madeProgress
 
 	return madeProgress
+}
+
+// ResetForSampling prepares the CU for a new kernel after a previous sampled
+// phase may have stopped detailed instruction issue.
+func (cu *ComputeUnit) ResetForSampling() {
+	cu.Lock()
+	defer cu.Unlock()
+
+	cu.setAllWfsPausedForSampling = false
+	if cu.Scheduler != nil {
+		cu.Scheduler.StartNewCode()
+	}
+}
+
+func (cu *ComputeUnit) stopTimeModel(now sim.VTimeInSec) {
+	if cu.setAllWfsPausedForSampling {
+		return
+	}
+
+	sampledTimeEngine := sampledrunner.SampledTimeEngineForGPU(cu.GPUID)
+	if sampledTimeEngine == nil {
+		return
+	}
+
+	if *sampledrunner.SampledRunnerFlag {
+		sampledEngine := sampledrunner.SampledEngineForGPU(cu.GPUID)
+		if sampledEngine != nil {
+			predTime, enableSampled := sampledEngine.Predict()
+			if enableSampled {
+				cu.convertActiveWGsToSampled(
+					now,
+					utils.WfSampled,
+					sampledTimeEngine,
+					func(wg *wavefront.WorkGroup) []sim.VTimeInSec {
+						predTimes := make([]sim.VTimeInSec, len(wg.Wfs))
+						for i := range predTimes {
+							predTimes[i] = predTime
+						}
+						return predTimes
+					})
+				return
+			}
+		}
+	}
+
+	if *sampledrunner.BranchSampledFlag {
+		branchEngine := sampledrunner.BranchSampledEngineForGPU(cu.GPUID)
+		sampledComputeUnit := emu.SampledComputeUnitForGPU(cu.GPUID)
+		if branchEngine == nil ||
+			sampledComputeUnit == nil ||
+			!branchEngine.EnableSampled() {
+			return
+		}
+
+		cu.convertActiveWGsToSampled(
+			now,
+			utils.BBSampled,
+			sampledTimeEngine,
+			func(wg *wavefront.WorkGroup) []sim.VTimeInSec {
+				return sampledComputeUnit.RunWGWithBranchEngine(
+					wg.MapReq, now, branchEngine)
+			})
+	}
+}
+
+func (cu *ComputeUnit) convertActiveWGsToSampled(
+	now sim.VTimeInSec,
+	level utils.SampledLevel,
+	sampledTimeEngine *sampledrunner.SampledTimeEngine,
+	predictTimes func(*wavefront.WorkGroup) []sim.VTimeInSec,
+) {
+	if cu.Scheduler == nil {
+		return
+	}
+
+	cu.Scheduler.StopNewCode()
+	globalFinished := true
+	visitedWGs := make(map[*wavefront.WorkGroup]bool)
+
+	for _, wfPool := range cu.WfPools {
+		for _, wf := range wfPool.wfs {
+			if wf == nil || wf.WG == nil || visitedWGs[wf.WG] {
+				continue
+			}
+
+			visitedWGs[wf.WG] = true
+			waiting := cu.convertWGToSampledIfReady(
+				now, wf.WG, level, sampledTimeEngine, predictTimes)
+			if waiting {
+				globalFinished = false
+			}
+		}
+	}
+
+	if globalFinished {
+		cu.setAllWfsPausedForSampling = true
+		sampledrunner.PhotonDebugf(
+			fmt.Sprintf("GPU%d.CU", cu.GPUID),
+			"all resident wfs converted or drained for sampled timing cu=%s",
+			cu.Name())
+	}
+}
+
+func (cu *ComputeUnit) convertWGToSampledIfReady(
+	now sim.VTimeInSec,
+	wg *wavefront.WorkGroup,
+	level utils.SampledLevel,
+	sampledTimeEngine *sampledrunner.SampledTimeEngine,
+	predictTimes func(*wavefront.WorkGroup) []sim.VTimeInSec,
+) (waiting bool) {
+	allDone := true
+	for _, wf := range wg.Wfs {
+		if wf.State != wavefront.WfCompleted &&
+			wf.State != wavefront.WfSampledCompleted {
+			allDone = false
+			break
+		}
+	}
+	if allDone {
+		return false
+	}
+
+	for _, wf := range wg.Wfs {
+		if wf.State == wavefront.WfRunning {
+			return true
+		}
+	}
+
+	predTimes := predictTimes(wg)
+	if len(predTimes) < len(wg.Wfs) {
+		return true
+	}
+
+	cu.Scheduler.removeAllWfFromBuffer(wg)
+	nextTick := cu.Freq.NextTick(now)
+	for idx, wf := range wg.Wfs {
+		if wf.State == wavefront.WfCompleted ||
+			wf.State == wavefront.WfSampledCompleted {
+			continue
+		}
+
+		issueTime, found := cu.wftime[wf.UID]
+		if !found {
+			issueTime = now
+		}
+		predictedTime := issueTime + predTimes[idx]
+		if predictedTime < nextTick {
+			predictedTime = nextTick
+		}
+
+		wf.State = wavefront.WfSampledCompleted
+		wf.SampledLevel = level
+		wf.Sampled_level = level
+		sampledTimeEngine.NewRawSampledWfCompletionEvent(
+			now, predictedTime, cu, wf)
+		sampledrunner.PhotonDebugf(
+			fmt.Sprintf("GPU%d.CU", cu.GPUID),
+			"resident wf converted to sampled cu=%s wfid=%s level=%d end=%.3fns",
+			cu.Name(),
+			wf.UID,
+			level,
+			predictedTime*1e9)
+	}
+
+	return false
+}
+
+// Handle processes events scheduled on the ComputeUnit.
+func (cu *ComputeUnit) Handle(evt sim.Event) error {
+	ctx := sim.HookCtx{
+		Domain: cu,
+		Pos:    sim.HookPosBeforeEvent,
+		Item:   evt,
+	}
+	cu.InvokeHook(ctx)
+
+	cu.Lock()
+	defer cu.Unlock()
+
+	switch evt := evt.(type) {
+	case sim.TickEvent:
+		cu.TickingComponent.Handle(evt)
+	case *wavefront.WfCompletionEvent:
+		cu.handleWfCompletionEvent(evt)
+	default:
+		log.Panicf("Unable to process event of type %s",
+			reflect.TypeOf(evt))
+	}
+
+	ctx.Pos = sim.HookPosAfterEvent
+	cu.InvokeHook(ctx)
+
+	return nil
 }
 
 //nolint:gocyclo
@@ -317,11 +524,138 @@ func (cu *ComputeUnit) handleMapWGReq(
 
 	tracing.TraceReqReceive(req, cu)
 
+	if *profiler.CollectDataApplication ||
+		*sampledrunner.SampledRunnerFlag ||
+		*sampledrunner.BranchSampledFlag ||
+		*profiler.WfProfilingFlag ||
+		*sampledrunner.KernelSampledFlag {
+		for _, wf := range wg.Wfs {
+			cu.wftime[wf.UID] = now
+		}
+	}
+
+	if *sampledrunner.KernelSampledFlag || *sampledrunner.SampledRunnerFlag {
+		sampledEngine := sampledrunner.SampledEngineForGPU(cu.GPUID)
+		sampledTimeEngine := sampledrunner.SampledTimeEngineForGPU(cu.GPUID)
+		skipCount := 0
+		wfPredTime := sim.VTimeInSec(0)
+		wfSampled := false
+		if *sampledrunner.SampledRunnerFlag && sampledEngine != nil {
+			wfPredTime, wfSampled = sampledEngine.Predict()
+		}
+
+		for _, wf := range wg.Wfs {
+			predTime := wf.Predtime
+			skip := wf.Skip
+			if wfSampled && !skip {
+				skip = true
+				predTime = wfPredTime
+			}
+
+			if skip && sampledTimeEngine != nil {
+				skipCount++
+				predictedTime := now + predTime
+				sampledrunner.PhotonDebugf(
+					fmt.Sprintf("GPU%d.CU", cu.GPUID),
+					"wf sampled skip cu=%s wfid=%s pred=%.3fns now=%.3fns",
+					cu.Name(),
+					wf.UID,
+					predTime*1e9,
+					now*1e9)
+				wf.State = wavefront.WfSampledCompleted
+				wf.SampledLevel = utils.WfSampled
+				wf.Sampled_level = utils.WfSampled
+				sampledTimeEngine.NewRawSampledWfCompletionEvent(
+					now, predictedTime, cu, wf)
+
+				if *profiler.WfProfilingFlag && profiler.Wffinalfeature != nil {
+					profiler.Wffinalfeature.CollectWfStart(wf.UID, now)
+				}
+
+				tracing.StartTaskWithSpecificLocation(wf.UID,
+					tracing.MsgIDAtReceiver(req, cu),
+					cu,
+					"wavefront",
+					"wavefront",
+					cu.Name()+".SampledWF",
+					nil,
+				)
+			}
+		}
+
+		if skipCount == len(wg.Wfs) {
+			return true
+		}
+	}
+
+	branchEngine := sampledrunner.BranchSampledEngineForGPU(cu.GPUID)
+	sampledTimeEngine := sampledrunner.SampledTimeEngineForGPU(cu.GPUID)
+	sampledComputeUnit := emu.SampledComputeUnitForGPU(cu.GPUID)
+	if *sampledrunner.BranchSampledFlag &&
+		branchEngine != nil &&
+		sampledTimeEngine != nil &&
+		sampledComputeUnit != nil &&
+		branchEngine.EnableSampled() {
+		sampledrunner.PhotonDebugf(
+			fmt.Sprintf("GPU%d.CU", cu.GPUID),
+			"branch sampled run wg cu=%s wg=%d wfCount=%d now=%.3fns",
+			cu.Name(),
+			req.WorkGroup.IDX,
+			len(wg.Wfs),
+			now*1e9)
+		predictTimes := sampledComputeUnit.RunWGWithBranchEngine(
+			req, now, branchEngine)
+		for idx, wf := range wg.Wfs {
+			predictedTime := now + predictTimes[idx]
+			sampledrunner.PhotonDebugf(
+				fmt.Sprintf("GPU%d.CU", cu.GPUID),
+				"branch sampled skip cu=%s wfid=%s pred=%.3fns now=%.3fns",
+				cu.Name(),
+				wf.UID,
+				predictTimes[idx]*1e9,
+				now*1e9)
+			wf.State = wavefront.WfSampledCompleted
+			wf.SampledLevel = utils.BBSampled
+			wf.Sampled_level = utils.BBSampled
+			sampledTimeEngine.NewRawSampledWfCompletionEvent(
+				now, predictedTime, cu, wf)
+
+			if *profiler.WfProfilingFlag && profiler.Wffinalfeature != nil {
+				profiler.Wffinalfeature.CollectWfStart(wf.UID, now)
+			}
+
+			tracing.StartTaskWithSpecificLocation(wf.UID,
+				tracing.MsgIDAtReceiver(req, cu),
+				cu,
+				"wavefront",
+				"wavefront",
+				cu.Name()+".BBSampledWF",
+				nil,
+			)
+		}
+		return true
+	}
+
+	kernelEngine := sampledrunner.KernelSampledEngineForGPU(cu.GPUID)
 	for i, wf := range wg.Wfs {
+		if wf.State == wavefront.WfSampledCompleted {
+			continue
+		}
+
 		location := req.Wavefronts[i]
 		cu.WfPools[location.SIMDID].AddWf(wf)
 		cu.WfDispatcher.DispatchWf(now, wf, req.Wavefronts[i])
 		wf.State = wavefront.WfReady
+
+		if *sampledrunner.BranchSampledFlag && branchEngine != nil {
+			branchEngine.CollectWfStart(wf.UID, now)
+		}
+		if *sampledrunner.KernelSampledFlag && kernelEngine != nil {
+			kernelEngine.CollectWfStart(wf.UID, now)
+		}
+		if *profiler.WfProfilingFlag && profiler.Wffinalfeature != nil {
+			profiler.Wffinalfeature.CollectWfStart(wf.UID, now)
+		}
 
 		tracing.StartTaskWithSpecificLocation(wf.UID,
 			tracing.MsgIDAtReceiver(req, cu),
@@ -336,6 +670,103 @@ func (cu *ComputeUnit) handleMapWGReq(
 	cu.running = true
 	cu.TickLater(now)
 
+	return true
+}
+
+func (cu *ComputeUnit) handleWfCompletionEvent(
+	evt *wavefront.WfCompletionEvent,
+) error {
+	wf := evt.Wf
+	wg := wf.WG
+	now := evt.Time()
+
+	tracing.EndTask(wf.UID, cu)
+	wf.State = wavefront.WfCompleted
+
+	cu.recordWfCompletion(now, wf)
+
+	if cu.isAllWfInWGCompleted(wg) {
+		cu.isHandlingWfCompletionEvent = true
+		ok := cu.sendSampledWGCompletionMessage(now, wg, wf)
+		if ok {
+			cu.clearWGResource(wg)
+			tracing.TraceReqComplete(wg.MapReq, cu)
+		}
+
+		if !cu.hasMoreWfsToRun() {
+			cu.running = false
+		}
+	}
+
+	cu.TickLater(now)
+	return nil
+}
+
+func (cu *ComputeUnit) recordWfCompletion(
+	now sim.VTimeInSec,
+	wf *wavefront.Wavefront,
+) {
+	issueTime, found := cu.wftime[wf.UID]
+	if !found {
+		return
+	}
+
+	if *profiler.CollectDataApplication {
+		profiler.Datafeature.AddData(cu.Id, issueTime, now)
+	}
+	if wf.Sampled_level == utils.TimeModel &&
+		(*sampledrunner.SampledRunnerFlag ||
+			*sampledrunner.BranchSampledFlag ||
+			*sampledrunner.KernelSampledFlag) {
+		if sampledTimeEngine := sampledrunner.SampledTimeEngineForGPU(cu.GPUID); sampledTimeEngine != nil {
+			sampledTimeEngine.IncreaseIdx(now)
+		}
+	}
+	branchEngine := sampledrunner.BranchSampledEngineForGPU(cu.GPUID)
+	if *sampledrunner.BranchSampledFlag && branchEngine != nil {
+		branchEngine.CollectWfEnd(wf.UID, now)
+	}
+	kernelEngine := sampledrunner.KernelSampledEngineForGPU(cu.GPUID)
+	if *sampledrunner.KernelSampledFlag && kernelEngine != nil {
+		kernelEngine.CollectWfEnd(wf.UID, now)
+	}
+	if *profiler.WfProfilingFlag && profiler.Wffinalfeature != nil {
+		profiler.Wffinalfeature.CollectWfEnd(wf.UID, now, wf.Sampled_level)
+	}
+
+	wf.Finishtime = now
+	wf.Issuetime = issueTime
+	sampledEngine := sampledrunner.SampledEngineForGPU(cu.GPUID)
+	if *sampledrunner.SampledRunnerFlag && sampledEngine != nil {
+		sampledEngine.Collect(issueTime, now)
+	}
+	delete(cu.wftime, wf.UID)
+}
+
+func (cu *ComputeUnit) sendSampledWGCompletionMessage(
+	now sim.VTimeInSec,
+	wg *wavefront.WorkGroup,
+	wf *wavefront.Wavefront,
+) bool {
+	mapReq := wg.MapReq
+	dispatcher := mapReq.Src
+
+	msg := protocol.WGCompletionMsgBuilder{}.
+		WithSendTime(now).
+		WithSrc(cu.ToACE).
+		WithDst(dispatcher).
+		WithRspTo([]string{mapReq.ID}).
+		Build()
+
+	err := cu.ToACE.Send(msg)
+	if err != nil {
+		newEvent := wavefront.NewWfCompletionEvent(
+			cu.Freq.NextTick(now), cu, wf)
+		cu.Engine.Schedule(newEvent)
+		return false
+	}
+
+	cu.isHandlingWfCompletionEvent = false
 	return true
 }
 
@@ -613,7 +1044,41 @@ func (cu *ComputeUnit) logInstTask(
 ) {
 	if completed {
 		tracing.EndTask(inst.ID, cu)
+		_, found := cu.inflightInst[inst.ID]
+		if !found {
+			return
+		}
+		delete(cu.inflightInst, inst.ID)
+
+		if *sampledrunner.BranchSampledFlag &&
+			inst.FormatType == insts.SOPP &&
+			inst.Opcode == 1 {
+			if branchEngine := sampledrunner.BranchSampledEngineForGPU(cu.GPUID); branchEngine != nil {
+				branchEngine.Collect(wf.UID, now, inst.Inst, wf)
+			}
+		}
 		return
+	}
+
+	if *sampledrunner.BranchSampledFlag ||
+		*sampledrunner.KernelSampledFlag ||
+		*profiler.WfProfilingFlag {
+		cu.inflightInst[inst.ID] = 1
+	}
+
+	if *sampledrunner.BranchSampledFlag &&
+		!(inst.FormatType == insts.SOPP && inst.Opcode == 1) {
+		if branchEngine := sampledrunner.BranchSampledEngineForGPU(cu.GPUID); branchEngine != nil {
+			branchEngine.Collect(wf.UID, now, inst.Inst, wf)
+		}
+	}
+	if *sampledrunner.KernelSampledFlag {
+		if kernelEngine := sampledrunner.KernelSampledEngineForGPU(cu.GPUID); kernelEngine != nil {
+			kernelEngine.Collect(wf.UID, now, inst.Inst)
+		}
+	}
+	if *profiler.WfProfilingFlag && profiler.Wffinalfeature != nil {
+		profiler.Wffinalfeature.Collect(wf.UID, now, inst.Inst)
 	}
 
 	tracing.StartTaskWithSpecificLocation(
@@ -809,6 +1274,8 @@ func NewComputeUnit(
 	cu.ToScalarMem = sim.NewLimitNumMsgPort(cu, 4, name+".ToScalarMem")
 	cu.ToVectorMem = sim.NewLimitNumMsgPort(cu, 4, name+".ToVectorMem")
 	cu.ToCP = sim.NewLimitNumMsgPort(cu, 4, name+".ToCP")
+	cu.inflightInst = make(map[string]int)
+	cu.wftime = make(map[string]sim.VTimeInSec)
 
 	return cu
 }

@@ -15,6 +15,7 @@ type Builder struct {
 	engine            sim.Engine
 	freq              sim.Freq
 	name              string
+	gpuID             uint64
 	simdCount         int
 	vgprCount         []int
 	sgprCount         int
@@ -49,6 +50,11 @@ func (b Builder) WithEngine(engine sim.Engine) Builder {
 // WithFreq sets the frequency.
 func (b Builder) WithFreq(f sim.Freq) Builder {
 	b.freq = f
+	return b
+}
+
+func (b Builder) WithGPUID(gpuID uint64) Builder {
+	b.gpuID = gpuID
 	return b
 }
 
@@ -93,6 +99,7 @@ func (b *Builder) Build(name string) *ComputeUnit {
 	b.name = name
 	cu := NewComputeUnit(name, b.engine)
 	cu.Freq = b.freq
+	cu.GPUID = b.gpuID
 	cu.Decoder = insts.NewDisassembler()
 	cu.WfDispatcher = NewWfDispatcher(cu)
 	cu.InFlightVectorMemAccessLimit = 512

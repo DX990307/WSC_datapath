@@ -7,6 +7,8 @@ import (
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/mgpusim/v3/driver"
+	"github.com/sarchlab/mgpusim/v3/emu"
+	"github.com/sarchlab/mgpusim/v3/insts"
 )
 
 // EmuBuilder can build a platform for emulation purposes.
@@ -115,6 +117,7 @@ func (b EmuBuilder) Build() *Platform {
 
 	for i := 0; i < b.numGPU; i++ {
 		gpu := gpuBuilder.
+			WithGPUID(uint64(i + 1)).
 			WithMemOffset(uint64(i+1) * 4 * mem.GB).
 			Build(fmt.Sprintf("GPU[%d]", i+1))
 
@@ -129,6 +132,38 @@ func (b EmuBuilder) Build() *Platform {
 	}
 
 	connection.PlugIn(gpuDriver.GetPortByName("GPU"), 4)
+
+	disassembler := insts.NewDisassembler()
+	emu.CreateUniqSampledComputeUnit(
+		"cu", gpuBuilder.freq, disassembler,
+		pageTable, b.log2PageSize, storage, nil)
+	emu.CreateUniqBBVComputeUnit(
+		"cu", gpuBuilder.freq, disassembler,
+		pageTable, b.log2PageSize, storage, nil)
+	emu.CreateUniqStaticComputeUnit(
+		"cu", gpuBuilder.freq, disassembler,
+		pageTable, b.log2PageSize, storage, nil)
+	for _, gpu := range b.gpus {
+		name := fmt.Sprintf("GPU%dCU", gpu.GPUID)
+		emu.CreateSampledComputeUnitForGPU(
+			gpu.GPUID,
+			name,
+			gpuBuilder.freq,
+			disassembler,
+			pageTable,
+			b.log2PageSize,
+			storage,
+			nil)
+		emu.CreateStaticComputeUnitForGPU(
+			gpu.GPUID,
+			name,
+			gpuBuilder.freq,
+			disassembler,
+			pageTable,
+			b.log2PageSize,
+			storage,
+			nil)
+	}
 
 	return &Platform{
 		Engine: engine,

@@ -18,6 +18,9 @@ type Scheduler interface {
 	Pause()
 	Resume()
 	Flush()
+	StopNewCode()
+	StartNewCode()
+	removeAllWfFromBuffer(wg *wavefront.WorkGroup)
 }
 
 // SchedulerImpl implements scheduler
@@ -35,7 +38,8 @@ type SchedulerImpl struct {
 	cyclesNoProgress                  int
 	stopTickingAfterNCyclesNoProgress int
 
-	isPaused bool
+	stopNewCode bool
+	isPaused    bool
 }
 
 // NewScheduler returns a newly created scheduler, injecting dependency
@@ -165,7 +169,7 @@ func (s *SchedulerImpl) DoFetch(now sim.VTimeInSec) bool {
 func (s *SchedulerImpl) DoIssue(now sim.VTimeInSec) bool {
 	madeProgress := false
 
-	if s.isPaused == false {
+	if s.isPaused == false && s.stopNewCode == false {
 		wfs := s.issueArbiter.Arbitrate(s.cu.WfPools)
 		for _, wf := range wfs {
 			if wf.InstToIssue.ExeUnit == insts.ExeUnitSpecial {
@@ -279,6 +283,7 @@ func (s *SchedulerImpl) evalSEndPgm(
 		}
 
 		wf.State = wavefront.WfCompleted
+		s.cu.recordWfCompletion(now, wf)
 
 		s.resetRegisterValue(wf)
 		s.cu.clearWGResource(wf.WG)
@@ -294,6 +299,7 @@ func (s *SchedulerImpl) evalSEndPgm(
 		s.resetRegisterValue(wf)
 
 		wf.State = wavefront.WfCompleted
+		s.cu.recordWfCompletion(now, wf)
 
 		tracing.EndTask(wf.UID, s.cu)
 
@@ -304,6 +310,7 @@ func (s *SchedulerImpl) evalSEndPgm(
 		s.resetRegisterValue(wf)
 
 		wf.State = wavefront.WfCompleted
+		s.cu.recordWfCompletion(now, wf)
 
 		s.cu.logInstTask(now, wf, wf.DynamicInst(), true)
 		tracing.EndTask(wf.UID, s.cu)
@@ -477,6 +484,18 @@ func (s *SchedulerImpl) removeAllWfFromBarrierBuffer(wg *wavefront.WorkGroup) {
 	s.barrierBuffer = newBarrierBuffer
 }
 
+func (s *SchedulerImpl) removeAllWfFromBuffer(wg *wavefront.WorkGroup) {
+	s.removeAllWfFromBarrierBuffer(wg)
+
+	newExecuting := make([]*wavefront.Wavefront, 0, len(s.internalExecuting))
+	for _, executing := range s.internalExecuting {
+		if executing.WG != wg {
+			newExecuting = append(newExecuting, executing)
+		}
+	}
+	s.internalExecuting = newExecuting
+}
+
 func (s *SchedulerImpl) evalSWaitCnt(
 	wf *wavefront.Wavefront,
 	now sim.VTimeInSec,
@@ -503,6 +522,17 @@ func (s *SchedulerImpl) evalSWaitCnt(
 // Pause pauses
 func (s *SchedulerImpl) Pause() {
 	s.isPaused = true
+}
+
+// StopNewCode lets already-running instructions drain while preventing the
+// scheduler from issuing more detailed instructions.
+func (s *SchedulerImpl) StopNewCode() {
+	s.stopNewCode = true
+}
+
+// StartNewCode re-enables normal instruction issue.
+func (s *SchedulerImpl) StartNewCode() {
+	s.stopNewCode = false
 }
 
 // Resume resumes

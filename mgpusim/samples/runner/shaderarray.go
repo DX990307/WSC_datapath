@@ -266,6 +266,7 @@ func (b *shaderArrayBuilder) buildCUs(sa *shaderArray) {
 	cuBuilder := cu.MakeBuilder().
 		WithEngine(b.engine).
 		WithFreq(b.freq).
+		WithGPUID(b.gpuID).
 		WithLog2CachelineSize(b.log2CacheLineSize)
 
 	for i := 0; i < b.numCU; i++ {

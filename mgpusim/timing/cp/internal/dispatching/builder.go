@@ -12,6 +12,7 @@ import (
 // A Builder can build dispatchers
 type Builder struct {
 	cp              tracing.NamedHookable
+	gpuID           uint64
 	cuResourcePool  resource.CUResourcePool
 	alg             string
 	respondingPort  sim.Port
@@ -30,6 +31,11 @@ func MakeBuilder() Builder {
 // WithCP sets the Command Processor that the Dispatcher belongs to.
 func (b Builder) WithCP(cp tracing.NamedHookable) Builder {
 	b.cp = cp
+	return b
+}
+
+func (b Builder) WithGPUID(gpuID uint64) Builder {
+	b.gpuID = gpuID
 	return b
 }
 
@@ -75,6 +81,7 @@ func (b Builder) WithMonitor(monitor *monitoring.Monitor) Builder {
 func (b Builder) Build(name string) Dispatcher {
 	d := &DispatcherImpl{
 		name:            name,
+		gpuID:           b.gpuID,
 		cp:              b.cp,
 		respondingPort:  b.respondingPort,
 		dispatchingPort: b.dispatchingPort,

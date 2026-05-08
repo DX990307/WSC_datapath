@@ -27,6 +27,18 @@ type Wavefront struct {
 	SRegFile []byte
 	VRegFile []byte
 	LDS      []byte
+
+	isLastInstBranch bool
+	lastBBLPC        uint64
+	startPC          uint64
+	currentInsNum    uint64
+	lastInsNum       uint64
+
+	is_last_inst_branch bool
+	last_bbl_pc         uint64
+	start_pc            uint64
+	current_ins_num     uint64
+	last_ins_num        uint64
 }
 
 // NewWavefront returns the Wavefront that wraps the nativeWf
@@ -41,9 +53,26 @@ func NewWavefront(nativeWf *kernels.Wavefront) *Wavefront {
 	return wf
 }
 
+// GetPC returns the current program counter.
+func (wf *Wavefront) GetPC() uint64 {
+	return wf.PC
+}
+
 // Inst returns the instruction that the wavefront is executing
 func (wf *Wavefront) Inst() *insts.Inst {
 	return wf.inst
+}
+
+// SetInst records the instruction currently being executed.
+func (wf *Wavefront) SetInst(inst *insts.Inst) {
+	wf.inst = inst
+}
+
+// RecordInst records instruction-level profiling data for this wavefront.
+func (wf *Wavefront) RecordInst() {
+	if wf.Wf_feature != nil {
+		wf.Wf_feature.AddInst(wf)
+	}
 }
 
 // Scratchpad returns the scratchpad that is associated with the wavefront
@@ -54,6 +83,11 @@ func (wf *Wavefront) Scratchpad() Scratchpad {
 // PID returns pid
 func (wf *Wavefront) PID() vm.PID {
 	return wf.pid
+}
+
+// SetPID sets pid.
+func (wf *Wavefront) SetPID(pid vm.PID) {
+	wf.pid = pid
 }
 
 // SRegValue returns s(i)'s value
