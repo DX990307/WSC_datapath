@@ -51,15 +51,16 @@ func InitGPUSampledEngines(
 			*SampledRunnerGranularityFlag)
 	}
 
-	if *BranchSampledFlag {
+	if *BranchSampledFlag || *LoopSampledFlag {
 		label := fmt.Sprintf("GPU%d.Branch", gpuID)
 		perGPUState.branchSampledEngines[gpuID] =
 			NewBranchSampledEngine(freq, staticComputeUnit, label)
 		PhotonDebugf(fmt.Sprintf("GPU%d", gpuID),
-			"init branch sampled engine coverage=%.6f least-square=%.6f staticCU=%t",
+			"init branch/loop sampled engine coverage=%.6f least-square=%.6f staticCU=%t loop=%t",
 			*BranchSampledThresholdFlag,
 			*BranchSampledLeastSqureFlag,
-			staticComputeUnit != nil)
+			staticComputeUnit != nil,
+			*LoopSampledFlag)
 	}
 
 	if *KernelSampledFlag {
@@ -74,7 +75,8 @@ func InitGPUSampledEngines(
 			kernelEngine.HistorySize())
 	}
 
-	if *SampledRunnerFlag || *BranchSampledFlag || *KernelSampledFlag {
+	if *SampledRunnerFlag || *BranchSampledFlag ||
+		*KernelSampledFlag || *LoopSampledFlag {
 		name := fmt.Sprintf("SampledTimeEngine[%d]", gpuID)
 		sampledTimeEngine := NewSampledTimeEngine(name, engine, freq)
 		sampledTimeEngine.SetDebugLabel(fmt.Sprintf("GPU%d.Time", gpuID))
@@ -125,10 +127,10 @@ func SampledTimeEngineForGPU(gpuID uint64) *SampledTimeEngine {
 }
 
 func ResetGPUSampledEngines(gpuID uint64) {
-	if *BranchSampledFlag {
+	if *BranchSampledFlag || *LoopSampledFlag {
 		if engine := BranchSampledEngineForGPU(gpuID); engine != nil {
 			PhotonDebugf(fmt.Sprintf("GPU%d", gpuID),
-				"kernel launch reset branch engine")
+				"kernel launch reset branch/loop engine")
 			engine.Reset()
 		}
 	}

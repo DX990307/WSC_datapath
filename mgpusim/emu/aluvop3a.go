@@ -46,8 +46,14 @@ func (u *ALUImpl) runVOP3A(state InstEmuState) {
 		u.runVCmpLtU64VOP3a(state)
 	case 256:
 		u.runVCNDMASKB32VOP3a(state)
+	case 257:
+		u.runVADDF32VOP3a(state)
 	case 258:
 		u.runVSUBF32VOP3a(state)
+	case 260, 261:
+		u.runVMULF32VOP3a(state)
+	case 278:
+		u.runVMACF32VOP3a(state)
 	case 449:
 		u.runVMADF32(state)
 	case 450:
@@ -518,6 +524,21 @@ func (u *ALUImpl) runVCNDMASKB32VOP3a(state InstEmuState) {
 	}
 }
 
+func (u *ALUImpl) runVADDF32VOP3a(state InstEmuState) {
+	sp := state.Scratchpad().AsVOP3A()
+
+	var i uint
+	for i = 0; i < 64; i++ {
+		if !laneMasked(sp.EXEC, i) {
+			continue
+		}
+		src0 := math.Float32frombits(uint32(sp.SRC0[i]))
+		src1 := math.Float32frombits(uint32(sp.SRC1[i]))
+		dst := src0 + src1
+		sp.DST[i] = uint64(math.Float32bits(dst))
+	}
+}
+
 func (u *ALUImpl) runVSUBF32VOP3a(state InstEmuState) {
 	sp := state.Scratchpad().AsVOP3A()
 
@@ -529,6 +550,37 @@ func (u *ALUImpl) runVSUBF32VOP3a(state InstEmuState) {
 		src0 := math.Float32frombits(uint32(sp.SRC0[i]))
 		src1 := math.Float32frombits(uint32(sp.SRC1[i]))
 		dst := src0 - src1
+		sp.DST[i] = uint64(math.Float32bits(dst))
+	}
+}
+
+func (u *ALUImpl) runVMULF32VOP3a(state InstEmuState) {
+	sp := state.Scratchpad().AsVOP3A()
+
+	var i uint
+	for i = 0; i < 64; i++ {
+		if !laneMasked(sp.EXEC, i) {
+			continue
+		}
+		src0 := math.Float32frombits(uint32(sp.SRC0[i]))
+		src1 := math.Float32frombits(uint32(sp.SRC1[i]))
+		dst := src0 * src1
+		sp.DST[i] = uint64(math.Float32bits(dst))
+	}
+}
+
+func (u *ALUImpl) runVMACF32VOP3a(state InstEmuState) {
+	sp := state.Scratchpad().AsVOP3A()
+
+	var i uint
+	for i = 0; i < 64; i++ {
+		if !laneMasked(sp.EXEC, i) {
+			continue
+		}
+		dst := math.Float32frombits(uint32(sp.DST[i]))
+		src0 := math.Float32frombits(uint32(sp.SRC0[i]))
+		src1 := math.Float32frombits(uint32(sp.SRC1[i]))
+		dst += src0 * src1
 		sp.DST[i] = uint64(math.Float32bits(dst))
 	}
 }

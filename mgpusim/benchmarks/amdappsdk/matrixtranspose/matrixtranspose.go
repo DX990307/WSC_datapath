@@ -13,6 +13,11 @@ import (
 	"github.com/sarchlab/mgpusim/v3/kernels"
 )
 
+const (
+	defaultBlockSize    = 16
+	middleTileBlockSize = 8
+)
+
 // KernelArgs defines kernel arguments
 type KernelArgs struct {
 	Output              driver.Ptr
@@ -56,7 +61,15 @@ func NewBenchmark(driver *driver.Driver) *Benchmark {
 	b.context = driver.Init()
 	b.loadProgram()
 	b.elemsPerThread1Dim = 4
-	b.blockSize = 16
+	b.blockSize = defaultBlockSize
+	return b
+}
+
+// NewMiddleTileBenchmark keeps the same matrix problem size, but uses a
+// middle-sized tile with one full 64-lane wavefront per workgroup.
+func NewMiddleTileBenchmark(driver *driver.Driver) *Benchmark {
+	b := NewBenchmark(driver)
+	b.blockSize = middleTileBlockSize
 	return b
 }
 

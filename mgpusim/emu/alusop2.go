@@ -34,6 +34,8 @@ func (u *ALUImpl) runSOP2(state InstEmuState) {
 		u.runSMAXU32(state)
 	case 10:
 		u.runSCSELECTB32(state)
+	case 11:
+		u.runSCSELECTB64(state)
 	case 12:
 		u.runSANDB32(state)
 	case 13:
@@ -210,6 +212,16 @@ func (u *ALUImpl) runSMAXU32(state InstEmuState) {
 }
 
 func (u *ALUImpl) runSCSELECTB32(state InstEmuState) {
+	sp := state.Scratchpad().AsSOP2()
+
+	if sp.SCC == 1 {
+		sp.DST = sp.SRC0
+	} else {
+		sp.DST = sp.SRC1
+	}
+}
+
+func (u *ALUImpl) runSCSELECTB64(state InstEmuState) {
 	sp := state.Scratchpad().AsSOP2()
 
 	if sp.SCC == 1 {

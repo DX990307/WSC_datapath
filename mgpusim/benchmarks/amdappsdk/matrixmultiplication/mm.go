@@ -24,6 +24,8 @@ type GPUMatrixMultiplier struct {
 	context          *driver.Context
 	gpus             []int
 	kernel           *insts.HsaCo
+	WorkGroupSizeX   uint16
+	WorkGroupSizeY   uint16
 	useUnifiedMemory bool
 }
 
@@ -34,8 +36,10 @@ func NewGPUMatrixMultiplier(
 	context *driver.Context,
 ) *GPUMatrixMultiplier {
 	m := &GPUMatrixMultiplier{
-		driver:  gpuDriver,
-		context: context,
+		driver:         gpuDriver,
+		context:        context,
+		WorkGroupSizeX: 8,
+		WorkGroupSizeY: 8,
 	}
 	return m
 }
@@ -78,6 +82,14 @@ func (m *GPUMatrixMultiplier) launchKernel(
 	mC *Matrix,
 ) {
 	queues := make([]*driver.CommandQueue, len(m.gpus))
+	workGroupSizeX := m.WorkGroupSizeX
+	if workGroupSizeX == 0 {
+		workGroupSizeX = 8
+	}
+	workGroupSizeY := m.WorkGroupSizeY
+	if workGroupSizeY == 0 {
+		workGroupSizeY = 8
+	}
 
 	for i, gpu := range m.gpus {
 		m.driver.SelectGPU(m.context, gpu)
@@ -91,14 +103,15 @@ func (m *GPUMatrixMultiplier) launchKernel(
 		kernArgs := &KernelArgs{
 			gA, gB, gC,
 			mA.Width,
-			32 * 32 * 4,
+			driver.LocalPtr(workGroupSizeX) *
+				driver.LocalPtr(workGroupSizeY) * 4 * 16,
 			0, int64(height * i), 0,
 		}
 		m.driver.EnqueueLaunchKernel(
 			q,
 			m.kernel,
 			[3]uint32{uint32(width), uint32(height), 1},
-			[3]uint16{8, 8, 1},
+			[3]uint16{workGroupSizeX, workGroupSizeY, 1},
 			kernArgs,
 		)
 	}

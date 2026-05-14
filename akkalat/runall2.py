@@ -19,24 +19,40 @@ TARGETS = [
 MAX_WORKERS = 15
 
 ALL_BENCHMARKS = [
-    "aes",
-    # "atax",
-    # "bicg",
-    "bitonicsort",
-    # "conv2d",
-    "fft",
-    "fastwalshtransform",
-    "fir",
-    "floydwarshall",
+    # "aes",
+    # # "atax",
+    # # "bicg",
+    # "bitonicsort",
+    "bert",
+    "conv2d",
+    "gpt",
+    "maxpooling",
+    "avgpooling",
+    "fulllayer",
+    "fulllayer-large",
+    "fulllayer-gemm-tiny",
+    "fulllayer-gemm-debug",
+    "fulllayer-7bcompute",
+    "fulllayer-1gb",
+    # "fft",
+    # "fastwalshtransform",
+    # "fir",
+    # "floydwarshall",
     "im2col",
-    "kmeans",
+    # "kmeans",
+    "kvcache",
+    "kvcache-decode",
+    "kvcache-decode-30b",
     "matrixmultiplication",
+    "matrixmultiplication-middletile",
     "matrixtranspose",
-    # "nw",
-    "pagerank",
+    "matrixtranspose-middletile",
+    # # "nw",
+    # "pagerank",
     "relu",
-    "simpleconvolution",
-    "spmv",
+    "resnet",
+    # "simpleconvolution",
+    # "spmv",
     # "stencil2d",
 ]
 
@@ -107,6 +123,10 @@ CONFIGS = [
         "sample_kernel",
         ["-kernel-sampled"],
     ),
+    (
+        "sample_loop",
+        ["-loop-sampled"],
+    ),
 ]
 
 QUICK_BENCHMARKS = [
@@ -119,6 +139,7 @@ QUICK_CONFIGS = [
     "sample_wf",
     "sample_branch",
     "sample_kernel",
+    "sample_loop",
 ]
 
 
@@ -158,6 +179,16 @@ def parse_args():
             "Comma-separated config list. Choices: "
             + ",".join(name for name, _ in CONFIGS)
             + ". Use all for every config."
+        ),
+    )
+    parser.add_argument(
+        "--extra-benchmark-flags",
+        dest="extra_benchmark_flags",
+        default="",
+        help=(
+            "Additional flags appended to each benchmark binary command. "
+            "Use quotes, e.g. --extra-benchmark-flags "
+            "'-bert-mode=block -gpt-mode=block'."
         ),
     )
     parser.add_argument(
@@ -263,6 +294,24 @@ def parse_args():
             "Pass -kernel-sampled-distance-threshold to kernel sampled configs. "
             "0 uses the binary default, except --balanced-sweep uses 8."
         ),
+    )
+    parser.add_argument(
+        "--loop-sampled-warmup",
+        type=int,
+        default=0,
+        help="Pass -loop-sampled-warmup to loop sampled configs. 0 uses the binary default.",
+    )
+    parser.add_argument(
+        "--loop-sampled-min-iters",
+        type=int,
+        default=0,
+        help="Pass -loop-sampled-min-iters to loop sampled configs. 0 uses the binary default.",
+    )
+    parser.add_argument(
+        "--loop-sampled-threshold",
+        type=float,
+        default=0,
+        help="Pass -loop-sampled-threshold to loop sampled configs. 0 uses the binary default.",
     )
     parser.add_argument(
         "--allow-sampled-parallel",
@@ -377,6 +426,21 @@ def sampled_control_flags(args, config_flags):
     if kernel_distance > 0 and "-kernel-sampled" in config_flags:
         flags.append(f"-kernel-sampled-distance-threshold={kernel_distance}")
 
+    loop_warmup = positive_or_zero(
+        args.loop_sampled_warmup, "loop-sampled-warmup")
+    if loop_warmup > 0 and "-loop-sampled" in config_flags:
+        flags.append(f"-loop-sampled-warmup={loop_warmup}")
+
+    loop_min_iters = positive_or_zero(
+        args.loop_sampled_min_iters, "loop-sampled-min-iters")
+    if loop_min_iters > 0 and "-loop-sampled" in config_flags:
+        flags.append(f"-loop-sampled-min-iters={loop_min_iters}")
+
+    loop_threshold = positive_or_zero(
+        args.loop_sampled_threshold, "loop-sampled-threshold")
+    if loop_threshold > 0 and "-loop-sampled" in config_flags:
+        flags.append(f"-loop-sampled-threshold={loop_threshold}")
+
     return flags
 
 
@@ -486,6 +550,11 @@ def get_selected_benchmarks(args, target):
 
 def make_exps(args, ablation_configs):
     exps = []
+    extra_flags = (
+        shlex.split(args.extra_benchmark_flags)
+        if args.extra_benchmark_flags
+        else []
+    )
     for target in TARGETS:
         for benchmark in get_selected_benchmarks(args, target):
             for config_name, config_flags in ablation_configs:
@@ -494,7 +563,11 @@ def make_exps(args, ablation_configs):
                         "target": target,
                         "benchmark": benchmark,
                         "config_name": config_name,
-                        "flags": DEFAULT_BENCHMARK_FLAGS + config_flags,
+                        "flags": (
+                            DEFAULT_BENCHMARK_FLAGS
+                            + extra_flags
+                            + config_flags
+                        ),
                     }
                 )
     return exps

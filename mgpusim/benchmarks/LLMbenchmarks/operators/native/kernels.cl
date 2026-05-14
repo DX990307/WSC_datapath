@@ -1,0 +1,8 @@
+#include "common.h"
+#include "residual_add.cl"
+#include "gelu.cl"
+#include "layernorm.cl"
+#include "embedding_synthetic.cl"
+#include "batchnorm2d_inference.cl"
+#include "causal_mask.cl"
+#include "row_softmax.cl"

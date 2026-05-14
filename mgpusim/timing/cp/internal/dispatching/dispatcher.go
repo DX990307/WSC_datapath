@@ -485,7 +485,7 @@ func (d *DispatcherImpl) enableDisabledSampleEngines() {
 		}
 	}
 
-	if *sampledrunner.BranchSampledFlag {
+	if *sampledrunner.BranchSampledFlag || *sampledrunner.LoopSampledFlag {
 		if branchEngine := sampledrunner.BranchSampledEngineForGPU(d.gpuID); branchEngine != nil &&
 			branchEngine.IfDisable() {
 			branchEngine.Enable()

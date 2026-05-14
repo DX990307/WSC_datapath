@@ -527,6 +527,7 @@ func (cu *ComputeUnit) handleMapWGReq(
 	if *profiler.CollectDataApplication ||
 		*sampledrunner.SampledRunnerFlag ||
 		*sampledrunner.BranchSampledFlag ||
+		*sampledrunner.LoopSampledFlag ||
 		*profiler.WfProfilingFlag ||
 		*sampledrunner.KernelSampledFlag {
 		for _, wf := range wg.Wfs {
@@ -647,7 +648,8 @@ func (cu *ComputeUnit) handleMapWGReq(
 		cu.WfDispatcher.DispatchWf(now, wf, req.Wavefronts[i])
 		wf.State = wavefront.WfReady
 
-		if *sampledrunner.BranchSampledFlag && branchEngine != nil {
+		if (*sampledrunner.BranchSampledFlag || *sampledrunner.LoopSampledFlag) &&
+			branchEngine != nil {
 			branchEngine.CollectWfStart(wf.UID, now)
 		}
 		if *sampledrunner.KernelSampledFlag && kernelEngine != nil {
@@ -717,13 +719,15 @@ func (cu *ComputeUnit) recordWfCompletion(
 	if wf.Sampled_level == utils.TimeModel &&
 		(*sampledrunner.SampledRunnerFlag ||
 			*sampledrunner.BranchSampledFlag ||
+			*sampledrunner.LoopSampledFlag ||
 			*sampledrunner.KernelSampledFlag) {
 		if sampledTimeEngine := sampledrunner.SampledTimeEngineForGPU(cu.GPUID); sampledTimeEngine != nil {
 			sampledTimeEngine.IncreaseIdx(now)
 		}
 	}
 	branchEngine := sampledrunner.BranchSampledEngineForGPU(cu.GPUID)
-	if *sampledrunner.BranchSampledFlag && branchEngine != nil {
+	if (*sampledrunner.BranchSampledFlag || *sampledrunner.LoopSampledFlag) &&
+		branchEngine != nil {
 		branchEngine.CollectWfEnd(wf.UID, now)
 	}
 	kernelEngine := sampledrunner.KernelSampledEngineForGPU(cu.GPUID)
@@ -1050,7 +1054,7 @@ func (cu *ComputeUnit) logInstTask(
 		}
 		delete(cu.inflightInst, inst.ID)
 
-		if *sampledrunner.BranchSampledFlag &&
+		if (*sampledrunner.BranchSampledFlag || *sampledrunner.LoopSampledFlag) &&
 			inst.FormatType == insts.SOPP &&
 			inst.Opcode == 1 {
 			if branchEngine := sampledrunner.BranchSampledEngineForGPU(cu.GPUID); branchEngine != nil {
@@ -1061,12 +1065,13 @@ func (cu *ComputeUnit) logInstTask(
 	}
 
 	if *sampledrunner.BranchSampledFlag ||
+		*sampledrunner.LoopSampledFlag ||
 		*sampledrunner.KernelSampledFlag ||
 		*profiler.WfProfilingFlag {
 		cu.inflightInst[inst.ID] = 1
 	}
 
-	if *sampledrunner.BranchSampledFlag &&
+	if (*sampledrunner.BranchSampledFlag || *sampledrunner.LoopSampledFlag) &&
 		!(inst.FormatType == insts.SOPP && inst.Opcode == 1) {
 		if branchEngine := sampledrunner.BranchSampledEngineForGPU(cu.GPUID); branchEngine != nil {
 			branchEngine.Collect(wf.UID, now, inst.Inst, wf)

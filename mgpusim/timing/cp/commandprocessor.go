@@ -244,6 +244,7 @@ func (p *CommandProcessor) processRspFromCUs(now sim.VTimeInSec) bool {
 func (p *CommandProcessor) resetForSampling() {
 	if !*sampledrunner.SampledRunnerFlag &&
 		!*sampledrunner.BranchSampledFlag &&
+		!*sampledrunner.LoopSampledFlag &&
 		!*sampledrunner.KernelSampledFlag {
 		return
 	}

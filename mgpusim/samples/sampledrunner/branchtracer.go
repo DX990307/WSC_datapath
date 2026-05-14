@@ -21,6 +21,14 @@ var BranchSampledThresholdFlag = flag.Float64("branch-sampled-coverage-threshold
 	"Branch sampled machanism coverage threshold.")
 var BranchSampledLeastSqureFlag = flag.Float64("branch-sampled-threshold", 0.01,
 	"Branch sampled machanism threshold.")
+var LoopSampledFlag = flag.Bool("loop-sampled", false,
+	"Loop-level sampled timing prototype.")
+var LoopSampledWarmupFlag = flag.Int("loop-sampled-warmup", 8,
+	"number of loop iterations to observe before testing stability.")
+var LoopSampledMinItersFlag = flag.Int("loop-sampled-min-iters", 16,
+	"number of loop iterations in the stability window.")
+var LoopSampledThresholdFlag = flag.Float64("loop-sampled-threshold", 0.03,
+	"maximum relative loop-iteration spread for stable loop detection.")
 
 type StaticComputeUnit interface {
 	GetBBLInsts(bbl profiler.BBL) []*insts.Inst
@@ -38,6 +46,22 @@ type WfBranchFeature struct {
 	bbl_seq             []profiler.BBL
 	lastBBLFinishTime   sim.VTimeInSec
 	predict_bb_idx      int
+	lastLoopBackedge    map[loopKey]sim.VTimeInSec
+}
+
+type loopKey struct {
+	BranchPC uint64
+	TargetPC uint64
+}
+
+type loopSampleState struct {
+	warmup    int
+	windowLen int
+	threshold float64
+	seen      int
+	window    []sim.VTimeInSec
+	stable    bool
+	predTime  sim.VTimeInSec
 }
 
 type BranchSampledEngine struct {
@@ -54,6 +78,7 @@ type BranchSampledEngine struct {
 	insnums_enablesampled uint64
 	enableSampled         bool
 	disableEngine         bool
+	loopSamples           map[loopKey]*loopSampleState
 	//endtimesum sim.VTimeInSec
 	//  begintimesum sim.VTimeInSec
 	//    begintimenum uint64
@@ -72,7 +97,7 @@ func (sampled_engine *BranchSampledEngine) SetStaticComputeUnit(staticcomputeuni
 }
 
 func (sampled_engine *BranchSampledEngine) Reset() {
-	if !*BranchSampledFlag {
+	if !*BranchSampledFlag && !*LoopSampledFlag {
 		return
 	}
 	// fmt.Printf("branch engine reset\n")
@@ -81,6 +106,7 @@ func (sampled_engine *BranchSampledEngine) Reset() {
 	sampled_engine.wfcount_map = make(map[string]*WfBranchFeature)
 	sampled_engine.bbv_counts = make(map[profiler.BBL]uint64)
 	sampled_engine.bbl2rate = make(map[profiler.BBL]float64)
+	sampled_engine.loopSamples = make(map[loopKey]*loopSampleState)
 	sampled_engine.enableSampled = false
 	//  sampled_engine.  enableSampled : true,
 	sampled_engine.insnums = 0
@@ -114,7 +140,7 @@ func NewBranchSampledEngine(
 }
 
 func InitBranchSampledFeature(freq sim.Freq) {
-	if *BranchSampledFlag {
+	if *BranchSampledFlag || *LoopSampledFlag {
 		Branchsampledengine = NewBranchSampledEngine(freq, nil, "global.Branch")
 		InitUniqBBModel(freq)
 	}
@@ -208,7 +234,7 @@ func (br_engine *BranchSampledEngine) Print() {
 }
 
 func (br_engine *BranchSampledEngine) CollectWfStart(wfid string, now sim.VTimeInSec) {
-	if !*BranchSampledFlag {
+	if !*BranchSampledFlag && !*LoopSampledFlag {
 		return
 	}
 	if br_engine.enableSampled {
@@ -221,6 +247,7 @@ func (br_engine *BranchSampledEngine) CollectWfStart(wfid string, now sim.VTimeI
 		currentIns:          0,
 		last_inst_is_branch: false,
 		predict_bb_idx:      0,
+		lastLoopBackedge:    make(map[loopKey]sim.VTimeInSec),
 	}
 	//panic(inst.PC)
 	//   fmt.Printf("collect begin wfid %s\n",wfid)
@@ -232,7 +259,7 @@ func (br_engine *BranchSampledEngine) CollectWfStart(wfid string, now sim.VTimeI
 }
 
 func (br_engine *BranchSampledEngine) CollectWfEnd(wfid string, now sim.VTimeInSec) {
-	if !*BranchSampledFlag {
+	if !*BranchSampledFlag && !*LoopSampledFlag {
 		return
 	}
 	if br_engine.enableSampled {
@@ -369,7 +396,7 @@ func (sampled_engine *BranchSampledEngine) IfDisable() bool {
 }
 
 func (br_engine *BranchSampledEngine) Collect(wfid string, now sim.VTimeInSec, inst *insts.Inst, state utils.InstEmuState) {
-	if !*BranchSampledFlag {
+	if !*BranchSampledFlag && !*LoopSampledFlag {
 		return
 	}
 	if br_engine.enableSampled || br_engine.disableEngine {
@@ -380,17 +407,22 @@ func (br_engine *BranchSampledEngine) Collect(wfid string, now sim.VTimeInSec, i
 			br_engine.disableEngine)
 		return
 	}
-	if len(br_engine.bbl2rate) == 0 {
-		PhotonVerbosef(br_engine.debugLabel,
-			"branch collect inst ignored wfid=%s no bbl rates",
-			wfid)
-		return
-	}
-
 	wf_branch_feature, found := br_engine.wfcount_map[wfid]
 	if !found || wf_branch_feature == nil {
 		PhotonVerbosef(br_engine.debugLabel,
 			"branch collect inst ignored wfid=%s no wf feature", wfid)
+		return
+	}
+
+	br_engine.collectLoopSample(wf_branch_feature, now, inst)
+
+	if !*BranchSampledFlag {
+		return
+	}
+	if len(br_engine.bbl2rate) == 0 {
+		PhotonVerbosef(br_engine.debugLabel,
+			"branch collect inst ignored wfid=%s no bbl rates",
+			wfid)
 		return
 	}
 	inswidth := uint64(inst.InstWidth())
@@ -426,6 +458,136 @@ func (br_engine *BranchSampledEngine) Collect(wfid string, now sim.VTimeInSec, i
 
 		br_engine.Flush(wf_branch_feature, now, inst.PC)
 	}
+}
+
+func (br_engine *BranchSampledEngine) collectLoopSample(
+	wfBranchFeature *WfBranchFeature,
+	now sim.VTimeInSec,
+	inst *insts.Inst,
+) {
+	if !*LoopSampledFlag ||
+		inst == nil ||
+		inst.FormatType != insts.SOPP ||
+		inst.SImm16 == nil ||
+		!(inst.Opcode >= 2 && inst.Opcode <= 9) {
+		return
+	}
+
+	target, ok := soppBranchTarget(inst)
+	if !ok || target >= inst.PC {
+		return
+	}
+
+	key := loopKey{BranchPC: inst.PC, TargetPC: target}
+	state := br_engine.loopSamples[key]
+	if state == nil {
+		state = newLoopSampleState(
+			*LoopSampledWarmupFlag,
+			*LoopSampledMinItersFlag,
+			*LoopSampledThresholdFlag)
+		br_engine.loopSamples[key] = state
+		PhotonDebugf(br_engine.debugLabel,
+			"loop candidate branchPC=%#x targetPC=%#x",
+			key.BranchPC,
+			key.TargetPC)
+	}
+
+	if wfBranchFeature.lastLoopBackedge == nil {
+		wfBranchFeature.lastLoopBackedge = make(map[loopKey]sim.VTimeInSec)
+	}
+	last, found := wfBranchFeature.lastLoopBackedge[key]
+	wfBranchFeature.lastLoopBackedge[key] = now
+	if !found || now <= last {
+		return
+	}
+
+	interval := now - last
+	wasStable := state.stable
+	if state.collect(interval) && !wasStable {
+		PhotonDebugf(br_engine.debugLabel,
+			"loop sampled stable branchPC=%#x targetPC=%#x iters=%d pred=%.3fns threshold=%.6f",
+			key.BranchPC,
+			key.TargetPC,
+			state.seen,
+			state.predTime*1e9,
+			state.threshold)
+	}
+}
+
+func soppBranchTarget(inst *insts.Inst) (uint64, bool) {
+	if inst == nil || inst.SImm16 == nil {
+		return 0, false
+	}
+	imm := int16(uint16(inst.SImm16.IntValue))
+	target := int64(inst.PC) + int64(imm)*4 + 4
+	if target < 0 {
+		return 0, false
+	}
+	return uint64(target), true
+}
+
+func newLoopSampleState(
+	warmup int,
+	windowLen int,
+	threshold float64,
+) *loopSampleState {
+	if warmup < 0 {
+		warmup = 0
+	}
+	if windowLen < 2 {
+		windowLen = 2
+	}
+	if threshold <= 0 {
+		threshold = 0.03
+	}
+	return &loopSampleState{
+		warmup:    warmup,
+		windowLen: windowLen,
+		threshold: threshold,
+		window:    make([]sim.VTimeInSec, 0, windowLen),
+	}
+}
+
+func (state *loopSampleState) collect(interval sim.VTimeInSec) bool {
+	state.seen++
+	if state.seen <= state.warmup || interval <= 0 {
+		return state.stable
+	}
+
+	state.window = append(state.window, interval)
+	if len(state.window) > state.windowLen {
+		copy(state.window, state.window[1:])
+		state.window = state.window[:state.windowLen]
+	}
+	if len(state.window) < state.windowLen {
+		return state.stable
+	}
+
+	minTime := state.window[0]
+	maxTime := state.window[0]
+	var sum sim.VTimeInSec
+	for _, sample := range state.window {
+		if sample < minTime {
+			minTime = sample
+		}
+		if sample > maxTime {
+			maxTime = sample
+		}
+		sum += sample
+	}
+
+	avg := sum / sim.VTimeInSec(len(state.window))
+	if avg <= 0 {
+		return state.stable
+	}
+
+	spread := float64((maxTime - minTime) / avg)
+	if spread <= state.threshold {
+		state.stable = true
+		state.predTime = avg
+	}
+
+	return state.stable
 }
 
 func (br_engine *BranchSampledEngine) Update(bbl profiler.BBL) {

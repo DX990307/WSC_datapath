@@ -2,6 +2,9 @@ package benchmarkselection
 
 import (
 	"github.com/sarchlab/mgpusim/v3/benchmarks"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/LLMbenchmarks/bert"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/LLMbenchmarks/gpt"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/LLMbenchmarks/resnet"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/TensorParallelismSample/layer_benchmarks/conv2d"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/amdappsdk/bitonicsort"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/amdappsdk/fastwalshtransform"
@@ -21,7 +24,10 @@ import (
 	"github.com/sarchlab/mgpusim/v3/benchmarks/concurrentRunning/spmvmt"
 
 	// "github.com/sarchlab/mgpusim/v3/benchmarks/dnn/layer_benchmarks/conv2d"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/layer_benchmarks/avgpooling"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/layer_benchmarks/fulllayer"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/layer_benchmarks/im2col"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/layer_benchmarks/maxpooling"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/layer_benchmarks/relu"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/training_benchmarks/lenet"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/training_benchmarks/minerva"
@@ -30,6 +36,7 @@ import (
 	"github.com/sarchlab/mgpusim/v3/benchmarks/heteromark/fir"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/heteromark/kmeans"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/heteromark/pagerank"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/llm/kvcache"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/polybench/atax"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/polybench/bicg"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/rodinia/nw"
@@ -72,6 +79,8 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		// closest practical size to the 6x 3x3-to-7x7 scaling target.
 		bitonicsort.Length = 1048576 * 64
 		benchmark = bitonicsort
+	case "bert":
+		benchmark = bert.NewBenchmark(driver)
 	case "conv2d":
 		conv2d := conv2d.NewBenchmark(driver)
 		conv2d.N = 1
@@ -86,6 +95,93 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		conv2d.StrideX = 1
 		conv2d.StrideY = 1
 		benchmark = conv2d
+	case "maxpooling":
+		maxpooling := maxpooling.NewBenchmark(driver)
+		maxpooling.N = 1
+		maxpooling.C = 64
+		maxpooling.H = 112
+		maxpooling.W = 112
+		maxpooling.KernelHeight = 2
+		maxpooling.KernelWidth = 2
+		maxpooling.PadX = 0
+		maxpooling.PadY = 0
+		maxpooling.StrideX = 2
+		maxpooling.StrideY = 2
+		benchmark = maxpooling
+	case "avgpooling":
+		avgpooling := avgpooling.NewBenchmark(driver)
+		avgpooling.N = 1
+		avgpooling.C = 512
+		avgpooling.H = 7
+		avgpooling.W = 7
+		avgpooling.KernelHeight = 7
+		avgpooling.KernelWidth = 7
+		avgpooling.PadX = 0
+		avgpooling.PadY = 0
+		avgpooling.StrideX = 1
+		avgpooling.StrideY = 1
+		benchmark = avgpooling
+	case "fulllayer":
+		fulllayer := fulllayer.NewBenchmark(driver)
+		fulllayer.N = 1
+		fulllayer.InputDim = 1024
+		fulllayer.OutputDim = 100
+		benchmark = fulllayer
+	case "fulllayer-large":
+		fulllayer := fulllayer.NewBenchmark(driver)
+		// A runnable large full-layer case for Photon validation. It is
+		// much smaller than fulllayer-1gb but still has enough GEMM WGs:
+		// ceil(512/16) * ceil(4096/16) = 8192.
+		fulllayer.N = 512
+		fulllayer.InputDim = 4096
+		fulllayer.OutputDim = 4096
+		fulllayer.RandomizeParameters = false
+		benchmark = fulllayer
+	case "fulllayer-gemm-tiny":
+		fulllayer := fulllayer.NewBenchmark(driver)
+		// A tiny smoke-test case for checking whether the fully connected
+		// GEMM path completes at all. The old scalar GEMM kernel is very
+		// slow in timing simulation, so keep K small here.
+		// Compute: 1 * 128 * 128 = 16K MACs.
+		// GEMM workgroups: ceil(1/16) * ceil(128/16) = 8.
+		fulllayer.N = 1
+		fulllayer.InputDim = 4096
+		fulllayer.OutputDim = 4096
+		fulllayer.RandomizeParameters = false
+		benchmark = fulllayer
+	case "fulllayer-gemm-debug":
+		fulllayer := fulllayer.NewBenchmark(driver)
+		// A small full-layer case for debugging whether GEMM itself
+		// completes. Compute: 128 * 2048 * 2048 = 0.54B MACs.
+		// GEMM workgroups: ceil(128/16) * ceil(2048/16) = 1024.
+		fulllayer.N = 128
+		fulllayer.InputDim = 2048
+		fulllayer.OutputDim = 2048
+		fulllayer.RandomizeParameters = false
+		benchmark = fulllayer
+	case "fulllayer-7bcompute":
+		fulllayer := fulllayer.NewBenchmark(driver)
+		// LLaMA-7B-style decode does roughly 6.5B linear-layer MACs per
+		// generated token across all transformer layers. This single-GEMM
+		// proxy is close to that scale:
+		// 416 * 4096 * 4096 = 6.98B MACs.
+		// GEMM workgroups: ceil(416/16) * ceil(4096/16) = 6656.
+		fulllayer.N = 416
+		fulllayer.InputDim = 4096
+		fulllayer.OutputDim = 4096
+		fulllayer.RandomizeParameters = false
+		benchmark = fulllayer
+	case "fulllayer-1gb":
+		fulllayer := fulllayer.NewBenchmark(driver)
+		// This shape uses the generic fully connected layer path. Its
+		// persistent parameters and gradients are about 512MiB, while
+		// forward-time clone/reshape/GEMM temporaries push peak footprint
+		// close to 1GiB.
+		fulllayer.N = 1024
+		fulllayer.InputDim = 16384
+		fulllayer.OutputDim = 4096
+		fulllayer.RandomizeParameters = false
+		benchmark = fulllayer
 	case "fastwalshtransform":
 		fastwalshtransform := fastwalshtransform.NewBenchmark(driver)
 		fastwalshtransform.Length = 1048576 * 64
@@ -104,6 +200,8 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		floydwarshall.NumNodes = 8192
 		floydwarshall.NumIterations = 1
 		benchmark = floydwarshall
+	case "gpt":
+		benchmark = gpt.NewBenchmark(driver)
 	case "im2col":
 		im2col := im2col.NewBenchmark(driver)
 		im2col.N = 1
@@ -126,15 +224,53 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		kmeans.NumFeatures = 16
 		kmeans.MaxIter = 8
 		benchmark = kmeans
+	case "kvcache":
+		kvcache := kvcache.NewBenchmark(driver)
+		kvcache.NumLayers = 8
+		kvcache.NumHeads = 16
+		kvcache.SeqLen = 2048
+		kvcache.HeadDim = 128
+		kvcache.DecodeStep = 1
+		benchmark = kvcache
+	case "kvcache-decode":
+		kvcache := kvcache.NewDecodeBenchmark(driver)
+		kvcache.NumLayers = 32
+		kvcache.NumHeads = 32
+		kvcache.NumKVHeads = 32
+		kvcache.SeqLen = 2048
+		kvcache.HeadDim = 128
+		kvcache.SeqBlock = 64
+		kvcache.DecodeStep = 1
+		benchmark = kvcache
+	case "kvcache-decode-30b":
+		kvcache := kvcache.NewDecode30BBenchmark(driver)
+		kvcache.NumLayers = 60
+		kvcache.NumHeads = 52
+		kvcache.NumKVHeads = 52
+		kvcache.SeqLen = 2048
+		kvcache.HeadDim = 128
+		kvcache.SeqBlock = 64
+		kvcache.DecodeStep = 1
+		benchmark = kvcache
 	case "matrixmultiplication":
 		matrixmultiplication := matrixmultiplication.NewBenchmark(driver)
 		matrixmultiplication.X = 256
 		matrixmultiplication.Y = 2048 * 128
 		matrixmultiplication.Z = 256
 		benchmark = matrixmultiplication
+	case "matrixmultiplication-middletile":
+		matrixmultiplication := matrixmultiplication.NewMiddleTileBenchmark(driver)
+		matrixmultiplication.X = 256
+		matrixmultiplication.Y = 2048 * 128
+		matrixmultiplication.Z = 256
+		benchmark = matrixmultiplication
 	case "matrixtranspose":
 		matrixtranspose := matrixtranspose.NewBenchmark(driver)
-		matrixtranspose.Width = 8192
+		matrixtranspose.Width = 8192 * 2
+		benchmark = matrixtranspose
+	case "matrixtranspose-middletile":
+		matrixtranspose := matrixtranspose.NewMiddleTileBenchmark(driver)
+		matrixtranspose.Width = 8192 * 2
 		benchmark = matrixtranspose
 	case "nbody":
 		nbody := nbody.NewBenchmark(driver)
@@ -157,6 +293,8 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		// relu.Length = 10485760 * 8
 		relu.Length = 10485760 * oneGBScale
 		benchmark = relu
+	case "resnet":
+		benchmark = resnet.NewBenchmark(driver)
 	case "simpleconvolution":
 		simpleconvolution := simpleconvolution.NewBenchmark(driver)
 		simpleconvolution.Height = 2048
