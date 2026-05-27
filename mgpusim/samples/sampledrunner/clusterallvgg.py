@@ -229,7 +229,7 @@ def run_bench_with_param( bench,bench_cmd ):
     binary_dir=os.path.join(root_path,bench)
     os.chdir( binary_dir )
     if not args.check:
-        os.system("go build")
+        os.system("go build -buildvcs=false")
 
     output_each_bench = [bench_cmd]
     for pattern in pattern_order:
@@ -393,4 +393,3 @@ print(cluster2simtime)
 for kernel,times in cluster2simtime.items():
     timesstr = [str(elem)for elem in times]
     print("\t".join(timesstr))
-

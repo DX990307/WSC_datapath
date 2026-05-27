@@ -41,7 +41,7 @@ def get_args():
     parser.add_argument("-check" ,action="store_true" , default=False,help=" check the final result")
     parser.add_argument("-force" ,action="store_true" , default=False,help=" force to execute")
     parser.add_argument("-mode",type=str   ,nargs='+', default=["all"],help=" execution modes, including photon, kernelSampled, warpKernelSampled,full ")
-    parser.add_argument("-bench",type=str   , default="vgg16",help=" benchmarks to execute, support vgg16,vgg19,resnet18,resnet32,resnet50,resnet101,resnet152")
+    parser.add_argument("-bench",type=str   , default="vgg16",help=" benchmarks to execute, support vgg16,vgg19,resnet18,resnet32,resnet50,resnet101,resnet152,bert,gpt")
     parser.add_argument("-arch",type=str   , default="r9nano",help="archtecture to simulate")
     parser.add_argument("-v",type=str   , default="0",help="version")
     parser.add_argument("-n",type=int   , default=8,help="parallel workloads")
@@ -74,6 +74,8 @@ from vgg19config import init_vgg19, run_vgg19
 from resnet18config import init_resnet18, run_resnet18
 from resnet34config import init_resnet34, run_resnet34
 from resnet50config import init_resnet50_101_152,run_resnet50,run_resnet101,run_resnet152
+from bertconfig import init_bert, run_bert
+from gptconfig import init_gpt, run_gpt
 if args.bench=="vgg16":
     benchmarks = init_vgg16()
 elif args.bench=="vgg19":
@@ -84,8 +86,12 @@ elif args.bench=="resnet34":
     benchmarks = init_resnet34()
 elif args.bench=="resnet50" or args.bench=="resnet101" or args.bench=="resnet152":
     benchmarks = init_resnet50_101_152()
+elif args.bench=="bert":
+    benchmarks = init_bert()
+elif args.bench=="gpt":
+    benchmarks = init_gpt()
 else:
-    print("Unknow benchmarks, we only support vgg16/19 and resnet18/34/50/101/152 now")
+    print("Unknow benchmarks, we only support vgg16/19, resnet18/34/50/101/152, bert, and gpt now")
     print("If you want PageRank, run testpagerank.py script")
     exit(0)
 general_parameter=["-magic-memory-copy"]
@@ -231,7 +237,7 @@ def run_bench_with_param( bench,bench_cmd ,bench_i):
     binary_dir=os.path.join(root_path,bench)
     os.chdir( binary_dir )
     if not args.check:
-        os.system("go build")
+        os.system("go build -buildvcs=false")
 
     #output_each_bench = [bench_cmd]
     output_each_bench = []
@@ -374,6 +380,10 @@ elif args.bench=="resnet101":
     benchparams = run_resnet101(benchmarks)
 elif args.bench=="resnet152":
     benchparams = run_resnet152(benchmarks)
+elif args.bench=="bert":
+    benchparams = run_bert(benchmarks)
+elif args.bench=="gpt":
+    benchparams = run_gpt(benchmarks)
 bench_i = 0
 for bench,bench_cmd in benchparams:
     if args.mode[0] == "all" :
@@ -472,8 +482,6 @@ if args.check and args.bench =="vgg16" and args.mode[0]=="all":
     #print("\t".join(last_row))
 
     export_excel( outputfile, sheet2data, columns )
-
-
 
 
 

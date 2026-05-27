@@ -49,6 +49,10 @@ func ReportInstFeature() {
 }
 
 func (instfeature *OnlineInstFeature) Predict(inst *insts.Inst) (sim.VTimeInSec, bool) {
+	if instfeature == nil || inst == nil {
+		return sim.VTimeInSec(0), false
+	}
+
 	opcode := inst.Opcode
 	format := inst.FormatType
 	insttype := InstDataType{
@@ -56,12 +60,7 @@ func (instfeature *OnlineInstFeature) Predict(inst *insts.Inst) (sim.VTimeInSec,
 		format: format,
 	}
 	instdatafeatureptr, found := instfeature.inst2predicttime[insttype]
-	for key, _ := range instfeature.inst2predicttime {
-		log.Printf("have opcode %d , format %d\n", key.opcode, key.format)
-	}
-	log.Printf("format %d opcode%d found %t\n", format, opcode, found)
 	if !found {
-		//        panic(fmt.Sprintf("inst opcode %d format %d not found\n",opcode,format))
 		return sim.VTimeInSec(0), found
 	}
 	instnum := instdatafeatureptr.intervalnum
@@ -71,7 +70,6 @@ func (instfeature *OnlineInstFeature) Predict(inst *insts.Inst) (sim.VTimeInSec,
 		intervalavg := intervalsum / intervalnum
 		return intervalavg, found
 	} else {
-		log.Printf("I am triggered")
 		return sim.VTimeInSec(0), false
 	}
 }

@@ -7,8 +7,6 @@ import (
 
 	"github.com/sarchlab/mgpusim/v3/benchmarks"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/LLMbenchmarks/operators"
-	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/gputensor"
-	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/tensor"
 	"github.com/sarchlab/mgpusim/v3/driver"
 )
 
@@ -52,7 +50,7 @@ type Benchmark struct {
 	ctx    *driver.Context
 	gpus   []int
 
-	to  *gputensor.GPUOperator
+	to  *operators.GPUOperator
 	ops *operators.Operator
 
 	useUnifiedMemory bool
@@ -83,7 +81,7 @@ func (b *Benchmark) Run() {
 	}
 	cfg := bertConfig()
 	b.driver.SelectGPU(b.ctx, b.gpus[0])
-	b.to = gputensor.NewGPUOperator(b.driver, b.ctx)
+	b.to = operators.NewGPUOperator(b.driver, b.ctx)
 	b.to.ReportTime()
 	b.ops = operators.NewOperator(
 		b.driver, b.ctx, b.to, "BERT", *logSubtasksFlag)
@@ -178,11 +176,11 @@ func validateTransformerConfig(name string, cfg config) {
 }
 
 func (b *Benchmark) encoderLayer(
-	input tensor.Tensor,
+	input operators.Tensor,
 	rows int,
 	cfg config,
 	layer int,
-) tensor.Tensor {
+) operators.Tensor {
 	b.ops.Log("encoder layer %d", layer)
 	attn := b.ops.SelfAttention(
 		"encoder attention",

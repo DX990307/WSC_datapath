@@ -123,7 +123,7 @@ for bench,bench_cmds in benchmarks.items():
     binary_dir=os.path.join(root_path,bench)
     os.chdir( binary_dir )
     if not args.check:
-        os.system("go build")
+        os.system("go build -buildvcs=false")
     if type(bench_cmds) != list:
         bench_cmds = [bench_cmds]
     for bench_cmd in bench_cmds:
@@ -197,5 +197,4 @@ print("\n#########Final Results\n")
 print("\t".join(first_row))
 for output_each_bench in output_all:
     print( "\t".join(output_each_bench) )
-
 

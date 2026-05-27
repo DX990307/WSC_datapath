@@ -100,7 +100,6 @@ func (bb *BBModel) IntervalModel(bbtrace []*insts.Inst) sim.VTimeInSec {
 			issuetime = bb.Freq.NCyclesLater(exeunitvmem, issuetime)
 
 			time, found := profiler.Global_inst_feature.Predict(inst)
-			log.Printf("time %.2f found %t opcode %d\n", time*1e9, found, inst.Opcode)
 			if found {
 				finishtime2 += time
 			} else {
@@ -137,6 +136,5 @@ func (bb *BBModel) IntervalModel(bbtrace []*insts.Inst) sim.VTimeInSec {
 	} else {
 		ret = issuetime
 	}
-	log.Printf("interval %.2f", ret*1e9)
 	return ret
 }

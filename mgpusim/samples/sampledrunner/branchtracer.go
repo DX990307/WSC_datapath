@@ -4,6 +4,7 @@ import (
 	//    "encoding/json"
 	//    "os"
 	"flag"
+	"math"
 	//	"github.com/sarchlab/akita/v3/mem/vm"
 
 	"github.com/sarchlab/akita/v3/sim"
@@ -47,6 +48,7 @@ type WfBranchFeature struct {
 	lastBBLFinishTime   sim.VTimeInSec
 	predict_bb_idx      int
 	lastLoopBackedge    map[loopKey]sim.VTimeInSec
+	loopBackedgeCounts  map[loopKey]int
 }
 
 type loopKey struct {
@@ -55,13 +57,15 @@ type loopKey struct {
 }
 
 type loopSampleState struct {
-	warmup    int
-	windowLen int
-	threshold float64
-	seen      int
-	window    []sim.VTimeInSec
-	stable    bool
-	predTime  sim.VTimeInSec
+	warmup       int
+	windowLen    int
+	threshold    float64
+	seen         int
+	window       []sim.VTimeInSec
+	stable       bool
+	predTime     sim.VTimeInSec
+	tripCounts   []int
+	avgTripCount float64
 }
 
 type BranchSampledEngine struct {
@@ -211,8 +215,23 @@ func (br_engine *BranchSampledEngine) Predict(wfid string, bbv profiler.BBL) sim
 			if bbModel == nil {
 				bbModel = Global_bbmode
 			}
-			intervaltime = bbModel.IntervalModel(
-				br_engine.static_compute_unit.GetBBLInsts(bbv))
+			if br_engine.static_compute_unit == nil {
+				PhotonVerbosef(br_engine.debugLabel,
+					"branch predict skipped bblPC=%d bblIns=%d no static compute unit",
+					bbv.PC,
+					bbv.InsNum)
+				return sim.VTimeInSec(0)
+			}
+			bblInsts := getBBLInstsOrNil(
+				br_engine.static_compute_unit, bbv, br_engine.debugLabel)
+			if len(bblInsts) == 0 {
+				PhotonVerbosef(br_engine.debugLabel,
+					"branch predict skipped bblPC=%d bblIns=%d missing static bbl",
+					bbv.PC,
+					bbv.InsNum)
+				return sim.VTimeInSec(0)
+			}
+			intervaltime = bbModel.IntervalModel(bblInsts)
 			br_engine.bbv2bbmodeltime_map[bbv] = intervaltime
 			PhotonDebugf(br_engine.debugLabel,
 				"branch predict from bb model pred=%.3fns",
@@ -228,6 +247,25 @@ func (br_engine *BranchSampledEngine) Predict(wfid string, bbv profiler.BBL) sim
 		return sim.VTimeInSec(0)
 	}
 }
+
+func getBBLInstsOrNil(
+	staticComputeUnit StaticComputeUnit,
+	bbv profiler.BBL,
+	debugLabel string,
+) (insts []*insts.Inst) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			PhotonVerbosef(debugLabel,
+				"static bbl lookup failed bblPC=%d bblIns=%d err=%v",
+				bbv.PC,
+				bbv.InsNum,
+				recovered)
+			insts = nil
+		}
+	}()
+	return staticComputeUnit.GetBBLInsts(bbv)
+}
+
 func (br_engine *BranchSampledEngine) Print() {
 	// fmt.Printf("Hello")
 	// log.Printf("Hello")
@@ -248,6 +286,7 @@ func (br_engine *BranchSampledEngine) CollectWfStart(wfid string, now sim.VTimeI
 		last_inst_is_branch: false,
 		predict_bb_idx:      0,
 		lastLoopBackedge:    make(map[loopKey]sim.VTimeInSec),
+		loopBackedgeCounts:  make(map[loopKey]int),
 	}
 	//panic(inst.PC)
 	//   fmt.Printf("collect begin wfid %s\n",wfid)
@@ -262,13 +301,14 @@ func (br_engine *BranchSampledEngine) CollectWfEnd(wfid string, now sim.VTimeInS
 	if !*BranchSampledFlag && !*LoopSampledFlag {
 		return
 	}
-	if br_engine.enableSampled {
+	if br_engine.enableSampled && !*LoopSampledFlag {
 		return
 	}
-	//    wf_branch_feature,_ := br_engine.wfcount_map[wfid]
-	//    wf_branch_feature, found := br_engine.wfcount_map[wfid]
-	_, found := br_engine.wfcount_map[wfid]
+	wf_branch_feature, found := br_engine.wfcount_map[wfid]
 	if found {
+		if *LoopSampledFlag {
+			br_engine.collectLoopTripCounts(wf_branch_feature)
+		}
 		//        endtime := now - wf_branch_feature.wfStartTime
 		//    fmt.Printf("wfid %s endtime %f %f %f\n",wfid,endtime * 1e9, now*1e9,wf_branch_feature.startTime*1e9)
 		//        br_engine.endtimesum += endtime
@@ -465,11 +505,7 @@ func (br_engine *BranchSampledEngine) collectLoopSample(
 	now sim.VTimeInSec,
 	inst *insts.Inst,
 ) {
-	if !*LoopSampledFlag ||
-		inst == nil ||
-		inst.FormatType != insts.SOPP ||
-		inst.SImm16 == nil ||
-		!(inst.Opcode >= 2 && inst.Opcode <= 9) {
+	if !*LoopSampledFlag || !isLoopSampleCandidate(inst) {
 		return
 	}
 
@@ -495,6 +531,10 @@ func (br_engine *BranchSampledEngine) collectLoopSample(
 	if wfBranchFeature.lastLoopBackedge == nil {
 		wfBranchFeature.lastLoopBackedge = make(map[loopKey]sim.VTimeInSec)
 	}
+	if wfBranchFeature.loopBackedgeCounts == nil {
+		wfBranchFeature.loopBackedgeCounts = make(map[loopKey]int)
+	}
+	wfBranchFeature.loopBackedgeCounts[key]++
 	last, found := wfBranchFeature.lastLoopBackedge[key]
 	wfBranchFeature.lastLoopBackedge[key] = now
 	if !found || now <= last {
@@ -514,16 +554,108 @@ func (br_engine *BranchSampledEngine) collectLoopSample(
 	}
 }
 
+func (br_engine *BranchSampledEngine) collectLoopTripCounts(
+	wfBranchFeature *WfBranchFeature,
+) {
+	for key, count := range wfBranchFeature.loopBackedgeCounts {
+		state := br_engine.loopSamples[key]
+		if state == nil || !state.stable {
+			continue
+		}
+
+		state.collectTripCount(count)
+		if state.avgTripCount <= 0 {
+			continue
+		}
+
+		if !br_engine.enableSampled {
+			PhotonDebugf(br_engine.debugLabel,
+				"loop-level sampled start branchPC=%#x targetPC=%#x avgTripCount=%.2f predIter=%.3fns",
+				key.BranchPC,
+				key.TargetPC,
+				state.avgTripCount,
+				state.predTime*1e9)
+		}
+		br_engine.enableSampled = true
+	}
+}
+
+// PredictStableLoop returns the predicted time for a previously observed stable
+// loop backedge. It intentionally only enables fast-forward for conditional
+// backedges. Unconditional backward branches usually rely on an earlier exit
+// branch, so jumping to their fall-through would be too aggressive.
+func (br_engine *BranchSampledEngine) PredictStableLoop(
+	inst *insts.Inst,
+	completedIters int,
+) (
+	predTime sim.VTimeInSec,
+	target uint64,
+	fallthroughPC uint64,
+	skippedIters int,
+	ok bool,
+) {
+	if br_engine == nil ||
+		!*LoopSampledFlag ||
+		!isConditionalLoopSampleCandidate(inst) {
+		return 0, 0, 0, 0, false
+	}
+
+	target, ok = soppBranchTarget(inst)
+	if !ok || target >= inst.PC {
+		return 0, 0, 0, 0, false
+	}
+
+	state := br_engine.loopSamples[loopKey{
+		BranchPC: inst.PC,
+		TargetPC: target,
+	}]
+	if state == nil || !state.stable || state.predTime <= 0 ||
+		state.avgTripCount <= 0 {
+		return 0, 0, 0, 0, false
+	}
+
+	skippedIters = state.remainingIters(completedIters)
+	if skippedIters <= 0 {
+		return 0, 0, 0, 0, false
+	}
+
+	return state.predTime * sim.VTimeInSec(skippedIters),
+		target,
+		soppFallthroughPC(inst),
+		skippedIters,
+		true
+}
+
+func isLoopSampleCandidate(inst *insts.Inst) bool {
+	return inst != nil &&
+		inst.FormatType == insts.SOPP &&
+		inst.SImm16 != nil &&
+		inst.Opcode >= 2 &&
+		inst.Opcode <= 9
+}
+
+func isConditionalLoopSampleCandidate(inst *insts.Inst) bool {
+	return isLoopSampleCandidate(inst) && inst.Opcode != 2
+}
+
 func soppBranchTarget(inst *insts.Inst) (uint64, bool) {
 	if inst == nil || inst.SImm16 == nil {
 		return 0, false
 	}
 	imm := int16(uint16(inst.SImm16.IntValue))
-	target := int64(inst.PC) + int64(imm)*4 + 4
+	target := int64(soppFallthroughPC(inst)) + int64(imm)*4
 	if target < 0 {
 		return 0, false
 	}
 	return uint64(target), true
+}
+
+func soppFallthroughPC(inst *insts.Inst) uint64 {
+	byteSize := inst.ByteSize
+	if byteSize <= 0 {
+		byteSize = 4
+	}
+	return inst.PC + uint64(byteSize)
 }
 
 func newLoopSampleState(
@@ -588,6 +720,50 @@ func (state *loopSampleState) collect(interval sim.VTimeInSec) bool {
 	}
 
 	return state.stable
+}
+
+func (state *loopSampleState) collectTripCount(count int) {
+	if count <= 0 {
+		return
+	}
+
+	state.tripCounts = append(state.tripCounts, count)
+	if len(state.tripCounts) > state.windowLen {
+		copy(state.tripCounts, state.tripCounts[1:])
+		state.tripCounts = state.tripCounts[:state.windowLen]
+	}
+
+	minCount := state.tripCounts[0]
+	maxCount := state.tripCounts[0]
+	sum := 0
+	for _, sample := range state.tripCounts {
+		if sample < minCount {
+			minCount = sample
+		}
+		if sample > maxCount {
+			maxCount = sample
+		}
+		sum += sample
+	}
+
+	avg := float64(sum) / float64(len(state.tripCounts))
+	if avg <= 0 {
+		return
+	}
+
+	spread := float64(maxCount-minCount) / avg
+	if len(state.tripCounts) == 1 || spread <= state.threshold {
+		state.avgTripCount = avg
+	}
+}
+
+func (state *loopSampleState) remainingIters(completedIters int) int {
+	tripCount := int(math.Round(state.avgTripCount))
+	remaining := tripCount - completedIters
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
 }
 
 func (br_engine *BranchSampledEngine) Update(bbl profiler.BBL) {

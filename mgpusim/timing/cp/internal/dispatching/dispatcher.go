@@ -192,6 +192,7 @@ func (d *DispatcherImpl) StartDispatching(req *protocol.LaunchKernelReq) {
 
 	if *sampledrunner.SampledRunnerFlag ||
 		*sampledrunner.BranchSampledFlag ||
+		*sampledrunner.LoopSampledFlag ||
 		*sampledrunner.KernelSampledFlag {
 		packet := info.Packet
 		workgroupSize := int(packet.WorkgroupSizeX) *
@@ -359,6 +360,7 @@ func (d *DispatcherImpl) completeKernel(now sim.VTimeInSec) (
 
 		tracing.TraceReqComplete(req, d.cp)
 		if (*sampledrunner.BranchSampledFlag ||
+			*sampledrunner.LoopSampledFlag ||
 			*sampledrunner.KernelSampledFlag) &&
 			emu.Bbvcomputeunit != nil {
 			emu.Bbvcomputeunit.FFlush()

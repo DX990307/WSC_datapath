@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/gputensor"
-	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/tensor"
 	"github.com/sarchlab/mgpusim/v3/driver"
 	"github.com/sarchlab/mgpusim/v3/insts"
 	"github.com/sarchlab/mgpusim/v3/kernels"
@@ -40,7 +38,7 @@ var rowSoftmaxKernelBytes []byte
 type Operator struct {
 	driver      *driver.Driver
 	ctx         *driver.Context
-	to          *gputensor.GPUOperator
+	to          *GPUOperator
 	logSubtasks bool
 	prefix      string
 
@@ -57,7 +55,7 @@ type Operator struct {
 func NewOperator(
 	gpuDriver *driver.Driver,
 	ctx *driver.Context,
-	to *gputensor.GPUOperator,
+	to *GPUOperator,
 	prefix string,
 	logSubtasks bool,
 ) *Operator {
@@ -73,7 +71,7 @@ func NewOperator(
 }
 
 // TensorOperator returns the underlying DNN tensor operator.
-func (o *Operator) TensorOperator() *gputensor.GPUOperator {
+func (o *Operator) TensorOperator() *GPUOperator {
 	return o.to
 }
 
@@ -86,7 +84,7 @@ func (o *Operator) Log(format string, args ...interface{}) {
 }
 
 // Free releases a tensor if it is non-nil.
-func (o *Operator) Free(t tensor.Tensor) {
+func (o *Operator) Free(t Tensor) {
 	if t == nil {
 		return
 	}
@@ -94,7 +92,7 @@ func (o *Operator) Free(t tensor.Tensor) {
 }
 
 // Input creates a synthetic input tensor.
-func (o *Operator) Input(name string, size []int) tensor.Tensor {
+func (o *Operator) Input(name string, size []int) Tensor {
 	o.Log("%s input %v", name, size)
 	return o.to.Zeros(size)
 }
@@ -117,8 +115,8 @@ func loadKernel(data []byte, name string) *insts.HsaCo {
 	return kernel
 }
 
-func ptr(t tensor.Tensor) driver.Ptr {
-	return t.(*gputensor.Tensor).Ptr()
+func ptr(t Tensor) driver.Ptr {
+	return t.(*GPUTensor).Ptr()
 }
 
 func launch1DSize(n int) [3]uint32 {
@@ -154,8 +152,9 @@ type layerNormArgs struct {
 }
 
 type embeddingArgs struct {
-	Out                       driver.Ptr
-	Rows, Hidden, Seed        int32
+	Out, TokenIDs             driver.Ptr
+	TokenTable, PositionTable driver.Ptr
+	Rows, Hidden, VocabSize   int32
 	Padding                   int32
 	OffsetX, OffsetY, OffsetZ int64
 }
@@ -184,31 +183,58 @@ type rowSoftmaxArgs struct {
 	OffsetX, OffsetY, OffsetZ int64
 }
 
-// Embedding creates a synthetic token/position embedding tensor. This uses a
-// GPU elementwise kernel to materialize the embedding output while keeping the
-// benchmark independent from external token data.
-func (o *Operator) Embedding(name string, rows, hidden int) tensor.Tensor {
+// Embedding gathers token and position vectors, then adds them elementwise.
+// The benchmark treats embedding tables as preloaded model weights, so it
+// allocates them without timing a large host-side initialization copy.
+func (o *Operator) Embedding(name string, rows, hidden int) Tensor {
 	o.Log("%s embedding rows=%d hidden=%d", name, rows, hidden)
+	vocabSize := embeddingVocabSize(rows)
 	out := o.to.Create([]int{rows, hidden})
+	tokenTable := o.to.Create([]int{vocabSize, hidden})
+	positionTable := o.to.Create([]int{rows, hidden})
+	tokenIDs := o.driver.AllocateMemory(o.ctx, uint64(rows*4))
+	hTokenIDs := make([]int32, rows)
+	for i := range hTokenIDs {
+		hTokenIDs[i] = int32(i % vocabSize)
+	}
+	o.driver.MemCopyH2D(o.ctx, tokenIDs, hTokenIDs)
+
 	args := embeddingArgs{
-		Out:    ptr(out),
-		Rows:   int32(rows),
-		Hidden: int32(hidden),
-		Seed:   1,
+		Out:           ptr(out),
+		TokenIDs:      tokenIDs,
+		TokenTable:    ptr(tokenTable),
+		PositionTable: ptr(positionTable),
+		Rows:          int32(rows),
+		Hidden:        int32(hidden),
+		VocabSize:     int32(vocabSize),
 	}
 	o.driver.LaunchKernel(o.ctx, o.embeddingKernel,
 		launch1DSize(rows*hidden),
 		[3]uint16{64, 1, 1},
 		&args)
+	o.driver.FreeMemory(o.ctx, tokenIDs)
+	o.Free(tokenTable)
+	o.Free(positionTable)
 	return out
+}
+
+func embeddingVocabSize(rows int) int {
+	vocabSize := rows
+	if vocabSize < 1024 {
+		vocabSize = 1024
+	}
+	if vocabSize > 4096 {
+		vocabSize = 4096
+	}
+	return vocabSize
 }
 
 // Linear performs a synthetic dense layer with a newly allocated weight matrix.
 func (o *Operator) Linear(
 	name string,
-	input tensor.Tensor,
+	input Tensor,
 	rows, inputDim, outputDim int,
-) tensor.Tensor {
+) Tensor {
 	o.Log("%s linear [%d,%d] x [%d,%d]",
 		name, rows, inputDim, inputDim, outputDim)
 	input.SetSize([]int{rows, inputDim})
@@ -220,11 +246,29 @@ func (o *Operator) Linear(
 	return out
 }
 
+// SplitKLinear performs a dense layer while splitting the GEMM reduction
+// dimension across the kernel grid.
+func (o *Operator) SplitKLinear(
+	name string,
+	input Tensor,
+	rows, inputDim, outputDim, splitK int,
+) Tensor {
+	o.Log("%s split-k linear [%d,%d] x [%d,%d] split_k=%d",
+		name, rows, inputDim, inputDim, outputDim, splitK)
+	input.SetSize([]int{rows, inputDim})
+	weight := o.to.Zeros([]int{inputDim, outputDim})
+	bias := o.to.Zeros([]int{rows, outputDim})
+	out := o.to.SplitKGemm(false, false, 1, 1, input, weight, bias, splitK)
+	o.Free(weight)
+	o.Free(bias)
+	return out
+}
+
 // ResidualAdd performs elementwise a+b.
 func (o *Operator) ResidualAdd(
 	name string,
-	a, b tensor.Tensor,
-) tensor.Tensor {
+	a, b Tensor,
+) Tensor {
 	o.Log("%s residual add elements=%d", name, a.NumElement())
 	if a.NumElement() != b.NumElement() {
 		panic("residual add size mismatch")
@@ -247,8 +291,8 @@ func (o *Operator) ResidualAdd(
 // elementwise affine operation.
 func (o *Operator) BatchNorm2DInference(
 	name string,
-	input tensor.Tensor,
-) tensor.Tensor {
+	input Tensor,
+) Tensor {
 	o.Log("%s batchnorm inference elements=%d", name, input.NumElement())
 	size := input.Size()
 	if len(size) != 4 {
@@ -291,13 +335,12 @@ func (o *Operator) BatchNorm2DInference(
 	return out
 }
 
-// LayerNorm models layer normalization as an elementwise affine stage. A future
-// dedicated hsaco can replace this helper without changing model code.
+// LayerNorm performs row-wise normalization with workgroup-level reductions.
 func (o *Operator) LayerNorm(
 	name string,
-	input tensor.Tensor,
+	input Tensor,
 	rows, hidden int,
-) tensor.Tensor {
+) Tensor {
 	o.Log("%s layernorm rows=%d hidden=%d", name, rows, hidden)
 	input.SetSize([]int{rows, hidden})
 	out := o.to.Create([]int{rows, hidden})
@@ -315,10 +358,8 @@ func (o *Operator) LayerNorm(
 	return out
 }
 
-// GELU models the transformer activation with the existing elementwise
-// activation kernel. It preserves the workload's elementwise activation stage;
-// replace this with a dedicated GELU hsaco when the compiler is available.
-func (o *Operator) GELU(name string, input tensor.Tensor) tensor.Tensor {
+// GELU applies the tanh-form GELU function elementwise.
+func (o *Operator) GELU(name string, input Tensor) Tensor {
 	o.Log("%s gelu elements=%d", name, input.NumElement())
 	out := o.to.Create(input.Size())
 	args := geluArgs{
@@ -339,10 +380,10 @@ func (o *Operator) GELU(name string, input tensor.Tensor) tensor.Tensor {
 // their workload semantics independently.
 func (o *Operator) SelfAttention(
 	name string,
-	input tensor.Tensor,
+	input Tensor,
 	rows, hidden, numHeads, seqLen, batchSize int,
 	causal bool,
-) tensor.Tensor {
+) Tensor {
 	o.Log("%s attention rows=%d hidden=%d heads=%d causal=%t",
 		name, rows, hidden, numHeads, causal)
 	q := o.Linear(name+" q", input, rows, hidden, hidden)
@@ -354,7 +395,7 @@ func (o *Operator) SelfAttention(
 	scoreBias := o.to.Zeros([]int{rows, rows})
 	scores := o.to.Gemm(false, true, 1, 0, q, k, scoreBias)
 	if causal {
-		o.applyCausalMask(scores, rows, seqLen, batchSize)
+		o.ApplyCausalMask(scores, rows, seqLen, batchSize)
 	}
 	probs := o.RowSoftmax(scores, rows, rows)
 
@@ -376,8 +417,8 @@ func (o *Operator) SelfAttention(
 	return out
 }
 
-// RowSoftmax performs a stable row-wise softmax on a 2D tensor.
-func (o *Operator) RowSoftmax(t tensor.Tensor, rows, cols int) tensor.Tensor {
+// RowSoftmax performs stable row-wise softmax with workgroup-level reductions.
+func (o *Operator) RowSoftmax(t Tensor, rows, cols int) Tensor {
 	o.Log("row softmax rows=%d cols=%d", rows, cols)
 	t.SetSize([]int{rows, cols})
 	out := o.to.Create([]int{rows, cols})
@@ -394,8 +435,9 @@ func (o *Operator) RowSoftmax(t tensor.Tensor, rows, cols int) tensor.Tensor {
 	return out
 }
 
-func (o *Operator) applyCausalMask(
-	scores tensor.Tensor,
+// ApplyCausalMask masks future tokens in an attention score matrix.
+func (o *Operator) ApplyCausalMask(
+	scores Tensor,
 	rows, seqLen, batchSize int,
 ) {
 	o.Log("causal mask rows=%d seq=%d batch=%d", rows, seqLen, batchSize)
@@ -415,9 +457,9 @@ func (o *Operator) applyCausalMask(
 // MLP performs a transformer feed-forward network.
 func (o *Operator) MLP(
 	name string,
-	input tensor.Tensor,
+	input Tensor,
 	rows, hidden, intermediate int,
-) tensor.Tensor {
+) Tensor {
 	o.Log("%s mlp hidden=%d intermediate=%d", name, hidden, intermediate)
 	h := o.Linear(name+" fc1", input, rows, hidden, intermediate)
 	act := o.GELU(name, h)

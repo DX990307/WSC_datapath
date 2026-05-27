@@ -108,6 +108,7 @@ func (s *SchedulerImpl) DecodeNextInst(now sim.VTimeInSec) bool {
 			inst, err := s.cu.Decoder.Decode(
 				wf.InstBuffer[wf.PC-wf.InstBufferStartPC:])
 			if err == nil {
+				inst.PC = wf.PC
 				wf.InstToIssue = wavefront.NewInst(inst)
 				// s.cu.logInstTask(now, wf, wf.InstToIssue, false)
 				madeProgress = true

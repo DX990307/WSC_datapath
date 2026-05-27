@@ -592,7 +592,7 @@ func (cu *ComputeUnit) handleMapWGReq(
 	branchEngine := sampledrunner.BranchSampledEngineForGPU(cu.GPUID)
 	sampledTimeEngine := sampledrunner.SampledTimeEngineForGPU(cu.GPUID)
 	sampledComputeUnit := emu.SampledComputeUnitForGPU(cu.GPUID)
-	if *sampledrunner.BranchSampledFlag &&
+	if (*sampledrunner.BranchSampledFlag || *sampledrunner.LoopSampledFlag) &&
 		branchEngine != nil &&
 		sampledTimeEngine != nil &&
 		sampledComputeUnit != nil &&

@@ -4,6 +4,7 @@ import (
 	"github.com/sarchlab/mgpusim/v3/benchmarks"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/LLMbenchmarks/bert"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/LLMbenchmarks/gpt"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/LLMbenchmarks/llmop"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/LLMbenchmarks/resnet"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/TensorParallelismSample/layer_benchmarks/conv2d"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/amdappsdk/bitonicsort"
@@ -252,6 +253,8 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		kvcache.SeqBlock = 64
 		kvcache.DecodeStep = 1
 		benchmark = kvcache
+	case "llmop":
+		benchmark = llmop.NewBenchmarkFromFlags(driver)
 	case "matrixmultiplication":
 		matrixmultiplication := matrixmultiplication.NewBenchmark(driver)
 		matrixmultiplication.X = 256

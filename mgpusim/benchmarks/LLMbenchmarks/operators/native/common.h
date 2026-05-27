@@ -4,33 +4,44 @@
 #define LLM_LN_WORKGROUP_SIZE 256
 #define LLM_SOFTMAX_WORKGROUP_SIZE 256
 #define LLM_NEG_INF -3.4028234663852886e+38F
+#define LLM_GELU_TANH_SCALE 0.7978845608028654F
+
+inline float llm_tanh_value(float x) {
+  float x2 = x * x;
+  float y = x * (27.0F + x2) / (27.0F + 9.0F * x2);
+  return fmin(fmax(y, -1.0F), 1.0F);
+}
+
+inline float llm_recip_value(float x) {
+  float clipped = fmax(x, 1.0e-20F);
+  float inv_sqrt = rsqrt(clipped);
+  return inv_sqrt * inv_sqrt;
+}
 
 inline float llm_gelu_value(float x) {
-  if (x <= -3.0F) {
-    return 0.0F;
-  }
-  if (x >= 3.0F) {
-    return x;
-  }
-
   float x3 = x * x * x;
-  float gate = 0.5F + 0.197F * x - 0.004F * x3;
-  gate = fmin(fmax(gate, 0.0F), 1.0F);
-  return x * gate;
+  float inner = LLM_GELU_TANH_SCALE * (x + 0.044715F * x3);
+  return 0.5F * x * (1.0F + llm_tanh_value(inner));
 }
 
 inline float llm_safe_rsqrt(float x, float epsilon) {
-  return rsqrt(fmax(x, 0.0F) + epsilon);
+  float clipped = fmax(x, 0.0F);
+  return rsqrt(clipped + epsilon);
 }
 
-inline float llm_exp_approx(float x) {
-  x = fmin(fmax(x, -10.0F), 0.0F);
-  float x2 = x * x;
-  float x3 = x2 * x;
-  float x4 = x2 * x2;
-  float y = 1.0F + x + 0.5F * x2 + 0.1666666716F * x3 +
-            0.0416666679F * x4;
-  return fmax(y, 0.000001F);
+inline float llm_exp_value(float x) {
+  float y = 0.0F - x;
+  y = fmax(y, 0.0F);
+  y = fmin(y, 20.0F);
+  float y2 = y * y;
+  float y4 = y2 * y2;
+  float y8 = y4 * y4;
+  float denom =
+      1.0F + y + 0.5F * y2 + 0.1666666716F * y2 * y +
+      0.0416666679F * y4 + 0.0083333338F * y4 * y +
+      0.0013888889F * y4 * y2 + 0.0001984127F * y4 * y2 * y +
+      0.0000248016F * y8;
+  return llm_recip_value(denom);
 }
 
 inline int llm_nchw_channel(int flat_index, int channels, int height, int width) {

@@ -73,6 +73,37 @@ PROFILES = {
             "-gpt-intermediate-size=4096",
         ],
     },
+    "middle": {
+        "description": (
+            "Middle-size loop-sampling test profile. BERT/GPT use two "
+            "transformer layers with seq=64, hidden=512, and intermediate=2048. "
+            "This gives more repeated loop opportunities than tiny, while "
+            "keeping GEMM much smaller than the 512mb profile."
+        ),
+        "max_wg": 0,
+        "flags": [
+            "-resnet-mode=block",
+            "-resnet-depth=18",
+            "-resnet-batch-size=1",
+            "-resnet-image-size=128",
+            "-bert-mode=full",
+            "-bert-size=custom",
+            "-bert-batch-size=1",
+            "-bert-seq-len=64",
+            "-bert-hidden-size=512",
+            "-bert-num-heads=8",
+            "-bert-num-layers=2",
+            "-bert-intermediate-size=2048",
+            "-gpt-mode=full",
+            "-gpt-size=custom",
+            "-gpt-batch-size=1",
+            "-gpt-seq-len=64",
+            "-gpt-hidden-size=512",
+            "-gpt-num-heads=8",
+            "-gpt-num-layers=2",
+            "-gpt-intermediate-size=2048",
+        ],
+    },
     "512mb": {
         "description": (
             "Moderate profile intended to stay well below the previous 4096 "

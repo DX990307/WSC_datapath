@@ -3,6 +3,7 @@ package runner
 import (
 	"sort"
 
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/mgpusim/v3/timing/cu"
 )
 
@@ -25,6 +26,9 @@ func (r *Runner) reportStats() {
 	r.reportDRAMTransactionCount()
 	r.reportIOMMUTLBStats()
 	r.reportMMUCoalescingStats()
+	if err := memtrace.DumpL2SourceStats(); err != nil {
+		panic(err)
+	}
 	// r.reportGMMUCounts()
 	// r.reportL2TLBCounts()
 	r.dumpMetrics()

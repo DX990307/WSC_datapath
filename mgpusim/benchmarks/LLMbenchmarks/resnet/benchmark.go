@@ -8,9 +8,6 @@ import (
 
 	"github.com/sarchlab/mgpusim/v3/benchmarks"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/LLMbenchmarks/operators"
-	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/gputensor"
-	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/layers"
-	"github.com/sarchlab/mgpusim/v3/benchmarks/dnn/tensor"
 	"github.com/sarchlab/mgpusim/v3/driver"
 )
 
@@ -35,7 +32,7 @@ type Benchmark struct {
 	ctx    *driver.Context
 	gpus   []int
 
-	to  *gputensor.GPUOperator
+	to  *operators.GPUOperator
 	ops *operators.Operator
 
 	useUnifiedMemory bool
@@ -65,7 +62,7 @@ func (b *Benchmark) Run() {
 		log.Panic("resnet benchmark requires at least one GPU")
 	}
 	b.driver.SelectGPU(b.ctx, b.gpus[0])
-	b.to = gputensor.NewGPUOperator(b.driver, b.ctx)
+	b.to = operators.NewGPUOperator(b.driver, b.ctx)
 	b.to.ReportTime()
 	b.ops = operators.NewOperator(
 		b.driver, b.ctx, b.to, "ResNet", *logSubtasksFlag)
@@ -165,9 +162,9 @@ func resnetBlocks(depth int) []int {
 }
 
 func (b *Benchmark) basicBlock(
-	input tensor.Tensor,
+	input operators.Tensor,
 	inC, inH, inW, outC, stride, index int,
-) (tensor.Tensor, int, int, int) {
+) (operators.Tensor, int, int, int) {
 	b.ops.Log("basic block index=%d inC=%d outC=%d stride=%d",
 		index, inC, outC, stride)
 	identity := input
@@ -199,9 +196,9 @@ func (b *Benchmark) basicBlock(
 }
 
 func (b *Benchmark) bottleneckBlock(
-	input tensor.Tensor,
+	input operators.Tensor,
 	inC, inH, inW, outC, stride, index int,
-) (tensor.Tensor, int, int, int) {
+) (operators.Tensor, int, int, int) {
 	b.ops.Log("bottleneck block index=%d inC=%d outC=%d stride=%d",
 		index, inC, outC, stride)
 	identity := input
@@ -243,9 +240,9 @@ func (b *Benchmark) bottleneckBlock(
 }
 
 func (b *Benchmark) conv(
-	input tensor.Tensor,
+	input operators.Tensor,
 	inC, inH, inW, outC, kernel, stride, pad, index int,
-) (tensor.Tensor, int, int, int) {
+) (operators.Tensor, int, int, int) {
 	outH := (inH-kernel+2*pad)/stride + 1
 	outW := (inW-kernel+2*pad)/stride + 1
 	if outH <= 0 || outW <= 0 {
@@ -253,22 +250,49 @@ func (b *Benchmark) conv(
 	}
 	b.ops.Log("conv index=%d [%d,%d,%d] -> [%d,%d,%d] k=%d stride=%d",
 		index, inC, inH, inW, outC, outH, outW, kernel, stride)
-	l := layers.NewConv2D(
-		index,
-		b.to,
-		[]int{inC, inH, inW},
-		[]int{outC, inC, kernel, kernel},
-		[]int{stride, stride},
+
+	numWeight := outC * inC * kernel * kernel
+	numBias := outC
+	params := b.to.Create([]int{numWeight + numBias})
+	weights := b.to.Slice(params, 0, numWeight)
+	bias := b.to.Slice(params, numWeight, numWeight+numBias)
+	b.to.Clear(params)
+
+	im2ColMatrix := b.to.Im2Col(
+		input,
+		[]int{kernel, kernel},
 		[]int{pad, pad},
+		[]int{stride, stride},
+		[]int{1, 1},
 	)
-	b.to.Clear(l.Parameters())
-	return l.Forward(input), outC, outH, outW
+	weightMatrix := b.to.Reshape(weights, []int{outC, im2ColMatrix.Size()[0]})
+
+	biasMatrix := b.to.Repeat(bias, im2ColMatrix.Size()[1])
+	biasMatrix.SetSize([]int{im2ColMatrix.Size()[1], outC})
+	biasMatrixTranspose := b.to.Transpose(biasMatrix, []int{1, 0})
+
+	outputMatrix := b.to.Gemm(
+		false, false, 1.0, 1.0,
+		weightMatrix, im2ColMatrix, biasMatrixTranspose,
+	)
+	outputMatrix.SetSize([]int{outC, input.Size()[0], outH, outW})
+	outputTranspose := b.to.Transpose(outputMatrix, []int{1, 0, 2, 3})
+	outputTranspose.SetDescriptor("NCHW")
+
+	b.to.Free(im2ColMatrix)
+	b.to.Free(weightMatrix)
+	b.to.Free(biasMatrix)
+	b.to.Free(biasMatrixTranspose)
+	b.to.Free(outputMatrix)
+	b.to.Free(params)
+
+	return outputTranspose, outC, outH, outW
 }
 
 func (b *Benchmark) maxPool(
-	input tensor.Tensor,
+	input operators.Tensor,
 	inH, inW, kernel, stride, pad int,
-) (tensor.Tensor, int, int) {
+) (operators.Tensor, int, int) {
 	outH := (inH-kernel+2*pad)/stride + 1
 	outW := (inW-kernel+2*pad)/stride + 1
 	b.ops.Log("maxpool [%d,%d] -> [%d,%d]", inH, inW, outH, outW)

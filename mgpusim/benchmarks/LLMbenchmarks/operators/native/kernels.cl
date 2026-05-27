@@ -6,3 +6,5 @@
 #include "batchnorm2d_inference.cl"
 #include "causal_mask.cl"
 #include "row_softmax.cl"
+#include "gemm.cl"
+#include "transfer_copy.cl"

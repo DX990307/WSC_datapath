@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/monitoring"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
@@ -85,6 +86,7 @@ type Runner struct {
 	ReportL2TLBLatency         bool
 	ReportL2TLBHitRate         bool
 	DisableServers             bool
+	ReportL2Source             bool
 
 	GPUIDs []int
 }
@@ -106,6 +108,7 @@ func (r *Runner) startProfilingServer() {
 // Init initializes the platform simulate
 func (r *Runner) Init() *Runner {
 	r.ParseFlag()
+	r.configureL2SourceStats()
 
 	if !r.DisableServers {
 		go r.startProfilingServer()
@@ -150,6 +153,19 @@ func (r *Runner) Init() *Runner {
 	r.defineMetrics()
 
 	return r
+}
+
+func (r *Runner) configureL2SourceStats() {
+	memtrace.DisableL2SourceStats()
+	if !r.ReportL2Source {
+		return
+	}
+
+	prefix := *l2SourceFileFlag
+	if prefix == "" {
+		prefix = *filenameFlag + "_l2_source"
+	}
+	memtrace.EnableL2SourceStats(prefix, *l2SourceTileWidthFlag)
 }
 
 func (r *Runner) buildEmuPlatform() {

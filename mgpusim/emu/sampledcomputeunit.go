@@ -47,10 +47,13 @@ func (cu *SampledComputeUnit) runWfUntilBarrier(
 	}
 	ret := sim.VTimeInSec(0)
 	continue_execute := true
+	loopBackedgeCounts := make(map[uint64]int)
 	for continue_execute {
+		instPC := wf.PC
 		instBuf := cu.storageAccessor.Read(wf.PID(), wf.PC, 8)
 
 		inst, _ := cu.decoder.Decode(instBuf)
+		inst.PC = instPC
 		inswidth := uint64(inst.InstWidth())
 		//		wf.inst = inst
 		wf.SetInst(inst)
@@ -86,6 +89,31 @@ func (cu *SampledComputeUnit) runWfUntilBarrier(
 		wf.PC += uint64(inst.ByteSize)
 		if continue_execute {
 			cu.executeInst(wf)
+			completedIters := loopBackedgeCounts[inst.PC] + 1
+			if pred, target, fallthroughPC, skippedIters, ok :=
+				branchEngine.PredictStableLoop(inst, completedIters); ok && wf.PC == target {
+				loopBackedgeCounts[inst.PC] = completedIters + skippedIters
+				ret += pred
+				sampledrunner.PhotonDebugf(
+					"LoopSampledCU",
+					"loop sampled fast-forward wfid=%s branchPC=%#x targetPC=%#x fallthroughPC=%#x completedIters=%d skippedIters=%d pred=%.3fns",
+					wf.UID,
+					inst.PC,
+					target,
+					fallthroughPC,
+					completedIters,
+					skippedIters,
+					pred*1e9)
+				wf.PC = fallthroughPC
+			} else if ok && wf.PC != target {
+				sampledrunner.PhotonVerbosef(
+					"LoopSampledCU",
+					"loop sampled prediction ignored wfid=%s branchPC=%#x targetPC=%#x actualPC=%#x",
+					wf.UID,
+					inst.PC,
+					target,
+					wf.PC)
+			}
 		}
 	}
 	if wf.Completed { //process ending bbl
@@ -290,6 +318,11 @@ func (cu *SampledComputeUnit) RunWGWithBranchEngine(
 	branchEngine *sampledrunner.BranchSampledEngine,
 ) []sim.VTimeInSec {
 	if branchEngine == nil {
+		if *sampledrunner.LoopSampledFlag {
+			sampledrunner.PhotonDebugf(
+				"LoopSampledCU",
+				"loop sampled requested but branch engine is nil")
+		}
 		return make([]sim.VTimeInSec, len(req.Wavefronts))
 	}
 
@@ -299,6 +332,14 @@ func (cu *SampledComputeUnit) RunWGWithBranchEngine(
 	//    wfs := wg.Wavefronts
 	wfstime := make([]sim.VTimeInSec, len(wfs))
 	beginandendtime := branchEngine.StartTime() + branchEngine.EndTime()
+	if *sampledrunner.LoopSampledFlag {
+		sampledrunner.PhotonDebugf(
+			"LoopSampledCU",
+			"run sampled compute unit with loop sampling wg=%d wfCount=%d basePred=%.3fns",
+			req.WorkGroup.IDX,
+			len(wfs),
+			beginandendtime*1e9)
+	}
 	//    beginandendtime := sim.VTimeInSec(0)
 	for i, _ := range wfstime {
 		//        wfstime[i] = sim.VTimeInSec( cu.freq.NextTick(sim.VTimeInSec(0) ))

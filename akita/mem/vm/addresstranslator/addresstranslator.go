@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
 
 	"github.com/sarchlab/akita/v3/mem/vm"
@@ -344,13 +345,17 @@ func (t *AddressTranslator) createTranslatedReadReq(
 ) *mem.ReadReq {
 	offset := req.Address % (1 << t.log2PageSize)
 	addr := page.PAddr + offset
+	info := req.Info
+	if memtrace.L2SourceStatsEnabled() {
+		info = memtrace.WithL2AddressInfo(req.Info, req.Address, addr)
+	}
 	clone := mem.ReadReqBuilder{}.
 		WithSrc(t.bottomPort).
 		WithDst(t.lowModuleFinder.Find(addr)).
 		WithAddress(addr).
 		WithByteSize(req.AccessByteSize).
 		WithPID(0).
-		WithInfo(req.Info).
+		WithInfo(info).
 		Build()
 	clone.CanWaitForCoalesce = req.CanWaitForCoalesce
 	return clone
@@ -362,6 +367,10 @@ func (t *AddressTranslator) createTranslatedWriteReq(
 ) *mem.WriteReq {
 	offset := req.Address % (1 << t.log2PageSize)
 	addr := page.PAddr + offset
+	info := req.Info
+	if memtrace.L2SourceStatsEnabled() {
+		info = memtrace.WithL2AddressInfo(req.Info, req.Address, addr)
+	}
 	clone := mem.WriteReqBuilder{}.
 		WithSrc(t.bottomPort).
 		WithDst(t.lowModuleFinder.Find(addr)).
@@ -369,7 +378,7 @@ func (t *AddressTranslator) createTranslatedWriteReq(
 		WithDirtyMask(req.DirtyMask).
 		WithAddress(addr).
 		WithPID(0).
-		WithInfo(req.Info).
+		WithInfo(info).
 		Build()
 	clone.CanWaitForCoalesce = req.CanWaitForCoalesce
 	return clone

@@ -68,6 +68,12 @@ var disableServersFlag = flag.Bool("disable-servers", false,
 	"Disable profiling and monitoring servers. Useful for automated tests.")
 var log2PageSizeFlag = flag.Uint64("log2-page-size", 12,
 	"GPU page size as log2(bytes). For example 12=4KB, 14=16KB, 15=32KB, 21=2MB.")
+var l2SourceReportFlag = flag.Bool("report-l2-source", false,
+	"Report aggregate L2 source data: local DRAM fills and remote GPM requester/provider traffic.")
+var l2SourceFileFlag = flag.String("l2-source-file", "",
+	"Output prefix for L2 source CSV files. Defaults to <metric-file-name>_l2_source.")
+var l2SourceTileWidthFlag = flag.Int("l2-source-tile-width", 7,
+	"Tile-array width used to compute Manhattan hops for L2 source reports.")
 
 func configuredLog2PageSize() uint64 {
 	return *log2PageSizeFlag
@@ -137,6 +143,10 @@ func (r *Runner) ParseFlag() *Runner {
 
 	if *disableServersFlag {
 		r.DisableServers = true
+	}
+
+	if *l2SourceReportFlag {
+		r.ReportL2Source = true
 	}
 
 	return r
