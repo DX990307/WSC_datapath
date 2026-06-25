@@ -161,6 +161,7 @@ BALANCED_KERNEL_DISTANCE_THRESHOLD = 8
 
 CONFIGS = [
     ("baseline", []),
+    ("all_local", ["-force-local-data-access"]),
     ("sample_all", ["-sampled", "-branch-sampled", "-kernel-sampled"]),
     (
         "sample_all_loop",

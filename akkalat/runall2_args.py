@@ -194,6 +194,15 @@ def parse_args():
             "0 keeps the benchmark binary default."
         ),
     )
+    parser.add_argument(
+        "--force-local-data-access",
+        dest="force_local_data_access",
+        action="store_true",
+        help=(
+            "Pass -force-local-data-access to each benchmark, forcing L1V "
+            "data-cache misses to use the requester's local L2/DRAM path."
+        ),
+    )
     add_sampled_args(parser)
     parser.add_argument(
         "--dry-run",

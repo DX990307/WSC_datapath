@@ -46,6 +46,7 @@ type R9NanoPlatformBuilder struct {
 	l1vRemoteMaxInflight  int
 	l1vMSHREntries        int
 	l1vMaxConcurrentTrans int
+	forceLocalDataAccess  bool
 
 	engine       sim.Engine
 	visTracer    tracing.Tracer
@@ -237,6 +238,14 @@ func (b R9NanoPlatformBuilder) WithL1VMaxConcurrentTrans(
 	if n > 0 {
 		b.l1vMaxConcurrentTrans = n
 	}
+	return b
+}
+
+// WithForceLocalDataAccess routes L1V data-cache misses to local L2/DRAM.
+func (b R9NanoPlatformBuilder) WithForceLocalDataAccess(
+	enable bool,
+) R9NanoPlatformBuilder {
+	b.forceLocalDataAccess = enable
 	return b
 }
 
@@ -507,6 +516,7 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
 		WithL1VMSHREntries(b.l1vMSHREntries).
 		WithL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
+		WithForceLocalDataAccess(b.forceLocalDataAccess).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).
 		WithGMMUPageTable(pageTable)

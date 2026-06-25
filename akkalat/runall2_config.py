@@ -43,6 +43,8 @@ def build_common_flags(args):
     if args.l1v_max_concurrent_trans > 0:
         common_flags.append(
             f"-l1v-max-concurrent-trans={args.l1v_max_concurrent_trans}")
+    if args.force_local_data_access:
+        common_flags.append("-force-local-data-access")
     if args.max_wg > 0:
         common_flags.append(f"-max-wg={args.max_wg}")
     return common_flags

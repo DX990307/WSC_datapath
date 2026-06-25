@@ -44,6 +44,7 @@ type R9NanoGPUBuilder struct {
 	l1vRemoteMaxInflight           int
 	l1vMSHREntries                 int
 	l1vMaxConcurrentTrans          int
+	forceLocalDataAccess           bool
 
 	enableISADebugging bool
 	enableMemTracing   bool
@@ -259,6 +260,16 @@ func (b R9NanoGPUBuilder) WithL1VMaxConcurrentTrans(n int) R9NanoGPUBuilder {
 	return b
 }
 
+// WithForceLocalDataAccess routes L1V data-cache misses to local L2/DRAM even
+// when the physical address belongs to another GPU's address range. This is an
+// experiment knob for isolating remote data-movement cost; address translation,
+// scalar/instruction cache routing, DMA, RDMA, and page-migration traffic keep
+// their normal routing.
+func (b R9NanoGPUBuilder) WithForceLocalDataAccess(enable bool) R9NanoGPUBuilder {
+	b.forceLocalDataAccess = enable
+	return b
+}
+
 // WithMonitor sets the monitor to use.
 func (b R9NanoGPUBuilder) WithMonitor(m *monitoring.Monitor) R9NanoGPUBuilder {
 	b.monitor = m
@@ -392,6 +403,11 @@ func (b *R9NanoGPUBuilder) connectL1ToL2() {
 	lowModuleFinder.UseAddressSpaceLimitation = true
 	lowModuleFinder.LowAddress = b.memAddrOffset
 	lowModuleFinder.HighAddress = b.memAddrOffset + 8*mem.GB
+	l1vLowModuleFinder := lowModuleFinder
+	if b.forceLocalDataAccess {
+		l1vLowModuleFinder = mem.NewInterleavedLowModuleFinder(
+			1 << b.log2MemoryBankInterleavingSize)
+	}
 
 	l1ToL2Conn := sim.NewDirectConnection(b.gpuName+".L1toL2",
 		b.engine, b.freq)
@@ -403,11 +419,16 @@ func (b *R9NanoGPUBuilder) connectL1ToL2() {
 	for _, l2 := range b.l2Caches {
 		lowModuleFinder.LowModules = append(lowModuleFinder.LowModules,
 			l2.GetPortByName("Top"))
+		if b.forceLocalDataAccess {
+			l1vLowModuleFinder.LowModules = append(
+				l1vLowModuleFinder.LowModules,
+				l2.GetPortByName("Top"))
+		}
 		l1ToL2Conn.PlugIn(l2.GetPortByName("Top"), 64)
 	}
 
 	for _, l1v := range b.l1vCaches {
-		l1v.SetLowModuleFinder(lowModuleFinder)
+		l1v.SetLowModuleFinder(l1vLowModuleFinder)
 		l1ToL2Conn.PlugIn(l1v.GetPortByName("Bottom"), 16)
 	}
 

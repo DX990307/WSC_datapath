@@ -144,6 +144,13 @@ def parse_args():
             "0 disables remote-only throttling."
         ))
     parser.add_argument(
+        "--force-local-data-access",
+        action="store_true",
+        help=(
+            "Pass -force-local-data-access to each llmop benchmark, forcing "
+            "L1V data-cache misses to use the requester's local L2/DRAM path."
+        ))
+    parser.add_argument(
         "--report-l2-source",
         action="store_true",
         help=(
@@ -597,6 +604,8 @@ def build_exps(args, ops=None):
     if args.l1v_remote_max_inflight > 0:
         common_flags.append(
             f"-l1v-remote-max-inflight={args.l1v_remote_max_inflight}")
+    if args.force_local_data_access:
+        common_flags.append("-force-local-data-access")
 
     exps = []
     for index, (label, flags) in enumerate(ops):

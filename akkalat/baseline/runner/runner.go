@@ -241,7 +241,8 @@ func (r *Runner) buildTimingPlatform() {
 		WithEndpointBufferSize(*endpointBufferSizeFlag).
 		WithL1VRemoteMaxInflight(*l1vRemoteMaxInflightFlag).
 		WithL1VMSHREntries(*l1vMSHREntriesFlag).
-		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag)
+		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag).
+		WithForceLocalDataAccess(*forceLocalDataAccessFlag)
 
 	if *sharingTracing {
 		traceWriter, err := newPageSharingTraceWriter(

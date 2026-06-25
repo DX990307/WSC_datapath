@@ -75,6 +75,9 @@ var l1vMSHREntriesFlag = flag.Int("l1v-mshr-entries", 160,
 	"Number of L1V cache MSHR entries per L1V cache.")
 var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 160,
 	"Maximum concurrent L1V cache transactions per L1V cache.")
+var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
+	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
+		"Address translation and non-L1V memory traffic remain unchanged.")
 var maxNumHopsFlag = flag.Int("max-num-hops", -1,
 	"The maximum number of hops in the network")
 var numMemBankFlag = flag.Int("num-memory-banks", 16,
