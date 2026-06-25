@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/pipelining"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
@@ -228,6 +229,10 @@ func (c *Channel) deliverOneEnd(
 	for srcEnd.postPipelineBuf.Size() > 0 {
 		msgTask := srcEnd.postPipelineBuf.Peek().(msgPipeTask)
 		msg := msgTask.msg
+		sendTime := msg.Meta().SendTime
+		if sendTime == 0 {
+			sendTime = now
+		}
 		msg.Meta().RecvTime = now
 
 		err := dstEnd.port.Recv(msg)
@@ -240,6 +245,20 @@ func (c *Channel) deliverOneEnd(
 
 		srcEnd.postPipelineBuf.Pop()
 		madeProgress = true
+		if flit, ok := msg.(*Flit); ok {
+			memtrace.RecordMemoryPathNetworkFlitStage(
+				c.Name(),
+				"channel_transfer",
+				flit.Msg.Meta().ID,
+				flit.Meta().ID,
+				flit.SeqID,
+				flit.NumFlitInMsg,
+				sendTime,
+				now,
+				srcEnd.port,
+				dstEnd.port,
+			)
+		}
 
 		tracing.EndTask(c.channelMsgTaskID(msg), c)
 	}

@@ -4,6 +4,7 @@ import (
 	"log"
 	"reflect"
 
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/mem/vm/tlb/internal"
 	"github.com/sarchlab/akita/v3/sim"
@@ -106,6 +107,13 @@ func (tlb *TLB) respondMSHREntry(now sim.VTimeInSec) bool {
 		tlb.respondingMSHREntry = nil
 	}
 
+	memtrace.RecordMemoryPathTLBComplete(
+		tlb.Name(),
+		req.TaskID,
+		req.ID,
+		req.SendTime,
+		now,
+	)
 	tracing.TraceReqComplete(req, tlb)
 	return true
 }
@@ -155,6 +163,21 @@ func (tlb *TLB) handleTranslationHit(
 
 	tracing.TraceReqReceive(req, tlb)
 	tracing.AddTaskStep(tracing.MsgIDAtReceiver(req, tlb), tlb, "hit")
+	memtrace.RecordMemoryPathTLBResult(
+		tlb.Name(),
+		req.TaskID,
+		req.ID,
+		"hit",
+		req.SendTime,
+		now,
+	)
+	memtrace.RecordMemoryPathTLBComplete(
+		tlb.Name(),
+		req.TaskID,
+		req.ID,
+		req.SendTime,
+		now,
+	)
 	tracing.TraceReqComplete(req, tlb)
 
 	return true
@@ -173,6 +196,14 @@ func (tlb *TLB) handleTranslationMiss(
 		tlb.topPort.Retrieve(now)
 		tracing.TraceReqReceive(req, tlb)
 		tracing.AddTaskStep(tracing.MsgIDAtReceiver(req, tlb), tlb, "miss")
+		memtrace.RecordMemoryPathTLBResult(
+			tlb.Name(),
+			req.TaskID,
+			req.ID,
+			"miss",
+			req.SendTime,
+			now,
+		)
 		return true
 	}
 
@@ -218,6 +249,14 @@ func (tlb *TLB) processTLBMSHRHit(
 	tlb.topPort.Retrieve(now)
 	tracing.TraceReqReceive(req, tlb)
 	tracing.AddTaskStep(tracing.MsgIDAtReceiver(req, tlb), tlb, "mshr-hit")
+	memtrace.RecordMemoryPathTLBResult(
+		tlb.Name(),
+		req.TaskID,
+		req.ID,
+		"mshr-hit",
+		req.SendTime,
+		now,
+	)
 
 	return true
 }

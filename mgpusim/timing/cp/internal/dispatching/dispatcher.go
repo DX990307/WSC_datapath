@@ -41,6 +41,9 @@ type DispatcherImpl struct {
 	numCompletedWGs        int
 	numDispatchedWFs       uint64
 	numCompletedWFs        uint64
+	progressTotalWGs       int
+	progressTotalWFs       uint64
+	nextWGProgressPercent  int
 	inflightWGs            map[string]dispatchLocation
 	originalReqs           map[string]*protocol.MapWGReq
 	latencyTable           []int
@@ -189,15 +192,19 @@ func (d *DispatcherImpl) StartDispatching(req *protocol.LaunchKernelReq) {
 	}
 	d.alg.StartNewKernel(info)
 	d.dispatching = req
+	packet := info.Packet
+	workgroupSize := int(packet.WorkgroupSizeX) *
+		int(packet.WorkgroupSizeY) *
+		int(packet.WorkgroupSizeZ)
+	wfPerWG := (workgroupSize + 63) / 64
 
 	if *sampledrunner.SampledRunnerFlag ||
 		*sampledrunner.BranchSampledFlag ||
 		*sampledrunner.LoopSampledFlag ||
 		*sampledrunner.KernelSampledFlag {
-		packet := info.Packet
-		workgroupSize := int(packet.WorkgroupSizeX) *
-			int(packet.WorkgroupSizeY) *
-			int(packet.WorkgroupSizeZ)
+		// Keep Photon's original sampled target formula. This intentionally
+		// uses floor(workgroupSize / 64), while wfPerWG below is only for
+		// progress reporting of the simulator's concrete wavefront objects.
 		wfNums := d.alg.NumWG() * workgroupSize / 64
 		if sampledTimeEngine := sampledrunner.SampledTimeEngineForGPU(d.gpuID); sampledTimeEngine != nil {
 			sampledTimeEngine.SetTargetCompletedWfs(uint64(wfNums))
@@ -224,6 +231,10 @@ func (d *DispatcherImpl) StartDispatching(req *protocol.LaunchKernelReq) {
 	d.numCompletedWGs = 0
 	d.numDispatchedWFs = 0
 	d.numCompletedWFs = 0
+	d.progressTotalWGs = d.alg.NumWG()
+	d.progressTotalWFs = uint64(d.progressTotalWGs * wfPerWG)
+	d.nextWGProgressPercent = 2
+	d.printWGProgressAt(0)
 
 	d.initializeProgressBar(req.ID)
 }
@@ -291,6 +302,7 @@ func (d *DispatcherImpl) processMessagesFromCU(now sim.VTimeInSec) bool {
 			delete(d.inflightWGs, rspToID)
 			d.numCompletedWGs++
 			d.numCompletedWFs += uint64(len(location.locations))
+			d.printWGProgress()
 			if d.numCompletedWGs == d.alg.NumWG() {
 				d.cycleLeft = d.constantKernelOverhead
 			}
@@ -325,6 +337,30 @@ func (d *DispatcherImpl) processMessagesFromCU(now sim.VTimeInSec) bool {
 	}
 
 	return false
+}
+
+func (d *DispatcherImpl) printWGProgress() {
+	if d.progressTotalWGs <= 0 {
+		return
+	}
+
+	for d.nextWGProgressPercent <= 100 &&
+		d.numCompletedWGs*100 >= d.progressTotalWGs*d.nextWGProgressPercent {
+		d.printWGProgressAt(d.nextWGProgressPercent)
+		d.nextWGProgressPercent += 2
+	}
+}
+
+func (d *DispatcherImpl) printWGProgressAt(percent int) {
+	fmt.Printf(
+		"WG progress GPU %d kernel %s: %d%% (WG %d/%d, WF %d/%d)\n",
+		d.gpuID,
+		d.dispatching.ID,
+		percent,
+		d.numCompletedWGs,
+		d.progressTotalWGs,
+		d.numCompletedWFs,
+		d.progressTotalWFs)
 }
 
 func (d *DispatcherImpl) kernelCompleted() bool {

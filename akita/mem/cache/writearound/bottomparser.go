@@ -3,6 +3,7 @@ package writearound
 import (
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 )
@@ -43,8 +44,20 @@ func (p *bottomParser) processDoneRsp(
 
 	p.removeTransaction(trans)
 	p.cache.bottomPort.Retrieve(now)
+	p.cache.releaseBottomTransaction(trans)
 
 	tracing.TraceReqFinalize(trans.writeToBottom, p.cache)
+	memtrace.RecordMemoryPathL1VBottomResponse(
+		p.cache.Name(),
+		trans.id,
+		done.Meta().ID,
+		done.Meta().SendTime,
+		now,
+		done.Meta().Src,
+		done.Meta().Dst,
+	)
+	recordMemoryPathCacheComplete(p.cache.Name(), trans, now)
+	memtrace.RecordMemoryPathL1VMSHRWakeup(p.cache.Name(), trans.id, now)
 	tracing.EndTask(trans.id, p.cache)
 
 	return true
@@ -70,6 +83,15 @@ func (p *bottomParser) processDataReady(
 	data := dr.Data
 	dirtyMask := make([]bool, 1<<p.cache.log2BlockSize)
 	mshrEntry := p.cache.mshr.Query(pid, cachelineID)
+	memtrace.RecordMemoryPathL1VBottomResponse(
+		p.cache.Name(),
+		trans.id,
+		dr.Meta().ID,
+		dr.Meta().SendTime,
+		now,
+		dr.Meta().Src,
+		dr.Meta().Dst,
+	)
 	p.mergeMSHRData(mshrEntry, data, dirtyMask)
 	p.finalizeMSHRTrans(mshrEntry, data, now)
 	p.cache.mshr.Remove(pid, cachelineID)
@@ -81,6 +103,7 @@ func (p *bottomParser) processDataReady(
 
 	p.removeTransaction(trans)
 	p.cache.bottomPort.Retrieve(now)
+	p.cache.releaseBottomTransaction(trans)
 
 	tracing.TraceReqFinalize(trans.readToBottom, p.cache)
 
@@ -131,6 +154,8 @@ func (p *bottomParser) finalizeMSHRTrans(
 		}
 		p.removeTransaction(trans)
 
+		recordMemoryPathCacheComplete(p.cache.Name(), trans, now)
+		memtrace.RecordMemoryPathL1VMSHRWakeup(p.cache.Name(), trans.id, now)
 		tracing.EndTask(trans.id, p.cache)
 	}
 }

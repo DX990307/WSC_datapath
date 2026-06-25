@@ -63,6 +63,7 @@ type Runner struct {
 	reportOnce          sync.Once
 	simdBusyTimeTracers []simdBusyTimeTracer
 	cuCPITraces         []cuCPIStackTracer
+	sharingTraceWriter  *pageSharingTraceWriter
 
 	Timing                     bool
 	Verify                     bool
@@ -109,6 +110,7 @@ func (r *Runner) startProfilingServer() {
 func (r *Runner) Init() *Runner {
 	r.ParseFlag()
 	r.configureL2SourceStats()
+	r.configureMemoryPathTrace()
 
 	if !r.DisableServers {
 		go r.startProfilingServer()
@@ -168,6 +170,38 @@ func (r *Runner) configureL2SourceStats() {
 	memtrace.EnableL2SourceStats(prefix, *l2SourceTileWidthFlag)
 }
 
+func (r *Runner) configureMemoryPathTrace() {
+	memtrace.DisableMemoryPathTrace()
+	if !*memoryPathTracing {
+		return
+	}
+
+	prefix := *memoryPathTraceFile
+	if prefix == "" {
+		prefix = *filenameFlag + "_memory_path"
+	}
+	var doneCallback func()
+	if *memoryPathTraceExitOnComplete {
+		doneCallback = func() {
+			log.Printf(
+				"memory-path trace reached max records; flushing metrics and exiting")
+			r.flushMetrics()
+			atexit.Exit(0)
+		}
+	}
+	if err := memtrace.EnableMemoryPathTrace(
+		prefix,
+		*memoryPathTraceWarmupAccesses,
+		*memoryPathTraceMaxRecords,
+		configuredLog2PageSize(),
+		*l2SourceTileWidthFlag,
+		*memoryPathTraceExitOnComplete,
+		doneCallback,
+	); err != nil {
+		panic(err)
+	}
+}
+
 func (r *Runner) buildEmuPlatform() {
 	b := MakeEmuBuilder().
 		WithNumGPU(r.GPUIDs[len(r.GPUIDs)-1]).
@@ -201,7 +235,29 @@ func (r *Runner) buildTimingPlatform() {
 		WithLog2PageSize(configuredLog2PageSize()).
 		WithBandwidth(*bandwidthFlag).
 		WithSwitchLatency(*switchLatencyFlag).
-		WithMaxNumHops(*maxNumHopsFlag)
+		WithMaxNumHops(*maxNumHopsFlag).
+		WithNetworkFlitSize(*networkFlitSizeFlag).
+		WithEndpointChannels(*endpointChannelsFlag).
+		WithEndpointBufferSize(*endpointBufferSizeFlag).
+		WithL1VRemoteMaxInflight(*l1vRemoteMaxInflightFlag).
+		WithL1VMSHREntries(*l1vMSHREntriesFlag).
+		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag)
+
+	if *sharingTracing {
+		traceWriter, err := newPageSharingTraceWriter(
+			*sharingTraceFile,
+			*sharingTraceSampleEvery,
+			*sharingTraceMaxRecords,
+			b.log2PageSize,
+			b.tileWidth,
+			b.tileHeight,
+		)
+		if err != nil {
+			panic(err)
+		}
+		r.sharingTraceWriter = traceWriter
+		b = b.WithSharingTracer(traceWriter)
+	}
 
 	if r.Parallel {
 		b = b.WithParallelEngine()
@@ -343,6 +399,7 @@ func (r *Runner) dumpMetrics() {
 func (r *Runner) flushMetrics() {
 	r.reportOnce.Do(func() {
 		r.reportStats()
+		r.closeSharingTrace()
 	})
 }
 

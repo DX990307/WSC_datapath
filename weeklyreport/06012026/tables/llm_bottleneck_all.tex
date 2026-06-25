@@ -1,0 +1,22 @@
+\begin{tabular}{lrrrrr}
+\toprule
+Operator & Speedup & Remote & Shared acc. & Shared pg. & Accesses \\
+\midrule
+embedding & 1.00 & 95.5 & 7.7 & 0.1 & 106496 \\
+layer00\_norm1 & 1.00 & 98.0 & 0.0 & 0.0 & 98304 \\
+layer00\_attn\_q & 1.00 & 94.0 & 99.5 & 88.2 & 1000000 \\
+layer00\_attn\_k & 1.00 & 94.0 & 99.5 & 88.2 & 1000000 \\
+layer00\_attn\_v & 1.00 & 94.0 & 99.5 & 88.2 & 1000000 \\
+layer00\_attn\_score & 1.00 & 96.7 & 97.4 & 92.1 & 1000000 \\
+layer00\_causal\_mask & 1.00 & 27.5 & 0.0 & 0.0 & 568 \\
+layer00\_attn\_softmax & 1.00 & 75.0 & 0.0 & 0.0 & 4096 \\
+layer00\_attn\_value & 1.00 & 95.1 & 99.8 & 90.7 & 1000000 \\
+layer00\_attn\_out & 1.00 & 94.0 & 99.5 & 88.2 & 1000000 \\
+layer00\_attn\_residual & 1.00 & 94.1 & 0.0 & 0.0 & 98304 \\
+layer00\_norm2 & 1.00 & 98.0 & 0.0 & 0.0 & 98304 \\
+layer00\_mlp\_fc1 & 1.00 & 92.7 & 99.0 & 81.1 & 1000000 \\
+layer00\_mlp\_gelu & 1.00 & 84.7 & 0.0 & 0.0 & 176128 \\
+layer00\_mlp\_fc2 & 1.00 & 94.6 & 38.0 & 45.0 & 1000000 \\
+layer00\_mlp\_residual & 1.00 & 94.1 & 0.0 & 0.0 & 98304 \\
+\bottomrule
+\end{tabular}

@@ -9,6 +9,8 @@ from runall2_constants import (
     MAX_WORKERS,
 )
 
+DEFAULT_MAX_WG = 78600
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -31,6 +33,16 @@ def parse_args():
         type=int,
         default=DEFAULT_MMUTLB_LOOKUP_LATENCY,
         help="Fixed MMUTLB/IOTLB lookup latency, in cycles.",
+    )
+    parser.add_argument(
+        "--switch-latency",
+        dest="switch_latency",
+        type=int,
+        default=0,
+        help=(
+            "Override -switch-latency in the benchmark command. "
+            "0 keeps runall2_constants.py default."
+        ),
     )
     parser.add_argument(
         "--benchmarks",
@@ -67,8 +79,11 @@ def parse_args():
         "--max-wg",
         dest="max_wg",
         type=int,
-        default=0,
-        help="Pass -max-wg to each benchmark. 0 means no limit.",
+        default=DEFAULT_MAX_WG,
+        help=(
+            "Pass -max-wg to each benchmark. "
+            f"Defaults to {DEFAULT_MAX_WG}; use 0 for no limit."
+        ),
     )
     parser.add_argument(
         "--timeout-minutes",
@@ -102,6 +117,82 @@ def parse_args():
         type=int,
         default=7,
         help="Tile-array width used to compute Manhattan hops.",
+    )
+    parser.add_argument(
+        "--trace-sharing",
+        dest="trace_sharing",
+        action="store_true",
+        help="Emit a compact gzip page-sharing trace for each experiment.",
+    )
+    parser.add_argument(
+        "--trace-sharing-sample",
+        dest="trace_sharing_sample",
+        type=int,
+        default=1,
+        help="Record one translated data access every N accesses when --trace-sharing is enabled.",
+    )
+    parser.add_argument(
+        "--trace-sharing-max-records",
+        dest="trace_sharing_max_records",
+        type=int,
+        default=1000000,
+        help="Maximum records per page-sharing trace; 0 means unlimited.",
+    )
+    parser.add_argument(
+        "--trace-memory-path",
+        dest="trace_memory_path",
+        action="store_true",
+        help="Emit request-level memory-path trace and joint TLB/cache miss summaries.",
+    )
+    parser.add_argument(
+        "--trace-memory-path-warmup-accesses",
+        dest="trace_memory_path_warmup_accesses",
+        type=int,
+        default=100000,
+        help="Observed L1V memory accesses to skip before writing raw memory-path rows.",
+    )
+    parser.add_argument(
+        "--trace-memory-path-max-records",
+        dest="trace_memory_path_max_records",
+        type=int,
+        default=100000,
+        help="Maximum stable-window memory-path raw rows per experiment; 0 means unlimited.",
+    )
+    parser.add_argument(
+        "--trace-memory-path-exit-on-complete",
+        dest="trace_memory_path_exit_on_complete",
+        action="store_true",
+        help="Stop each benchmark process after the memory-path raw window reaches max records.",
+    )
+    parser.add_argument(
+        "--l1v-remote-max-inflight",
+        dest="l1v_remote_max_inflight",
+        type=int,
+        default=0,
+        help=(
+            "Limit in-flight remote L1V bottom transactions per L1V cache. "
+            "0 disables remote-only throttling."
+        ),
+    )
+    parser.add_argument(
+        "--l1v-mshr-entries",
+        dest="l1v_mshr_entries",
+        type=int,
+        default=0,
+        help=(
+            "Pass -l1v-mshr-entries to each benchmark. "
+            "0 keeps the benchmark binary default."
+        ),
+    )
+    parser.add_argument(
+        "--l1v-max-concurrent-trans",
+        dest="l1v_max_concurrent_trans",
+        type=int,
+        default=0,
+        help=(
+            "Pass -l1v-max-concurrent-trans to each benchmark. "
+            "0 keeps the benchmark binary default."
+        ),
     )
     add_sampled_args(parser)
     parser.add_argument(

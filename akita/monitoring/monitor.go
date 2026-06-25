@@ -526,6 +526,13 @@ func (m *Monitor) reportTraffic(w http.ResponseWriter, r *http.Request) {
 	// 	return
 	// }
 
+	w.Header().Set("Content-Type", "application/json")
+	if m.perfAnalyzer == nil {
+		_, err := w.Write([]byte("[]"))
+		dieOnErr(err)
+		return
+	}
+
 	backend := m.perfAnalyzer.GetCurrentTraffic(name)
 
 	_, err := w.Write([]byte(backend))

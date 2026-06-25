@@ -1,0 +1,14 @@
+\begin{tabular}{lrrrrrr}
+\toprule
+Operator & Time (us) & Remote & Shared access & Shared page & L1 miss & L2 miss \\
+\midrule
+embedding & 9.5 & 95.5 & 7.7 & 0.1 & 100.0 & 99.8 \\
+layer00\_attn\_q & 10941.0 & 94.0 & 99.5 & 88.2 & 75.6 & 21.8 \\
+layer00\_attn\_score & 1919.5 & 96.7 & 97.4 & 92.1 & 98.0 & 1.8 \\
+layer00\_attn\_value & 164.0 & 95.1 & 99.8 & 90.7 & 26.7 & 33.3 \\
+layer00\_mlp\_fc1 & 25223.0 & 92.7 & 99.0 & 81.1 & 71.7 & 28.5 \\
+layer00\_mlp\_fc2 & 6842.2 & 94.6 & 38.0 & 45.0 & 30.3 & 17.9 \\
+layer00\_norm1 & 38.5 & 98.0 & 0.0 & 0.0 & 50.0 & 99.3 \\
+layer00\_attn\_residual & 8.6 & 94.1 & 0.0 & 0.0 & 100.0 & 100.0 \\
+\bottomrule
+\end{tabular}

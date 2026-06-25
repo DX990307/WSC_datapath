@@ -3,6 +3,7 @@ package switching
 import (
 	"fmt"
 
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/noc/messaging"
 	"github.com/sarchlab/akita/v3/noc/networking/arbitration"
 	"github.com/sarchlab/akita/v3/noc/networking/routing"
@@ -61,6 +62,9 @@ type Switch struct {
 	portToComplexMapping map[sim.Port]portComplex
 	routingTable         routing.Table
 	arbiter              arbitration.Arbiter
+	flitSwitchStart      map[string]sim.VTimeInSec
+	flitRouteStart       map[string]sim.VTimeInSec
+	flitForwardStart     map[string]sim.VTimeInSec
 }
 
 // addPort adds a new port on the switch.
@@ -111,12 +115,29 @@ func (s *Switch) startProcessing(now sim.VTimeInSec) (madeProgress bool) {
 			}
 
 			flit := item.(*messaging.Flit)
+			recvTime := flit.Meta().RecvTime
+			if recvTime == 0 {
+				recvTime = now
+			}
+			memtrace.RecordMemoryPathNetworkFlitStage(
+				s.Name(),
+				"switch_input_queue",
+				flit.Msg.Meta().ID,
+				flit.Meta().ID,
+				flit.SeqID,
+				flit.NumFlitInMsg,
+				recvTime,
+				now,
+				flit.Meta().Src,
+				port,
+			)
 			pipelineItem := flitPipelineItem{
 				taskID: s.flitTaskID(flit),
 				flit:   flit,
 			}
 			pc.pipeline.Accept(now, pipelineItem)
 			port.Retrieve(now)
+			s.flitSwitchStart[flit.Meta().ID] = now
 			madeProgress = true
 
 			tracing.StartTask(
@@ -143,7 +164,7 @@ func (s *Switch) movePipeline(now sim.VTimeInSec) (madeProgress bool) {
 	return madeProgress
 }
 
-func (s *Switch) route(_ sim.VTimeInSec) (madeProgress bool) {
+func (s *Switch) route(now sim.VTimeInSec) (madeProgress bool) {
 	for _, port := range s.ports {
 		pc := s.portToComplexMapping[port]
 		routeBuf := pc.routeBuffer
@@ -161,9 +182,26 @@ func (s *Switch) route(_ sim.VTimeInSec) (madeProgress bool) {
 
 			pipelineItem := item.(flitPipelineItem)
 			flit := pipelineItem.flit
+			start := s.flitSwitchStart[flit.Meta().ID]
+			if start == 0 {
+				start = now
+			}
+			memtrace.RecordMemoryPathNetworkFlitStage(
+				s.Name(),
+				"switch_pipeline",
+				flit.Msg.Meta().ID,
+				flit.Meta().ID,
+				flit.SeqID,
+				flit.NumFlitInMsg,
+				start,
+				now,
+				nil,
+				nil,
+			)
 			s.assignFlitOutputBuf(flit)
 			routeBuf.Pop()
 			forwardBuf.Push(flit)
+			s.flitRouteStart[flit.Meta().ID] = now
 			madeProgress = true
 
 			// fmt.Printf("%.10f, %s, switch route flit, %s\n",
@@ -189,8 +227,25 @@ func (s *Switch) forward(now sim.VTimeInSec) (madeProgress bool) {
 				break
 			}
 
+			start := s.flitRouteStart[flit.Meta().ID]
+			if start == 0 {
+				start = now
+			}
+			memtrace.RecordMemoryPathNetworkFlitStage(
+				s.Name(),
+				"switch_arb_wait",
+				flit.Msg.Meta().ID,
+				flit.Meta().ID,
+				flit.SeqID,
+				flit.NumFlitInMsg,
+				start,
+				now,
+				nil,
+				nil,
+			)
 			flit.OutputBuf.Push(flit)
 			buf.Pop()
+			s.flitForwardStart[flit.Meta().ID] = now
 			madeProgress = true
 
 			// fmt.Printf("%.10f, %s, switch forward flit, %s\n",
@@ -213,12 +268,31 @@ func (s *Switch) sendOut(now sim.VTimeInSec) (madeProgress bool) {
 			}
 
 			flit := item.(*messaging.Flit)
+			start := s.flitForwardStart[flit.Meta().ID]
+			if start == 0 {
+				start = now
+			}
 			flit.Meta().Src = pc.localPort
 			flit.Meta().Dst = pc.remotePort
 			flit.Meta().SendTime = now
 
 			err := pc.localPort.Send(flit)
 			if err == nil {
+				memtrace.RecordMemoryPathNetworkFlitStage(
+					s.Name(),
+					"switch_output_wait",
+					flit.Msg.Meta().ID,
+					flit.Meta().ID,
+					flit.SeqID,
+					flit.NumFlitInMsg,
+					start,
+					now,
+					pc.localPort,
+					pc.remotePort,
+				)
+				delete(s.flitSwitchStart, flit.Meta().ID)
+				delete(s.flitRouteStart, flit.Meta().ID)
+				delete(s.flitForwardStart, flit.Meta().ID)
 				sendOutBuf.Pop()
 				madeProgress = true
 
@@ -293,6 +367,9 @@ func (b SwitchBuilder) Build(name string) *Switch {
 	s.routingTable = b.routingTable
 	s.arbiter = b.arbiter
 	s.portToComplexMapping = make(map[sim.Port]portComplex)
+	s.flitSwitchStart = make(map[string]sim.VTimeInSec)
+	s.flitRouteStart = make(map[string]sim.VTimeInSec)
+	s.flitForwardStart = make(map[string]sim.VTimeInSec)
 	return s
 }
 

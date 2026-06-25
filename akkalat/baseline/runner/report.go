@@ -26,6 +26,9 @@ func (r *Runner) reportStats() {
 	r.reportDRAMTransactionCount()
 	r.reportIOMMUTLBStats()
 	r.reportMMUCoalescingStats()
+	if err := memtrace.DumpMemoryPathTrace(); err != nil {
+		panic(err)
+	}
 	if err := memtrace.DumpL2SourceStats(); err != nil {
 		panic(err)
 	}

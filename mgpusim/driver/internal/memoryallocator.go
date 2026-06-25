@@ -156,7 +156,14 @@ func (a *memoryAllocatorImpl) allocatePages(
 	currentPageBlock := pageBlockNum + 1
 
 	for i := 0; i < numPages; i++ {
-		pAddr := device.allocatePage()
+		// Previous unified-GPU policy:
+		// pAddr := device.allocatePage()
+		//
+		// For a unified GPU, device.allocatePage() selects the next actual GPU
+		// after every page, which creates page-level round-robin placement.
+		// Keep the old line above for quick rollback, but use contiguous
+		// distribute-style placement for multi-tile experiments.
+		pAddr := a.allocatePageWithDistributePolicy(device, i, numPages)
 		vAddr := nextVAddr + uint64(i)*pageSize
 
 		page := vm.Page{
@@ -187,6 +194,43 @@ func (a *memoryAllocatorImpl) allocatePages(
 	// numPages, pid, deviceID, startVPN, endVPN, currentPageBlock)
 
 	return nextVAddr
+}
+
+func (a *memoryAllocatorImpl) allocatePageWithDistributePolicy(
+	device *Device,
+	pageIndex int,
+	numPages int,
+) uint64 {
+	if device.Type != DeviceTypeUnifiedGPU {
+		return device.allocatePage()
+	}
+
+	actualGPU := a.selectActualGPUForDistributedPage(
+		device, pageIndex, numPages)
+	return actualGPU.allocatePage()
+}
+
+func (a *memoryAllocatorImpl) selectActualGPUForDistributedPage(
+	device *Device,
+	pageIndex int,
+	numPages int,
+) *Device {
+	numGPUs := len(device.ActualGPUs)
+	if numGPUs == 0 {
+		panic("unified GPU has no actual GPUs")
+	}
+
+	numPagesPerGPU := numPages / numGPUs
+	if numPagesPerGPU == 0 {
+		return device.ActualGPUs[0]
+	}
+
+	gpuIndex := pageIndex / numPagesPerGPU
+	if gpuIndex >= numGPUs {
+		gpuIndex = numGPUs - 1
+	}
+
+	return device.ActualGPUs[gpuIndex]
 }
 
 func (a *memoryAllocatorImpl) Remap(

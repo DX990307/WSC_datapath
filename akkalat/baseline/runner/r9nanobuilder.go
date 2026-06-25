@@ -41,12 +41,16 @@ type R9NanoGPUBuilder struct {
 	log2PageSize                   uint64
 	log2CacheLineSize              uint64
 	log2MemoryBankInterleavingSize uint64
+	l1vRemoteMaxInflight           int
+	l1vMSHREntries                 int
+	l1vMaxConcurrentTrans          int
 
 	enableISADebugging bool
 	enableMemTracing   bool
 	enableVisTracing   bool
 	visTracer          tracing.Tracer
 	memTracer          tracing.Tracer
+	sharingTracer      addresstranslator.SharingTracer
 	monitor            *monitoring.Monitor
 	perfAnalyzer       *analysis.PerfAnalyzer
 
@@ -105,6 +109,8 @@ func MakeR9NanoGPUBuilder() R9NanoGPUBuilder {
 		log2MemoryBankInterleavingSize: 12,
 		l2CacheSize:                    4 * mem.MB,
 		dramSize:                       8 * mem.GB,
+		l1vMSHREntries:                 160,
+		l1vMaxConcurrentTrans:          160,
 	}
 	return b
 }
@@ -202,6 +208,14 @@ func (b R9NanoGPUBuilder) WithMemTracer(t tracing.Tracer) R9NanoGPUBuilder {
 	return b
 }
 
+// WithSharingTracer traces translated vector-memory page accesses.
+func (b R9NanoGPUBuilder) WithSharingTracer(
+	t addresstranslator.SharingTracer,
+) R9NanoGPUBuilder {
+	b.sharingTracer = t
+	return b
+}
+
 // WithISADebugging enables the GPU to dump instruction execution information.
 func (b R9NanoGPUBuilder) WithISADebugging() R9NanoGPUBuilder {
 	b.enableISADebugging = true
@@ -219,6 +233,29 @@ func (b R9NanoGPUBuilder) WithLog2CacheLineSize(
 // WithLog2PageSize sets the page size with the power of 2.
 func (b R9NanoGPUBuilder) WithLog2PageSize(log2PageSize uint64) R9NanoGPUBuilder {
 	b.log2PageSize = log2PageSize
+	return b
+}
+
+// WithL1VRemoteMaxInflight limits in-flight remote L1V bottom transactions per
+// L1V cache. A non-positive value disables the remote-only throttle.
+func (b R9NanoGPUBuilder) WithL1VRemoteMaxInflight(n int) R9NanoGPUBuilder {
+	b.l1vRemoteMaxInflight = n
+	return b
+}
+
+// WithL1VMSHREntries sets the number of L1V cache MSHR entries.
+func (b R9NanoGPUBuilder) WithL1VMSHREntries(n int) R9NanoGPUBuilder {
+	if n > 0 {
+		b.l1vMSHREntries = n
+	}
+	return b
+}
+
+// WithL1VMaxConcurrentTrans sets the L1V cache concurrency window.
+func (b R9NanoGPUBuilder) WithL1VMaxConcurrentTrans(n int) R9NanoGPUBuilder {
+	if n > 0 {
+		b.l1vMaxConcurrentTrans = n
+	}
 	return b
 }
 
@@ -544,6 +581,9 @@ func (b *R9NanoGPUBuilder) buildSAs() {
 		withGPUID(b.gpuID).
 		withLog2CachelineSize(b.log2CacheLineSize).
 		withLog2PageSize(b.log2PageSize).
+		withL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
+		withL1VMSHREntries(b.l1vMSHREntries).
+		withL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
 		withNumCU(b.numCUPerShaderArray)
 
 	if b.enableISADebugging {
@@ -556,6 +596,9 @@ func (b *R9NanoGPUBuilder) buildSAs() {
 
 	if b.enableMemTracing {
 		saBuilder = saBuilder.withMemTracer(b.memTracer)
+	}
+	if b.sharingTracer != nil {
+		saBuilder = saBuilder.withSharingTracer(b.sharingTracer)
 	}
 
 	for i := 0; i < b.numShaderArray; i++ {

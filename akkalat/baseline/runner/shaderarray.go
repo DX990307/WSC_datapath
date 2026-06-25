@@ -41,24 +41,30 @@ type shaderArrayBuilder struct {
 	name  string
 	numCU int
 
-	engine            sim.Engine
-	freq              sim.Freq
-	log2CacheLineSize uint64
-	log2PageSize      uint64
+	engine                sim.Engine
+	freq                  sim.Freq
+	log2CacheLineSize     uint64
+	log2PageSize          uint64
+	l1vRemoteMaxInflight  int
+	l1vMSHREntries        int
+	l1vMaxConcurrentTrans int
 
-	isaDebugging bool
-	visTracer    tracing.Tracer
-	memTracer    tracing.Tracer
+	isaDebugging  bool
+	visTracer     tracing.Tracer
+	memTracer     tracing.Tracer
+	sharingTracer addresstranslator.SharingTracer
 }
 
 func makeShaderArrayBuilder() shaderArrayBuilder {
 	b := shaderArrayBuilder{
-		gpuID:             0,
-		name:              "SA",
-		numCU:             4,
-		freq:              1 * sim.GHz,
-		log2CacheLineSize: 6,
-		log2PageSize:      12,
+		gpuID:                 0,
+		name:                  "SA",
+		numCU:                 4,
+		freq:                  1 * sim.GHz,
+		log2CacheLineSize:     6,
+		log2PageSize:          12,
+		l1vMSHREntries:        160,
+		l1vMaxConcurrentTrans: 160,
 	}
 	return b
 }
@@ -97,6 +103,25 @@ func (b shaderArrayBuilder) withLog2PageSize(
 	return b
 }
 
+func (b shaderArrayBuilder) withL1VRemoteMaxInflight(n int) shaderArrayBuilder {
+	b.l1vRemoteMaxInflight = n
+	return b
+}
+
+func (b shaderArrayBuilder) withL1VMSHREntries(n int) shaderArrayBuilder {
+	if n > 0 {
+		b.l1vMSHREntries = n
+	}
+	return b
+}
+
+func (b shaderArrayBuilder) withL1VMaxConcurrentTrans(n int) shaderArrayBuilder {
+	if n > 0 {
+		b.l1vMaxConcurrentTrans = n
+	}
+	return b
+}
+
 func (b shaderArrayBuilder) withIsaDebugging() shaderArrayBuilder {
 	b.isaDebugging = true
 	return b
@@ -113,6 +138,13 @@ func (b shaderArrayBuilder) withMemTracer(
 	memTracer tracing.Tracer,
 ) shaderArrayBuilder {
 	b.memTracer = memTracer
+	return b
+}
+
+func (b shaderArrayBuilder) withSharingTracer(
+	sharingTracer addresstranslator.SharingTracer,
+) shaderArrayBuilder {
+	b.sharingTracer = sharingTracer
 	return b
 }
 
@@ -311,6 +343,9 @@ func (b *shaderArrayBuilder) buildL1VAddressTranslators(sa *shaderArray) {
 		WithFreq(b.freq).
 		WithDeviceID(b.gpuID).
 		WithLog2PageSize(b.log2PageSize)
+	if b.sharingTracer != nil {
+		builder = builder.WithSharingTracer(b.sharingTracer)
+	}
 
 	for i := 0; i < b.numCU; i++ {
 		name := fmt.Sprintf("%s.L1VAddrTrans[%d]", b.name, i)
@@ -347,11 +382,13 @@ func (b *shaderArrayBuilder) buildL1VCaches(sa *shaderArray) {
 	builder := writearound.NewBuilder().
 		WithEngine(b.engine).
 		WithFreq(b.freq).
-		WithBankLatency(60).
+		WithBankLatency(10).
 		WithNumBanks(1).
 		WithLog2BlockSize(b.log2CacheLineSize).
 		WithWayAssociativity(4).
-		WithNumMSHREntry(16).
+		WithNumMSHREntry(b.l1vMSHREntries).
+		WithMaxNumConcurrentTrans(b.l1vMaxConcurrentTrans).
+		WithMaxRemoteBottomTrans(b.l1vRemoteMaxInflight).
 		WithTotalByteSize(16 * mem.KB)
 
 	if b.visTracer != nil {

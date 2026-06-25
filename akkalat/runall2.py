@@ -99,6 +99,17 @@ def prepare_exps(args, exps, common_flags):
     for exp in exps:
         exp["common_flags"] = common_flags
         exp["timeout_seconds"] = timeout_seconds
+        exp["trace_sharing"] = args.trace_sharing
+        exp["trace_sharing_sample"] = args.trace_sharing_sample
+        exp["trace_sharing_max_records"] = args.trace_sharing_max_records
+        exp["trace_memory_path"] = args.trace_memory_path
+        exp["trace_memory_path_warmup_accesses"] = (
+            args.trace_memory_path_warmup_accesses
+        )
+        exp["trace_memory_path_max_records"] = args.trace_memory_path_max_records
+        exp["trace_memory_path_exit_on_complete"] = (
+            args.trace_memory_path_exit_on_complete
+        )
 
 
 def print_launch_summary(args, common_flags, exps, max_workers):

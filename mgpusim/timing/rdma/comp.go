@@ -39,6 +39,11 @@ type Comp struct {
 
 	transactionsFromOutside []transaction
 	transactionsFromInside  []transaction
+
+	firstSeenFromL1Req      map[string]sim.VTimeInSec
+	firstSeenFromOutsideReq map[string]sim.VTimeInSec
+	firstSeenFromL2Rsp      map[string]sim.VTimeInSec
+	firstSeenFromOutsideRsp map[string]sim.VTimeInSec
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -122,6 +127,28 @@ func (c *Comp) fullyDrained() bool {
 		len(c.transactionsFromInside) == 0
 }
 
+func (c *Comp) firstSeen(
+	seen *map[string]sim.VTimeInSec,
+	id string,
+	now sim.VTimeInSec,
+) sim.VTimeInSec {
+	if *seen == nil {
+		*seen = make(map[string]sim.VTimeInSec)
+	}
+	if first, ok := (*seen)[id]; ok {
+		return first
+	}
+	(*seen)[id] = now
+	return now
+}
+
+func (c *Comp) forgetSeen(seen map[string]sim.VTimeInSec, id string) {
+	if seen == nil {
+		return
+	}
+	delete(seen, id)
+}
+
 func (c *Comp) processFromL1(now sim.VTimeInSec) bool {
 	if c.pauseIncomingReqsFromL1 {
 		return false
@@ -200,6 +227,7 @@ func (c *Comp) processReqFromL1(
 	now sim.VTimeInSec,
 	req mem.AccessReq,
 ) bool {
+	firstSeen := c.firstSeen(&c.firstSeenFromL1Req, req.Meta().ID, now)
 	dst := c.RemoteRDMAAddressTable.Find(req.GetAddress())
 
 	if dst == c.ToOutside {
@@ -214,7 +242,30 @@ func (c *Comp) processReqFromL1(
 
 	err := c.ToOutside.Send(cloned)
 	if err == nil {
+		memtrace.RegisterMemoryPathNetworkMessage(
+			rdmaAccessReqInfo(req),
+			req.Meta().ID,
+			cloned.Meta().ID,
+			"request",
+		)
+		memtrace.RecordMemoryPathRDMARequestFromL1(
+			c.Name(),
+			rdmaAccessReqInfo(req),
+			req.Meta().ID,
+			req.Meta().SendTime,
+			firstSeen,
+			req.Meta().Src,
+			req.Meta().Dst,
+		)
+		memtrace.RecordMemoryPathRDMALocalRequestOutputWait(
+			c.Name(),
+			rdmaAccessReqInfo(req),
+			req.Meta().ID,
+			firstSeen,
+			now,
+		)
 		c.ToL1.Retrieve(now)
+		c.forgetSeen(c.firstSeenFromL1Req, req.Meta().ID)
 
 		c.traceInsideOutStart(req, cloned)
 
@@ -237,6 +288,7 @@ func (c *Comp) processReqFromOutside(
 	now sim.VTimeInSec,
 	req mem.AccessReq,
 ) bool {
+	firstSeen := c.firstSeen(&c.firstSeenFromOutsideReq, req.Meta().ID, now)
 	dst := c.localModules.Find(req.GetAddress())
 
 	cloned := c.cloneReq(req)
@@ -246,7 +298,24 @@ func (c *Comp) processReqFromOutside(
 
 	err := c.ToL2.Send(cloned)
 	if err == nil {
+		memtrace.RecordMemoryPathRDMALocalToRemoteRequest(
+			c.Name(),
+			rdmaAccessReqInfo(req),
+			req.Meta().ID,
+			req.Meta().SendTime,
+			firstSeen,
+			req.Meta().Src,
+			req.Meta().Dst,
+		)
+		memtrace.RecordMemoryPathRDMARemoteRequestOutputWait(
+			c.Name(),
+			rdmaAccessReqInfo(req),
+			req.Meta().ID,
+			firstSeen,
+			now,
+		)
 		c.ToOutside.Retrieve(now)
+		c.forgetSeen(c.firstSeenFromOutsideReq, req.Meta().ID)
 
 		c.traceOutsideInStart(req, cloned)
 
@@ -268,6 +337,7 @@ func (c *Comp) processRspFromL2(
 	now sim.VTimeInSec,
 	rsp mem.AccessRsp,
 ) bool {
+	firstSeen := c.firstSeen(&c.firstSeenFromL2Rsp, rsp.Meta().ID, now)
 	transactionIndex := c.findTransactionByRspToID(
 		rsp.GetRspTo(), c.transactionsFromOutside)
 	trans := c.transactionsFromOutside[transactionIndex]
@@ -279,7 +349,32 @@ func (c *Comp) processRspFromL2(
 
 	err := c.ToOutside.Send(rspToOutside)
 	if err == nil {
+		memtrace.RegisterMemoryPathNetworkMessage(
+			rdmaAccessReqInfo(trans.fromOutside),
+			trans.fromOutside.Meta().ID,
+			rspToOutside.Meta().ID,
+			"return",
+		)
+		memtrace.RecordMemoryPathRDMAResponseFromL2(
+			c.Name(),
+			rdmaAccessReqInfo(trans.fromOutside),
+			trans.fromOutside.Meta().ID,
+			rsp.Meta().ID,
+			rsp.Meta().SendTime,
+			firstSeen,
+			rsp.Meta().Src,
+			rsp.Meta().Dst,
+		)
+		memtrace.RecordMemoryPathRDMARemoteResponseOutputWait(
+			c.Name(),
+			rdmaAccessReqInfo(trans.fromOutside),
+			trans.fromOutside.Meta().ID,
+			rsp.Meta().ID,
+			firstSeen,
+			now,
+		)
 		c.ToL2.Retrieve(now)
+		c.forgetSeen(c.firstSeenFromL2Rsp, rsp.Meta().ID)
 
 		//fmt.Printf("%s rsp inside %s -> outside %s\n",
 		//e.Name(), rsp.GetID(), rspToOutside.GetID())
@@ -298,6 +393,7 @@ func (c *Comp) processRspFromOutside(
 	now sim.VTimeInSec,
 	rsp mem.AccessRsp,
 ) bool {
+	firstSeen := c.firstSeen(&c.firstSeenFromOutsideRsp, rsp.Meta().ID, now)
 	transactionIndex := c.findTransactionByRspToID(
 		rsp.GetRspTo(), c.transactionsFromInside)
 	trans := c.transactionsFromInside[transactionIndex]
@@ -309,7 +405,26 @@ func (c *Comp) processRspFromOutside(
 
 	err := c.ToL1.Send(rspToInside)
 	if err == nil {
+		memtrace.RecordMemoryPathRDMARemoteToLocalResponse(
+			c.Name(),
+			rdmaAccessReqInfo(trans.fromInside),
+			trans.fromInside.Meta().ID,
+			rsp.Meta().ID,
+			rsp.Meta().SendTime,
+			firstSeen,
+			rsp.Meta().Src,
+			rsp.Meta().Dst,
+		)
+		memtrace.RecordMemoryPathRDMALocalResponseOutputWait(
+			c.Name(),
+			rdmaAccessReqInfo(trans.fromInside),
+			trans.fromInside.Meta().ID,
+			rsp.Meta().ID,
+			firstSeen,
+			now,
+		)
 		c.ToOutside.Retrieve(now)
+		c.forgetSeen(c.firstSeenFromOutsideRsp, rsp.Meta().ID)
 
 		c.traceInsideOutEnd(trans)
 		c.recordRemoteGPMAccess(now, trans, rsp)
@@ -332,7 +447,7 @@ func (c *Comp) recordRemoteGPMAccess(
 	trans transaction,
 	rsp mem.AccessRsp,
 ) {
-	if !memtrace.L2SourceStatsEnabled() {
+	if !memtrace.L2SourceStatsEnabled() && !memtrace.MemoryPathTraceEnabled() {
 		return
 	}
 
@@ -364,6 +479,26 @@ func (c *Comp) recordRemoteGPMAccess(
 		now,
 		op,
 	)
+	memtrace.RecordMemoryPathRemoteGPM(
+		rdmaAccessReqInfo(trans.fromInside),
+		c.Name(),
+		providerName,
+		bytes,
+		now-trans.fromInside.Meta().SendTime,
+		now,
+		op,
+	)
+}
+
+func rdmaAccessReqInfo(req sim.Msg) interface{} {
+	switch req := req.(type) {
+	case *mem.ReadReq:
+		return req.Info
+	case *mem.WriteReq:
+		return req.Info
+	default:
+		return nil
+	}
 }
 
 func (c *Comp) findTransactionByRspToID(
@@ -419,7 +554,7 @@ func (c *Comp) cloneReq(origin mem.AccessReq) mem.AccessReq {
 }
 
 func (c *Comp) markReqAsRemote(req mem.AccessReq, dst sim.Port) {
-	if !memtrace.L2SourceStatsEnabled() {
+	if !memtrace.L2SourceStatsEnabled() && !memtrace.MemoryPathTraceEnabled() {
 		return
 	}
 

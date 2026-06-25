@@ -7,6 +7,7 @@ import (
 	"github.com/sarchlab/akita/v3/mem/dram/internal/signal"
 	"github.com/sarchlab/akita/v3/mem/dram/internal/trans"
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 )
@@ -91,6 +92,17 @@ func (c *MemController) parseTop(now sim.VTimeInSec) (madeProgress bool) {
 	c.topPort.Retrieve(now)
 
 	tracing.TraceReqReceive(msg, c)
+	if req, ok := msg.(mem.AccessReq); ok {
+		memtrace.RecordMemoryPathDRAMRequestReceive(
+			c.Name(),
+			dramAccessReqInfo(req),
+			req.Meta().ID,
+			req.Meta().SendTime,
+			now,
+			req.Meta().Src,
+			req.Meta().Dst,
+		)
+	}
 	for _, st := range trans.SubTransactions {
 		tracing.StartTaskWithSpecificLocation(
 			st.ID,
@@ -182,6 +194,13 @@ func (c *MemController) finalizeWriteTrans(
 		Build()
 	sendErr := c.topPort.Send(writeDone)
 	if sendErr == nil {
+		memtrace.RecordMemoryPathDRAMResponse(
+			c.Name(),
+			dramAccessReqInfo(t.Write),
+			t.Write.Meta().ID,
+			writeDone.Meta().ID,
+			now,
+		)
 		c.inflightTransactions = append(
 			c.inflightTransactions[:i],
 			c.inflightTransactions[i+1:]...)
@@ -213,6 +232,13 @@ func (c *MemController) finalizeReadTrans(
 		Build()
 	sendErr := c.topPort.Send(dataReady)
 	if sendErr == nil {
+		memtrace.RecordMemoryPathDRAMResponse(
+			c.Name(),
+			dramAccessReqInfo(t.Read),
+			t.Read.Meta().ID,
+			dataReady.Meta().ID,
+			now,
+		)
 		c.inflightTransactions = append(
 			c.inflightTransactions[:i],
 			c.inflightTransactions[i+1:]...)
@@ -223,4 +249,15 @@ func (c *MemController) finalizeReadTrans(
 	}
 
 	return false
+}
+
+func dramAccessReqInfo(req mem.AccessReq) interface{} {
+	switch req := req.(type) {
+	case *mem.ReadReq:
+		return req.Info
+	case *mem.WriteReq:
+		return req.Info
+	default:
+		return nil
+	}
 }

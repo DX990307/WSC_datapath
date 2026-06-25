@@ -1,6 +1,8 @@
 package writearound
 
 import (
+	"strings"
+
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/sim"
@@ -37,6 +39,9 @@ type Cache struct {
 	transactions             []*transaction
 	postCoalesceTransactions []*transaction
 
+	maxRemoteBottomTrans int
+	remoteBottomTrans    int
+
 	isPaused bool
 }
 
@@ -44,6 +49,38 @@ type Cache struct {
 // the data on a certain address.
 func (c *Cache) SetLowModuleFinder(lmf mem.LowModuleFinder) {
 	c.lowModuleFinder = lmf
+}
+
+func (c *Cache) canSendToBottomModule(module sim.Port) bool {
+	if !c.isRemoteBottomModule(module) || c.maxRemoteBottomTrans <= 0 {
+		return true
+	}
+	return c.remoteBottomTrans < c.maxRemoteBottomTrans
+}
+
+func (c *Cache) trackBottomTransaction(trans *transaction, module sim.Port) {
+	if !c.isRemoteBottomModule(module) {
+		return
+	}
+	trans.remoteBottom = true
+	c.remoteBottomTrans++
+}
+
+func (c *Cache) releaseBottomTransaction(trans *transaction) {
+	if trans == nil || !trans.remoteBottom {
+		return
+	}
+	trans.remoteBottom = false
+	if c.remoteBottomTrans > 0 {
+		c.remoteBottomTrans--
+	}
+}
+
+func (c *Cache) isRemoteBottomModule(module sim.Port) bool {
+	if module == nil {
+		return false
+	}
+	return strings.Contains(module.Name(), ".RDMA.")
 }
 
 // Tick update the state of the cache

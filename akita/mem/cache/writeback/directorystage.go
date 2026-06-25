@@ -80,6 +80,14 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 		}
 
 		trans := item.(*transaction)
+		if req := trans.accessReq(); req != nil {
+			memtrace.RecordMemoryPathL2DirStart(
+				ds.cache.Name(),
+				req.Meta().ID,
+				accessReqInfo(req),
+				now,
+			)
+		}
 		ds.pipeline.Accept(now, dirPipelineItem{trans})
 		ds.cache.dirStageBuffer.Pop()
 
@@ -130,6 +138,7 @@ func (ds *directoryStage) handleReadMSHRHit(
 		ds.cache,
 		"read-mshr-hit",
 	)
+	ds.recordMemoryPathCacheResult(now, trans, "read-mshr-hit")
 	ds.recordL2AccessSource(now, trans, "l2_mshr")
 
 	return true
@@ -149,6 +158,7 @@ func (ds *directoryStage) handleReadHit(
 		ds.cache,
 		"read-hit",
 	)
+	ds.recordMemoryPathCacheResult(now, trans, "read-hit")
 
 	// fmt.Printf("%.10f, %s, dir read hit, %s, %04X, %04X, (%d, %d), %v\n",
 	// 	now, ds.cache.Name(),
@@ -190,6 +200,7 @@ func (ds *directoryStage) handleReadMiss(
 				ds.cache,
 				"read-miss",
 			)
+			ds.recordMemoryPathCacheResult(now, trans, "read-miss")
 
 			// fmt.Printf("%.10f, %s, dir read miss, %s, %04X, %04X, (%d, %d), %v\n",
 			// 	now, ds.cache.Name(),
@@ -211,6 +222,7 @@ func (ds *directoryStage) handleReadMiss(
 			ds.cache,
 			"read-miss",
 		)
+		ds.recordMemoryPathCacheResult(now, trans, "read-miss")
 
 		// fmt.Printf("%.10f, %s, dir read miss, %s, %04X, %04X, (%d, %d), %v\n",
 		// 	now, ds.cache.Name(),
@@ -241,6 +253,7 @@ func (ds *directoryStage) doWrite(
 			"write-mshr-hit",
 		)
 		if ok {
+			ds.recordMemoryPathCacheResult(now, trans, "write-mshr-hit")
 			ds.recordL2AccessSource(now, trans, "l2_mshr")
 		}
 
@@ -256,6 +269,7 @@ func (ds *directoryStage) doWrite(
 				ds.cache,
 				"write-hit",
 			)
+			ds.recordMemoryPathCacheResult(now, trans, "write-hit")
 			ds.recordL2AccessSource(now, trans, "l2_cache")
 		}
 
@@ -269,6 +283,7 @@ func (ds *directoryStage) doWrite(
 			ds.cache,
 			"write-miss",
 		)
+		ds.recordMemoryPathCacheResult(now, trans, "write-miss")
 	}
 
 	return ok
@@ -614,6 +629,28 @@ func (ds *directoryStage) recordL2AccessSource(
 		now,
 		accessReqOp(req),
 		sourceBase,
+	)
+}
+
+func (ds *directoryStage) recordMemoryPathCacheResult(
+	now sim.VTimeInSec,
+	trans *transaction,
+	result string,
+) {
+	req := trans.accessReq()
+	if req == nil {
+		return
+	}
+	memtrace.RecordMemoryPathCacheResult(
+		ds.cache.Name(),
+		req.Meta().ID,
+		accessReqInfo(req),
+		req.GetAddress(),
+		req.GetByteSize(),
+		uint64(req.GetPID()),
+		accessReqOp(req),
+		result,
+		now,
 	)
 }
 

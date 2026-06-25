@@ -76,3 +76,11 @@ func timeToNS(t sim.VTimeInSec) uint64 {
 	}
 	return uint64(math.Round(float64(t) * 1e9))
 }
+
+func pageBase(paddr uint64) uint64 {
+	return (paddr / defaultL2SourcePageSize) * defaultL2SourcePageSize
+}
+
+func isNeighborHop(hops int) bool {
+	return hops == 1
+}

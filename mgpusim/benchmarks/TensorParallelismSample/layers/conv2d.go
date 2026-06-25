@@ -49,7 +49,17 @@ func NewConv2D(
 	To tensor.Operator,
 	inputSize, kernelSize, stride, padding []int, loop int,
 ) *Conv2D {
+	return NewConv2DWithGPUs(index, To, inputSize, kernelSize, stride, padding, loop, nil)
+}
+
+func NewConv2DWithGPUs(
+	index int,
+	To tensor.Operator,
+	inputSize, kernelSize, stride, padding []int, loop int,
+	gpuIDs []int,
+) *Conv2D {
 	argumentsMustBeValid(inputSize, kernelSize, stride, padding)
+	stageGPUs := conv2DStageGPUs(gpuIDs)
 
 	l := &Conv2D{
 		layerIndex:              index,
@@ -58,10 +68,10 @@ func NewConv2D(
 		kernelSize:              kernelSize,
 		stride:                  stride,
 		padding:                 padding,
-		gpu1Status:              GPUstatus{GPUID: 49, GPUCanUse: true},
-		gpu2Status:              GPUstatus{GPUID: 50, GPUCanUse: true},
-		gpu3Status:              GPUstatus{GPUID: 51, GPUCanUse: true},
-		gpu4Status:              GPUstatus{GPUID: 52, GPUCanUse: true},
+		gpu1Status:              GPUstatus{GPUID: stageGPUs[0], GPUCanUse: true},
+		gpu2Status:              GPUstatus{GPUID: stageGPUs[1], GPUCanUse: true},
+		gpu3Status:              GPUstatus{GPUID: stageGPUs[2], GPUCanUse: true},
+		gpu4Status:              GPUstatus{GPUID: stageGPUs[3], GPUCanUse: true},
 		im2ColMatrixList:        make([]tensor.Tensor, loop),
 		weightMatrixList:        make([]tensor.Tensor, loop),
 		biasMatrixList:          make([]tensor.Tensor, loop),
@@ -77,8 +87,51 @@ func NewConv2D(
 	return l
 }
 
+func conv2DStageGPUs(gpuIDs []int) [4]int {
+	if len(gpuIDs) == 0 {
+		return [4]int{49, 50, 51, 52}
+	}
+	if len(gpuIDs) == 1 {
+		return [4]int{gpuIDs[0], gpuIDs[0], gpuIDs[0], gpuIDs[0]}
+	}
+
+	stageGPUs := [4]int{}
+	for i := range stageGPUs {
+		stageGPUs[i] = gpuIDs[i%len(gpuIDs)]
+	}
+	return stageGPUs
+}
+
+func (l *Conv2D) minStageGPUID() int {
+	minGPUID := l.gpu1Status.GPUID
+	for _, gpuid := range []int{
+		l.gpu2Status.GPUID,
+		l.gpu3Status.GPUID,
+		l.gpu4Status.GPUID,
+	} {
+		if gpuid < minGPUID {
+			minGPUID = gpuid
+		}
+	}
+	return minGPUID
+}
+
+func (l *Conv2D) maxStageGPUID() int {
+	maxGPUID := l.gpu1Status.GPUID
+	for _, gpuid := range []int{
+		l.gpu2Status.GPUID,
+		l.gpu3Status.GPUID,
+		l.gpu4Status.GPUID,
+	} {
+		if gpuid > maxGPUID {
+			maxGPUID = gpuid
+		}
+	}
+	return maxGPUID
+}
+
 func (l *Conv2D) allocateBuffers() {
-	l.parameters = l.To.Create([]int{l.numParam()}, 49)
+	l.parameters = l.To.Create([]int{l.numParam()}, l.gpu1Status.GPUID)
 	l.weights = l.To.Slice(l.parameters, 0, l.numWeight())
 	l.bias = l.To.Slice(l.parameters, l.numWeight(), l.numWeight()+l.numBias())
 }
@@ -183,18 +236,20 @@ func (l *Conv2D) Forward(input tensor.Tensor) (tensor.Tensor, *driver.CommandQue
 
 	im2ColMatrix, _ := l.To.Im2Col(input,
 		[]int{l.kernelSize[2], l.kernelSize[3]},
-		l.padding, l.stride, []int{1, 1}, 49, 49)
+		l.padding, l.stride, []int{1, 1}, l.gpu1Status.GPUID, l.gpu1Status.GPUID)
 	weightMatrix := l.To.Reshape(l.weights,
 		[]int{l.kernelSize[0], im2ColMatrix.Size()[0]})
 
 	biasMatrix := l.To.Repeat(l.bias, im2ColMatrix.Size()[1])
 	biasMatrix.SetSize([]int{im2ColMatrix.Size()[1], l.kernelSize[0]})
-	biasMatrixTranspose, _ := l.To.Transpose(biasMatrix, []int{1, 0}, 49, 49)
+	biasMatrixTranspose, _ := l.To.Transpose(
+		biasMatrix, []int{1, 0}, l.gpu2Status.GPUID, l.gpu2Status.GPUID)
 	// biasMatrixTranspose := l.to.Zeros(
 	// []int{l.kernelSize[0], im2ColMatrix.Size()[1]})
 
 	outputMatrix, _ := l.To.Gemm(false, false, 1.0, 1.0,
-		weightMatrix, im2ColMatrix, biasMatrixTranspose, 49, 49)
+		weightMatrix, im2ColMatrix, biasMatrixTranspose,
+		l.gpu3Status.GPUID, l.gpu3Status.GPUID)
 
 	outputMatrix.SetSize(
 		[]int{
@@ -203,7 +258,8 @@ func (l *Conv2D) Forward(input tensor.Tensor) (tensor.Tensor, *driver.CommandQue
 			l.outputSize[1],
 			l.outputSize[2],
 		})
-	outputTranspose, _ := l.To.Transpose(outputMatrix, []int{1, 0, 2, 3}, 49, 49)
+	outputTranspose, _ := l.To.Transpose(
+		outputMatrix, []int{1, 0, 2, 3}, l.gpu4Status.GPUID, l.gpu4Status.GPUID)
 	outputTranspose.SetDescriptor("NCHW")
 
 	// l.to.Free(im2ColMatrix)
@@ -217,12 +273,13 @@ func (l *Conv2D) Forward(input tensor.Tensor) (tensor.Tensor, *driver.CommandQue
 
 func (l *Conv2D) Execute(input tensor.Tensor, loop int, i int) {
 	fmt.Printf("i: %d\n", i)
-	for gpuid := 49; gpuid <= 52; gpuid++ {
+	for gpuid := l.minStageGPUID(); gpuid <= l.maxStageGPUID(); gpuid++ {
 		if gpuid == l.gpu1Status.GPUID && i < loop-3 {
 			// l.ForwardInput = l.To.Clone(input)
 			im2ColMatrix, queue := l.To.Im2Col(input,
 				[]int{l.kernelSize[2], l.kernelSize[3]},
-				l.padding, l.stride, []int{1, 1}, 49, 49)
+				l.padding, l.stride, []int{1, 1},
+				l.gpu1Status.GPUID, l.gpu1Status.GPUID)
 			l.im2ColMatrixList[i] = im2ColMatrix
 			l.QueueList = append(l.QueueList, queue)
 		}
@@ -231,14 +288,16 @@ func (l *Conv2D) Execute(input tensor.Tensor, loop int, i int) {
 				[]int{l.kernelSize[0], l.im2ColMatrixList[i-1].Size()[0]})
 			biasMatrix := l.To.Repeat(l.bias, l.im2ColMatrixList[i-1].Size()[1])
 			biasMatrix.SetSize([]int{l.im2ColMatrixList[i-1].Size()[1], l.kernelSize[0]})
-			biasMatrixTranspose, queue := l.To.Transpose(biasMatrix, []int{1, 0}, 50, 50)
+			biasMatrixTranspose, queue := l.To.Transpose(
+				biasMatrix, []int{1, 0}, l.gpu2Status.GPUID, l.gpu2Status.GPUID)
 			l.biasMatrixList[i-1] = biasMatrix
 			l.biasMatrixTransposeList[i-1] = biasMatrixTranspose
 			l.QueueList = append(l.QueueList, queue)
 		}
 		if gpuid == l.gpu3Status.GPUID && i < loop-1 && i > 1 {
 			outputMatrix, queue := l.To.Gemm(false, false, 1.0, 1.0, l.weightMatrixList[i-2],
-				l.im2ColMatrixList[i-2], l.biasMatrixTransposeList[i-2], 51, 51)
+				l.im2ColMatrixList[i-2], l.biasMatrixTransposeList[i-2],
+				l.gpu3Status.GPUID, l.gpu3Status.GPUID)
 			l.outputMatrixList[i-2] = outputMatrix
 			for j := range queue {
 				if queue[j] != nil {
@@ -254,7 +313,9 @@ func (l *Conv2D) Execute(input tensor.Tensor, loop int, i int) {
 					l.outputSize[1],
 					l.outputSize[2],
 				})
-			outputTranspose, queue := l.To.Transpose(l.outputMatrixList[i-3], []int{1, 0, 2, 3}, 52, 52)
+			outputTranspose, queue := l.To.Transpose(
+				l.outputMatrixList[i-3], []int{1, 0, 2, 3},
+				l.gpu4Status.GPUID, l.gpu4Status.GPUID)
 			l.outputTransposeList[i-3] = outputTranspose
 			l.QueueList = append(l.QueueList, queue)
 

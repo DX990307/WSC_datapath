@@ -10,6 +10,7 @@ import (
 	"github.com/sarchlab/akita/v3/analysis"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
+	"github.com/sarchlab/akita/v3/mem/vm/addresstranslator"
 	"github.com/sarchlab/akita/v3/mem/vm/mmu"
 	"github.com/sarchlab/akita/v3/mem/vm/mmuCache"
 	"github.com/sarchlab/akita/v3/mem/vm/mmuTLB"
@@ -39,6 +40,12 @@ type R9NanoPlatformBuilder struct {
 	bandwidth             int
 	switchLatency         int
 	maxNumHops            int
+	networkFlitSize       int
+	endpointChannels      int
+	endpointBufferSize    int
+	l1vRemoteMaxInflight  int
+	l1vMSHREntries        int
+	l1vMaxConcurrentTrans int
 
 	engine       sim.Engine
 	visTracer    tracing.Tracer
@@ -53,6 +60,7 @@ type R9NanoPlatformBuilder struct {
 	perfAnalysisFileName string
 	perfAnalyzingPeriod  float64
 	perfAnalyzer         *analysis.PerfAnalyzer
+	sharingTracer        addresstranslator.SharingTracer
 
 	gpus []*GPU
 }
@@ -60,15 +68,18 @@ type R9NanoPlatformBuilder struct {
 // MakeR9NanoBuilder creates a EmuBuilder with default parameters.
 func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 	b := R9NanoPlatformBuilder{
-		tileWidth:         7,
-		tileHeight:        7,
-		log2PageSize:      12,
-		visTraceStartTime: -1,
-		visTraceEndTime:   -1,
-		switchLatency:     20,
-		numSAPerGPU:       8,
-		numCUPerSA:        4,
-		maxNumHops:        -1,
+		tileWidth:             7,
+		tileHeight:            7,
+		log2PageSize:          12,
+		visTraceStartTime:     -1,
+		visTraceEndTime:       -1,
+		switchLatency:         20,
+		networkFlitSize:       16,
+		numSAPerGPU:           8,
+		numCUPerSA:            4,
+		maxNumHops:            -1,
+		l1vMSHREntries:        160,
+		l1vMaxConcurrentTrans: 160,
 	}
 	return b
 }
@@ -107,6 +118,14 @@ func (b R9NanoPlatformBuilder) WithPartialVisTracing(
 // WithMemTracing lets the platform to trace memory operations.
 func (b R9NanoPlatformBuilder) WithMemTracing() R9NanoPlatformBuilder {
 	b.traceMem = true
+	return b
+}
+
+// WithSharingTracer records compact page-sharing observations.
+func (b R9NanoPlatformBuilder) WithSharingTracer(
+	t addresstranslator.SharingTracer,
+) R9NanoPlatformBuilder {
+	b.sharingTracer = t
 	return b
 }
 
@@ -163,6 +182,61 @@ func (b R9NanoPlatformBuilder) WithMaxNumHops(
 	n int,
 ) R9NanoPlatformBuilder {
 	b.maxNumHops = n
+	return b
+}
+
+// WithNetworkFlitSize sets the NoC flit payload size in bytes.
+func (b R9NanoPlatformBuilder) WithNetworkFlitSize(
+	n int,
+) R9NanoPlatformBuilder {
+	if n > 0 {
+		b.networkFlitSize = n
+	}
+	return b
+}
+
+// WithEndpointChannels overrides local device endpoint input/output channels.
+func (b R9NanoPlatformBuilder) WithEndpointChannels(
+	n int,
+) R9NanoPlatformBuilder {
+	b.endpointChannels = n
+	return b
+}
+
+// WithEndpointBufferSize overrides local device endpoint buffer capacity.
+func (b R9NanoPlatformBuilder) WithEndpointBufferSize(
+	n int,
+) R9NanoPlatformBuilder {
+	b.endpointBufferSize = n
+	return b
+}
+
+// WithL1VRemoteMaxInflight limits in-flight remote L1V cache-line misses per
+// L1V cache. A non-positive value disables the remote-only throttle.
+func (b R9NanoPlatformBuilder) WithL1VRemoteMaxInflight(
+	n int,
+) R9NanoPlatformBuilder {
+	b.l1vRemoteMaxInflight = n
+	return b
+}
+
+// WithL1VMSHREntries sets the number of L1V cache MSHR entries.
+func (b R9NanoPlatformBuilder) WithL1VMSHREntries(
+	n int,
+) R9NanoPlatformBuilder {
+	if n > 0 {
+		b.l1vMSHREntries = n
+	}
+	return b
+}
+
+// WithL1VMaxConcurrentTrans sets the L1V cache concurrency window.
+func (b R9NanoPlatformBuilder) WithL1VMaxConcurrentTrans(
+	n int,
+) R9NanoPlatformBuilder {
+	if n > 0 {
+		b.l1vMaxConcurrentTrans = n
+	}
 	return b
 }
 
@@ -346,9 +420,11 @@ func (b R9NanoPlatformBuilder) createConnection(
 	connector := mesh.NewConnector().
 		WithEngine(engine).
 		WithFreq(1 * sim.GHz).
-		WithFlitSize(16).
+		WithFlitSize(b.networkFlitSize).
 		WithBandwidth(float64(b.bandwidth)).
-		WithSwitchLatency(b.switchLatency)
+		WithSwitchLatency(b.switchLatency).
+		WithEndpointTransferPerCycle(b.endpointChannels).
+		WithEndpointBufferSize(b.endpointBufferSize)
 
 	if b.traceVis {
 		connector = connector.WithVisTracer(b.visTracer)
@@ -386,7 +462,7 @@ func (b R9NanoPlatformBuilder) createMMU(
 	mmuBuilder := mmu.MakeBuilder().
 		WithEngine(engine).
 		WithFreq(1 * sim.GHz).
-		WithPageWalkingLatency(500).
+		WithPageWalkingLatency(100).
 		WithLog2PageSize(b.log2PageSize).
 		WithMaxNumReqInFlight(256).
 		WithPageTable(pageTable).
@@ -428,6 +504,9 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithL2CacheSize(4 * mem.MB).
 		WithLog2MemoryBankInterleavingSize(7).
 		WithLog2PageSize(b.log2PageSize).
+		WithL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
+		WithL1VMSHREntries(b.l1vMSHREntries).
+		WithL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).
 		WithGMMUPageTable(pageTable)
@@ -438,9 +517,20 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 
 	gpuBuilder = b.setVisTracer(gpuDriver, gpuBuilder)
 	gpuBuilder = b.setMemTracer(gpuBuilder)
+	gpuBuilder = b.setSharingTracer(gpuBuilder)
 	gpuBuilder = b.setISADebugger(gpuBuilder)
 
 	return gpuBuilder
+}
+
+func (b *R9NanoPlatformBuilder) setSharingTracer(
+	gpuBuilder R9NanoGPUBuilder,
+) R9NanoGPUBuilder {
+	if b.sharingTracer == nil {
+		return gpuBuilder
+	}
+
+	return gpuBuilder.WithSharingTracer(b.sharingTracer)
 }
 
 func (b *R9NanoPlatformBuilder) setISADebugger(

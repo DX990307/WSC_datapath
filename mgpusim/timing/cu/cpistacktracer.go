@@ -270,14 +270,16 @@ func (h *CPIStackTracer) handleReqStart(task tracing.Task) {
 		parentTask, found := h.inflightTasks[task.ParentID]
 
 		if !found {
-			panic("Could not find parent task")
+			return
 		}
 
 		if parentTask.What == "VMem" {
 			task.What = "VectorMemTransaction"
+			h.inflightTasks[task.ID] = task
 			h.handleRegularTaskStart(task)
 		} else if parentTask.What == "Scalar" {
 			task.What = "ScalarMemTransaction"
+			h.inflightTasks[task.ID] = task
 			h.handleRegularTaskStart(task)
 		}
 	}
@@ -305,11 +307,17 @@ func (h *CPIStackTracer) handleRegularTaskEnd(task tracing.Task) {
 }
 
 func (h *CPIStackTracer) handleReqEnd(task tracing.Task) {
+	if task.What == "VectorMemTransaction" ||
+		task.What == "ScalarMemTransaction" {
+		h.handleRegularTaskEnd(task)
+		return
+	}
+
 	if task.What == "*mem.ReadReq" || task.What == "*mem.WriteReq" {
 		parentTask, found := h.inflightTasks[task.ParentID]
 
 		if !found {
-			panic("Could not find parent task")
+			return
 		}
 
 		if parentTask.What == "VMem" {

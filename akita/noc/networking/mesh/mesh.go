@@ -22,10 +22,12 @@ type tile struct {
 type Connector struct {
 	connector networkconnector.Connector
 
-	freq                 sim.Freq
-	switchLatency        int
-	flitSize             int
-	linkTransferPerCycle float64
+	freq                     sim.Freq
+	switchLatency            int
+	flitSize                 int
+	linkTransferPerCycle     float64
+	endpointTransferPerCycle int
+	endpointBufferSize       int
 
 	gridSize [3]int
 	gridCap  [3]int
@@ -92,6 +94,20 @@ func (c *Connector) WithNoCTracer(t tracing.Tracer) *Connector {
 func (c *Connector) WithFlitSize(size int) *Connector {
 	c.flitSize = size
 	c.connector = c.connector.WithFlitSize(size)
+	return c
+}
+
+// WithEndpointTransferPerCycle overrides the local device endpoint bandwidth.
+// A non-positive value keeps using the switch-to-switch link bandwidth.
+func (c *Connector) WithEndpointTransferPerCycle(num int) *Connector {
+	c.endpointTransferPerCycle = num
+	return c
+}
+
+// WithEndpointBufferSize overrides the local device endpoint buffers.
+// A non-positive value keeps using the endpoint transfer width.
+func (c *Connector) WithEndpointBufferSize(num int) *Connector {
+	c.endpointBufferSize = num
 	return c
 }
 
@@ -262,23 +278,25 @@ func (c *Connector) createSwitches() {
 				c.grid[x][y][z].sw = sw
 
 				transferPerCycle := int(math.Ceil(c.linkTransferPerCycle))
+				endpointTransferPerCycle := c.endpointTransferPerCycleOrDefault(transferPerCycle)
+				endpointBufferSize := c.endpointBufferSizeOrDefault(endpointTransferPerCycle)
 				epName := fmt.Sprintf("EP[%d][%d][%d]", x, y, z)
 				_, swPort := c.connector.ConnectDeviceWithEPName(
 					epName,
 					sw, c.grid[x][y][z].ports,
 					networkconnector.DeviceToSwitchLinkParameter{
 						DeviceEndParam: networkconnector.LinkEndDeviceParameter{
-							IncomingBufSize:  transferPerCycle,
-							OutgoingBufSize:  transferPerCycle,
-							NumInputChannel:  transferPerCycle,
-							NumOutputChannel: transferPerCycle,
+							IncomingBufSize:  endpointBufferSize,
+							OutgoingBufSize:  endpointBufferSize,
+							NumInputChannel:  endpointTransferPerCycle,
+							NumOutputChannel: endpointTransferPerCycle,
 						},
 						SwitchEndParam: networkconnector.LinkEndSwitchParameter{
-							IncomingBufSize:  transferPerCycle,
-							OutgoingBufSize:  transferPerCycle,
+							IncomingBufSize:  endpointBufferSize,
+							OutgoingBufSize:  endpointBufferSize,
 							Latency:          1,
-							NumInputChannel:  transferPerCycle,
-							NumOutputChannel: transferPerCycle,
+							NumInputChannel:  endpointTransferPerCycle,
+							NumOutputChannel: endpointTransferPerCycle,
 						},
 						LinkParam: networkconnector.LinkParameter{
 							IsIdeal:       true,
@@ -371,4 +389,18 @@ func (c *Connector) createLink(
 				PipelineWidth: 1,
 			},
 		})
+}
+
+func (c *Connector) endpointTransferPerCycleOrDefault(defaultValue int) int {
+	if c.endpointTransferPerCycle > 0 {
+		return c.endpointTransferPerCycle
+	}
+	return defaultValue
+}
+
+func (c *Connector) endpointBufferSizeOrDefault(defaultValue int) int {
+	if c.endpointBufferSize > 0 {
+		return c.endpointBufferSize
+	}
+	return defaultValue
 }

@@ -93,10 +93,12 @@ def profile(profile_name):
     return PROFILES[profile_name]
 
 
-def init_gpt(profile_name="tiny", split_k=1, layers=None):
+def init_gpt(profile_name="tiny", split_k=1, layers=None, overrides=None):
     profile_config = dict(profile(profile_name))
     if layers is not None:
         profile_config["layers"] = layers
+    if overrides:
+        profile_config.update(overrides)
     return {"llmop": gpt_ops(profile_config, split_k)}
 
 

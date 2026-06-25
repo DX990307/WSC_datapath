@@ -48,21 +48,42 @@ import (
 )
 
 const (
-	// oneMiB = int(1024 * 1024 * 0.8)
-	oneMiB = 1024 * 800
+	oneGiB = 1024 * 1024 * 1024
 
-	// These sizes keep each standalone run around the 1GB footprint range.
-	// Some workloads need power-of-two or square dimensions, so "around" is
-	// intentionally a stability target instead of an exact byte count.
-	oneGBScale = 6
+	// Traditional standalone sizes target about 1GiB of device-side data.
+	// Some workloads need power-of-two, square, or CSR-shaped inputs, so the
+	// target is intentionally approximate rather than byte-exact.
+	oneGiBFloat32Elements           = oneGiB / 4
+	oneGiBTwoFloat32BuffersElements = oneGiB / (2 * 4)
 )
+
+func newConv2DBenchmark(
+	gpuDriver *driver.Driver,
+	n, c, h, w int,
+	kernelChannel, kernelHeight, kernelWidth int,
+	padX, padY, strideX, strideY int,
+) *conv2d.Benchmark {
+	conv2dBenchmark := conv2d.NewBenchmark(gpuDriver)
+	conv2dBenchmark.N = n
+	conv2dBenchmark.C = c
+	conv2dBenchmark.H = h
+	conv2dBenchmark.W = w
+	conv2dBenchmark.KernelChannel = kernelChannel
+	conv2dBenchmark.KernelHeight = kernelHeight
+	conv2dBenchmark.KernelWidth = kernelWidth
+	conv2dBenchmark.PadX = padX
+	conv2dBenchmark.PadY = padY
+	conv2dBenchmark.StrideX = strideX
+	conv2dBenchmark.StrideY = strideY
+	return conv2dBenchmark
+}
 
 func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 	var benchmark benchmarks.Benchmark
 	switch name {
 	case "aes":
 		aes := aes.NewBenchmark(driver)
-		aes.Length = oneMiB * 512
+		aes.Length = oneGiB
 		benchmark = aes
 	case "atax":
 		atax := atax.NewBenchmark(driver)
@@ -76,26 +97,24 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = bicg
 	case "bitonicsort":
 		bitonicsort := bitonicsort.NewBenchmark(driver)
-		// Bitonic sort requires a power-of-two length. 64M is the
-		// closest practical size to the 6x 3x3-to-7x7 scaling target.
-		bitonicsort.Length = 1048576 * 64
+		bitonicsort.Length = oneGiBFloat32Elements
 		benchmark = bitonicsort
 	case "bert":
 		benchmark = bert.NewBenchmark(driver)
 	case "conv2d":
-		conv2d := conv2d.NewBenchmark(driver)
-		conv2d.N = 1
-		conv2d.C = 3
-		conv2d.H = 3072
-		conv2d.W = 3072
-		conv2d.KernelChannel = 3
-		conv2d.KernelHeight = 4
-		conv2d.KernelWidth = 4
-		conv2d.PadX = 0
-		conv2d.PadY = 0
-		conv2d.StrideX = 1
-		conv2d.StrideY = 1
-		benchmark = conv2d
+		benchmark = newConv2DBenchmark(driver, 1, 3, 3072, 3072, 3, 4, 4, 0, 0, 1, 1)
+	case "conv2d-llm-prefill-pointwise":
+		// 1x1 conv as a linear-layer proxy over a prefill-sized token grid:
+		// input [tokens=512, hidden=1024] -> output [tokens=512, hidden=4096].
+		benchmark = newConv2DBenchmark(driver, 1, 1024, 16, 32, 4096, 1, 1, 0, 0, 1, 1)
+	case "conv2d-llm-decode-pointwise":
+		// Batched decode proxy with fewer rows while keeping high channel count.
+		benchmark = newConv2DBenchmark(driver, 1, 1024, 8, 16, 4096, 1, 1, 0, 0, 1, 1)
+	case "conv2d-llm-prefill-local":
+		// High-channel 3x3 variant to keep conv2d spatial-neighbor reuse visible.
+		benchmark = newConv2DBenchmark(driver, 1, 1024, 16, 32, 1024, 3, 3, 1, 1, 1, 1)
+	case "conv2d-llm-decode-local":
+		benchmark = newConv2DBenchmark(driver, 1, 1024, 8, 16, 1024, 3, 3, 1, 1, 1, 1)
 	case "maxpooling":
 		maxpooling := maxpooling.NewBenchmark(driver)
 		maxpooling.N = 1
@@ -185,20 +204,20 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = fulllayer
 	case "fastwalshtransform":
 		fastwalshtransform := fastwalshtransform.NewBenchmark(driver)
-		fastwalshtransform.Length = 1048576 * 64
+		fastwalshtransform.Length = oneGiBFloat32Elements
 		benchmark = fastwalshtransform
 	case "fir":
 		fir := fir.NewBenchmark(driver)
-		fir.Length = oneMiB * 85
+		fir.Length = oneGiBTwoFloat32BuffersElements
 		benchmark = fir
 	case "fft":
 		fft := fft.NewBenchmark(driver)
-		fft.Bytes = 384
+		fft.Bytes = 1024
 		fft.Passes = 4
 		benchmark = fft
 	case "floydwarshall":
 		floydwarshall := floydwarshall.NewBenchmark(driver)
-		floydwarshall.NumNodes = 8192
+		floydwarshall.NumNodes = 11584
 		floydwarshall.NumIterations = 1
 		benchmark = floydwarshall
 	case "gpt":
@@ -207,8 +226,8 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		im2col := im2col.NewBenchmark(driver)
 		im2col.N = 1
 		im2col.C = 3
-		im2col.H = 2048
-		im2col.W = 2048
+		im2col.H = 3000
+		im2col.W = 3000
 		im2col.KernelHeight = 3
 		im2col.KernelWidth = 3
 		im2col.PadX = 0
@@ -220,10 +239,10 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = im2col
 	case "kmeans":
 		kmeans := kmeans.NewBenchmark(driver)
-		kmeans.NumPoints = oneMiB * 4
+		kmeans.NumPoints = 1 << 22
 		kmeans.NumClusters = 8
-		kmeans.NumFeatures = 16
-		kmeans.MaxIter = 8
+		kmeans.NumFeatures = 32
+		kmeans.MaxIter = 3
 		benchmark = kmeans
 	case "kvcache":
 		kvcache := kvcache.NewBenchmark(driver)
@@ -257,19 +276,68 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = llmop.NewBenchmarkFromFlags(driver)
 	case "matrixmultiplication":
 		matrixmultiplication := matrixmultiplication.NewBenchmark(driver)
-		matrixmultiplication.X = 256
-		matrixmultiplication.Y = 2048 * 128
-		matrixmultiplication.Z = 256
+		matrixmultiplication.X = 2048 / 16
+		matrixmultiplication.Y = 2048 * 512
+		matrixmultiplication.Z = 2048 / 16
+		benchmark = matrixmultiplication
+	case "matrixmultiplication-pipeline-smoke":
+		matrixmultiplication := matrixmultiplication.NewBenchmark(driver)
+		matrixmultiplication.X = 64
+		matrixmultiplication.Y = 8192
+		matrixmultiplication.Z = 64
+		benchmark = matrixmultiplication
+	case "matrixmultiplication-llm-prefill-attn":
+		matrixmultiplication := matrixmultiplication.NewBenchmark(driver)
+		matrixmultiplication.X = 4096
+		matrixmultiplication.Y = 1920
+		matrixmultiplication.Z = 4096
+		benchmark = matrixmultiplication
+	case "matrixmultiplication-llm-decode-attn":
+		matrixmultiplication := matrixmultiplication.NewBenchmark(driver)
+		matrixmultiplication.X = 4096
+		matrixmultiplication.Y = 192
+		matrixmultiplication.Z = 4096
+		benchmark = matrixmultiplication
+	case "matrixmultiplication-llm-prefill-mlp-up":
+		matrixmultiplication := matrixmultiplication.NewBenchmark(driver)
+		matrixmultiplication.X = 4096
+		matrixmultiplication.Y = 1920
+		matrixmultiplication.Z = 11008
+		benchmark = matrixmultiplication
+	case "matrixmultiplication-llm-decode-mlp-up":
+		matrixmultiplication := matrixmultiplication.NewBenchmark(driver)
+		matrixmultiplication.X = 4096
+		matrixmultiplication.Y = 192
+		matrixmultiplication.Z = 11008
+		benchmark = matrixmultiplication
+	case "matrixmultiplication-llm-prefill-mlp-down":
+		matrixmultiplication := matrixmultiplication.NewBenchmark(driver)
+		matrixmultiplication.X = 11008
+		matrixmultiplication.Y = 1920
+		matrixmultiplication.Z = 4096
+		benchmark = matrixmultiplication
+	case "matrixmultiplication-llm-decode-mlp-down":
+		matrixmultiplication := matrixmultiplication.NewBenchmark(driver)
+		matrixmultiplication.X = 11008
+		matrixmultiplication.Y = 192
+		matrixmultiplication.Z = 4096
 		benchmark = matrixmultiplication
 	case "matrixmultiplication-middletile":
 		matrixmultiplication := matrixmultiplication.NewMiddleTileBenchmark(driver)
 		matrixmultiplication.X = 256
-		matrixmultiplication.Y = 2048 * 128
+		matrixmultiplication.Y = 2048 * 256
 		matrixmultiplication.Z = 256
+		benchmark = matrixmultiplication
+	case "matrixmultiplication-middletile-pipeline-smoke":
+		matrixmultiplication := matrixmultiplication.NewMiddleTileBenchmark(driver)
+		matrixmultiplication.X = 64
+		matrixmultiplication.Y = 8192
+		matrixmultiplication.Z = 64
 		benchmark = matrixmultiplication
 	case "matrixtranspose":
 		matrixtranspose := matrixtranspose.NewBenchmark(driver)
-		matrixtranspose.Width = 8192 * 2
+		matrixtranspose.Width = 4096 * 4
+		// matrixtranspose.Width = 4096 / 2
 		benchmark = matrixtranspose
 	case "matrixtranspose-middletile":
 		matrixtranspose := matrixtranspose.NewMiddleTileBenchmark(driver)
@@ -286,33 +354,31 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = nw
 	case "pagerank":
 		pagerank := pagerank.NewBenchmark(driver)
-		pagerank.NumNodes = oneMiB * 4
-		pagerank.NumConnections = oneMiB * 64
+		pagerank.NumNodes = 1 << 20
+		pagerank.NumConnections = 132644864
 		pagerank.MaxIterations = 1
 		benchmark = pagerank
 	case "relu":
 		relu := relu.NewBenchmark(driver)
-		// relu.Length = 10485760 * 32
-		// relu.Length = 10485760 * 8
-		relu.Length = 10485760 * oneGBScale
+		relu.Length = 10485760 * 32
 		benchmark = relu
 	case "resnet":
 		benchmark = resnet.NewBenchmark(driver)
 	case "simpleconvolution":
 		simpleconvolution := simpleconvolution.NewBenchmark(driver)
 		simpleconvolution.Height = 2048
-		simpleconvolution.Width = 2048 * 16
+		simpleconvolution.Width = 2048 * 32 / 8
 		simpleconvolution.SetMaskSize(3)
 		benchmark = simpleconvolution
 	case "spmv":
 		spmv := spmv.NewBenchmark(driver)
-		spmv.Dim = 1024 * 1024 * 8
-		spmv.Sparsity = 8.0 / float64(spmv.Dim)
+		spmv.Dim = 1 << 20
+		spmv.Sparsity = 0.00012063980102539062
 		benchmark = spmv
 	case "stencil2d":
 		stencil2d := stencil2d.NewBenchmark(driver)
 		stencil2d.NumRows = 8192
-		stencil2d.NumCols = 8192
+		stencil2d.NumCols = 16384
 		stencil2d.NumIteration = 3
 		benchmark = stencil2d
 	case "lenet":

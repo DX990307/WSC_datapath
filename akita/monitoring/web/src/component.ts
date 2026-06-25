@@ -529,6 +529,10 @@ export class ComponentDetailView {
 
         canvas.selectAll("*").remove()
 
+        if (!Array.isArray(data) || data.length === 0) {
+            return
+        }
+
         const canvasDims = target.getBoundingClientRect()
         const canvasHeight = canvasDims.height
         const canvasWidth = canvasDims.width
@@ -548,7 +552,12 @@ export class ComponentDetailView {
         .extent([[0, canvasHeight / 3], [canvasWidth / 3, canvasHeight * 2 / 3]])
         .nodeId((d: any) => d.name)
 
-        this.sankeyCumulative.epochs.add(data.find((entry: any) => entry.value > 0).start)
+        const firstActiveEntry = data.find((entry: any) => entry.value > 0)
+        if (!firstActiveEntry) {
+            return
+        }
+
+        this.sankeyCumulative.epochs.add(firstActiveEntry.start)
 
         let linksRaw = data.map((entry: any) => {return {"source": entry.localPort, "target": entry.remotePort, "value": entry.value, "type": entry.unit}})
         // There's a Map.groupBy function, but it doesn't work in safari

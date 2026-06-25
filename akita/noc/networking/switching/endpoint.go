@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/noc/messaging"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
@@ -36,6 +37,9 @@ type EndPoint struct {
 	assemblingMsgTable map[string]*list.Element
 	assemblingMsgs     *list.List
 	assembledMsgs      []sim.Msg
+	flitReadyTime      map[string]sim.VTimeInSec
+	msgFirstFlitTime   map[string]sim.VTimeInSec
+	msgAssembledTime   map[string]sim.VTimeInSec
 }
 
 // CanSend returns whether the endpoint can send a message.
@@ -115,11 +119,28 @@ func (ep *EndPoint) sendFlitOut(now sim.VTimeInSec) bool {
 		}
 
 		flit := ep.flitsToSend[0]
+		readyTime := ep.flitReadyTime[flit.Meta().ID]
+		if readyTime == 0 {
+			readyTime = now
+		}
 		flit.SendTime = now
 		err := ep.NetworkPort.Send(flit)
 
 		if err == nil {
 			ep.flitsToSend = ep.flitsToSend[1:]
+			delete(ep.flitReadyTime, flit.Meta().ID)
+			memtrace.RecordMemoryPathNetworkFlitStage(
+				ep.Name(),
+				"endpoint_inject_wait",
+				flit.Msg.Meta().ID,
+				flit.Meta().ID,
+				flit.SeqID,
+				flit.NumFlitInMsg,
+				readyTime,
+				now,
+				flit.Meta().Src,
+				flit.Meta().Dst,
+			)
 
 			// switch test := flit.Msg.(type) {
 			// case *vm.TranslationReq:
@@ -145,7 +166,7 @@ func (ep *EndPoint) sendFlitOut(now sim.VTimeInSec) bool {
 	return madeProgress
 }
 
-func (ep *EndPoint) prepareFlits(_ sim.VTimeInSec) bool {
+func (ep *EndPoint) prepareFlits(now sim.VTimeInSec) bool {
 	madeProgress := false
 
 	for {
@@ -159,7 +180,21 @@ func (ep *EndPoint) prepareFlits(_ sim.VTimeInSec) bool {
 
 		msg := ep.msgOutBuf[0]
 		ep.msgOutBuf = ep.msgOutBuf[1:]
-		ep.flitsToSend = append(ep.flitsToSend, ep.msgToFlits(msg)...)
+		memtrace.RecordMemoryPathNetworkMessageStage(
+			ep.Name(),
+			"endpoint_queue",
+			msg.Meta().ID,
+			msg.Meta().SendTime,
+			now,
+			msg.Meta().Src,
+			ep.NetworkPort,
+			fmt.Sprintf("traffic_bytes=%d", msg.Meta().TrafficBytes),
+		)
+		flits := ep.msgToFlits(msg)
+		for _, flit := range flits {
+			ep.flitReadyTime[flit.Meta().ID] = now
+		}
+		ep.flitsToSend = append(ep.flitsToSend, flits...)
 
 		// // switch test := msg.(type) {
 		// // case *vm.TranslationReq:
@@ -194,6 +229,14 @@ func (ep *EndPoint) recv(now sim.VTimeInSec) bool {
 		flit := received.(*messaging.Flit)
 		msg := flit.Msg
 
+		if ep.msgFirstFlitTime[msg.Meta().ID] == 0 {
+			firstTime := flit.Meta().RecvTime
+			if firstTime == 0 {
+				firstTime = now
+			}
+			ep.msgFirstFlitTime[msg.Meta().ID] = firstTime
+		}
+
 		assemblingElem := ep.assemblingMsgTable[msg.Meta().ID]
 		if assemblingElem == nil {
 			assemblingElem = ep.assemblingMsgs.PushBack(&msgToAssemble{
@@ -220,7 +263,7 @@ func (ep *EndPoint) recv(now sim.VTimeInSec) bool {
 	return madeProgress
 }
 
-func (ep *EndPoint) assemble(_ sim.VTimeInSec) bool {
+func (ep *EndPoint) assemble(now sim.VTimeInSec) bool {
 	madeProgress := false
 
 	e := ep.assemblingMsgs.Front()
@@ -235,6 +278,22 @@ func (ep *EndPoint) assemble(_ sim.VTimeInSec) bool {
 		}
 
 		ep.assembledMsgs = append(ep.assembledMsgs, assemblingMsg.msg)
+		firstTime := ep.msgFirstFlitTime[assemblingMsg.msg.Meta().ID]
+		if firstTime == 0 {
+			firstTime = now
+		}
+		memtrace.RecordMemoryPathNetworkMessageStage(
+			ep.Name(),
+			"endpoint_assemble_wait",
+			assemblingMsg.msg.Meta().ID,
+			firstTime,
+			now,
+			ep.NetworkPort,
+			assemblingMsg.msg.Meta().Dst,
+			fmt.Sprintf("num_flits=%d", assemblingMsg.numFlitRequired),
+		)
+		delete(ep.msgFirstFlitTime, assemblingMsg.msg.Meta().ID)
+		ep.msgAssembledTime[assemblingMsg.msg.Meta().ID] = now
 		ep.assemblingMsgs.Remove(e)
 		delete(ep.assemblingMsgTable, assemblingMsg.msg.Meta().ID)
 
@@ -271,6 +330,22 @@ func (ep *EndPoint) tryDeliver(now sim.VTimeInSec) bool {
 			// fmt.Printf("Failure to deliver\n")
 			return madeProgress
 		}
+
+		assembledTime := ep.msgAssembledTime[msg.Meta().ID]
+		if assembledTime == 0 {
+			assembledTime = now
+		}
+		memtrace.RecordMemoryPathNetworkMessageStage(
+			ep.Name(),
+			"endpoint_deliver_wait",
+			msg.Meta().ID,
+			assembledTime,
+			now,
+			ep.NetworkPort,
+			msg.Meta().Dst,
+			"",
+		)
+		delete(ep.msgAssembledTime, msg.Meta().ID)
 
 		// fmt.Printf("%.10f, %s, delivered, %s\n",
 		// 	now, ep.Name(), msg.Meta().ID)
@@ -457,6 +532,9 @@ func (b EndPointBuilder) Build(name string) *EndPoint {
 
 	ep.assemblingMsgs = list.New()
 	ep.assemblingMsgTable = make(map[string]*list.Element)
+	ep.flitReadyTime = make(map[string]sim.VTimeInSec)
+	ep.msgFirstFlitTime = make(map[string]sim.VTimeInSec)
+	ep.msgAssembledTime = make(map[string]sim.VTimeInSec)
 
 	ep.encodingOverhead = b.encodingOverhead
 

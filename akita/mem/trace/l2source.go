@@ -5,6 +5,7 @@ import "sync"
 const (
 	defaultL2SourcePrefix    = "l2_source"
 	defaultL2SourceTileWidth = 7
+	defaultL2SourcePageSize  = 4096
 
 	sourceBaseL2Cache       = "l2_cache"
 	sourceBaseL2MSHR        = "l2_mshr"
@@ -20,6 +21,7 @@ const (
 	summaryCSVHeader         = "source_tier,requester_gpm,provider_gpm,hops,component,access_type,accesses,bytes,avg_latency_ns"
 	remoteMatrixCSVHeader    = "requester_gpm,provider_gpm,hops,access_type,accesses,bytes,avg_latency_ns"
 	dataSourceCSVHeader      = "source,requester_gpm,provider_gpm,hops,component,access_type,has_vaddr,vaddr,has_paddr,paddr,accesses,bytes,avg_latency_ns"
+	pageSourceCSVHeader      = "source,requester_gpm,provider_gpm,hops,is_neighbor,access_type,page_paddr,accesses,bytes,avg_latency_ns,first_time_ns,last_time_ns"
 	remoteFillReuseCSVHeader = "requester_gpm,provider_gpm,hops,component,has_vaddr,vaddr,has_paddr,paddr,remote_dram_fills,remote_dram_fill_bytes,first_fill_time_ns,last_fill_time_ns,local_l2_hit_reuses,local_l2_hit_reuse_bytes,first_local_reuse_time_ns,last_local_reuse_time_ns"
 )
 
@@ -27,6 +29,8 @@ type l2SourceCounter struct {
 	accesses     uint64
 	bytes        uint64
 	latencySumNS uint64
+	firstTimeNS  uint64
+	lastTimeNS   uint64
 }
 
 // L2AccessInfo is carried in mem.AccessReq.Info after address translation.
@@ -45,6 +49,12 @@ type L2AccessInfo struct {
 	ProviderName  string
 	RequesterGPM  int
 	ProviderGPM   int
+
+	OriginalReqID     string
+	PathID            string
+	TranslationReqID  string
+	TranslationTaskID string
+	TranslatedReqID   string
 }
 
 type l2LocalKey struct {
@@ -73,6 +83,15 @@ type l2DataSourceKey struct {
 	vaddr        uint64
 	hasPAddr     bool
 	paddr        uint64
+}
+
+type l2PageSourceKey struct {
+	source       string
+	requesterGPM int
+	providerGPM  int
+	hops         int
+	op           string
+	pagePAddr    uint64
 }
 
 type l2RemoteFillKey struct {
@@ -113,6 +132,7 @@ type l2SourceStats struct {
 	localDRAM       map[l2LocalKey]*l2SourceCounter
 	remoteGPM       map[l2RemoteKey]*l2SourceCounter
 	dataSource      map[l2DataSourceKey]*l2SourceCounter
+	pageSource      map[l2PageSourceKey]*l2SourceCounter
 	remoteFillReuse map[l2RemoteFillKey]*l2RemoteFillCounter
 	remoteFillIndex map[l2RemoteFillLookupKey][]l2RemoteFillKey
 }
@@ -149,6 +169,7 @@ func (s *l2SourceStats) resetMapsLocked() {
 	s.localDRAM = make(map[l2LocalKey]*l2SourceCounter)
 	s.remoteGPM = make(map[l2RemoteKey]*l2SourceCounter)
 	s.dataSource = make(map[l2DataSourceKey]*l2SourceCounter)
+	s.pageSource = make(map[l2PageSourceKey]*l2SourceCounter)
 	s.remoteFillReuse = make(map[l2RemoteFillKey]*l2RemoteFillCounter)
 	s.remoteFillIndex = make(map[l2RemoteFillLookupKey][]l2RemoteFillKey)
 }
@@ -186,6 +207,24 @@ func WithL2AddressInfo(info interface{}, vaddr, paddr uint64) interface{} {
 	accessInfo.VAddr = vaddr
 	accessInfo.HasPAddr = true
 	accessInfo.PAddr = paddr
+	return accessInfo
+}
+
+// WithMemoryPathInfo connects translated L2 requests back to the original
+// L1V request and translation task for request-level path tracing.
+func WithMemoryPathInfo(
+	info interface{},
+	originalReqID string,
+	translationReqID string,
+	translationTaskID string,
+	translatedReqID string,
+) interface{} {
+	accessInfo := cloneL2AccessInfo(info)
+	accessInfo.OriginalReqID = originalReqID
+	accessInfo.PathID = originalReqID
+	accessInfo.TranslationReqID = translationReqID
+	accessInfo.TranslationTaskID = translationTaskID
+	accessInfo.TranslatedReqID = translatedReqID
 	return accessInfo
 }
 

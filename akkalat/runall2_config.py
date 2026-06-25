@@ -24,6 +24,9 @@ from runall2_constants import (
 
 def build_common_flags(args):
     common_flags = BASE_COMMON_FLAGS[:]
+    if args.switch_latency > 0:
+        common_flags = replace_or_append_flag(
+            common_flags, "-switch-latency=", f"-switch-latency={args.switch_latency}")
     if args.disable_servers:
         common_flags.append("-disable-servers")
     if args.report_l2_source:
@@ -32,9 +35,31 @@ def build_common_flags(args):
     common_flags += [
         f"-mmutlb-lookup-latency={args.mmutlb_lookup_latency}",
     ]
+    if args.l1v_remote_max_inflight > 0:
+        common_flags.append(
+            f"-l1v-remote-max-inflight={args.l1v_remote_max_inflight}")
+    if args.l1v_mshr_entries > 0:
+        common_flags.append(f"-l1v-mshr-entries={args.l1v_mshr_entries}")
+    if args.l1v_max_concurrent_trans > 0:
+        common_flags.append(
+            f"-l1v-max-concurrent-trans={args.l1v_max_concurrent_trans}")
     if args.max_wg > 0:
         common_flags.append(f"-max-wg={args.max_wg}")
     return common_flags
+
+
+def replace_or_append_flag(flags, prefix, value):
+    updated = []
+    replaced = False
+    for flag in flags:
+        if flag.startswith(prefix):
+            updated.append(value)
+            replaced = True
+        else:
+            updated.append(flag)
+    if not replaced:
+        updated.append(value)
+    return updated
 
 
 def build_ablation_configs(args):

@@ -15,6 +15,7 @@ type Builder struct {
 	numReqPerCycle      int
 	log2PageSize        uint64
 	deviceID            uint64
+	sharingTracer       SharingTracer
 }
 
 // MakeBuilder creates a new builder
@@ -72,6 +73,12 @@ func (b Builder) WithDeviceID(n uint64) Builder {
 	return b
 }
 
+// WithSharingTracer sets the optional tracer for page-sharing observations.
+func (b Builder) WithSharingTracer(t SharingTracer) Builder {
+	b.sharingTracer = t
+	return b
+}
+
 // WithCtrlPort sets the port of the component that can send ctrl reqs to AT
 func (b Builder) WithCtrlPort(p sim.Port) Builder {
 	b.ctrlPort = p
@@ -91,6 +98,7 @@ func (b Builder) Build(name string) *AddressTranslator {
 	t.numReqPerCycle = b.numReqPerCycle
 	t.log2PageSize = b.log2PageSize
 	t.deviceID = b.deviceID
+	t.sharingTracer = b.sharingTracer
 
 	return t
 }

@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 )
@@ -151,12 +152,14 @@ func (c *coalescer) createTransaction(req mem.AccessReq, now sim.VTimeInSec) *tr
 	switch req := req.(type) {
 	case *mem.ReadReq:
 		t := &transaction{
-			read: req,
+			read:      req,
+			startTime: now,
 		}
 		return t
 	case *mem.WriteReq:
 		t := &transaction{
-			write: req,
+			write:     req,
+			startTime: now,
 		}
 		return t
 	default:
@@ -198,12 +201,69 @@ func (c *coalescer) coalesceAndSend(now sim.VTimeInSec) bool {
 			c.cache.Name()+".Local",
 			nil)
 	}
+	memtrace.RecordMemoryPathCacheStart(
+		c.cache.Name(),
+		trans.id,
+		nil,
+		trans.Address(),
+		trans.accessReq().GetByteSize(),
+		uint64(trans.PID()),
+		accessReqOp(trans.accessReq()),
+		trans.startTime,
+	)
+	memtrace.RecordMemoryPathCoalescedParents(
+		trans.id,
+		c.memoryPathParentInfos(trans),
+	)
+	c.recordMemoryPathL1VParents(trans)
+	memtrace.RecordMemoryPathL1VCoalesce(
+		c.cache.Name(),
+		trans.id,
+		trans.startTime,
+		now,
+		len(trans.preCoalesceTransactions),
+	)
 	c.cache.dirBuf.Push(trans)
 	c.cache.postCoalesceTransactions =
 		append(c.cache.postCoalesceTransactions, trans)
 	c.toCoalesce = nil
 
 	return true
+}
+
+func (c *coalescer) recordMemoryPathL1VParents(trans *transaction) {
+	for _, parent := range trans.preCoalesceTransactions {
+		req := parent.accessReq()
+		if req == nil {
+			continue
+		}
+		memtrace.RecordMemoryPathL1VParentAccess(
+			c.cache.Name(),
+			trans.id,
+			req.Meta().ID,
+			accessReqInfo(req),
+			req.GetAddress(),
+			req.GetByteSize(),
+			uint64(req.GetPID()),
+			accessReqOp(req),
+			req.Meta().SendTime,
+			parent.startTime,
+			req.Meta().Src,
+			req.Meta().Dst,
+		)
+	}
+}
+
+func (c *coalescer) memoryPathParentInfos(trans *transaction) []interface{} {
+	infos := make([]interface{}, 0, len(trans.preCoalesceTransactions))
+	for _, parent := range trans.preCoalesceTransactions {
+		req := parent.accessReq()
+		if req == nil {
+			continue
+		}
+		infos = append(infos, accessReqInfo(req))
+	}
+	return infos
 }
 
 func (c *coalescer) coalesceRead() *transaction {
@@ -218,6 +278,7 @@ func (c *coalescer) coalesceRead() *transaction {
 		id:                      sim.GetIDGenerator().Generate(),
 		read:                    coalescedRead,
 		preCoalesceTransactions: c.toCoalesce,
+		startTime:               c.toCoalesce[0].startTime,
 	}
 }
 
@@ -245,5 +306,6 @@ func (c *coalescer) coalesceWrite() *transaction {
 		id:                      sim.GetIDGenerator().Generate(),
 		write:                   write,
 		preCoalesceTransactions: c.toCoalesce,
+		startTime:               c.toCoalesce[0].startTime,
 	}
 }

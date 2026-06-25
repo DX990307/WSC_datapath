@@ -17,6 +17,7 @@ type transaction struct {
 	translationReq  *vm.TranslationReq
 	translationRsp  *vm.TranslationRsp
 	translationDone bool
+	needTime        sim.VTimeInSec
 }
 
 type reqToBottom struct {
@@ -39,6 +40,7 @@ type AddressTranslator struct {
 	log2PageSize        uint64
 	deviceID            uint64
 	numReqPerCycle      int
+	sharingTracer       SharingTracer
 
 	isFlushing bool
 
@@ -139,6 +141,7 @@ func (t *AddressTranslator) translate(now sim.VTimeInSec) bool {
 	vAddr := req.GetAddress()
 	vPageID := t.addrToPageID(vAddr)
 	taskID := sim.GetIDGenerator().Generate()
+	originalReqID := memoryPathOriginalReqID(req, req.Meta().ID)
 
 	transReq := vm.TranslationReqBuilder{}.
 		WithSendTime(now).
@@ -149,6 +152,17 @@ func (t *AddressTranslator) translate(now sim.VTimeInSec) bool {
 		WithDeviceID(t.deviceID).
 		WithTaskID(taskID).
 		Build()
+	memtrace.RecordMemoryPathTranslationStart(
+		t.Name(),
+		originalReqID,
+		transReq.ID,
+		transReq.TaskID,
+		req.GetAddress(),
+		uint64(req.GetPID()),
+		req.GetByteSize(),
+		accessReqOp(req),
+		now,
+	)
 	err := t.translationPort.Send(transReq)
 	if err != nil {
 		return false
@@ -159,6 +173,7 @@ func (t *AddressTranslator) translate(now sim.VTimeInSec) bool {
 	translation := &transaction{
 		incomingReqs:   []mem.AccessReq{req},
 		translationReq: transReq,
+		needTime:       now,
 	}
 	t.transactions = append(t.transactions, translation)
 
@@ -204,7 +219,8 @@ func (t *AddressTranslator) parseTranslation(now sim.VTimeInSec) bool {
 	reqFromTop := transaction.incomingReqs[0]
 	translatedReq := t.createTranslatedReq(
 		reqFromTop,
-		transaction.translationRsp.Page)
+		transaction.translationRsp.Page,
+		transaction.translationReq)
 	translatedReq.Meta().SendTime = now
 	err := t.bottomPort.Send(translatedReq)
 	if err != nil {
@@ -218,6 +234,10 @@ func (t *AddressTranslator) parseTranslation(now sim.VTimeInSec) bool {
 			reqFromTop:  reqFromTop,
 			reqToBottom: translatedReq,
 		})
+	t.traceSharingAccess(
+		transaction.needTime,
+		reqFromTop,
+		transaction.translationRsp.Page)
 	transaction.incomingReqs = transaction.incomingReqs[1:]
 	if len(transaction.incomingReqs) == 0 {
 		t.removeExistingTranslation(transaction)
@@ -327,12 +347,13 @@ func (t *AddressTranslator) respond(now sim.VTimeInSec) bool {
 func (t *AddressTranslator) createTranslatedReq(
 	req mem.AccessReq,
 	page vm.Page,
+	translationReq *vm.TranslationReq,
 ) mem.AccessReq {
 	switch req := req.(type) {
 	case *mem.ReadReq:
-		return t.createTranslatedReadReq(req, page)
+		return t.createTranslatedReadReq(req, page, translationReq)
 	case *mem.WriteReq:
-		return t.createTranslatedWriteReq(req, page)
+		return t.createTranslatedWriteReq(req, page, translationReq)
 	default:
 		log.Panicf("cannot translate request of type %s", reflect.TypeOf(req))
 		return nil
@@ -342,11 +363,13 @@ func (t *AddressTranslator) createTranslatedReq(
 func (t *AddressTranslator) createTranslatedReadReq(
 	req *mem.ReadReq,
 	page vm.Page,
+	translationReq *vm.TranslationReq,
 ) *mem.ReadReq {
 	offset := req.Address % (1 << t.log2PageSize)
 	addr := page.PAddr + offset
+	originalReqID := memoryPathOriginalReqID(req, req.ID)
 	info := req.Info
-	if memtrace.L2SourceStatsEnabled() {
+	if memtrace.L2SourceStatsEnabled() || memtrace.MemoryPathTraceEnabled() {
 		info = memtrace.WithL2AddressInfo(req.Info, req.Address, addr)
 	}
 	clone := mem.ReadReqBuilder{}.
@@ -357,6 +380,22 @@ func (t *AddressTranslator) createTranslatedReadReq(
 		WithPID(0).
 		WithInfo(info).
 		Build()
+	if memtrace.MemoryPathTraceEnabled() {
+		clone.Info = memtrace.WithMemoryPathInfo(
+			clone.Info,
+			originalReqID,
+			translationReq.ID,
+			translationReq.TaskID,
+			clone.ID,
+		)
+		memtrace.RecordMemoryPathTranslatedReq(
+			originalReqID,
+			clone.ID,
+			translationReq.ID,
+			translationReq.TaskID,
+			addr,
+		)
+	}
 	clone.CanWaitForCoalesce = req.CanWaitForCoalesce
 	return clone
 }
@@ -364,11 +403,13 @@ func (t *AddressTranslator) createTranslatedReadReq(
 func (t *AddressTranslator) createTranslatedWriteReq(
 	req *mem.WriteReq,
 	page vm.Page,
+	translationReq *vm.TranslationReq,
 ) *mem.WriteReq {
 	offset := req.Address % (1 << t.log2PageSize)
 	addr := page.PAddr + offset
+	originalReqID := memoryPathOriginalReqID(req, req.ID)
 	info := req.Info
-	if memtrace.L2SourceStatsEnabled() {
+	if memtrace.L2SourceStatsEnabled() || memtrace.MemoryPathTraceEnabled() {
 		info = memtrace.WithL2AddressInfo(req.Info, req.Address, addr)
 	}
 	clone := mem.WriteReqBuilder{}.
@@ -380,12 +421,53 @@ func (t *AddressTranslator) createTranslatedWriteReq(
 		WithPID(0).
 		WithInfo(info).
 		Build()
+	if memtrace.MemoryPathTraceEnabled() {
+		clone.Info = memtrace.WithMemoryPathInfo(
+			clone.Info,
+			originalReqID,
+			translationReq.ID,
+			translationReq.TaskID,
+			clone.ID,
+		)
+		memtrace.RecordMemoryPathTranslatedReq(
+			originalReqID,
+			clone.ID,
+			translationReq.ID,
+			translationReq.TaskID,
+			addr,
+		)
+	}
 	clone.CanWaitForCoalesce = req.CanWaitForCoalesce
 	return clone
 }
 
 func (t *AddressTranslator) addrToPageID(addr uint64) uint64 {
 	return (addr >> t.log2PageSize) << t.log2PageSize
+}
+
+func accessReqOp(req mem.AccessReq) string {
+	switch req.(type) {
+	case *mem.ReadReq:
+		return "read"
+	case *mem.WriteReq:
+		return "write"
+	default:
+		return "unknown"
+	}
+}
+
+func memoryPathOriginalReqID(req mem.AccessReq, fallback string) string {
+	switch req := req.(type) {
+	case *mem.ReadReq:
+		if info, ok := memtrace.GetL2AccessInfo(req.Info); ok && info.OriginalReqID != "" {
+			return info.OriginalReqID
+		}
+	case *mem.WriteReq:
+		if info, ok := memtrace.GetL2AccessInfo(req.Info); ok && info.OriginalReqID != "" {
+			return info.OriginalReqID
+		}
+	}
+	return fallback
 }
 
 func (t *AddressTranslator) findTranslationByReqID(id string) *transaction {

@@ -5,6 +5,7 @@ akkalat/baseline/*.test
 
 # Experiment outputs
 akkalat/results/
+bottleneck analysis/
 
 # Python cache
 __pycache__/
@@ -14,6 +15,19 @@ __pycache__/
 .DS_Store
 .vscode/
 .git/
+
+# Local external/vendor checkouts
+photon/
+
+# Temporary experiment helpers
+tmp_run_photon_baseline_vs_l1v_network.sh
+
+# LaTeX build intermediates
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
 
 # Go workspace cache/artifacts
 .gocache/

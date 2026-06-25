@@ -6,6 +6,7 @@ import (
 
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/pipelining"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
@@ -252,6 +253,16 @@ func (s *bankStage) finalizeReadHit(
 		Build()
 	s.cache.topSender.Send(dataReady)
 
+	memtrace.RecordMemoryPathCacheComplete(
+		s.cache.Name(),
+		read.ID,
+		accessReqInfo(read),
+		read.GetAddress(),
+		read.GetByteSize(),
+		uint64(read.GetPID()),
+		accessReqOp(read),
+		now,
+	)
 	tracing.TraceReqComplete(read, s.cache)
 
 	// log.Printf("%.10f, %s, bank read hit finalize， %s, %04X, %04X, (%d, %d), %v\n",
@@ -297,6 +308,16 @@ func (s *bankStage) finalizeWriteHit(
 		Build()
 	s.cache.topSender.Send(done)
 
+	memtrace.RecordMemoryPathCacheComplete(
+		s.cache.Name(),
+		write.ID,
+		accessReqInfo(write),
+		write.GetAddress(),
+		write.GetByteSize(),
+		uint64(write.GetPID()),
+		accessReqOp(write),
+		now,
+	)
 	tracing.TraceReqComplete(write, s.cache)
 
 	// log.Printf("%.10f, %s, bank write hit finalize， %s, %04X, %04X, (%d, %d), %v\n",

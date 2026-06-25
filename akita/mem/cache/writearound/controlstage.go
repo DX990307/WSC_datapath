@@ -71,6 +71,7 @@ func (s *controlStage) hardResetCache(now sim.VTimeInSec) {
 
 	s.cache.transactions = nil
 	s.cache.postCoalesceTransactions = nil
+	s.cache.remoteBottomTrans = 0
 
 	if s.currFlushReq.PauseAfterFlushing {
 		s.cache.isPaused = true

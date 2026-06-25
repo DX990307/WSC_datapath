@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/mem/vm/l2tlb/internal"
 	"github.com/sarchlab/akita/v3/sim"
@@ -112,6 +113,13 @@ func (tlb *L2TLB) respondMSHREntry(now sim.VTimeInSec) bool {
 		tlb.respondingMSHREntry = tlb.respondingMSHREntry[1:]
 	}
 
+	memtrace.RecordMemoryPathTLBComplete(
+		tlb.Name(),
+		req.TaskID,
+		req.ID,
+		req.SendTime,
+		now,
+	)
 	tracing.TraceReqComplete(req, tlb)
 	return true
 }
@@ -157,6 +165,21 @@ func (tlb *L2TLB) handleTranslationHit(
 
 	tracing.TraceReqReceive(req, tlb)
 	tracing.AddTaskStep(tracing.MsgIDAtReceiver(req, tlb), tlb, "hit")
+	memtrace.RecordMemoryPathTLBResult(
+		tlb.Name(),
+		req.TaskID,
+		req.ID,
+		"hit",
+		req.SendTime,
+		now,
+	)
+	memtrace.RecordMemoryPathTLBComplete(
+		tlb.Name(),
+		req.TaskID,
+		req.ID,
+		req.SendTime,
+		now,
+	)
 	tracing.TraceReqComplete(req, tlb)
 	tracing.StartTask(req.TaskID,
 		tracing.MsgIDAtReceiver(req, tlb),
@@ -177,6 +200,14 @@ func (tlb *L2TLB) handleTranslationMiss(
 	if fetched {
 		tracing.TraceReqReceive(mshrReq, tlb)
 		tracing.AddTaskStep(tracing.MsgIDAtReceiver(mshrReq, tlb), tlb, "miss")
+		memtrace.RecordMemoryPathTLBResult(
+			tlb.Name(),
+			mshrReq.TaskID,
+			mshrReq.ID,
+			"miss",
+			mshrReq.SendTime,
+			now,
+		)
 		tracing.StartTask(mshrReq.TaskID,
 			tracing.MsgIDAtReceiver(mshrReq, tlb),
 			tlb, "EvictTest", "*vm.TranslationReq", mshrReq)
@@ -224,6 +255,14 @@ func (tlb *L2TLB) processTLBMSHRHit(
 
 	tracing.TraceReqReceive(mshrReq, tlb)
 	tracing.AddTaskStep(tracing.MsgIDAtReceiver(mshrReq, tlb), tlb, "mshr-hit")
+	memtrace.RecordMemoryPathTLBResult(
+		tlb.Name(),
+		mshrReq.TaskID,
+		mshrReq.ID,
+		"mshr-hit",
+		mshrReq.SendTime,
+		now,
+	)
 	tracing.StartTask(mshrReq.TaskID,
 		tracing.MsgIDAtReceiver(mshrReq, tlb),
 		tlb, "EvictTest", "*vm.TranslationReq", mshrReq)

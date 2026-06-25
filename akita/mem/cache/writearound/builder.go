@@ -23,6 +23,7 @@ type Builder struct {
 	bankLatency           int
 	numReqPerCycle        int
 	maxNumConcurrentTrans int
+	maxRemoteBottomTrans  int
 	lowModuleFinder       mem.LowModuleFinder
 	visTracer             tracing.Tracer
 }
@@ -106,6 +107,13 @@ func (b *Builder) WithMaxNumConcurrentTrans(n int) *Builder {
 	return b
 }
 
+// WithMaxRemoteBottomTrans limits in-flight L1 miss requests sent to a remote
+// bottom module. A non-positive value disables the remote-only throttle.
+func (b *Builder) WithMaxRemoteBottomTrans(n int) *Builder {
+	b.maxRemoteBottomTrans = n
+	return b
+}
+
 // WithNumReqsPerCycle sets the number of requests that the cache can process
 // per cycle
 func (b *Builder) WithNumReqsPerCycle(n int) *Builder {
@@ -168,6 +176,7 @@ func (b *Builder) Build(name string) *Cache {
 	c.wayAssociativity = b.wayAssociativity
 	c.lowModuleFinder = b.lowModuleFinder
 	c.maxNumConcurrentTrans = b.maxNumConcurrentTrans
+	c.maxRemoteBottomTrans = b.maxRemoteBottomTrans
 
 	b.buildStages(c)
 

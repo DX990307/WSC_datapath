@@ -47,13 +47,13 @@ TRADITIONAL_LITE_BENCHMARKS = [
 
 TRADITIONAL_BENCHMARKS = [
     "aes",
-    "atax",
-    "bicg",
+    # "atax",
+    # "bicg",
     "bitonicsort",
-    "conv2d",
-    "maxpooling",
-    "avgpooling",
-    "fulllayer",
+    # "conv2d",
+    # "maxpooling",
+    # "avgpooling",
+    # "fulllayer",
     "fastwalshtransform",
     "fir",
     "fft",
@@ -62,13 +62,13 @@ TRADITIONAL_BENCHMARKS = [
     "kmeans",
     "matrixmultiplication",
     "matrixmultiplication-middletile",
-    "matrixtranspose",
-    "matrixtranspose-middletile",
-    "nbody",
-    "nw",
+    # "matrixtranspose",
+    # "matrixtranspose-middletile",
+    # "nbody",
+    # "nw",
     "pagerank",
-    "relu",
-    "simpleconvolution",
+    # "relu",
+    # "simpleconvolution",
     "spmv",
     "stencil2d",
 ]
@@ -82,6 +82,19 @@ LLM_BENCHMARKS = [
     "resnet",
 ]
 
+LLM_LIKE_BOTTLENECK_BENCHMARKS = [
+    "matrixmultiplication-llm-prefill-attn",
+    "matrixmultiplication-llm-decode-attn",
+    "matrixmultiplication-llm-prefill-mlp-up",
+    "matrixmultiplication-llm-decode-mlp-up",
+    "matrixmultiplication-llm-prefill-mlp-down",
+    "matrixmultiplication-llm-decode-mlp-down",
+    "conv2d-llm-prefill-pointwise",
+    "conv2d-llm-decode-pointwise",
+    "conv2d-llm-prefill-local",
+    "conv2d-llm-decode-local",
+]
+
 EXPERIMENTAL_BENCHMARKS = [
     "fulllayer-large",
     "fulllayer-gemm-tiny",
@@ -92,13 +105,17 @@ EXPERIMENTAL_BENCHMARKS = [
 ]
 
 ALL_BENCHMARKS = list(dict.fromkeys(
-    TRADITIONAL_BENCHMARKS + LLM_BENCHMARKS + EXPERIMENTAL_BENCHMARKS
+    TRADITIONAL_BENCHMARKS
+    + LLM_BENCHMARKS
+    + LLM_LIKE_BOTTLENECK_BENCHMARKS
+    + EXPERIMENTAL_BENCHMARKS
 ))
 
 BENCHMARK_ALIASES = {
     "all": ALL_BENCHMARKS,
     "default": DEFAULT_RUN_BENCHMARKS,
     "experimental": EXPERIMENTAL_BENCHMARKS,
+    "llm-like-bottleneck": LLM_LIKE_BOTTLENECK_BENCHMARKS,
     "traditional": TRADITIONAL_BENCHMARKS,
     "traditional-lite": TRADITIONAL_LITE_BENCHMARKS,
     "llm": LLM_BENCHMARKS,
@@ -116,7 +133,7 @@ BASE_COMMON_FLAGS = [
     "-timing",
     "-num-memory-banks=16",
     "-bandwidth=48",
-    "-switch-latency=32",
+    "-switch-latency=1",
     "-magic-memory-copy",
     "-report-all",
 ]

@@ -23,6 +23,9 @@ func DumpL2SourceStats() error {
 	if err := globalL2SourceStats.dumpDataSource(); err != nil {
 		return err
 	}
+	if err := globalL2SourceStats.dumpPageSource(); err != nil {
+		return err
+	}
 	return globalL2SourceStats.dumpRemoteFillReuse()
 }
 
@@ -88,6 +91,27 @@ func (s *l2SourceStats) dumpDataSource() error {
 			key.component, key.op, key.hasVAddr, key.vaddr,
 			key.hasPAddr, key.paddr, counter.accesses, counter.bytes,
 			counter.avgLatencyNS())
+	}
+
+	return nil
+}
+
+func (s *l2SourceStats) dumpPageSource() error {
+	file, err := os.Create(s.prefix + "_page_source.csv")
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	fmt.Fprintln(file, pageSourceCSVHeader)
+
+	for _, key := range s.sortedPageSourceKeys() {
+		counter := s.pageSource[key]
+		fmt.Fprintf(file, "%s,%d,%d,%d,%t,%s,%d,%d,%d,%d,%d,%d\n",
+			key.source, key.requesterGPM, key.providerGPM, key.hops,
+			isNeighborHop(key.hops), key.op, key.pagePAddr,
+			counter.accesses, counter.bytes, counter.avgLatencyNS(),
+			counter.firstTimeNS, counter.lastTimeNS)
 	}
 
 	return nil

@@ -1,6 +1,7 @@
 package writearound
 
 import (
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/pipelining"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
@@ -103,6 +104,7 @@ func (s *bankStage) finalizeReadHitTrans(
 	s.removeTransaction(trans)
 	s.postPipelineBuf.Pop()
 
+	recordMemoryPathCacheComplete(s.cache.Name(), trans, now)
 	tracing.EndTask(trans.id, s.cache)
 	return true
 }
@@ -168,4 +170,25 @@ func (s *bankStage) removeTransaction(trans *transaction) {
 			return
 		}
 	}
+}
+
+func recordMemoryPathCacheComplete(
+	cacheName string,
+	trans *transaction,
+	now sim.VTimeInSec,
+) {
+	req := trans.accessReq()
+	if req == nil {
+		return
+	}
+	memtrace.RecordMemoryPathCacheComplete(
+		cacheName,
+		trans.id,
+		nil,
+		trans.Address(),
+		req.GetByteSize(),
+		uint64(trans.PID()),
+		accessReqOp(req),
+		now,
+	)
 }

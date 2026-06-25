@@ -15,10 +15,16 @@ import sys
 
 import bertconfig
 import gptconfig
-import runall2
+from runall2_constants import (
+    BASE_COMMON_FLAGS,
+    CONFIGS,
+    DEFAULT_MMUTLB_LOOKUP_LATENCY,
+    ROOT_DIR,
+)
+import runall2_process
 
 
-CONFIG_FLAGS = {name: flags for name, flags in runall2.CONFIGS}
+CONFIG_FLAGS = {name: flags for name, flags in CONFIGS}
 PROFILE_NAMES = sorted(set(bertconfig.PROFILES) | set(gptconfig.PROFILES))
 
 
@@ -38,6 +44,21 @@ def parse_args():
     parser.add_argument(
         "--layers", type=int, default=0,
         help="Override the profile layer count. 0 uses the profile default.")
+    parser.add_argument(
+        "--batch", type=int, default=0,
+        help="Override profile batch size. 0 uses the profile default.")
+    parser.add_argument(
+        "--seq-len", type=int, default=0,
+        help="Override profile sequence length. 0 uses the profile default.")
+    parser.add_argument(
+        "--hidden", type=int, default=0,
+        help="Override profile hidden size. 0 uses the profile default.")
+    parser.add_argument(
+        "--heads", type=int, default=0,
+        help="Override profile attention head count. 0 uses the profile default.")
+    parser.add_argument(
+        "--intermediate", type=int, default=0,
+        help="Override profile MLP intermediate size. 0 uses the profile default.")
     parser.add_argument(
         "--split-k", default="1",
         help=(
@@ -72,8 +93,68 @@ def parse_args():
         "--summarize", action="store_true",
         help="Run summarize_llm_decomposed.py after all ops finish.")
     parser.add_argument(
-        "--enable-servers", action="store_true",
-        help="Do not pass -disable-servers to the benchmark binary.")
+        "--enable-servers",
+        dest="enable_servers",
+        action="store_true",
+        default=True,
+        help="Keep benchmark servers enabled. This is the default.")
+    parser.add_argument(
+        "--disable-servers",
+        dest="enable_servers",
+        action="store_false",
+        help="Pass -disable-servers to the benchmark binary.")
+    parser.add_argument(
+        "--trace-sharing",
+        action="store_true",
+        help="Emit a compact gzip page-sharing trace for each decomposed op.")
+    parser.add_argument(
+        "--trace-sharing-sample",
+        type=int,
+        default=1,
+        help="Record one translated data access every N accesses.")
+    parser.add_argument(
+        "--trace-sharing-max-records",
+        type=int,
+        default=1000000,
+        help="Maximum records per op trace; 0 means unlimited.")
+    parser.add_argument(
+        "--trace-memory-path",
+        action="store_true",
+        help="Emit request-level memory-path trace and joint TLB/cache miss summaries.")
+    parser.add_argument(
+        "--trace-memory-path-warmup-accesses",
+        type=int,
+        default=100000,
+        help="Observed L1V memory accesses to skip before raw memory-path rows.")
+    parser.add_argument(
+        "--trace-memory-path-max-records",
+        type=int,
+        default=100000,
+        help="Maximum stable-window memory-path raw rows per op; 0 means unlimited.")
+    parser.add_argument(
+        "--trace-memory-path-exit-on-complete",
+        action="store_true",
+        help="Stop each op process after the memory-path raw window reaches max records.")
+    parser.add_argument(
+        "--l1v-remote-max-inflight",
+        type=int,
+        default=0,
+        help=(
+            "Limit in-flight remote L1V bottom transactions per L1V cache. "
+            "0 disables remote-only throttling."
+        ))
+    parser.add_argument(
+        "--report-l2-source",
+        action="store_true",
+        help=(
+            "Emit per-op L2 source CSVs: service source, remote matrix, "
+            "and remote-fill reuse summaries."
+        ))
+    parser.add_argument(
+        "--l2-source-tile-width",
+        type=int,
+        default=7,
+        help="Tile-array width used to compute requester/provider hops.")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -136,6 +217,14 @@ def replace_or_append_flag(flags, name, value):
 
 def ceil_div(numerator, denominator):
     return (numerator + denominator - 1) // denominator
+
+
+def page_size(args):
+    return 1 << args.log2_page_size
+
+
+def pages_for_bytes(byte_count, args):
+    return ceil_div(byte_count, page_size(args))
 
 
 def uses_target_gpus(total_wg, target_gpus, cu_per_gpu):
@@ -336,8 +425,8 @@ def normalize_gpu_spec(spec, args, src=None, dst=None):
 
 
 def distribute_bytes(byte_count, gpus, args):
-    page_size = 1 << args.log2_page_size
-    num_pages = ceil_div(byte_count, page_size)
+    page_bytes = page_size(args)
+    num_pages = pages_for_bytes(byte_count, args)
     out = {gpu: 0 for gpu in gpus}
     if num_pages == 0:
         return out
@@ -351,11 +440,11 @@ def distribute_bytes(byte_count, gpus, args):
 
     last_gpu_index = 0
     for i in range(gpus_to_use):
-        out[gpus[i]] += pages_per_gpu * page_size
+        out[gpus[i]] += pages_per_gpu * page_bytes
         last_gpu_index = i
 
     remaining_pages = num_pages % len(gpus)
-    out[gpus[last_gpu_index]] += remaining_pages * page_size
+    out[gpus[last_gpu_index]] += remaining_pages * page_bytes
 
     if sum(out.values()) > byte_count:
         overage = sum(out.values()) - byte_count
@@ -369,6 +458,14 @@ def distribute_bytes(byte_count, gpus, args):
 def format_gpu_bytes(gpu_bytes):
     return ";".join(
         f"{gpu}:{byte_count}"
+        for gpu, byte_count in gpu_bytes.items()
+        if byte_count > 0
+    )
+
+
+def format_gpu_pages(gpu_bytes, args):
+    return ";".join(
+        f"{gpu}:{pages_for_bytes(byte_count, args)}"
         for gpu, byte_count in gpu_bytes.items()
         if byte_count > 0
     )
@@ -399,12 +496,15 @@ def op_metadata(index, label, flags, args):
         "label": label,
         "op": op_kind(flags),
         "output_bytes": byte_count,
+        "output_pages": pages_for_bytes(byte_count, args),
+        "page_size_bytes": page_size(args),
         "estimated_wg": estimated_wg(flags),
         "compute_gpus": compact_gpu_list(compute_gpus, args),
         "compute_gpu_count": len(compute_gpus),
         "output_gpus": compact_gpu_list(output_gpus, args),
         "output_gpu_count": len(output_gpus),
         "per_gpu_output_bytes": format_gpu_bytes(per_gpu_bytes),
+        "per_gpu_output_pages": format_gpu_pages(per_gpu_bytes, args),
         "flags": " ".join(flags),
     }
 
@@ -444,19 +544,22 @@ def insert_transfer_ops(ops, args):
 def write_placement_report(args, ops):
     path = Path(args.placement_output)
     if not path.is_absolute():
-        path = Path(runall2.output_dir) / path
+        path = Path(runall2_process.output_dir) / path
 
     fieldnames = [
         "op_index",
         "label",
         "op",
         "output_bytes",
+        "output_pages",
+        "page_size_bytes",
         "estimated_wg",
         "compute_gpus",
         "compute_gpu_count",
         "output_gpus",
         "output_gpu_count",
         "per_gpu_output_bytes",
+        "per_gpu_output_pages",
         "flags",
     ]
     with path.open("w", newline="") as f:
@@ -481,11 +584,19 @@ def build_exps(args, ops=None):
     if ops is None:
         ops = prepare_ops(args)
 
-    common_flags = runall2.BASE_COMMON_FLAGS[:] + [
-        f"-mmutlb-lookup-latency={runall2.DEFAULT_MMUTLB_LOOKUP_LATENCY}",
+    common_flags = BASE_COMMON_FLAGS[:] + [
+        f"-mmutlb-lookup-latency={DEFAULT_MMUTLB_LOOKUP_LATENCY}",
     ]
     if not args.enable_servers:
         common_flags.append("-disable-servers")
+    if args.report_l2_source:
+        common_flags.extend([
+            "-report-l2-source",
+            f"-l2-source-tile-width={args.l2_source_tile_width}",
+        ])
+    if args.l1v_remote_max_inflight > 0:
+        common_flags.append(
+            f"-l1v-remote-max-inflight={args.l1v_remote_max_inflight}")
 
     exps = []
     for index, (label, flags) in enumerate(ops):
@@ -505,6 +616,19 @@ def build_exps(args, ops=None):
                 ),
                 "common_flags": common_flags,
                 "flags": exp_flags,
+                "trace_sharing": args.trace_sharing,
+                "trace_sharing_sample": args.trace_sharing_sample,
+                "trace_sharing_max_records": args.trace_sharing_max_records,
+                "trace_memory_path": args.trace_memory_path,
+                "trace_memory_path_warmup_accesses": (
+                    args.trace_memory_path_warmup_accesses
+                ),
+                "trace_memory_path_max_records": (
+                    args.trace_memory_path_max_records
+                ),
+                "trace_memory_path_exit_on_complete": (
+                    args.trace_memory_path_exit_on_complete
+                ),
             })
     return exps
 
@@ -513,6 +637,7 @@ def prepare_ops(args):
     split_k = parse_split_k(args.split_k)
     if args.layers < 0:
         raise ValueError("--layers must be non-negative")
+    profile_overrides = profile_override_values(args)
     if args.target_gpus <= 0:
         raise ValueError("--target-gpus must be positive")
     if args.cu_per_gpu <= 0:
@@ -526,11 +651,19 @@ def prepare_ops(args):
 
     if args.model == "bert":
         benchmarks = bertconfig.init_bert(
-            args.profile, config_split_k, layers=args.layers or None)
+            args.profile,
+            config_split_k,
+            layers=args.layers or None,
+            overrides=profile_overrides,
+        )
         ops = bertconfig.run_bert(benchmarks)
     else:
         benchmarks = gptconfig.init_gpt(
-            args.profile, config_split_k, layers=args.layers or None)
+            args.profile,
+            config_split_k,
+            layers=args.layers or None,
+            overrides=profile_overrides,
+        )
         ops = gptconfig.run_gpt(benchmarks)
     if split_k == "auto":
         ops = [
@@ -544,11 +677,28 @@ def prepare_ops(args):
     return ops
 
 
+def profile_override_values(args):
+    overrides = {}
+    for arg_name, profile_name in [
+        ("batch", "batch"),
+        ("seq_len", "seq_len"),
+        ("hidden", "hidden"),
+        ("heads", "heads"),
+        ("intermediate", "intermediate"),
+    ]:
+        value = getattr(args, arg_name)
+        if value < 0:
+            raise ValueError(f"--{arg_name.replace('_', '-')} must be non-negative")
+        if value > 0:
+            overrides[profile_name] = value
+    return overrides
+
+
 def summarize_output(args):
     cmd = [
         sys.executable,
-        f"{runall2.ROOT_DIR}/summarize_llm_decomposed.py",
-        runall2.output_dir,
+        f"{ROOT_DIR}/summarize_llm_decomposed.py",
+        runall2_process.output_dir,
         "--model",
         args.model,
         "--profile",
@@ -561,7 +711,7 @@ def summarize_output(args):
 
 def print_dry_run(exps):
     for exp in exps:
-        binary = f'{runall2.ROOT_DIR}/{exp["target"]}/{exp["target"]}'
+        binary = f'{ROOT_DIR}/{exp["target"]}/{exp["target"]}'
         cmd = [
             binary,
             f'-benchmark={exp["benchmark"]}',
@@ -569,6 +719,28 @@ def print_dry_run(exps):
             *exp["flags"],
             "-metric-file-name=<output>",
         ]
+        if exp.get("trace_sharing"):
+            cmd.extend([
+                "-trace-sharing",
+                "-trace-sharing-file=<output>_sharing.csv.gz",
+                f'-trace-sharing-sample={exp["trace_sharing_sample"]}',
+                f'-trace-sharing-max-records={exp["trace_sharing_max_records"]}',
+            ])
+        if exp.get("trace_memory_path"):
+            cmd.extend([
+                "-trace-memory-path",
+                "-trace-memory-path-file=<output>_memory_path",
+                (
+                    "-trace-memory-path-warmup-accesses="
+                    f'{exp["trace_memory_path_warmup_accesses"]}'
+                ),
+                (
+                    "-trace-memory-path-max-records="
+                    f'{exp["trace_memory_path_max_records"]}'
+                ),
+            ])
+            if exp.get("trace_memory_path_exit_on_complete"):
+                cmd.append("-trace-memory-path-exit-on-complete")
         print(shlex.join(cmd))
 
 
@@ -586,26 +758,32 @@ def main():
                 f"{metadata['op_index']} {metadata['label']} "
                 f"op={metadata['op']} "
                 f"bytes={metadata['output_bytes']} "
+                f"pages={metadata['output_pages']} "
+                f"page_size={metadata['page_size_bytes']} "
                 f"compute={metadata['compute_gpus']} "
                 f"output={metadata['output_gpus']} "
-                f"per_gpu={metadata['per_gpu_output_bytes']}"
+                f"per_gpu={metadata['per_gpu_output_bytes']} "
+                f"per_gpu_pages={metadata['per_gpu_output_pages']}"
             )
         return
 
-    runall2.install_signal_handlers()
-    runall2.create_output_dir()
+    runall2_process.install_signal_handlers()
+    runall2_process.create_output_dir()
     write_placement_report(args, ops)
-    runall2.build_targets(exps)
+    runall2_process.build_targets(exps)
 
     try:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=args.max_workers,
         ) as executor:
-            futures = [executor.submit(runall2.run_exp, exp) for exp in exps]
+            futures = [
+                executor.submit(runall2_process.run_exp, exp)
+                for exp in exps
+            ]
             for future in concurrent.futures.as_completed(futures):
                 print(future.result())
     finally:
-        runall2.terminate_all_processes()
+        runall2_process.terminate_all_processes()
 
     if args.summarize:
         summarize_output(args)

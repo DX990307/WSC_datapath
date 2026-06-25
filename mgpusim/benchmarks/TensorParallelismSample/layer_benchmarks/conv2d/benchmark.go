@@ -77,13 +77,14 @@ func (b *Benchmark) calculateOutputSize() {
 }
 
 func (b *Benchmark) initMem() {
-	b.layer = layers.NewConv2D(
+	b.layer = layers.NewConv2DWithGPUs(
 		0,
 		b.operator,
 		[]int{b.C, b.H, b.W},
 		[]int{b.KernelChannel, b.C, b.KernelHeight, b.KernelWidth},
 		[]int{b.StrideY, b.StrideX},
 		[]int{b.PadY, b.PadX}, 4,
+		b.gpus,
 	)
 	b.layer.Randomize()
 

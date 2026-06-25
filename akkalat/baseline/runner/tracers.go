@@ -105,6 +105,18 @@ type cuCPIStackTracer struct {
 	tracer *cu.CPIStackTracer
 }
 
+func firstTraceForComponent(seen map[string]bool, comp sim.Named) bool {
+	if comp == nil {
+		return false
+	}
+	name := comp.Name()
+	if seen[name] {
+		return false
+	}
+	seen[name] = true
+	return true
+}
+
 // type gmmuCountTracer struct {
 // 	tracer *gmmuTracer
 // 	gmmu   *gmmu.GMMU
@@ -271,8 +283,12 @@ func (r *Runner) addCacheLatencyTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
 		for _, cache := range gpu.L1ICaches {
+			if !firstTraceForComponent(seen, cache) {
+				continue
+			}
 			tracer := tracing.NewAverageTimeTracer(
 				r.platform.Engine,
 				func(task tracing.Task) bool {
@@ -284,6 +300,9 @@ func (r *Runner) addCacheLatencyTracer() {
 		}
 
 		for _, cache := range gpu.L1SCaches {
+			if !firstTraceForComponent(seen, cache) {
+				continue
+			}
 			tracer := tracing.NewAverageTimeTracer(
 				r.platform.Engine,
 				func(task tracing.Task) bool {
@@ -295,6 +314,9 @@ func (r *Runner) addCacheLatencyTracer() {
 		}
 
 		for _, cache := range gpu.L1VCaches {
+			if !firstTraceForComponent(seen, cache) {
+				continue
+			}
 			tracer := tracing.NewAverageTimeTracer(
 				r.platform.Engine,
 				func(task tracing.Task) bool {
@@ -306,6 +328,9 @@ func (r *Runner) addCacheLatencyTracer() {
 		}
 
 		for _, cache := range gpu.L2Caches {
+			if !firstTraceForComponent(seen, cache) {
+				continue
+			}
 			tracer := tracing.NewAverageTimeTracer(
 				r.platform.Engine,
 				func(task tracing.Task) bool {
@@ -323,8 +348,12 @@ func (r *Runner) addCacheHitRateTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
 		for _, cache := range gpu.L1VCaches {
+			if !firstTraceForComponent(seen, cache) {
+				continue
+			}
 			tracer := tracing.NewStepCountTracer(
 				func(task tracing.Task) bool { return true })
 			r.cacheHitRateTracers = append(r.cacheHitRateTracers,
@@ -333,6 +362,9 @@ func (r *Runner) addCacheHitRateTracer() {
 		}
 
 		for _, cache := range gpu.L1SCaches {
+			if !firstTraceForComponent(seen, cache) {
+				continue
+			}
 			tracer := tracing.NewStepCountTracer(
 				func(task tracing.Task) bool { return true })
 			r.cacheHitRateTracers = append(r.cacheHitRateTracers,
@@ -341,6 +373,9 @@ func (r *Runner) addCacheHitRateTracer() {
 		}
 
 		for _, cache := range gpu.L1ICaches {
+			if !firstTraceForComponent(seen, cache) {
+				continue
+			}
 			tracer := tracing.NewStepCountTracer(
 				func(task tracing.Task) bool { return true })
 			r.cacheHitRateTracers = append(r.cacheHitRateTracers,
@@ -349,6 +384,9 @@ func (r *Runner) addCacheHitRateTracer() {
 		}
 
 		for _, cache := range gpu.L2Caches {
+			if !firstTraceForComponent(seen, cache) {
+				continue
+			}
 			tracer := tracing.NewStepCountTracer(
 				func(task tracing.Task) bool { return true })
 			r.cacheHitRateTracers = append(r.cacheHitRateTracers,
@@ -363,8 +401,12 @@ func (r *Runner) addRDMALatencyTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
 		rdma := gpu.RDMAEngine
+		if !firstTraceForComponent(seen, rdma) {
+			continue
+		}
 		tracer := tracing.NewAverageTimeTracer(
 			r.platform.Engine,
 			func(task tracing.Task) bool {
@@ -381,8 +423,12 @@ func (r *Runner) addTLBLatencyTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
 		for _, tlb := range gpu.L1VTLBs {
+			if !firstTraceForComponent(seen, tlb) {
+				continue
+			}
 			tracer := tracing.NewAverageTimeTracer(
 				r.platform.Engine,
 				func(task tracing.Task) bool {
@@ -394,6 +440,9 @@ func (r *Runner) addTLBLatencyTracer() {
 		}
 
 		for _, tlb := range gpu.L1STLBs {
+			if !firstTraceForComponent(seen, tlb) {
+				continue
+			}
 			tracer := tracing.NewAverageTimeTracer(
 				r.platform.Engine,
 				func(task tracing.Task) bool {
@@ -405,6 +454,9 @@ func (r *Runner) addTLBLatencyTracer() {
 		}
 
 		for _, tlb := range gpu.L1ITLBs {
+			if !firstTraceForComponent(seen, tlb) {
+				continue
+			}
 			tracer := tracing.NewAverageTimeTracer(
 				r.platform.Engine,
 				func(task tracing.Task) bool {
@@ -415,16 +467,8 @@ func (r *Runner) addTLBLatencyTracer() {
 			tracing.CollectTrace(tlb, tracer)
 		}
 
-		for _, tlb := range gpu.L2TLBs {
-			tracer := tracing.NewAverageTimeTracer(
-				r.platform.Engine,
-				func(task tracing.Task) bool {
-					return task.Kind == "req_in"
-				})
-			r.tlbLatencyTracers = append(r.tlbLatencyTracers,
-				tlbLatencyTracer{tracer: tracer, tlb: tlb})
-			tracing.CollectTrace(tlb, tracer)
-		}
+		// L2 TLBs use dedicated tracers below. Registering them here as well
+		// duplicates hit/miss/latency rows in the metrics CSV.
 	}
 }
 
@@ -433,8 +477,12 @@ func (r *Runner) addTLBHitRateTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
 		for _, tlb := range gpu.L1VTLBs {
+			if !firstTraceForComponent(seen, tlb) {
+				continue
+			}
 			tracer := tracing.NewStepCountTracer(
 				func(task tracing.Task) bool { return true })
 			r.tlbHitRateTracers = append(r.tlbHitRateTracers,
@@ -443,6 +491,9 @@ func (r *Runner) addTLBHitRateTracer() {
 		}
 
 		for _, tlb := range gpu.L1STLBs {
+			if !firstTraceForComponent(seen, tlb) {
+				continue
+			}
 			tracer := tracing.NewStepCountTracer(
 				func(task tracing.Task) bool { return true })
 			r.tlbHitRateTracers = append(r.tlbHitRateTracers,
@@ -451,6 +502,9 @@ func (r *Runner) addTLBHitRateTracer() {
 		}
 
 		for _, tlb := range gpu.L1ITLBs {
+			if !firstTraceForComponent(seen, tlb) {
+				continue
+			}
 			tracer := tracing.NewStepCountTracer(
 				func(task tracing.Task) bool { return true })
 			r.tlbHitRateTracers = append(r.tlbHitRateTracers,
@@ -458,13 +512,8 @@ func (r *Runner) addTLBHitRateTracer() {
 			tracing.CollectTrace(tlb, tracer)
 		}
 
-		for _, tlb := range gpu.L2TLBs {
-			tracer := tracing.NewStepCountTracer(
-				func(task tracing.Task) bool { return true })
-			r.tlbHitRateTracers = append(r.tlbHitRateTracers,
-				tlbHitRateTracer{tracer: tracer, tlb: tlb})
-			tracing.CollectTrace(tlb, tracer)
-		}
+		// L2 TLBs use dedicated tracers below. Registering them here as well
+		// duplicates hit/miss/latency rows in the metrics CSV.
 	}
 }
 
@@ -473,7 +522,11 @@ func (r *Runner) addL2TLBHitRateTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
+		if !firstTraceForComponent(seen, gpu.L2TLB) {
+			continue
+		}
 		tracer := tracing.NewStepCountTracer(
 			func(task tracing.Task) bool { return true })
 		r.l2TLBHitRateTracers = append(
@@ -492,7 +545,11 @@ func (r *Runner) addL2TLBLatencyTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
+		if !firstTraceForComponent(seen, gpu.L2TLB) {
+			continue
+		}
 		tracer := tracing.NewAverageTimeTracer(
 			r.platform.Engine,
 			func(task tracing.Task) bool {
@@ -515,7 +572,11 @@ func (r *Runner) addRDMAEngineTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
+		if !firstTraceForComponent(seen, gpu.RDMAEngine) {
+			continue
+		}
 		t := rdmaTransactionCountTracer{}
 		t.rdmaEngine = gpu.RDMAEngine
 		t.incomingTracer = tracing.NewAverageTimeTracer(
@@ -561,7 +622,12 @@ func (r *Runner) addMMUEngineTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
+		if !firstTraceForComponent(seen, gpu.MMUEngine) {
+			continue
+		}
+
 		t := mmuTransactionCountTracer{}
 		// t.mmuEngine = gpu.MMUEngine
 		t.mmuEngine = gpu.MMUEngine
@@ -608,7 +674,11 @@ func (r *Runner) addGMMUEngineTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
+		if !firstTraceForComponent(seen, gpu.GMMUEngine) {
+			continue
+		}
 		t := gmmuTransactionCountTracer{}
 		// t := mmuTransactionCountTracer{}
 		t.gmmuEngine = gpu.GMMUEngine
@@ -655,8 +725,13 @@ func (r *Runner) addMMULatencyTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
 		mmu := gpu.MMUEngine
+		if !firstTraceForComponent(seen, mmu) {
+			continue
+		}
+
 		tracer := tracing.NewAverageTimeTracer(
 			r.platform.Engine,
 			func(task tracing.Task) bool {
@@ -674,8 +749,12 @@ func (r *Runner) addGMMULatencyTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
 		gmmu := gpu.GMMUEngine
+		if !firstTraceForComponent(seen, gmmu) {
+			continue
+		}
 		tracer := tracing.NewAverageTimeTracer(
 			r.platform.Engine,
 			func(task tracing.Task) bool {
@@ -693,8 +772,12 @@ func (r *Runner) addDRAMTracer() {
 		return
 	}
 
+	seen := make(map[string]bool)
 	for _, gpu := range r.platform.GPUs {
 		for _, dram := range gpu.MemControllers {
+			if !firstTraceForComponent(seen, dram.(TraceableComponent)) {
+				continue
+			}
 			t := dramTransactionCountTracer{}
 			t.dram = dram.(TraceableComponent)
 			t.tracer = newDramTracer(r.platform.Engine)

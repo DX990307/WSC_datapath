@@ -20,6 +20,24 @@ var visTraceEndTime = flag.Float64("trace-vis-end", -1,
 		"means that the trace will be collected to the end of the simulation.")
 var verifyFlag = flag.Bool("verify", false, "Verify the emulation result.")
 var memTracing = flag.Bool("trace-mem", false, "Generate memory trace")
+var sharingTracing = flag.Bool("trace-sharing", false,
+	"Generate compact gzip-compressed page-sharing trace from L1 vector memory address translators.")
+var sharingTraceFile = flag.String("trace-sharing-file", "sharing_trace.csv.gz",
+	"Path of the gzip-compressed page-sharing trace.")
+var sharingTraceSampleEvery = flag.Uint64("trace-sharing-sample", 1,
+	"Record one translated data access every N accesses in the page-sharing trace.")
+var sharingTraceMaxRecords = flag.Uint64("trace-sharing-max-records", 1000000,
+	"Maximum page-sharing trace records to write; 0 means unlimited.")
+var memoryPathTracing = flag.Bool("trace-memory-path", false,
+	"Generate request-level memory path trace with TLB/cache joint-miss statistics.")
+var memoryPathTraceFile = flag.String("trace-memory-path-file", "",
+	"Output prefix for memory-path CSV files. Defaults to <metric-file-name>_memory_path.")
+var memoryPathTraceWarmupAccesses = flag.Uint64("trace-memory-path-warmup-accesses", 100000,
+	"Observed L1V memory accesses to skip before writing raw memory-path rows.")
+var memoryPathTraceMaxRecords = flag.Uint64("trace-memory-path-max-records", 100000,
+	"Maximum stable-window memory-path raw records to write; 0 means unlimited after warmup.")
+var memoryPathTraceExitOnComplete = flag.Bool("trace-memory-path-exit-on-complete", false,
+	"Exit the benchmark process after the memory-path raw trace window reaches max records.")
 var instCountReportFlag = flag.Bool("report-inst-count", false,
 	"Report the number of instructions executed in each compute unit.")
 var cacheLatencyReportFlag = flag.Bool("report-cache-latency", false,
@@ -32,6 +50,8 @@ var rdmaTransactionCountReportFlag = flag.Bool("report-rdma-transaction-count",
 	false, "Report the number of transactions going through the RDMA engines.")
 var dramTransactionCountReportFlag = flag.Bool("report-dram-transaction-count",
 	false, "Report the number of transactions accessing the DRAMs.")
+var reportCPIStackFlag = flag.Bool("report-cpi-stack", false,
+	"Report the compute-unit CPI stack.")
 var useUnifiedMemoryFlag = flag.Bool("use-unified-memory", false,
 	"Run benchmark with Unified Memory or not")
 var reportAll = flag.Bool("report-all", false, "Report all metrics to .csv file.")
@@ -43,6 +63,18 @@ var switchLatencyFlag = flag.Int("switch-latency", 20,
 	"The latency of the switch")
 var bandwidthFlag = flag.Int("bandwidth", 1,
 	"The bandwidth of the network as a multiple of 16GB/s.")
+var endpointChannelsFlag = flag.Int("endpoint-channels", 0,
+	"Override local device endpoint input/output flit channels per cycle; 0 uses network bandwidth.")
+var endpointBufferSizeFlag = flag.Int("endpoint-buffer-size", 0,
+	"Override local device endpoint buffer capacity; 0 uses endpoint channel count.")
+var networkFlitSizeFlag = flag.Int("network-flit-size", 16,
+	"NoC flit payload size in bytes. Larger values reduce response flit count.")
+var l1vRemoteMaxInflightFlag = flag.Int("l1v-remote-max-inflight", 0,
+	"Limit in-flight remote L1V bottom transactions per L1V cache; 0 disables remote-only throttling.")
+var l1vMSHREntriesFlag = flag.Int("l1v-mshr-entries", 160,
+	"Number of L1V cache MSHR entries per L1V cache.")
+var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 160,
+	"Maximum concurrent L1V cache transactions per L1V cache.")
 var maxNumHopsFlag = flag.Int("max-num-hops", -1,
 	"The maximum number of hops in the network")
 var numMemBankFlag = flag.Int("num-memory-banks", 16,
@@ -123,6 +155,10 @@ func (r *Runner) ParseFlag() *Runner {
 		r.ReportRDMATransactionCount = true
 	}
 
+	if *reportCPIStackFlag {
+		r.ReportCPIStack = true
+	}
+
 	if *reportAll {
 		r.ReportInstCount = true
 		r.ReportCacheLatency = true
@@ -137,6 +173,7 @@ func (r *Runner) ParseFlag() *Runner {
 		r.ReportGMMUTransactionCount = true
 		r.ReportMMUTransactionCount = true
 		r.ReportSIMDBusyTime = true
+		r.ReportCPIStack = true
 		r.ReportL2TLBHitRate = true
 		r.ReportL2TLBLatency = true
 	}

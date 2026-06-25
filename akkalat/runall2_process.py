@@ -118,14 +118,38 @@ def create_output_dir():
 
 def experiment_command(exp):
     binary = os.path.join(ROOT_DIR, exp["target"], exp["target"])
-    metric_file_name = f"{exp_file_stem(exp)}_metrics"
-    return [
+    file_stem = exp_file_stem(exp)
+    metric_file_name = f"{file_stem}_metrics"
+    cmd = [
         binary,
         f'-benchmark={exp["benchmark"]}',
         *exp["common_flags"],
         *exp["flags"],
         f"-metric-file-name={metric_file_name}",
     ]
+    if exp.get("trace_sharing"):
+        cmd.extend([
+            "-trace-sharing",
+            f"-trace-sharing-file={file_stem}_sharing.csv.gz",
+            f'-trace-sharing-sample={exp["trace_sharing_sample"]}',
+            f'-trace-sharing-max-records={exp["trace_sharing_max_records"]}',
+        ])
+    if exp.get("trace_memory_path"):
+        cmd.extend([
+            "-trace-memory-path",
+            f"-trace-memory-path-file={file_stem}_memory_path",
+            (
+                "-trace-memory-path-warmup-accesses="
+                f'{exp["trace_memory_path_warmup_accesses"]}'
+            ),
+            (
+                "-trace-memory-path-max-records="
+                f'{exp["trace_memory_path_max_records"]}'
+            ),
+        ])
+        if exp.get("trace_memory_path_exit_on_complete"):
+            cmd.append("-trace-memory-path-exit-on-complete")
+    return cmd
 
 
 def run_exp(exp):

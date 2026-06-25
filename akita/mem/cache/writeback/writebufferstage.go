@@ -136,6 +136,12 @@ func (wb *writeBufferStage) fetchFromBottom(
 		WithInfo(accessReqInfo(trans.accessReq())).
 		Build()
 	wb.cache.bottomSender.Send(read)
+	memtrace.RecordMemoryPathL2WriteBufferSend(
+		wb.cache.Name(),
+		accessReqInfo(trans.accessReq()),
+		read.Meta().ID,
+		now,
+	)
 
 	trans.fetchReadReq = read
 	wb.inflightFetch = append(wb.inflightFetch, trans)
@@ -301,6 +307,16 @@ func (wb *writeBufferStage) processDataReadyRsp(
 	trans.fetchedData = dataReady.Data
 	trans.action = bankWriteFetched
 	trans.mshrEntry.Data = dataReady.Data
+	memtrace.RecordMemoryPathL2DRAMResponse(
+		wb.cache.Name(),
+		accessReqInfo(trans.accessReq()),
+		trans.fetchReadReq.Meta().ID,
+		dataReady.Meta().ID,
+		dataReady.Meta().SendTime,
+		now,
+		dataReady.Meta().Src,
+		dataReady.Meta().Dst,
+	)
 	wb.combineData(trans.mshrEntry)
 	memtrace.RecordL2LocalDRAMFill(
 		wb.cache.Name(),

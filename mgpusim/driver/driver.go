@@ -444,6 +444,11 @@ func (d *Driver) distributeWGToGPUs(
 	numWGZ := (cmd.PacketArray[0].GridSizeZ-1)/uint32(cmd.PacketArray[0].WorkgroupSizeZ) + 1
 	totalWGCount := int(numWGX * numWGY * numWGZ)
 	wgPerCU := (totalWGCount-1)/totalCUCount + 1
+	workgroupSize := int(cmd.PacketArray[0].WorkgroupSizeX) *
+		int(cmd.PacketArray[0].WorkgroupSizeY) *
+		int(cmd.PacketArray[0].WorkgroupSizeZ)
+	wfPerWG := (workgroupSize + 63) / 64
+	totalWFCount := totalWGCount * wfPerWG
 
 	for i, devID := range actualGPUs {
 		cuCount := d.devices[devID].Properties.CUCount
@@ -462,6 +467,14 @@ func (d *Driver) distributeWGToGPUs(
 
 	// fmt.Sprintln("total WG: %d WG Per CU %d\n", totalWGCount, wgPerCU)
 	fmt.Printf("total WG: %d WG Per CU %d\n", totalWGCount, wgPerCU)
+	fmt.Printf(
+		"total WF: %d WF Per WG %d WG Size %d WF Per CU %.2f WF Per GPU %.2f Active GPUs %d\n",
+		totalWFCount,
+		wfPerWG,
+		workgroupSize,
+		float64(totalWFCount)/float64(totalCUCount),
+		float64(totalWFCount)/float64(len(actualGPUs)),
+		len(actualGPUs))
 
 	return wgDist
 }

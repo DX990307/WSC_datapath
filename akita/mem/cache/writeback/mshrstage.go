@@ -3,6 +3,7 @@ package writeback
 import (
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 )
@@ -82,6 +83,16 @@ func (s *mshrStage) respondRead(
 		Build()
 	s.cache.topSender.Send(dataReady)
 
+	memtrace.RecordMemoryPathCacheComplete(
+		s.cache.Name(),
+		read.ID,
+		accessReqInfo(read),
+		read.GetAddress(),
+		read.GetByteSize(),
+		uint64(read.GetPID()),
+		accessReqOp(read),
+		now,
+	)
 	tracing.TraceReqComplete(read, s.cache)
 }
 
@@ -97,6 +108,16 @@ func (s *mshrStage) respondWrite(
 		Build()
 	s.cache.topSender.Send(writeDoneRsp)
 
+	memtrace.RecordMemoryPathCacheComplete(
+		s.cache.Name(),
+		write.ID,
+		accessReqInfo(write),
+		write.GetAddress(),
+		write.GetByteSize(),
+		uint64(write.GetPID()),
+		accessReqOp(write),
+		now,
+	)
 	tracing.TraceReqComplete(write, s.cache)
 }
 

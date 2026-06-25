@@ -102,6 +102,16 @@ func RecordL2AccessSource(
 		return
 	}
 	sourceBase = normalizeSourceBase(sourceBase)
+	RecordMemoryPathDataSource(
+		cacheName,
+		info,
+		address,
+		bytes,
+		latency,
+		receiveTime,
+		op,
+		sourceBase,
+	)
 
 	globalL2SourceStats.Lock()
 	defer globalL2SourceStats.Unlock()
@@ -115,6 +125,10 @@ func RecordL2AccessSource(
 		cacheName, accessInfo, address, op, sourceBase)
 	counter := globalL2SourceStats.dataSourceCounter(key)
 	counter.add(bytes, latency, receiveTime)
+
+	pageKey := globalL2SourceStats.pageSourceKey(key)
+	pageCounter := globalL2SourceStats.pageSourceCounter(pageKey)
+	pageCounter.add(bytes, latency, receiveTime)
 
 	if accessInfo.IsRemote && sourceBase == sourceBaseDRAM {
 		globalL2SourceStats.recordRemoteFillLocked(
@@ -154,6 +168,15 @@ func (s *l2SourceStats) dataSourceCounter(key l2DataSourceKey) *l2SourceCounter 
 	return counter
 }
 
+func (s *l2SourceStats) pageSourceCounter(key l2PageSourceKey) *l2SourceCounter {
+	counter := s.pageSource[key]
+	if counter == nil {
+		counter = &l2SourceCounter{}
+		s.pageSource[key] = counter
+	}
+	return counter
+}
+
 func (s *l2SourceStats) dataSourceKey(
 	cacheName string,
 	info L2AccessInfo,
@@ -175,6 +198,19 @@ func (s *l2SourceStats) dataSourceKey(
 		vaddr:        vaddr,
 		hasPAddr:     true,
 		paddr:        address,
+	}
+}
+
+func (s *l2SourceStats) pageSourceKey(
+	key l2DataSourceKey,
+) l2PageSourceKey {
+	return l2PageSourceKey{
+		source:       key.source,
+		requesterGPM: key.requesterGPM,
+		providerGPM:  key.providerGPM,
+		hops:         key.hops,
+		op:           key.op,
+		pagePAddr:    pageBase(key.paddr),
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
+	"github.com/sarchlab/akita/v3/sim"
 )
 
 type bankActionType int
@@ -33,6 +34,8 @@ type transaction struct {
 
 	fetchAndWrite bool
 	done          bool
+	startTime     sim.VTimeInSec
+	remoteBottom  bool
 }
 
 func (t *transaction) Address() uint64 {
@@ -47,4 +50,36 @@ func (t *transaction) PID() vm.PID {
 		return t.read.PID
 	}
 	return t.write.PID
+}
+
+func (t *transaction) accessReq() mem.AccessReq {
+	if t.read != nil {
+		return t.read
+	}
+	if t.write != nil {
+		return t.write
+	}
+	return nil
+}
+
+func accessReqInfo(req mem.AccessReq) interface{} {
+	switch req := req.(type) {
+	case *mem.ReadReq:
+		return req.Info
+	case *mem.WriteReq:
+		return req.Info
+	default:
+		return nil
+	}
+}
+
+func accessReqOp(req mem.AccessReq) string {
+	switch req.(type) {
+	case *mem.ReadReq:
+		return "read"
+	case *mem.WriteReq:
+		return "write"
+	default:
+		return "unknown"
+	}
 }

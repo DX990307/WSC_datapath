@@ -13,6 +13,16 @@ func (c *l2SourceCounter) add(
 	c.accesses++
 	c.bytes += bytes
 	c.latencySumNS += latencyNS
+
+	timeNS := timeToNS(receiveTime)
+	if timeNS > 0 {
+		if c.firstTimeNS == 0 || timeNS < c.firstTimeNS {
+			c.firstTimeNS = timeNS
+		}
+		if timeNS > c.lastTimeNS {
+			c.lastTimeNS = timeNS
+		}
+	}
 }
 
 func (c *l2SourceCounter) avgLatencyNS() uint64 {

@@ -3,6 +3,7 @@ package writearound
 import (
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/pipelining"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
@@ -35,6 +36,8 @@ func (d *directory) Tick(now sim.VTimeInSec) (madeProgress bool) {
 		}
 
 		trans := item.(*transaction)
+		memtrace.RecordMemoryPathL1VDirStart(
+			d.cache.Name(), trans.id, now)
 		d.pipeline.Accept(now, dirPipelineItem{trans})
 		d.cache.dirBuf.Pop()
 
@@ -91,8 +94,10 @@ func (d *directory) processMSHRHit(
 
 	if trans.read != nil {
 		tracing.AddTaskStep(trans.id, d.cache, "read-mshr-hit")
+		d.recordMemoryPathCacheResult(now, trans, "read-mshr-hit")
 	} else {
 		tracing.AddTaskStep(trans.id, d.cache, "write-mshr-hit")
+		d.recordMemoryPathCacheResult(now, trans, "write-mshr-hit")
 	}
 
 	d.buf.Pop()
@@ -122,6 +127,7 @@ func (d *directory) processReadHit(
 
 	d.buf.Pop()
 	tracing.AddTaskStep(trans.id, d.cache, "read-hit")
+	d.recordMemoryPathCacheResult(now, trans, "read-hit")
 
 	return true
 }
@@ -150,6 +156,7 @@ func (d *directory) processReadMiss(
 
 	d.buf.Pop()
 	tracing.AddTaskStep(trans.id, d.cache, "read-miss")
+	d.recordMemoryPathCacheResult(now, trans, "read-miss")
 
 	return true
 }
@@ -187,6 +194,7 @@ func (d *directory) writeMiss(
 ) bool {
 	if ok := d.writeBottom(now, trans); ok {
 		tracing.AddTaskStep(trans.id, d.cache, "write-miss")
+		d.recordMemoryPathCacheResult(now, trans, "write-miss")
 		d.buf.Pop()
 		return true
 	}
@@ -197,15 +205,20 @@ func (d *directory) writeMiss(
 func (d *directory) writeBottom(now sim.VTimeInSec, trans *transaction) bool {
 	write := trans.write
 	addr := write.Address
+	bottomModule := d.cache.lowModuleFinder.Find(addr)
+	if !d.cache.canSendToBottomModule(bottomModule) {
+		return false
+	}
 
 	writeToBottom := mem.WriteReqBuilder{}.
 		WithSendTime(now).
 		WithSrc(d.cache.bottomPort).
-		WithDst(d.cache.lowModuleFinder.Find(addr)).
+		WithDst(bottomModule).
 		WithAddress(addr).
 		WithPID(write.PID).
 		WithData(write.Data).
 		WithDirtyMask(write.DirtyMask).
+		WithInfo(d.memoryPathInfo(trans)).
 		Build()
 
 	err := d.cache.bottomPort.Send(writeToBottom)
@@ -214,6 +227,7 @@ func (d *directory) writeBottom(now sim.VTimeInSec, trans *transaction) bool {
 	}
 
 	trans.writeToBottom = writeToBottom
+	d.cache.trackBottomTransaction(trans, bottomModule)
 
 	tracing.TraceReqInitiate(writeToBottom, d.cache, trans.id)
 
@@ -255,6 +269,7 @@ func (d *directory) processWriteHit(
 	bankBuf.Push(trans)
 
 	tracing.AddTaskStep(trans.id, d.cache, "write-hit")
+	d.recordMemoryPathCacheResult(now, trans, "write-hit")
 	d.buf.Pop()
 
 	return true
@@ -271,6 +286,10 @@ func (d *directory) fetchFromBottom(
 	cacheLineID := addr / blockSize * blockSize
 
 	bottomModule := d.cache.lowModuleFinder.Find(cacheLineID)
+	if !d.cache.canSendToBottomModule(bottomModule) {
+		return false
+	}
+
 	readToBottom := mem.ReadReqBuilder{}.
 		WithSendTime(now).
 		WithSrc(d.cache.bottomPort).
@@ -278,6 +297,7 @@ func (d *directory) fetchFromBottom(
 		WithAddress(cacheLineID).
 		WithPID(pid).
 		WithByteSize(blockSize).
+		WithInfo(d.memoryPathInfo(trans)).
 		Build()
 	err := d.cache.bottomPort.Send(readToBottom)
 	if err != nil {
@@ -287,6 +307,7 @@ func (d *directory) fetchFromBottom(
 	tracing.TraceReqInitiate(readToBottom, d.cache, trans.id)
 	trans.readToBottom = readToBottom
 	trans.block = victim
+	d.cache.trackBottomTransaction(trans, bottomModule)
 
 	mshrEntry := d.cache.mshr.Add(pid, cacheLineID)
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
@@ -307,4 +328,33 @@ func (d *directory) getBankBuf(block *cache.Block) sim.Buffer {
 	blockID := block.SetID*numWaysPerSet + block.WayID
 	bankID := blockID % len(d.cache.bankBufs)
 	return d.cache.bankBufs[bankID]
+}
+
+func (d *directory) memoryPathInfo(trans *transaction) interface{} {
+	if !memtrace.MemoryPathTraceEnabled() {
+		return nil
+	}
+	return memtrace.WithMemoryPathInfo(nil, trans.id, "", "", "")
+}
+
+func (d *directory) recordMemoryPathCacheResult(
+	now sim.VTimeInSec,
+	trans *transaction,
+	result string,
+) {
+	req := trans.accessReq()
+	if req == nil {
+		return
+	}
+	memtrace.RecordMemoryPathCacheResult(
+		d.cache.Name(),
+		trans.id,
+		nil,
+		trans.Address(),
+		req.GetByteSize(),
+		uint64(trans.PID()),
+		accessReqOp(req),
+		result,
+		now,
+	)
 }

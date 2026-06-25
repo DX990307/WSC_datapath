@@ -2,6 +2,7 @@ package writeback
 
 import (
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 )
@@ -37,6 +38,27 @@ func (p *topParser) Tick(now sim.VTimeInSec) bool {
 
 	p.cache.inFlightTransactions = append(p.cache.inFlightTransactions, trans)
 
+	if accessReq := trans.accessReq(); accessReq != nil {
+		memtrace.RecordMemoryPathL2TopReceive(
+			p.cache.Name(),
+			accessReq.Meta().ID,
+			accessReqInfo(accessReq),
+			accessReq.Meta().SendTime,
+			now,
+			accessReq.Meta().Src,
+			accessReq.Meta().Dst,
+		)
+		memtrace.RecordMemoryPathCacheStart(
+			p.cache.Name(),
+			accessReq.Meta().ID,
+			accessReqInfo(accessReq),
+			accessReq.GetAddress(),
+			accessReq.GetByteSize(),
+			uint64(accessReq.GetPID()),
+			accessReqOp(accessReq),
+			now,
+		)
+	}
 	tracing.TraceReqReceive(req, p.cache)
 
 	p.cache.topPort.Retrieve(now)
