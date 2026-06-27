@@ -12,6 +12,7 @@ from statistics import mean
 L1V_TRACE_FILE_SUFFIX = "_memory_path_l1v_path_summary.csv"
 L1V_SUMMARY_SUFFIX = "_l1v_path_summary.csv"
 MEMORY_PATH_SUFFIX = "_memory_path"
+METRICS_SUFFIX = "_metrics.csv"
 
 REQUEST_STAGE_GROUPS = {
     "l1v_mshr_wait_ns": ["l1v_mshr_wait_ns"],
@@ -191,8 +192,29 @@ def find_l1v_traces(result_dir: Path) -> dict[str, Path]:
     }
 
 
+def metric_key(path: Path) -> str:
+    name = path.name
+    if name.endswith(METRICS_SUFFIX):
+        return name[: -len(METRICS_SUFFIX)]
+    return path.stem
+
+
+def find_metrics(result_dir: Path) -> dict[str, Path]:
+    return {
+        metric_key(path): path
+        for path in sorted(result_dir.glob(f"*{METRICS_SUFFIX}"))
+    }
+
+
 def driver_metric(trace_path: Path, what: str) -> float | str:
     for row in read_csv(metrics_path(trace_path)):
+        if row.get("where") == "Driver" and row.get("what") == what:
+            return to_float(row.get("value"))
+    return ""
+
+
+def driver_metric_from_metrics(metrics_csv: Path, what: str) -> float | str:
+    for row in read_csv(metrics_csv):
         if row.get("where") == "Driver" and row.get("what") == what:
             return to_float(row.get("value"))
     return ""
@@ -320,6 +342,49 @@ def comparison_row(
     return row
 
 
+def metrics_only_row(
+    workload: str,
+    baseline_path: Path,
+    experiment_path: Path,
+) -> dict[str, object]:
+    baseline_total_time = driver_metric_from_metrics(baseline_path, "total_time")
+    experiment_total_time = driver_metric_from_metrics(experiment_path, "total_time")
+    row: dict[str, object] = {
+        "workload": workload,
+        "baseline_requests": "",
+        "experiment_requests": "",
+        "baseline_remote_ratio": "",
+        "experiment_remote_ratio": "",
+        "baseline_total_time_s": baseline_total_time,
+        "experiment_total_time_s": experiment_total_time,
+        "total_time_speedup": speedup(
+            to_float(baseline_total_time),
+            to_float(experiment_total_time),
+        ),
+        "baseline_total_wg_count": driver_metric_from_metrics(
+            baseline_path, "total_wg_count"
+        ),
+        "experiment_total_wg_count": driver_metric_from_metrics(
+            experiment_path, "total_wg_count"
+        ),
+        "baseline_max_wg_limit": driver_metric_from_metrics(
+            baseline_path, "max_wg_limit"
+        ),
+        "experiment_max_wg_limit": driver_metric_from_metrics(
+            experiment_path, "max_wg_limit"
+        ),
+        "baseline_max_wg_reached": driver_metric_from_metrics(
+            baseline_path, "max_wg_reached"
+        ),
+        "experiment_max_wg_reached": driver_metric_from_metrics(
+            experiment_path, "max_wg_reached"
+        ),
+    }
+    for field in SUMMARY_FIELDS:
+        row.setdefault(field, "")
+    return row
+
+
 def stage_rows(
     workload: str,
     baseline_path: Path,
@@ -400,11 +465,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline-dir", type=Path, required=True)
     parser.add_argument("--experiment-dir", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument(
+        "--metrics-only",
+        action="store_true",
+        help="Compare only Driver metrics when memory-path traces were not collected.",
+    )
     return parser
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    if args.metrics_only:
+        baseline_metrics = find_metrics(args.baseline_dir)
+        experiment_metrics = find_metrics(args.experiment_dir)
+        common_metrics = sorted(set(baseline_metrics) & set(experiment_metrics))
+        if not common_metrics:
+            raise SystemExit("no matching metrics found")
+
+        summary = [
+            metrics_only_row(
+                workload,
+                baseline_metrics[workload],
+                experiment_metrics[workload],
+            )
+            for workload in common_metrics
+        ]
+        write_csv(
+            args.out_dir / "m1_sim_datapath_comparison.csv",
+            SUMMARY_FIELDS,
+            summary,
+        )
+        write_csv(args.out_dir / "m1_sim_stage_comparison.csv", STAGE_FIELDS, [])
+        write_markdown_summary(args.out_dir / "m1_sim_evidence_summary.md", summary)
+        print(f"[m1] compared {len(common_metrics)} workloads from metrics")
+        print(f"[m1] wrote {args.out_dir / 'm1_sim_datapath_comparison.csv'}")
+        print(f"[m1] wrote {args.out_dir / 'm1_sim_stage_comparison.csv'}")
+        print(f"[m1] wrote {args.out_dir / 'm1_sim_evidence_summary.md'}")
+        return
+
     baseline = find_l1v_traces(args.baseline_dir)
     experiment = find_l1v_traces(args.experiment_dir)
     common = sorted(set(baseline) & set(experiment))

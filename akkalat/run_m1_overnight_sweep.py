@@ -22,6 +22,7 @@ from runall2_constants import ALL_BENCHMARKS, BENCHMARK_ALIASES
 ROOT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = ROOT_DIR.parent
 TRACE_SUFFIX = "_memory_path_l1v_path_summary.csv"
+METRICS_SUFFIX = "_metrics.csv"
 UNICODE_DASH_TRANSLATION = str.maketrans({
     "\u2013": "-",
     "\u2014": "-",
@@ -134,6 +135,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Seconds to wait between memory-gate checks.",
     )
     parser.add_argument("--timeout-minutes", type=float, default=0)
+    parser.add_argument(
+        "--no-trace-memory-path",
+        action="store_true",
+        help=(
+            "Do not collect memory-path trace CSVs. The sweep still records "
+            "simulator metrics and compares total runtime from *_metrics.csv."
+        ),
+    )
     parser.add_argument("--warmup-accesses", type=int, default=600000)
     parser.add_argument("--max-records", type=int, default=1000000)
     parser.add_argument("--max-wg", type=int, default=78600)
@@ -228,15 +237,18 @@ def runall_base_cmd(
         str(args.l1v_mshr_entries),
         "--l1v-max-concurrent-trans",
         str(args.l1v_max_concurrent_trans),
-        "--trace-memory-path",
-        "--trace-memory-path-warmup-accesses",
-        str(args.warmup_accesses),
-        "--trace-memory-path-max-records",
-        str(args.max_records),
     ]
+    if not args.no_trace_memory_path:
+        cmd += [
+            "--trace-memory-path",
+            "--trace-memory-path-warmup-accesses",
+            str(args.warmup_accesses),
+            "--trace-memory-path-max-records",
+            str(args.max_records),
+        ]
     if not args.enable_servers:
         cmd.append("--disable-servers")
-    if not args.run_until_max_wg:
+    if not args.no_trace_memory_path and not args.run_until_max_wg:
         cmd.append("--trace-memory-path-exit-on-complete")
     if args.sampled_warmups:
         cmd += ["--sampled-warmups", args.sampled_warmups]
@@ -285,8 +297,13 @@ def experiment_cmd(
     return cmd
 
 
-def compare_cmd(baseline_dir: Path, experiment_dir: Path, out_dir: Path) -> list[str]:
-    return [
+def compare_cmd(
+    baseline_dir: Path,
+    experiment_dir: Path,
+    out_dir: Path,
+    metrics_only: bool = False,
+) -> list[str]:
+    cmd = [
         sys.executable,
         str(ROOT_DIR / "compare_m1_sim_datapath.py"),
         "--baseline-dir",
@@ -296,6 +313,9 @@ def compare_cmd(baseline_dir: Path, experiment_dir: Path, out_dir: Path) -> list
         "--out-dir",
         str(out_dir),
     ]
+    if metrics_only:
+        cmd.append("--metrics-only")
+    return cmd
 
 
 def run_cmd(title: str, cmd: list[str], dry_run: bool) -> int:
@@ -312,6 +332,30 @@ def has_trace_output(path: Path) -> bool:
 
 def has_benchmark_trace_output(path: Path, benchmark: str) -> bool:
     return any(path.glob(f"baseline_{benchmark}_*{TRACE_SUFFIX}"))
+
+
+def has_metric_output(path: Path) -> bool:
+    return any(path.glob(f"*{METRICS_SUFFIX}"))
+
+
+def has_benchmark_metric_output(path: Path, benchmark: str) -> bool:
+    return any(path.glob(f"baseline_{benchmark}_*{METRICS_SUFFIX}"))
+
+
+def has_result_output(path: Path, args: argparse.Namespace) -> bool:
+    if args.no_trace_memory_path:
+        return has_metric_output(path)
+    return has_trace_output(path)
+
+
+def has_benchmark_result_output(
+    path: Path,
+    benchmark: str,
+    args: argparse.Namespace,
+) -> bool:
+    if args.no_trace_memory_path:
+        return has_benchmark_metric_output(path, benchmark)
+    return has_benchmark_trace_output(path, benchmark)
 
 
 def build_baseline_once(args: argparse.Namespace) -> int:
@@ -388,9 +432,9 @@ def maybe_run(
         print(f"\n=== {title} ===", flush=True)
         print(f"[m1] compare-only: assuming existing output in {out_dir}", flush=True)
         return 0
-    if args.resume and has_trace_output(out_dir):
+    if args.resume and has_result_output(out_dir, args):
         print(f"\n=== {title} ===", flush=True)
-        print(f"[m1] resume: found traces in {out_dir}; skipping run", flush=True)
+        print(f"[m1] resume: found results in {out_dir}; skipping run", flush=True)
         return 0
     return run_cmd(title, cmd, args.dry_run)
 
@@ -438,7 +482,11 @@ def build_global_jobs(
 
 
 def should_skip_job(args: argparse.Namespace, job: Job) -> bool:
-    return args.resume and has_benchmark_trace_output(job.out_dir, job.benchmark)
+    return args.resume and has_benchmark_result_output(
+        job.out_dir,
+        job.benchmark,
+        args,
+    )
 
 
 def run_job(
@@ -724,7 +772,12 @@ def main() -> int:
             exp_dir = output_root / spec.name
             ret = run_cmd(
                 f"{spec.name} datapath comparison",
-                compare_cmd(baseline_dir, exp_dir, output_root / "compare" / spec.name),
+                compare_cmd(
+                    baseline_dir,
+                    exp_dir,
+                    output_root / "compare" / spec.name,
+                    metrics_only=args.no_trace_memory_path,
+                ),
                 args.dry_run,
             )
             if ret != 0:
@@ -735,7 +788,7 @@ def main() -> int:
         return 0
 
     ret = maybe_run(
-        "baseline trace run",
+        "baseline metric run" if args.no_trace_memory_path else "baseline trace run",
         runall_base_cmd(args, baseline_dir),
         baseline_dir,
         args,
@@ -746,7 +799,11 @@ def main() -> int:
     for spec in specs:
         exp_dir = output_root / spec.name
         ret = maybe_run(
-            f"{spec.name} trace run",
+            (
+                f"{spec.name} metric run"
+                if args.no_trace_memory_path
+                else f"{spec.name} trace run"
+            ),
             experiment_cmd(args, spec, exp_dir),
             exp_dir,
             args,
@@ -759,7 +816,12 @@ def main() -> int:
 
         ret = run_cmd(
             f"{spec.name} datapath comparison",
-            compare_cmd(baseline_dir, exp_dir, output_root / "compare" / spec.name),
+            compare_cmd(
+                baseline_dir,
+                exp_dir,
+                output_root / "compare" / spec.name,
+                metrics_only=args.no_trace_memory_path,
+            ),
             args.dry_run,
         )
         if ret != 0:
