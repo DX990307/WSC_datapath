@@ -51,6 +51,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-accesses", type=int, default=600000)
     parser.add_argument("--max-records", type=int, default=1000000)
     parser.add_argument("--max-wg", type=int, default=78600)
+    parser.add_argument(
+        "--run-until-max-wg",
+        action="store_true",
+        help=(
+            "Do not stop when the memory-path trace reaches --max-records; "
+            "let each benchmark run until --max-wg or natural completion."
+        ),
+    )
     parser.add_argument("--switch-latency", type=int, default=32)
     parser.add_argument("--mmutlb-lookup-latency", type=int, default=80)
     parser.add_argument("--l1v-mshr-entries", type=int, default=160)
@@ -116,9 +124,10 @@ def runall_base_cmd(args: argparse.Namespace, out_dir: Path) -> list[str]:
         str(args.warmup_accesses),
         "--trace-memory-path-max-records",
         str(args.max_records),
-        "--trace-memory-path-exit-on-complete",
         "--disable-servers",
     ]
+    if not args.run_until_max_wg:
+        cmd.append("--trace-memory-path-exit-on-complete")
     if args.sampled_warmups:
         cmd += ["--sampled-warmups", args.sampled_warmups]
     if args.sampled_granularities:
