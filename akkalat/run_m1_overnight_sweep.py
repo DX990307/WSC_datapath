@@ -55,6 +55,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mmutlb-lookup-latency", type=int, default=80)
     parser.add_argument("--l1v-mshr-entries", type=int, default=160)
     parser.add_argument("--l1v-max-concurrent-trans", type=int, default=160)
+    parser.add_argument("--sampled-warmups", default="")
+    parser.add_argument("--sampled-granularities", default="")
+    parser.add_argument("--sampled-threshold", type=float, default=0)
+    parser.add_argument("--balanced-sweep", action="store_true")
+    parser.add_argument("--sampled-sweep", action="store_true")
+    parser.add_argument("--photon-debug", action="store_true")
+    parser.add_argument("--photon-verbose", action="store_true")
     parser.add_argument("--hlq-windows", default="16,32,64,128")
     parser.add_argument("--hlq-ages", default="100")
     parser.add_argument("--fifo-windows", default="64")
@@ -112,6 +119,20 @@ def runall_base_cmd(args: argparse.Namespace, out_dir: Path) -> list[str]:
         "--trace-memory-path-exit-on-complete",
         "--disable-servers",
     ]
+    if args.sampled_warmups:
+        cmd += ["--sampled-warmups", args.sampled_warmups]
+    if args.sampled_granularities:
+        cmd += ["--sampled-granularities", args.sampled_granularities]
+    if args.sampled_threshold > 0:
+        cmd += ["--sampled-threshold", str(args.sampled_threshold)]
+    if args.balanced_sweep:
+        cmd.append("--balanced-sweep")
+    if args.sampled_sweep:
+        cmd.append("--sampled-sweep")
+    if args.photon_debug:
+        cmd.append("--photon-debug")
+    if args.photon_verbose:
+        cmd.append("--photon-verbose")
     if args.timeout_minutes > 0:
         cmd += ["--timeout-minutes", str(args.timeout_minutes)]
     return cmd
