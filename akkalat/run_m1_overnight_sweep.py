@@ -492,19 +492,36 @@ def should_skip_job(args: argparse.Namespace, job: Job) -> bool:
 def run_job(
     job: Job,
     dry_run: bool,
-    min_available_mem_gb: float,
-    memory_check_interval_sec: float,
 ) -> tuple[str, int]:
     print(f"\n=== {job.title} ===", flush=True)
     print(shlex.join(job.cmd), flush=True)
     if dry_run:
         return job.title, 0
+    return job.title, subprocess.call(job.cmd, cwd=REPO_ROOT)
+
+
+def submit_global_job(
+    executor: concurrent.futures.ThreadPoolExecutor,
+    job: Job,
+    args: argparse.Namespace,
+) -> concurrent.futures.Future:
     wait_for_memory_gate(
         job.title,
-        min_available_mem_gb,
-        memory_check_interval_sec,
+        args.min_available_mem_gb,
+        args.memory_check_interval_sec,
     )
-    return job.title, subprocess.call(job.cmd, cwd=REPO_ROOT)
+    return executor.submit(run_job, job, False)
+
+
+def pause_after_memory_gated_launch(args: argparse.Namespace) -> None:
+    if args.min_available_mem_gb <= 0:
+        return
+    pause = max(args.memory_check_interval_sec, 1.0)
+    print(
+        f"[m1] memory gate: waiting {pause:.0f}s after launch before filling next job",
+        flush=True,
+    )
+    time.sleep(pause)
 
 
 def run_global_jobs(
@@ -541,31 +558,38 @@ def run_global_jobs(
         )
     if args.dry_run:
         for job in jobs:
-            run_job(
-                job,
-                args.dry_run,
-                args.min_available_mem_gb,
-                args.memory_check_interval_sec,
-            )
+            run_job(job, args.dry_run)
         return 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [
-            executor.submit(
-                run_job,
-                job,
-                False,
-                args.min_available_mem_gb,
-                args.memory_check_interval_sec,
-            )
-            for job in jobs
-        ]
+        futures: dict[concurrent.futures.Future, str] = {}
         failed = False
-        for future in concurrent.futures.as_completed(futures):
-            title, ret = future.result()
-            print(f"[m1] finished {title}: returncode={ret}", flush=True)
-            if ret != 0:
-                failed = True
+
+        next_job = 0
+
+        def fill_workers() -> None:
+            nonlocal next_job
+            while next_job < len(jobs) and len(futures) < workers:
+                job = jobs[next_job]
+                next_job += 1
+                future = submit_global_job(executor, job, args)
+                futures[future] = job.title
+                if next_job < len(jobs) and len(futures) < workers:
+                    pause_after_memory_gated_launch(args)
+
+        fill_workers()
+        while futures:
+            done, _ = concurrent.futures.wait(
+                futures,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            for future in done:
+                futures.pop(future)
+                title, ret = future.result()
+                print(f"[m1] finished {title}: returncode={ret}", flush=True)
+                if ret != 0:
+                    failed = True
+            fill_workers()
         return 1 if failed else 0
 
 
