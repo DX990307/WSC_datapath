@@ -47,6 +47,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-records", type=int, default=1000000)
     parser.add_argument("--max-wg", type=int, default=78600)
     parser.add_argument(
+        "--max-wg-multiplier",
+        type=int,
+        default=1,
+        help=(
+            "Multiply --max-wg before forwarding to runall2.py. "
+            "Use 48 to interpret --max-wg as a per-active-GPU target."
+        ),
+    )
+    parser.add_argument(
         "--run-until-max-wg",
         action="store_true",
         help=(
@@ -80,6 +89,7 @@ def default_output_root() -> Path:
 
 
 def runall_base_cmd(args: argparse.Namespace, out_dir: Path) -> list[str]:
+    forwarded_max_wg = args.max_wg * args.max_wg_multiplier
     cmd = [
         sys.executable,
         str(ROOT_DIR / "runall2.py"),
@@ -96,7 +106,7 @@ def runall_base_cmd(args: argparse.Namespace, out_dir: Path) -> list[str]:
         "--mmutlb-lookup-latency",
         str(args.mmutlb_lookup_latency),
         "--max-wg",
-        str(args.max_wg),
+        str(forwarded_max_wg),
         "--l1v-mshr-entries",
         str(args.l1v_mshr_entries),
         "--l1v-max-concurrent-trans",

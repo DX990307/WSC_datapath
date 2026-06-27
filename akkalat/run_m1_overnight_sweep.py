@@ -71,6 +71,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-records", type=int, default=1000000)
     parser.add_argument("--max-wg", type=int, default=78600)
     parser.add_argument(
+        "--max-wg-multiplier",
+        type=int,
+        default=1,
+        help=(
+            "Multiply --max-wg before forwarding to runall2.py. "
+            "Use 48 to interpret --max-wg as a per-active-GPU target."
+        ),
+    )
+    parser.add_argument(
         "--run-until-max-wg",
         action="store_true",
         help=(
@@ -124,6 +133,7 @@ def experiments(args: argparse.Namespace) -> list[Experiment]:
 
 
 def runall_base_cmd(args: argparse.Namespace, out_dir: Path) -> list[str]:
+    forwarded_max_wg = args.max_wg * args.max_wg_multiplier
     cmd = [
         sys.executable,
         str(ROOT_DIR / "runall2.py"),
@@ -140,7 +150,7 @@ def runall_base_cmd(args: argparse.Namespace, out_dir: Path) -> list[str]:
         "--mmutlb-lookup-latency",
         str(args.mmutlb_lookup_latency),
         "--max-wg",
-        str(args.max_wg),
+        str(forwarded_max_wg),
         "--l1v-mshr-entries",
         str(args.l1v_mshr_entries),
         "--l1v-max-concurrent-trans",
@@ -270,6 +280,12 @@ def geomean(values: list[float]) -> float | str:
     return exp(sum(log(value) for value in positive) / len(positive))
 
 
+def minimum(values: list[float]) -> float | str:
+    if not values:
+        return ""
+    return min(values)
+
+
 def numeric_values(rows: list[dict[str, object]], field: str) -> list[float]:
     values = []
     for row in rows:
@@ -314,6 +330,8 @@ def aggregate_results(
             tagged_rows,
             "remote_avg_total_l1v_path_latency_reduction_pct",
         )
+        total_wg_counts = numeric_values(tagged_rows, "experiment_total_wg_count")
+        max_wg_reached = numeric_values(tagged_rows, "experiment_max_wg_reached")
         summary_rows.append(
             {
                 "experiment": spec.name,
@@ -326,6 +344,9 @@ def aggregate_results(
                 "mean_avg_l1v_path_reduction_pct": mean(avg_l1v_reductions),
                 "mean_p95_l1v_path_reduction_pct": mean(p95_l1v_reductions),
                 "mean_remote_l1v_path_reduction_pct": mean(remote_l1v_reductions),
+                "mean_experiment_total_wg_count": mean(total_wg_counts),
+                "min_experiment_total_wg_count": minimum(total_wg_counts),
+                "workloads_reached_max_wg": sum(1 for value in max_wg_reached if value >= 1),
             }
         )
 
@@ -345,6 +366,9 @@ def aggregate_results(
         "mean_avg_l1v_path_reduction_pct",
         "mean_p95_l1v_path_reduction_pct",
         "mean_remote_l1v_path_reduction_pct",
+        "mean_experiment_total_wg_count",
+        "min_experiment_total_wg_count",
+        "workloads_reached_max_wg",
     ]
     write_csv(compare_root / "m1_overnight_config_summary.csv", summary_fields, summary_rows)
     write_markdown_summary(compare_root / "m1_overnight_config_summary.md", summary_rows)
@@ -373,13 +397,14 @@ def write_markdown_summary(
         f.write(
             "| experiment | workloads | geomean speedup | mean speedup | "
             "mean avg L1V reduction | mean p95 L1V reduction | "
-            "mean remote L1V reduction |\n"
+            "mean remote L1V reduction | mean WG count | reached max-wg |\n"
         )
-        f.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+        f.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
         for row in ordered:
             f.write(
                 "| {experiment} | {workloads} | {geomean} | {mean_speedup} | "
-                "{avg_l1v} | {p95_l1v} | {remote_l1v} |\n".format(
+                "{avg_l1v} | {p95_l1v} | {remote_l1v} | {mean_wg} | "
+                "{reached} |\n".format(
                     experiment=row["experiment"],
                     workloads=row["workloads"],
                     geomean=fmt_number(row["geomean_total_time_speedup"]),
@@ -393,6 +418,8 @@ def write_markdown_summary(
                     remote_l1v=fmt_number(
                         row["mean_remote_l1v_path_reduction_pct"], "%"
                     ),
+                    mean_wg=fmt_number(row["mean_experiment_total_wg_count"]),
+                    reached=row["workloads_reached_max_wg"],
                 )
             )
 

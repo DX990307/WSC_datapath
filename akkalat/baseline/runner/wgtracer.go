@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"fmt"
+
 	"github.com/sarchlab/akita/v3/tracing"
 	"github.com/tebeka/atexit"
 )
@@ -73,7 +75,8 @@ func (t *wgTracer) EndTask(task tracing.Task) {
 	t.count++
 
 	if t.maxCount > 0 && t.count >= t.maxCount {
-		// fmt.Printf("Reached max instruction count %d, exiting...\n", t.maxCount)
+		fmt.Printf("[Runner] reached max-wg=%d observed_wg=%d\n",
+			t.maxCount, t.count)
 		atexit.Exit(0)
 	}
 }

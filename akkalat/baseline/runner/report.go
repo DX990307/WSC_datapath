@@ -10,6 +10,7 @@ import (
 func (r *Runner) reportStats() {
 	r.reportExecutionTime()
 	r.reportInstCount()
+	r.reportWGCount()
 	r.reportCPIStack()
 	r.reportCacheLatency()
 	r.reportRDMALatency()
@@ -60,6 +61,31 @@ func (r *Runner) reportInstCount() {
 
 		r.metricsCollector.Collect(
 			t.cu.Name(), "cu_CPI", numCycle/float64(t.tracer.count))
+	}
+}
+
+func (r *Runner) reportWGCount() {
+	var total uint64
+	for _, t := range r.wgCountTracers {
+		r.metricsCollector.Collect(
+			t.cu.Name(), "cu_wg_count", float64(t.tracer.count))
+		total += t.tracer.count
+	}
+	if r.maxWGStopper != nil && r.maxWGStopper.count > total {
+		total = r.maxWGStopper.count
+	}
+
+	r.metricsCollector.Collect(
+		r.platform.Driver.Name(), "total_wg_count", float64(total))
+	if *maxWGCount > 0 {
+		r.metricsCollector.Collect(
+			r.platform.Driver.Name(), "max_wg_limit", float64(*maxWGCount))
+		reached := 0.0
+		if total >= *maxWGCount {
+			reached = 1.0
+		}
+		r.metricsCollector.Collect(
+			r.platform.Driver.Name(), "max_wg_reached", reached)
 	}
 }
 

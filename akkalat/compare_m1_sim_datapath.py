@@ -58,6 +58,12 @@ SUMMARY_FIELDS = [
     "baseline_total_time_s",
     "experiment_total_time_s",
     "total_time_speedup",
+    "baseline_total_wg_count",
+    "experiment_total_wg_count",
+    "baseline_max_wg_limit",
+    "experiment_max_wg_limit",
+    "baseline_max_wg_reached",
+    "experiment_max_wg_reached",
     "baseline_avg_total_l1v_path_latency_ns",
     "experiment_avg_total_l1v_path_latency_ns",
     "avg_total_l1v_path_latency_reduction_pct",
@@ -185,11 +191,15 @@ def find_l1v_traces(result_dir: Path) -> dict[str, Path]:
     }
 
 
-def driver_total_time(trace_path: Path) -> float | str:
+def driver_metric(trace_path: Path, what: str) -> float | str:
     for row in read_csv(metrics_path(trace_path)):
-        if row.get("where") == "Driver" and row.get("what") == "total_time":
+        if row.get("where") == "Driver" and row.get("what") == what:
             return to_float(row.get("value"))
     return ""
+
+
+def driver_total_time(trace_path: Path) -> float | str:
+    return driver_metric(trace_path, "total_time")
 
 
 def request_values(rows: list[dict[str, str]], field: str) -> list[float]:
@@ -220,6 +230,9 @@ def request_stats(trace_path: Path) -> dict[str, object]:
         "remote_avg_total_l1v_path_latency_ns": avg(remote_latencies),
         "local_avg_total_l1v_path_latency_ns": avg(local_latencies),
         "total_time_s": driver_total_time(trace_path),
+        "total_wg_count": driver_metric(trace_path, "total_wg_count"),
+        "max_wg_limit": driver_metric(trace_path, "max_wg_limit"),
+        "max_wg_reached": driver_metric(trace_path, "max_wg_reached"),
     }
     for metric, fields in REQUEST_STAGE_GROUPS.items():
         stats[f"avg_{metric}"] = request_group_avg(rows, fields)
@@ -246,6 +259,12 @@ def comparison_row(
             to_float(baseline["total_time_s"]),
             to_float(experiment["total_time_s"]),
         ),
+        "baseline_total_wg_count": baseline["total_wg_count"],
+        "experiment_total_wg_count": experiment["total_wg_count"],
+        "baseline_max_wg_limit": baseline["max_wg_limit"],
+        "experiment_max_wg_limit": experiment["max_wg_limit"],
+        "baseline_max_wg_reached": baseline["max_wg_reached"],
+        "experiment_max_wg_reached": experiment["max_wg_reached"],
         "baseline_avg_total_l1v_path_latency_ns": baseline[
             "avg_total_l1v_path_latency_ns"
         ],
