@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 from dataclasses import dataclass
 from datetime import datetime
 from math import exp, log
+import os
 from pathlib import Path
 import shlex
 import subprocess
 import sys
+
+from runall2_constants import ALL_BENCHMARKS, BENCHMARK_ALIASES
 
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -49,10 +53,47 @@ class Experiment:
         return f"{self.policy}_w{self.window}_age{self.max_age_ns}"
 
 
+@dataclass(frozen=True)
+class Job:
+    title: str
+    benchmark: str
+    out_dir: Path
+    cmd: list[str]
+
+
+def parse_csv(text: str) -> list[str]:
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
 def parse_int_csv(text: str) -> list[int]:
     if text.strip() == "":
         return []
     return [int(item.strip()) for item in text.split(",") if item.strip()]
+
+
+def unique_preserving_order(items: list[str]) -> list[str]:
+    seen = set()
+    unique = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return unique
+
+
+def expand_benchmarks(selection: str) -> list[str]:
+    expanded = []
+    for item in parse_csv(selection):
+        if item in BENCHMARK_ALIASES:
+            expanded += BENCHMARK_ALIASES[item]
+        else:
+            expanded.append(item)
+    expanded = unique_preserving_order(expanded)
+    unknown = sorted(set(expanded) - set(ALL_BENCHMARKS))
+    if unknown:
+        raise ValueError(f"unknown benchmarks: {unknown}")
+    return expanded
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -66,6 +107,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configs", default="baseline")
     parser.add_argument("--output-root", type=Path, default=None)
     parser.add_argument("--max-workers", type=int, default=1)
+    parser.add_argument(
+        "--schedule",
+        choices=("by-config", "global"),
+        default="by-config",
+        help=(
+            "by-config runs one full arm at a time. global schedules each "
+            "(benchmark, arm) as an independent job and removes config-level barriers."
+        ),
+    )
     parser.add_argument("--timeout-minutes", type=float, default=0)
     parser.add_argument("--warmup-accesses", type=int, default=600000)
     parser.add_argument("--max-records", type=int, default=1000000)
@@ -132,19 +182,25 @@ def experiments(args: argparse.Namespace) -> list[Experiment]:
     return list(dict.fromkeys(specs))
 
 
-def runall_base_cmd(args: argparse.Namespace, out_dir: Path) -> list[str]:
+def runall_base_cmd(
+    args: argparse.Namespace,
+    out_dir: Path,
+    benchmarks: str | None = None,
+    runall_workers: int | None = None,
+    skip_build: bool = False,
+) -> list[str]:
     forwarded_max_wg = args.max_wg * args.max_wg_multiplier
     cmd = [
         sys.executable,
         str(ROOT_DIR / "runall2.py"),
         "--benchmarks",
-        args.benchmarks,
+        benchmarks or args.benchmarks,
         "--configs",
         args.configs,
         "--output-dir",
         str(out_dir),
         "--max-workers",
-        str(args.max_workers),
+        str(runall_workers or args.max_workers),
         "--switch-latency",
         str(args.switch_latency),
         "--mmutlb-lookup-latency",
@@ -181,6 +237,8 @@ def runall_base_cmd(args: argparse.Namespace, out_dir: Path) -> list[str]:
         cmd.append("--photon-verbose")
     if args.timeout_minutes > 0:
         cmd += ["--timeout-minutes", str(args.timeout_minutes)]
+    if skip_build:
+        cmd.append("--skip-build")
     return cmd
 
 
@@ -188,8 +246,17 @@ def experiment_cmd(
     args: argparse.Namespace,
     spec: Experiment,
     out_dir: Path,
+    benchmarks: str | None = None,
+    runall_workers: int | None = None,
+    skip_build: bool = False,
 ) -> list[str]:
-    cmd = runall_base_cmd(args, out_dir)
+    cmd = runall_base_cmd(
+        args,
+        out_dir,
+        benchmarks=benchmarks,
+        runall_workers=runall_workers,
+        skip_build=skip_build,
+    )
     cmd += [
         "--l1v-bottom-reorder-policy",
         spec.policy,
@@ -226,6 +293,26 @@ def has_trace_output(path: Path) -> bool:
     return any(path.glob(f"*{TRACE_SUFFIX}"))
 
 
+def has_benchmark_trace_output(path: Path, benchmark: str) -> bool:
+    return any(path.glob(f"baseline_{benchmark}_*{TRACE_SUFFIX}"))
+
+
+def build_baseline_once(args: argparse.Namespace) -> int:
+    if args.dry_run or args.compare_only:
+        return 0
+
+    env = os.environ.copy()
+    env.setdefault("GOCACHE", "/tmp/gocache")
+    target_dir = ROOT_DIR / "baseline"
+    print(f"\n=== build baseline once ===", flush=True)
+    print(f"go build -buildvcs=false  # cwd={target_dir}", flush=True)
+    return subprocess.call(
+        ["go", "build", "-buildvcs=false"],
+        cwd=target_dir,
+        env=env,
+    )
+
+
 def maybe_run(
     title: str,
     cmd: list[str],
@@ -241,6 +328,102 @@ def maybe_run(
         print(f"[m1] resume: found traces in {out_dir}; skipping run", flush=True)
         return 0
     return run_cmd(title, cmd, args.dry_run)
+
+
+def build_global_jobs(
+    args: argparse.Namespace,
+    output_root: Path,
+    specs: list[Experiment],
+) -> list[Job]:
+    baseline_dir = output_root / "baseline"
+    jobs: list[Job] = []
+    for benchmark in expand_benchmarks(args.benchmarks):
+        jobs.append(
+            Job(
+                title=f"baseline {benchmark}",
+                benchmark=benchmark,
+                out_dir=baseline_dir,
+                cmd=runall_base_cmd(
+                    args,
+                    baseline_dir,
+                    benchmarks=benchmark,
+                    runall_workers=1,
+                    skip_build=True,
+                ),
+            )
+        )
+        for spec in specs:
+            exp_dir = output_root / spec.name
+            jobs.append(
+                Job(
+                    title=f"{spec.name} {benchmark}",
+                    benchmark=benchmark,
+                    out_dir=exp_dir,
+                    cmd=experiment_cmd(
+                        args,
+                        spec,
+                        exp_dir,
+                        benchmarks=benchmark,
+                        runall_workers=1,
+                        skip_build=True,
+                    ),
+                )
+            )
+    return jobs
+
+
+def should_skip_job(args: argparse.Namespace, job: Job) -> bool:
+    return args.resume and has_benchmark_trace_output(job.out_dir, job.benchmark)
+
+
+def run_job(job: Job, dry_run: bool) -> tuple[str, int]:
+    print(f"\n=== {job.title} ===", flush=True)
+    print(shlex.join(job.cmd), flush=True)
+    if dry_run:
+        return job.title, 0
+    return job.title, subprocess.call(job.cmd, cwd=REPO_ROOT)
+
+
+def run_global_jobs(
+    args: argparse.Namespace,
+    output_root: Path,
+    specs: list[Experiment],
+) -> int:
+    if args.compare_only:
+        print("[m1] compare-only: skipping global job execution", flush=True)
+        return 0
+
+    jobs = [
+        job for job in build_global_jobs(args, output_root, specs)
+        if not should_skip_job(args, job)
+    ]
+    skipped = len(build_global_jobs(args, output_root, specs)) - len(jobs)
+    if skipped:
+        print(f"[m1] resume: skipped {skipped} completed benchmark jobs", flush=True)
+    if not jobs:
+        print("[m1] no global jobs to run", flush=True)
+        return 0
+
+    ret = build_baseline_once(args)
+    if ret != 0:
+        return ret
+
+    workers = min(max(args.max_workers, 1), len(jobs))
+    print(f"[m1] global scheduler: {len(jobs)} jobs, max_workers={workers}", flush=True)
+    if args.dry_run:
+        for job in jobs:
+            run_job(job, args.dry_run)
+        return 0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(run_job, job, False) for job in jobs]
+        failed = False
+        for future in concurrent.futures.as_completed(futures):
+            title, ret = future.result()
+            print(f"[m1] finished {title}: returncode={ret}", flush=True)
+            if ret != 0:
+                failed = True
+        return 1 if failed else 0
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -433,6 +616,28 @@ def main() -> int:
 
     print(f"[m1] output root: {output_root}", flush=True)
     print(f"[m1] experiments: {', '.join(spec.name for spec in specs)}", flush=True)
+
+    if args.schedule == "global":
+        ret = run_global_jobs(args, output_root, specs)
+        if ret != 0:
+            return ret
+
+        if args.skip_compare:
+            return 0
+
+        for spec in specs:
+            exp_dir = output_root / spec.name
+            ret = run_cmd(
+                f"{spec.name} datapath comparison",
+                compare_cmd(baseline_dir, exp_dir, output_root / "compare" / spec.name),
+                args.dry_run,
+            )
+            if ret != 0:
+                return ret
+
+        if not args.dry_run:
+            aggregate_results(output_root, specs)
+        return 0
 
     ret = maybe_run(
         "baseline trace run",

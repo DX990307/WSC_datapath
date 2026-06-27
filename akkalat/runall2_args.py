@@ -34,6 +34,11 @@ def parse_args():
         help="Maximum number of concurrent experiments to launch.",
     )
     parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Assume target binaries are already built.",
+    )
+    parser.add_argument(
         "--mmutlb-lookup-latency",
         dest="mmutlb_lookup_latency",
         type=int,

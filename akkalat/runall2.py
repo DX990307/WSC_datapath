@@ -47,7 +47,10 @@ def main():
         dry_run_commands(exps)
         return
 
-    build_targets(exps)
+    if args.skip_build:
+        print("Skipping target build (--skip-build).")
+    else:
+        build_targets(exps)
     run_all_experiments(exps, max_workers)
 
 
