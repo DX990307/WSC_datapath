@@ -67,10 +67,10 @@ TRADITIONAL_BENCHMARKS = [
     # "nbody",
     # "nw",
     "pagerank",
-    # "relu",
-    # "simpleconvolution",
+    "relu",
+    "simpleconvolution",
     "spmv",
-    "stencil2d",
+    # "stencil2d",
 ]
 
 LLM_BENCHMARKS = [
