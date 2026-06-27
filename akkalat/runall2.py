@@ -60,6 +60,12 @@ def prepare_output_dir(args, exps):
         set_output_dir(results_dir)
         return
 
+    if args.output_dir:
+        results_dir = os.path.abspath(args.output_dir)
+        os.makedirs(results_dir, exist_ok=True)
+        set_output_dir(results_dir)
+        return
+
     create_output_dir()
 
 

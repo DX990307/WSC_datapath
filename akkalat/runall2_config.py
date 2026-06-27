@@ -43,6 +43,16 @@ def build_common_flags(args):
     if args.l1v_max_concurrent_trans > 0:
         common_flags.append(
             f"-l1v-max-concurrent-trans={args.l1v_max_concurrent_trans}")
+    if args.l1v_bottom_reorder_policy:
+        common_flags.append(
+            f"-l1v-bottom-reorder-policy={args.l1v_bottom_reorder_policy}")
+    if args.l1v_bottom_reorder_window > 0:
+        common_flags.append(
+            f"-l1v-bottom-reorder-window={args.l1v_bottom_reorder_window}")
+    if args.l1v_bottom_reorder_max_age_ns >= 0:
+        common_flags.append(
+            "-l1v-bottom-reorder-max-age-ns="
+            f"{args.l1v_bottom_reorder_max_age_ns}")
     if args.force_local_data_access:
         common_flags.append("-force-local-data-access")
     if args.max_wg > 0:

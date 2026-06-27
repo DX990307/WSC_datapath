@@ -44,6 +44,9 @@ type R9NanoGPUBuilder struct {
 	l1vRemoteMaxInflight           int
 	l1vMSHREntries                 int
 	l1vMaxConcurrentTrans          int
+	l1vBottomReorderPolicy         string
+	l1vBottomReorderWindow         int
+	l1vBottomReorderMaxAgeNS       uint64
 	forceLocalDataAccess           bool
 
 	enableISADebugging bool
@@ -257,6 +260,19 @@ func (b R9NanoGPUBuilder) WithL1VMaxConcurrentTrans(n int) R9NanoGPUBuilder {
 	if n > 0 {
 		b.l1vMaxConcurrentTrans = n
 	}
+	return b
+}
+
+// WithL1VBottomReorder configures an optional post-L1V bottom request reorder
+// queue used by M1 experiments.
+func (b R9NanoGPUBuilder) WithL1VBottomReorder(
+	policy string,
+	window int,
+	maxAgeNS uint64,
+) R9NanoGPUBuilder {
+	b.l1vBottomReorderPolicy = policy
+	b.l1vBottomReorderWindow = window
+	b.l1vBottomReorderMaxAgeNS = maxAgeNS
 	return b
 }
 
@@ -605,6 +621,11 @@ func (b *R9NanoGPUBuilder) buildSAs() {
 		withL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
 		withL1VMSHREntries(b.l1vMSHREntries).
 		withL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
+		withL1VBottomReorder(
+			b.l1vBottomReorderPolicy,
+			b.l1vBottomReorderWindow,
+			b.l1vBottomReorderMaxAgeNS,
+		).
 		withNumCU(b.numCUPerShaderArray)
 
 	if b.enableISADebugging {

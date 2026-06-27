@@ -21,6 +21,12 @@ def parse_args():
         help="Reuse a results directory and rerun missing metrics.",
     )
     parser.add_argument(
+        "--output-dir",
+        dest="output_dir",
+        default="",
+        help="Write new experiment outputs to this directory instead of a timestamped results dir.",
+    )
+    parser.add_argument(
         "--max-workers",
         dest="max_workers",
         type=int,
@@ -192,6 +198,35 @@ def parse_args():
         help=(
             "Pass -l1v-max-concurrent-trans to each benchmark. "
             "0 keeps the benchmark binary default."
+        ),
+    )
+    parser.add_argument(
+        "--l1v-bottom-reorder-policy",
+        dest="l1v_bottom_reorder_policy",
+        default="",
+        help=(
+            "Pass -l1v-bottom-reorder-policy to each benchmark. "
+            "Choices in the simulator are none, fifo, and hlq."
+        ),
+    )
+    parser.add_argument(
+        "--l1v-bottom-reorder-window",
+        dest="l1v_bottom_reorder_window",
+        type=int,
+        default=0,
+        help=(
+            "Pass -l1v-bottom-reorder-window to each benchmark. "
+            "0 keeps the benchmark binary default."
+        ),
+    )
+    parser.add_argument(
+        "--l1v-bottom-reorder-max-age-ns",
+        dest="l1v_bottom_reorder_max_age_ns",
+        type=int,
+        default=-1,
+        help=(
+            "Pass -l1v-bottom-reorder-max-age-ns to each benchmark. "
+            "-1 keeps the benchmark binary default; 0 means unlimited."
         ),
     )
     parser.add_argument(

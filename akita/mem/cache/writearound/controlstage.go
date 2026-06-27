@@ -72,6 +72,10 @@ func (s *controlStage) hardResetCache(now sim.VTimeInSec) {
 	s.cache.transactions = nil
 	s.cache.postCoalesceTransactions = nil
 	s.cache.remoteBottomTrans = 0
+	s.cache.bottomReorderQueue = nil
+	s.cache.bottomReorderOpenRows = make(map[bottomReorderBankKey]uint64)
+	s.cache.bottomReorderChannels = make(map[bottomReorderChannelKey]uint64)
+	s.cache.bottomReorderSequence = 0
 
 	if s.currFlushReq.PauseAfterFlushing {
 		s.cache.isPaused = true

@@ -75,6 +75,12 @@ var l1vMSHREntriesFlag = flag.Int("l1v-mshr-entries", 160,
 	"Number of L1V cache MSHR entries per L1V cache.")
 var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 160,
 	"Maximum concurrent L1V cache transactions per L1V cache.")
+var l1vBottomReorderPolicyFlag = flag.String("l1v-bottom-reorder-policy", "none",
+	"L1V bottom request reorder policy: none, fifo, or hlq.")
+var l1vBottomReorderWindowFlag = flag.Int("l1v-bottom-reorder-window", 0,
+	"Maximum entries in the optional L1V bottom reorder queue. 0 disables the queue.")
+var l1vBottomReorderMaxAgeNSFlag = flag.Uint64("l1v-bottom-reorder-max-age-ns", 0,
+	"Maximum L1V bottom reorder queue age in ns. 0 means unlimited.")
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")

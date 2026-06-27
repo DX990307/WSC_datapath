@@ -41,13 +41,16 @@ type shaderArrayBuilder struct {
 	name  string
 	numCU int
 
-	engine                sim.Engine
-	freq                  sim.Freq
-	log2CacheLineSize     uint64
-	log2PageSize          uint64
-	l1vRemoteMaxInflight  int
-	l1vMSHREntries        int
-	l1vMaxConcurrentTrans int
+	engine                   sim.Engine
+	freq                     sim.Freq
+	log2CacheLineSize        uint64
+	log2PageSize             uint64
+	l1vRemoteMaxInflight     int
+	l1vMSHREntries           int
+	l1vMaxConcurrentTrans    int
+	l1vBottomReorderPolicy   string
+	l1vBottomReorderWindow   int
+	l1vBottomReorderMaxAgeNS uint64
 
 	isaDebugging  bool
 	visTracer     tracing.Tracer
@@ -57,14 +60,15 @@ type shaderArrayBuilder struct {
 
 func makeShaderArrayBuilder() shaderArrayBuilder {
 	b := shaderArrayBuilder{
-		gpuID:                 0,
-		name:                  "SA",
-		numCU:                 4,
-		freq:                  1 * sim.GHz,
-		log2CacheLineSize:     6,
-		log2PageSize:          12,
-		l1vMSHREntries:        160,
-		l1vMaxConcurrentTrans: 160,
+		gpuID:                  0,
+		name:                   "SA",
+		numCU:                  4,
+		freq:                   1 * sim.GHz,
+		log2CacheLineSize:      6,
+		log2PageSize:           12,
+		l1vMSHREntries:         160,
+		l1vMaxConcurrentTrans:  160,
+		l1vBottomReorderPolicy: "none",
 	}
 	return b
 }
@@ -119,6 +123,17 @@ func (b shaderArrayBuilder) withL1VMaxConcurrentTrans(n int) shaderArrayBuilder 
 	if n > 0 {
 		b.l1vMaxConcurrentTrans = n
 	}
+	return b
+}
+
+func (b shaderArrayBuilder) withL1VBottomReorder(
+	policy string,
+	window int,
+	maxAgeNS uint64,
+) shaderArrayBuilder {
+	b.l1vBottomReorderPolicy = policy
+	b.l1vBottomReorderWindow = window
+	b.l1vBottomReorderMaxAgeNS = maxAgeNS
 	return b
 }
 
@@ -389,6 +404,11 @@ func (b *shaderArrayBuilder) buildL1VCaches(sa *shaderArray) {
 		WithNumMSHREntry(b.l1vMSHREntries).
 		WithMaxNumConcurrentTrans(b.l1vMaxConcurrentTrans).
 		WithMaxRemoteBottomTrans(b.l1vRemoteMaxInflight).
+		WithBottomReorder(
+			b.l1vBottomReorderPolicy,
+			b.l1vBottomReorderWindow,
+			b.l1vBottomReorderMaxAgeNS,
+		).
 		WithTotalByteSize(16 * mem.KB)
 
 	if b.visTracer != nil {

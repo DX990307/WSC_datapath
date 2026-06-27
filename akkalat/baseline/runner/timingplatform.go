@@ -26,27 +26,30 @@ import (
 
 // R9NanoPlatformBuilder can build a platform that equips R9Nano GPU.
 type R9NanoPlatformBuilder struct {
-	useParallelEngine     bool
-	debugISA              bool
-	traceVis              bool
-	visTraceStartTime     sim.VTimeInSec
-	visTraceEndTime       sim.VTimeInSec
-	traceMem              bool
-	tileWidth, tileHeight int
-	numSAPerGPU           int
-	numCUPerSA            int
-	useMagicMemoryCopy    bool
-	log2PageSize          uint64
-	bandwidth             int
-	switchLatency         int
-	maxNumHops            int
-	networkFlitSize       int
-	endpointChannels      int
-	endpointBufferSize    int
-	l1vRemoteMaxInflight  int
-	l1vMSHREntries        int
-	l1vMaxConcurrentTrans int
-	forceLocalDataAccess  bool
+	useParallelEngine        bool
+	debugISA                 bool
+	traceVis                 bool
+	visTraceStartTime        sim.VTimeInSec
+	visTraceEndTime          sim.VTimeInSec
+	traceMem                 bool
+	tileWidth, tileHeight    int
+	numSAPerGPU              int
+	numCUPerSA               int
+	useMagicMemoryCopy       bool
+	log2PageSize             uint64
+	bandwidth                int
+	switchLatency            int
+	maxNumHops               int
+	networkFlitSize          int
+	endpointChannels         int
+	endpointBufferSize       int
+	l1vRemoteMaxInflight     int
+	l1vMSHREntries           int
+	l1vMaxConcurrentTrans    int
+	l1vBottomReorderPolicy   string
+	l1vBottomReorderWindow   int
+	l1vBottomReorderMaxAgeNS uint64
+	forceLocalDataAccess     bool
 
 	engine       sim.Engine
 	visTracer    tracing.Tracer
@@ -69,18 +72,19 @@ type R9NanoPlatformBuilder struct {
 // MakeR9NanoBuilder creates a EmuBuilder with default parameters.
 func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 	b := R9NanoPlatformBuilder{
-		tileWidth:             7,
-		tileHeight:            7,
-		log2PageSize:          12,
-		visTraceStartTime:     -1,
-		visTraceEndTime:       -1,
-		switchLatency:         20,
-		networkFlitSize:       16,
-		numSAPerGPU:           8,
-		numCUPerSA:            4,
-		maxNumHops:            -1,
-		l1vMSHREntries:        160,
-		l1vMaxConcurrentTrans: 160,
+		tileWidth:              7,
+		tileHeight:             7,
+		log2PageSize:           12,
+		visTraceStartTime:      -1,
+		visTraceEndTime:        -1,
+		switchLatency:          20,
+		networkFlitSize:        16,
+		numSAPerGPU:            8,
+		numCUPerSA:             4,
+		maxNumHops:             -1,
+		l1vMSHREntries:         160,
+		l1vMaxConcurrentTrans:  160,
+		l1vBottomReorderPolicy: "none",
 	}
 	return b
 }
@@ -238,6 +242,19 @@ func (b R9NanoPlatformBuilder) WithL1VMaxConcurrentTrans(
 	if n > 0 {
 		b.l1vMaxConcurrentTrans = n
 	}
+	return b
+}
+
+// WithL1VBottomReorder configures an optional post-L1V bottom request reorder
+// queue used by M1 experiments.
+func (b R9NanoPlatformBuilder) WithL1VBottomReorder(
+	policy string,
+	window int,
+	maxAgeNS uint64,
+) R9NanoPlatformBuilder {
+	b.l1vBottomReorderPolicy = policy
+	b.l1vBottomReorderWindow = window
+	b.l1vBottomReorderMaxAgeNS = maxAgeNS
 	return b
 }
 
@@ -510,12 +527,17 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithNumCUPerShaderArray(b.numCUPerSA).
 		WithNumShaderArray(b.numSAPerGPU).
 		WithNumMemoryBank(numMemoryBank).
-		WithL2CacheSize(4 * mem.MB).
+		WithL2CacheSize(4*mem.MB).
 		WithLog2MemoryBankInterleavingSize(7).
 		WithLog2PageSize(b.log2PageSize).
 		WithL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
 		WithL1VMSHREntries(b.l1vMSHREntries).
 		WithL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
+		WithL1VBottomReorder(
+			b.l1vBottomReorderPolicy,
+			b.l1vBottomReorderWindow,
+			b.l1vBottomReorderMaxAgeNS,
+		).
 		WithForceLocalDataAccess(b.forceLocalDataAccess).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).

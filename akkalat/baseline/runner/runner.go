@@ -242,6 +242,11 @@ func (r *Runner) buildTimingPlatform() {
 		WithL1VRemoteMaxInflight(*l1vRemoteMaxInflightFlag).
 		WithL1VMSHREntries(*l1vMSHREntriesFlag).
 		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag).
+		WithL1VBottomReorder(
+			*l1vBottomReorderPolicyFlag,
+			*l1vBottomReorderWindowFlag,
+			*l1vBottomReorderMaxAgeNSFlag,
+		).
 		WithForceLocalDataAccess(*forceLocalDataAccessFlag)
 
 	if *sharingTracing {
