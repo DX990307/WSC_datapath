@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import concurrent.futures
 import csv
 from dataclasses import dataclass
@@ -12,8 +13,10 @@ from math import exp, log
 import os
 from pathlib import Path
 import shlex
+import signal
 import subprocess
 import sys
+import threading
 import time
 
 from runall2_constants import ALL_BENCHMARKS, BENCHMARK_ALIASES
@@ -28,6 +31,79 @@ UNICODE_DASH_TRANSLATION = str.maketrans({
     "\u2014": "-",
     "\u2212": "-",
 })
+RUNNING_PROCESSES = set()
+RUNNING_PROCESSES_LOCK = threading.Lock()
+
+
+def register_process(process: subprocess.Popen) -> None:
+    with RUNNING_PROCESSES_LOCK:
+        RUNNING_PROCESSES.add(process)
+
+
+def unregister_process(process: subprocess.Popen) -> None:
+    with RUNNING_PROCESSES_LOCK:
+        RUNNING_PROCESSES.discard(process)
+
+
+def terminate_process(process: subprocess.Popen, grace_seconds: int = 30) -> None:
+    if process.poll() is not None:
+        return
+
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    try:
+        process.wait(timeout=grace_seconds)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    process.wait()
+
+
+def terminate_all_processes() -> None:
+    with RUNNING_PROCESSES_LOCK:
+        processes = list(RUNNING_PROCESSES)
+
+    for process in processes:
+        terminate_process(process)
+
+
+def install_signal_handlers() -> None:
+    def handle_signal(signum: int, _frame: object) -> None:
+        print(
+            f"Received signal {signum}; terminating running M1 jobs.",
+            flush=True,
+        )
+        terminate_all_processes()
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+
+def tracked_subprocess_call(
+    cmd: list[str],
+    cwd: Path,
+    env: dict[str, str] | None = None,
+) -> int:
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        start_new_session=True,
+    )
+    register_process(process)
+    try:
+        return process.wait()
+    finally:
+        unregister_process(process)
 
 
 def normalize_option_dashes(argv: list[str]) -> list[str]:
@@ -323,7 +399,7 @@ def run_cmd(title: str, cmd: list[str], dry_run: bool) -> int:
     print(shlex.join(cmd), flush=True)
     if dry_run:
         return 0
-    return subprocess.call(cmd, cwd=REPO_ROOT)
+    return tracked_subprocess_call(cmd, cwd=REPO_ROOT)
 
 
 def has_trace_output(path: Path) -> bool:
@@ -367,7 +443,7 @@ def build_baseline_once(args: argparse.Namespace) -> int:
     target_dir = ROOT_DIR / "baseline"
     print(f"\n=== build baseline once ===", flush=True)
     print(f"go build -buildvcs=false  # cwd={target_dir}", flush=True)
-    return subprocess.call(
+    return tracked_subprocess_call(
         ["go", "build", "-buildvcs=false"],
         cwd=target_dir,
         env=env,
@@ -497,7 +573,7 @@ def run_job(
     print(shlex.join(job.cmd), flush=True)
     if dry_run:
         return job.title, 0
-    return job.title, subprocess.call(job.cmd, cwd=REPO_ROOT)
+    return job.title, tracked_subprocess_call(job.cmd, cwd=REPO_ROOT)
 
 
 def submit_global_job(
@@ -775,6 +851,9 @@ def write_markdown_summary(
 
 
 def main() -> int:
+    install_signal_handlers()
+    atexit.register(terminate_all_processes)
+
     args = build_arg_parser().parse_args(normalize_option_dashes(sys.argv[1:]))
     output_root = (args.output_root or default_output_root()).resolve()
     baseline_dir = output_root / "baseline"
