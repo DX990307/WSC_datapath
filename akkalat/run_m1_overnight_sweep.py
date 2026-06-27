@@ -17,6 +17,25 @@ import sys
 ROOT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = ROOT_DIR.parent
 TRACE_SUFFIX = "_memory_path_l1v_path_summary.csv"
+UNICODE_DASH_TRANSLATION = str.maketrans({
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2212": "-",
+})
+
+
+def normalize_option_dashes(argv: list[str]) -> list[str]:
+    normalized = []
+    for arg in argv:
+        if not arg.startswith(("-", "\u2013", "\u2014", "\u2212")):
+            normalized.append(arg)
+            continue
+        if "=" in arg:
+            name, value = arg.split("=", 1)
+            normalized.append(f"{name.translate(UNICODE_DASH_TRANSLATION)}={value}")
+        else:
+            normalized.append(arg.translate(UNICODE_DASH_TRANSLATION))
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -58,6 +77,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Do not stop when the memory-path trace reaches --max-records; "
             "let each benchmark run until --max-wg or natural completion."
         ),
+    )
+    parser.add_argument(
+        "--enable-servers",
+        "--enable-server",
+        dest="enable_servers",
+        action="store_true",
+        help="Do not pass --disable-servers to runall2.py.",
     )
     parser.add_argument("--switch-latency", type=int, default=32)
     parser.add_argument("--mmutlb-lookup-latency", type=int, default=80)
@@ -124,8 +150,9 @@ def runall_base_cmd(args: argparse.Namespace, out_dir: Path) -> list[str]:
         str(args.warmup_accesses),
         "--trace-memory-path-max-records",
         str(args.max_records),
-        "--disable-servers",
     ]
+    if not args.enable_servers:
+        cmd.append("--disable-servers")
     if not args.run_until_max_wg:
         cmd.append("--trace-memory-path-exit-on-complete")
     if args.sampled_warmups:
@@ -371,7 +398,7 @@ def write_markdown_summary(
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    args = build_arg_parser().parse_args(normalize_option_dashes(sys.argv[1:]))
     output_root = (args.output_root or default_output_root()).resolve()
     baseline_dir = output_root / "baseline"
     specs = experiments(args)
