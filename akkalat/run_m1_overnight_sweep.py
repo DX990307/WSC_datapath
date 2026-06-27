@@ -14,6 +14,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import time
 
 from runall2_constants import ALL_BENCHMARKS, BENCHMARK_ALIASES
 
@@ -115,6 +116,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "by-config runs one full arm at a time. global schedules each "
             "(benchmark, arm) as an independent job and removes config-level barriers."
         ),
+    )
+    parser.add_argument(
+        "--min-available-mem-gb",
+        type=float,
+        default=0,
+        help=(
+            "In global scheduling mode, wait before starting each simulator job "
+            "until /proc/meminfo MemAvailable is at least this many GiB. "
+            "0 disables the memory gate."
+        ),
+    )
+    parser.add_argument(
+        "--memory-check-interval-sec",
+        type=float,
+        default=60,
+        help="Seconds to wait between memory-gate checks.",
     )
     parser.add_argument("--timeout-minutes", type=float, default=0)
     parser.add_argument("--warmup-accesses", type=int, default=600000)
@@ -313,6 +330,54 @@ def build_baseline_once(args: argparse.Namespace) -> int:
     )
 
 
+def available_memory_gb() -> float | None:
+    try:
+        with Path("/proc/meminfo").open() as f:
+            for line in f:
+                if not line.startswith("MemAvailable:"):
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    return None
+                return int(parts[1]) / 1024 / 1024
+    except OSError:
+        return None
+    return None
+
+
+def wait_for_memory_gate(
+    title: str,
+    min_available_gb: float,
+    interval_sec: float,
+) -> None:
+    if min_available_gb <= 0:
+        return
+
+    interval_sec = max(interval_sec, 1.0)
+    while True:
+        available = available_memory_gb()
+        if available is None:
+            print(
+                "[m1] memory gate requested but MemAvailable is unavailable; "
+                f"starting {title}",
+                flush=True,
+            )
+            return
+        if available >= min_available_gb:
+            print(
+                f"[m1] memory gate ok for {title}: "
+                f"MemAvailable={available:.1f}GiB >= {min_available_gb:.1f}GiB",
+                flush=True,
+            )
+            return
+        print(
+            f"[m1] waiting to start {title}: "
+            f"MemAvailable={available:.1f}GiB < {min_available_gb:.1f}GiB",
+            flush=True,
+        )
+        time.sleep(interval_sec)
+
+
 def maybe_run(
     title: str,
     cmd: list[str],
@@ -376,11 +441,21 @@ def should_skip_job(args: argparse.Namespace, job: Job) -> bool:
     return args.resume and has_benchmark_trace_output(job.out_dir, job.benchmark)
 
 
-def run_job(job: Job, dry_run: bool) -> tuple[str, int]:
+def run_job(
+    job: Job,
+    dry_run: bool,
+    min_available_mem_gb: float,
+    memory_check_interval_sec: float,
+) -> tuple[str, int]:
     print(f"\n=== {job.title} ===", flush=True)
     print(shlex.join(job.cmd), flush=True)
     if dry_run:
         return job.title, 0
+    wait_for_memory_gate(
+        job.title,
+        min_available_mem_gb,
+        memory_check_interval_sec,
+    )
     return job.title, subprocess.call(job.cmd, cwd=REPO_ROOT)
 
 
@@ -410,13 +485,33 @@ def run_global_jobs(
 
     workers = min(max(args.max_workers, 1), len(jobs))
     print(f"[m1] global scheduler: {len(jobs)} jobs, max_workers={workers}", flush=True)
+    if args.min_available_mem_gb > 0:
+        print(
+            "[m1] memory gate: start a job only when "
+            f"MemAvailable >= {args.min_available_mem_gb:.1f}GiB",
+            flush=True,
+        )
     if args.dry_run:
         for job in jobs:
-            run_job(job, args.dry_run)
+            run_job(
+                job,
+                args.dry_run,
+                args.min_available_mem_gb,
+                args.memory_check_interval_sec,
+            )
         return 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(run_job, job, False) for job in jobs]
+        futures = [
+            executor.submit(
+                run_job,
+                job,
+                False,
+                args.min_available_mem_gb,
+                args.memory_check_interval_sec,
+            )
+            for job in jobs
+        ]
         failed = False
         for future in concurrent.futures.as_completed(futures):
             title, ret = future.result()
