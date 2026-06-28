@@ -22,12 +22,15 @@ type Builder struct {
 	interleavingUnitCount int
 	interleavingUnitIndex int
 
-	byteSize            uint64
-	numMSHREntry        int
-	numReqPerCycle      int
-	writeBufferCapacity int
-	maxInflightFetch    int
-	maxInflightEviction int
+	byteSize                 uint64
+	numMSHREntry             int
+	numReqPerCycle           int
+	writeBufferCapacity      int
+	maxInflightFetch         int
+	maxInflightEviction      int
+	l2DirBatchWindow         int
+	l2DramAccessUnitCoalesce bool
+	l2DramAccessUnitBytes    uint64
 
 	dirLatency  int
 	bankLatency int
@@ -36,16 +39,17 @@ type Builder struct {
 // MakeBuilder creates a new builder with default configurations.
 func MakeBuilder() Builder {
 	return Builder{
-		freq:                1 * sim.GHz,
-		wayAssociativity:    4,
-		log2BlockSize:       6,
-		byteSize:            512 * mem.KB,
-		numMSHREntry:        16,
-		numReqPerCycle:      1,
-		writeBufferCapacity: 1024,
-		maxInflightFetch:    128,
-		maxInflightEviction: 128,
-		bankLatency:         10,
+		freq:                  1 * sim.GHz,
+		wayAssociativity:      4,
+		log2BlockSize:         6,
+		byteSize:              512 * mem.KB,
+		numMSHREntry:          16,
+		numReqPerCycle:        1,
+		writeBufferCapacity:   1024,
+		maxInflightFetch:      128,
+		maxInflightEviction:   128,
+		l2DramAccessUnitBytes: 128,
+		bankLatency:           10,
 	}
 }
 
@@ -130,6 +134,23 @@ func (b Builder) WithMaxInflightEviction(n int) Builder {
 	return b
 }
 
+// WithL2DirBatch configures same-set batching in the L2 directory pipeline.
+func (b Builder) WithL2DirBatch(window int) Builder {
+	b.l2DirBatchWindow = window
+	return b
+}
+
+// WithL2DramAccessUnitCoalescing configures L2 miss fill coalescing at the
+// DRAM access-unit granularity.
+func (b Builder) WithL2DramAccessUnitCoalescing(
+	enabled bool,
+	accessUnitBytes uint64,
+) Builder {
+	b.l2DramAccessUnitCoalesce = enabled
+	b.l2DramAccessUnitBytes = accessUnitBytes
+	return b
+}
+
 // WithDirectoryLatency sets the number of cycles required to access the
 // directory.
 func (b Builder) WithDirectoryLatency(n int) Builder {
@@ -179,6 +200,9 @@ func (b *Builder) configureCache(cacheModule *Cache) {
 
 	cacheModule.log2BlockSize = b.log2BlockSize
 	cacheModule.numReqPerCycle = b.numReqPerCycle
+	cacheModule.l2DirBatchWindow = b.l2DirBatchWindow
+	cacheModule.l2DramAccessUnitCoalesce = b.l2DramAccessUnitCoalesce
+	cacheModule.l2DramAccessUnitBytes = b.l2DramAccessUnitBytes
 	cacheModule.directory = directory
 	cacheModule.mshr = mshr
 	cacheModule.storage = storage

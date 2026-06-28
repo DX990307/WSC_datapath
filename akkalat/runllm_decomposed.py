@@ -15,16 +15,10 @@ import sys
 
 import bertconfig
 import gptconfig
-from runall2_constants import (
-    BASE_COMMON_FLAGS,
-    CONFIGS,
-    DEFAULT_MMUTLB_LOOKUP_LATENCY,
-    ROOT_DIR,
-)
-import runall2_process
+import runall2
 
 
-CONFIG_FLAGS = {name: flags for name, flags in CONFIGS}
+CONFIG_FLAGS = {name: flags for name, flags in runall2.CONFIGS}
 PROFILE_NAMES = sorted(set(bertconfig.PROFILES) | set(gptconfig.PROFILES))
 
 
@@ -551,7 +545,7 @@ def insert_transfer_ops(ops, args):
 def write_placement_report(args, ops):
     path = Path(args.placement_output)
     if not path.is_absolute():
-        path = Path(runall2_process.output_dir) / path
+        path = Path(runall2.output_dir) / path
 
     fieldnames = [
         "op_index",
@@ -591,8 +585,8 @@ def build_exps(args, ops=None):
     if ops is None:
         ops = prepare_ops(args)
 
-    common_flags = BASE_COMMON_FLAGS[:] + [
-        f"-mmutlb-lookup-latency={DEFAULT_MMUTLB_LOOKUP_LATENCY}",
+    common_flags = runall2.BASE_COMMON_FLAGS[:] + [
+        f"-mmutlb-lookup-latency={runall2.DEFAULT_MMUTLB_LOOKUP_LATENCY}",
     ]
     if not args.enable_servers:
         common_flags.append("-disable-servers")
@@ -706,8 +700,8 @@ def profile_override_values(args):
 def summarize_output(args):
     cmd = [
         sys.executable,
-        f"{ROOT_DIR}/summarize_llm_decomposed.py",
-        runall2_process.output_dir,
+        f"{runall2.ROOT_DIR}/summarize_llm_decomposed.py",
+        runall2.output_dir,
         "--model",
         args.model,
         "--profile",
@@ -720,7 +714,7 @@ def summarize_output(args):
 
 def print_dry_run(exps):
     for exp in exps:
-        binary = f'{ROOT_DIR}/{exp["target"]}/{exp["target"]}'
+        binary = f'{runall2.ROOT_DIR}/{exp["target"]}/{exp["target"]}'
         cmd = [
             binary,
             f'-benchmark={exp["benchmark"]}',
@@ -776,23 +770,23 @@ def main():
             )
         return
 
-    runall2_process.install_signal_handlers()
-    runall2_process.create_output_dir()
+    runall2.install_signal_handlers()
+    runall2.create_output_dir()
     write_placement_report(args, ops)
-    runall2_process.build_targets(exps)
+    runall2.build_targets(exps)
 
     try:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=args.max_workers,
         ) as executor:
             futures = [
-                executor.submit(runall2_process.run_exp, exp)
+                executor.submit(runall2.run_exp, exp)
                 for exp in exps
             ]
             for future in concurrent.futures.as_completed(futures):
                 print(future.result())
     finally:
-        runall2_process.terminate_all_processes()
+        runall2.terminate_all_processes()
 
     if args.summarize:
         summarize_output(args)

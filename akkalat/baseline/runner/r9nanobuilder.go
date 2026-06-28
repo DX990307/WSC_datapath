@@ -47,6 +47,8 @@ type R9NanoGPUBuilder struct {
 	l1vBottomReorderPolicy         string
 	l1vBottomReorderWindow         int
 	l1vBottomReorderMaxAgeNS       uint64
+	l2DirBatchWindow               int
+	l2DramAccessUnitCoalesce       bool
 	forceLocalDataAccess           bool
 
 	enableISADebugging bool
@@ -115,6 +117,7 @@ func MakeR9NanoGPUBuilder() R9NanoGPUBuilder {
 		dramSize:                       8 * mem.GB,
 		l1vMSHREntries:                 160,
 		l1vMaxConcurrentTrans:          160,
+		l1vBottomReorderPolicy:         "none",
 	}
 	return b
 }
@@ -273,6 +276,20 @@ func (b R9NanoGPUBuilder) WithL1VBottomReorder(
 	b.l1vBottomReorderPolicy = policy
 	b.l1vBottomReorderWindow = window
 	b.l1vBottomReorderMaxAgeNS = maxAgeNS
+	return b
+}
+
+// WithL2DirBatch configures same-set directory batching in the L2 caches.
+func (b R9NanoGPUBuilder) WithL2DirBatch(window int) R9NanoGPUBuilder {
+	b.l2DirBatchWindow = window
+	return b
+}
+
+// WithL2DramAccessUnitCoalescing configures DRAM-access-unit fill coalescing.
+func (b R9NanoGPUBuilder) WithL2DramAccessUnitCoalescing(
+	enable bool,
+) R9NanoGPUBuilder {
+	b.l2DramAccessUnitCoalesce = enable
 	return b
 }
 
@@ -651,6 +668,7 @@ func (b *R9NanoGPUBuilder) buildSAs() {
 
 func (b *R9NanoGPUBuilder) buildL2Caches() {
 	byteSize := b.l2CacheSize / uint64(b.numMemoryBank)
+	_, _, _, _, _, dramBusWidth, _ := b.dramGeometry()
 	l2Builder := writeback.MakeBuilder().
 		WithEngine(b.engine).
 		WithFreq(b.freq).
@@ -658,7 +676,12 @@ func (b *R9NanoGPUBuilder) buildL2Caches() {
 		WithWayAssociativity(16).
 		WithByteSize(byteSize).
 		WithNumMSHREntry(64).
-		WithNumReqPerCycle(16)
+		WithNumReqPerCycle(16).
+		WithL2DirBatch(b.l2DirBatchWindow).
+		WithL2DramAccessUnitCoalescing(
+			b.l2DramAccessUnitCoalesce,
+			uint64(dramBusWidth/8*4),
+		)
 
 	for i := 0; i < b.numMemoryBank; i++ {
 		cacheName := fmt.Sprintf("%s.L2[%d]", b.gpuName, i)
@@ -785,24 +808,8 @@ func (b *R9NanoGPUBuilder) buildDRAMControllers() {
 }
 
 func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
-	memBankSize := 8 * mem.GB / uint64(b.numMemoryBank)
-	if 4*mem.GB%uint64(b.numMemoryBank) != 0 {
-		panic("GPU memory size is not a multiple of the number of memory banks")
-	}
-
-	dramCol := 64
-	dramRow := 16384
-	dramDeviceWidth := 128 * 2
-	dramBankSize := dramCol * dramRow * dramDeviceWidth
-	dramBank := 4
-	dramBankGroup := 4
-	dramBusWidth := 256
-	dramDevicePerRank := dramBusWidth / dramDeviceWidth
-	dramRankSize := dramBankSize * dramDevicePerRank * dramBank
-	dramRank := int(memBankSize * 8 / uint64(dramRankSize))
-	if dramRank == 0 {
-		panic("DRAMRank is 0")
-	}
+	dramCol, dramRow, dramDeviceWidth, dramBank, dramBankGroup, dramBusWidth,
+		dramRank := b.dramGeometry()
 
 	memCtrlBuilder := dram.MakeBuilder().
 		WithEngine(b.engine).
@@ -846,6 +853,36 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 	}
 
 	return memCtrlBuilder
+}
+
+func (b *R9NanoGPUBuilder) dramGeometry() (
+	dramCol int,
+	dramRow int,
+	dramDeviceWidth int,
+	dramBank int,
+	dramBankGroup int,
+	dramBusWidth int,
+	dramRank int,
+) {
+	memBankSize := 8 * mem.GB / uint64(b.numMemoryBank)
+	if 4*mem.GB%uint64(b.numMemoryBank) != 0 {
+		panic("GPU memory size is not a multiple of the number of memory banks")
+	}
+
+	dramCol = 64
+	dramRow = 16384
+	dramDeviceWidth = 128 * 2
+	dramBank = 4
+	dramBankGroup = 4
+	dramBusWidth = 256
+	dramBankSize := dramCol * dramRow * dramDeviceWidth
+	dramDevicePerRank := dramBusWidth / dramDeviceWidth
+	dramRankSize := dramBankSize * dramDevicePerRank * dramBank
+	dramRank = int(memBankSize * 8 / uint64(dramRankSize))
+	if dramRank == 0 {
+		panic("DRAMRank is 0")
+	}
+	return
 }
 
 func (b *R9NanoGPUBuilder) buildSA(

@@ -3,6 +3,7 @@ package runner
 import (
 	"sort"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/mgpusim/v3/timing/cu"
 )
@@ -25,6 +26,7 @@ func (r *Runner) reportStats() {
 	r.reportGMMUTransactionCount()
 	r.reportMMUTransactionCount()
 	r.reportDRAMTransactionCount()
+	r.reportL2BatchStats()
 	r.reportIOMMUTLBStats()
 	r.reportMMUCoalescingStats()
 	if err := memtrace.DumpMemoryPathTrace(); err != nil {
@@ -317,6 +319,101 @@ func (r *Runner) reportDRAMTransactionCount() {
 			"write_size",
 			float64(t.tracer.writeSize),
 		)
+	}
+}
+
+type l2BatchStatProvider interface {
+	Name() string
+	L2BatchStats() writeback.L2BatchStats
+}
+
+func (r *Runner) reportL2BatchStats() {
+	total := writeback.L2BatchStats{}
+	for _, gpu := range r.platform.GPUs {
+		for _, cache := range gpu.L2Caches {
+			provider, ok := cache.(l2BatchStatProvider)
+			if !ok {
+				continue
+			}
+			stats := provider.L2BatchStats()
+			if !l2BatchStatsNonZero(stats) {
+				continue
+			}
+			r.collectL2BatchStats(provider.Name(), stats)
+			total = combineL2BatchStats(total, stats)
+		}
+	}
+	if l2BatchStatsNonZero(total) {
+		r.collectL2BatchStats(r.platform.Driver.Name(), total)
+	}
+}
+
+func l2BatchStatsNonZero(stats writeback.L2BatchStats) bool {
+	return stats.DirBatchRequests+stats.AccessUnitReads+
+		stats.AccessUnitCoalesced+stats.DRAMReadIssuedBytes+
+		stats.DRAMReadUsefulBytes > 0
+}
+
+func combineL2BatchStats(
+	a, b writeback.L2BatchStats,
+) writeback.L2BatchStats {
+	a.DirBatchGroups += b.DirBatchGroups
+	a.DirBatchRequests += b.DirBatchRequests
+	if b.DirMaxBatchSize > a.DirMaxBatchSize {
+		a.DirMaxBatchSize = b.DirMaxBatchSize
+	}
+	a.AccessUnitReads += b.AccessUnitReads
+	a.AccessUnitCoalesced += b.AccessUnitCoalesced
+	a.DRAMReadIssuedBytes += b.DRAMReadIssuedBytes
+	a.DRAMReadUsefulBytes += b.DRAMReadUsefulBytes
+	return a
+}
+
+func (r *Runner) collectL2BatchStats(
+	where string,
+	stats writeback.L2BatchStats,
+) {
+	r.metricsCollector.Collect(
+		where, "l2_batch_dir_groups", float64(stats.DirBatchGroups))
+	r.metricsCollector.Collect(
+		where, "l2_batch_dir_requests", float64(stats.DirBatchRequests))
+	r.metricsCollector.Collect(
+		where, "l2_batch_dir_max_size", float64(stats.DirMaxBatchSize))
+	if stats.DirBatchGroups > 0 {
+		avg := float64(stats.DirBatchRequests) /
+			float64(stats.DirBatchGroups)
+		r.metricsCollector.Collect(where, "l2_batch_dir_avg_size", avg)
+	}
+	r.metricsCollector.Collect(
+		where, "l2_batch_access_unit_reads",
+		float64(stats.AccessUnitReads))
+	r.metricsCollector.Collect(
+		where, "l2_batch_access_unit_coalesced",
+		float64(stats.AccessUnitCoalesced))
+	r.metricsCollector.Collect(
+		where, "l2_batch_dram_read_issued_bytes",
+		float64(stats.DRAMReadIssuedBytes))
+	r.metricsCollector.Collect(
+		where, "l2_batch_dram_read_useful_bytes",
+		float64(stats.DRAMReadUsefulBytes))
+	if stats.DRAMReadIssuedBytes > 0 {
+		usefulRatio := float64(stats.DRAMReadUsefulBytes) /
+			float64(stats.DRAMReadIssuedBytes)
+		r.metricsCollector.Collect(
+			where, "l2_batch_dram_read_useful_ratio", usefulRatio)
+
+		overfetchBytes := uint64(0)
+		if stats.DRAMReadIssuedBytes > stats.DRAMReadUsefulBytes {
+			overfetchBytes = stats.DRAMReadIssuedBytes -
+				stats.DRAMReadUsefulBytes
+		}
+		r.metricsCollector.Collect(
+			where, "l2_batch_dram_read_overfetch_bytes",
+			float64(overfetchBytes))
+		overfetchPct := float64(overfetchBytes) /
+			float64(stats.DRAMReadIssuedBytes) * 100
+		r.metricsCollector.Collect(
+			where, "l2_batch_dram_read_overfetch_pct", overfetchPct)
 	}
 }
 

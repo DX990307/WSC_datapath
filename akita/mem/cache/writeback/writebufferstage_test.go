@@ -278,7 +278,78 @@ var _ = Describe("Write Buffer Stage", func() {
 			Expect(madeProgress).To(BeTrue())
 			Expect(trans.fetchReadReq).To(BeIdenticalTo(fetchReq))
 			Expect(wbStage.inflightFetch).To(ContainElement(trans))
+			Expect(cacheModule.l2BatchStats.DRAMReadIssuedBytes).
+				To(Equal(uint64(64)))
+			Expect(cacheModule.l2BatchStats.DRAMReadUsefulBytes).
+				To(Equal(uint64(64)))
 		})
+
+		It("should read one DRAM access unit when coalescing is enabled", func() {
+			dramPort := NewMockPort(mockCtrl)
+			trans.fetchAddress = 0x1040
+			cacheModule.l2DramAccessUnitCoalesce = true
+			cacheModule.l2DramAccessUnitBytes = 128
+
+			lowModuleFinder.EXPECT().Find(uint64(0x1040)).Return(dramPort)
+			bottomSender.EXPECT().CanSend(1).Return(true)
+			bottomSender.EXPECT().
+				Send(gomock.Any()).
+				Do(func(req *mem.ReadReq) {
+					Expect(req.Address).To(Equal(uint64(0x1000)))
+					Expect(req.AccessByteSize).To(Equal(uint64(128)))
+				})
+			writeBufferBuffer.EXPECT().Pop()
+
+			madeProgress := wbStage.processNewTransaction(10)
+
+			Expect(madeProgress).To(BeTrue())
+			Expect(cacheModule.l2BatchStats.AccessUnitReads).
+				To(Equal(uint64(1)))
+			Expect(cacheModule.l2BatchStats.AccessUnitCoalesced).
+				To(Equal(uint64(0)))
+			Expect(cacheModule.l2BatchStats.DRAMReadIssuedBytes).
+				To(Equal(uint64(128)))
+			Expect(cacheModule.l2BatchStats.DRAMReadUsefulBytes).
+				To(Equal(uint64(64)))
+		})
+
+		It("should attach an adjacent line to an inflight access-unit read", func() {
+			dramPort := NewMockPort(mockCtrl)
+			cacheModule.l2DramAccessUnitCoalesce = true
+			cacheModule.l2DramAccessUnitBytes = 128
+			trans.fetchAddress = 0x1040
+
+			read := mem.ReadReqBuilder{}.
+				WithDst(dramPort).
+				WithPID(1).
+				WithAddress(0x1000).
+				WithByteSize(128).
+				Build()
+			inflight := &transaction{
+				fetchPID:     1,
+				fetchAddress: 0x1000,
+				fetchReadReq: read,
+			}
+			wbStage.inflightFetch = append(wbStage.inflightFetch, inflight)
+
+			lowModuleFinder.EXPECT().Find(uint64(0x1040)).Return(dramPort)
+			writeBufferBuffer.EXPECT().Pop()
+
+			madeProgress := wbStage.processNewTransaction(10)
+
+			Expect(madeProgress).To(BeTrue())
+			Expect(trans.fetchReadReq).To(BeIdenticalTo(read))
+			Expect(wbStage.inflightFetch).To(ContainElement(trans))
+			Expect(cacheModule.l2BatchStats.AccessUnitReads).
+				To(Equal(uint64(0)))
+			Expect(cacheModule.l2BatchStats.AccessUnitCoalesced).
+				To(Equal(uint64(1)))
+			Expect(cacheModule.l2BatchStats.DRAMReadIssuedBytes).
+				To(Equal(uint64(0)))
+			Expect(cacheModule.l2BatchStats.DRAMReadUsefulBytes).
+				To(Equal(uint64(64)))
+		})
+
 	})
 
 	Context("evict and write", func() {

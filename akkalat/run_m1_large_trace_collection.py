@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect large memory-path traces and optionally run M1 analysis."""
+"""Collect large memory-path traces for legacy offline M1 analysis."""
 
 from __future__ import annotations
 
@@ -36,7 +36,10 @@ def normalize_option_dashes(argv: list[str]) -> list[str]:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run large per-benchmark memory-path traces for M1."
+        description=(
+            "Run large per-benchmark memory-path traces for legacy offline M1 "
+            "analysis. Use run_m1_clean_compare.py for current Mechanism 1."
+        )
     )
     parser.add_argument(
         "--benchmarks",
@@ -90,7 +93,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--trace-only",
         action="store_true",
-        help="Skip M1 offline analysis and plotting after trace collection.",
+        help="Skip M1 offline analysis after trace collection.",
     )
     parser.add_argument(
         "--m1-policies",
@@ -211,15 +214,6 @@ def build_m1_cmd(args: argparse.Namespace, out_dir: Path) -> list[str]:
     ]
 
 
-def build_plot_cmd(out_dir: Path) -> list[str]:
-    return [
-        sys.executable,
-        str(ROOT_DIR / "plot_m1_results.py"),
-        "--m1-dir",
-        str(out_dir / "m1"),
-    ]
-
-
 def run_cmd(title: str, cmd: list[str], dry_run: bool) -> int:
     print(f"\n=== {title} ===", flush=True)
     print(shlex.join(cmd), flush=True)
@@ -245,7 +239,7 @@ def main() -> int:
     if ret != 0:
         return ret
 
-    return run_cmd("plot M1 results", build_plot_cmd(out_dir), args.dry_run)
+    return 0
 
 
 if __name__ == "__main__":

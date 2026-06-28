@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run an overnight M1 baseline/reorder sweep and aggregate comparisons."""
+"""Legacy overnight sweep for L1V-bottom reorder experiments."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 
-from runall2_constants import ALL_BENCHMARKS, BENCHMARK_ALIASES
+from runall2 import ALL_BENCHMARKS, BENCHMARK_ALIASES
 
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -177,7 +177,7 @@ def expand_benchmarks(selection: str) -> list[str]:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run baseline once, sweep simulator-side M1 reorder configs, "
+            "Run baseline once, sweep legacy L1V-bottom reorder configs, "
             "compare each run, and aggregate datapath evidence."
         )
     )

@@ -81,6 +81,10 @@ var l1vBottomReorderWindowFlag = flag.Int("l1v-bottom-reorder-window", 0,
 	"Maximum entries in the optional L1V bottom reorder queue. 0 disables the queue.")
 var l1vBottomReorderMaxAgeNSFlag = flag.Uint64("l1v-bottom-reorder-max-age-ns", 0,
 	"Maximum L1V bottom reorder queue age in ns. 0 means unlimited.")
+var l2DirBatchWindowFlag = flag.Int("l2-dir-batch-window", 0,
+	"Maximum same-set L2 directory requests to batch into one lookup. 0 disables batching.")
+var l2DramAccessUnitCoalesceFlag = flag.Bool("l2-dram-access-unit-coalesce", false,
+	"Coalesce adjacent L2 cache-line fills into one DRAM access-unit read.")
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run paired baseline vs simulator-side M1 HLQ experiments."""
+"""Legacy paired baseline vs L1V-bottom HLQ experiments."""
 
 from __future__ import annotations
 
@@ -36,7 +36,10 @@ def normalize_option_dashes(argv: list[str]) -> list[str]:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run baseline and simulator-side HLQ, then compare datapath evidence."
+        description=(
+            "Legacy runner for baseline vs L1V-bottom HLQ. "
+            "Use run_m1_clean_compare.py for current Mechanism 1."
+        )
     )
     parser.add_argument("--benchmarks", default="traditional")
     parser.add_argument("--configs", default="baseline")

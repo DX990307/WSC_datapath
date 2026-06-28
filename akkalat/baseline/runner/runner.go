@@ -247,6 +247,8 @@ func (r *Runner) buildTimingPlatform() {
 			*l1vBottomReorderWindowFlag,
 			*l1vBottomReorderMaxAgeNSFlag,
 		).
+		WithL2DirBatch(*l2DirBatchWindowFlag).
+		WithL2DramAccessUnitCoalescing(*l2DramAccessUnitCoalesceFlag).
 		WithForceLocalDataAccess(*forceLocalDataAccessFlag)
 
 	if *sharingTracing {

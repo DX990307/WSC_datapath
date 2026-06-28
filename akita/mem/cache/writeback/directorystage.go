@@ -13,17 +13,28 @@ import (
 )
 
 type dirPipelineItem struct {
-	trans *transaction
+	transactions []*transaction
 }
 
-func (i dirPipelineItem) TaskID() string {
-	return i.trans.id + "_dir_pipeline"
+func (i *dirPipelineItem) TaskID() string {
+	return i.current().id + "_dir_pipeline"
+}
+
+func (i *dirPipelineItem) current() *transaction {
+	return i.transactions[0]
+}
+
+func (i *dirPipelineItem) popCurrent() bool {
+	i.transactions = i.transactions[1:]
+	return len(i.transactions) == 0
 }
 
 type directoryStage struct {
 	cache    *Cache
 	pipeline pipelining.Pipeline
 	buf      sim.Buffer
+
+	processingItem *dirPipelineItem
 }
 
 func (ds *directoryStage) Tick(now sim.VTimeInSec) (madeProgress bool) {
@@ -47,7 +58,8 @@ func (ds *directoryStage) processTransaction(
 			break
 		}
 
-		trans := item.(dirPipelineItem).trans
+		ds.processingItem = item.(*dirPipelineItem)
+		trans := ds.processingItem.current()
 
 		addr := trans.accessReq().GetAddress()
 		cacheLineID, _ := getCacheLineID(addr, ds.cache.log2BlockSize)
@@ -62,6 +74,7 @@ func (ds *directoryStage) processTransaction(
 
 		madeProgress = ds.doWrite(now, trans) || madeProgress
 	}
+	ds.processingItem = nil
 
 	return madeProgress
 }
@@ -79,22 +92,108 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 			break
 		}
 
-		trans := item.(*transaction)
-		if req := trans.accessReq(); req != nil {
-			memtrace.RecordMemoryPathL2DirStart(
-				ds.cache.Name(),
-				req.Meta().ID,
-				accessReqInfo(req),
-				now,
-			)
-		}
-		ds.pipeline.Accept(now, dirPipelineItem{trans})
-		ds.cache.dirStageBuffer.Pop()
+		first := item.(*transaction)
+		batch := ds.collectDirBatch(now, first)
+		ds.pipeline.Accept(now, &dirPipelineItem{
+			transactions: batch,
+		})
 
 		madeProgress = true
 	}
 
 	return madeProgress
+}
+
+func (ds *directoryStage) collectDirBatch(
+	now sim.VTimeInSec,
+	first *transaction,
+) []*transaction {
+	batch := []*transaction{first}
+	ds.recordDirStart(now, first)
+	ds.cache.dirStageBuffer.Pop()
+
+	window := ds.cache.l2DirBatchWindow
+	if window <= 1 {
+		return batch
+	}
+
+	firstSet, ok := ds.cacheSetID(first)
+	if !ok {
+		ds.recordDirBatch(batch)
+		return batch
+	}
+
+	for len(batch) < window {
+		item := ds.cache.dirStageBuffer.Peek()
+		if item == nil {
+			break
+		}
+
+		next := item.(*transaction)
+		nextSet, ok := ds.cacheSetID(next)
+		if !ok || nextSet != firstSet {
+			break
+		}
+
+		batch = append(batch, next)
+		ds.recordDirStart(now, next)
+		ds.cache.dirStageBuffer.Pop()
+	}
+
+	ds.recordDirBatch(batch)
+	return batch
+}
+
+func (ds *directoryStage) recordDirStart(
+	now sim.VTimeInSec,
+	trans *transaction,
+) {
+	if req := trans.accessReq(); req != nil {
+		memtrace.RecordMemoryPathL2DirStart(
+			ds.cache.Name(),
+			req.Meta().ID,
+			accessReqInfo(req),
+			now,
+		)
+	}
+}
+
+func (ds *directoryStage) recordDirBatch(batch []*transaction) {
+	if len(batch) == 0 {
+		return
+	}
+
+	ds.cache.l2BatchStats.DirBatchGroups++
+	ds.cache.l2BatchStats.DirBatchRequests += uint64(len(batch))
+	if uint64(len(batch)) > ds.cache.l2BatchStats.DirMaxBatchSize {
+		ds.cache.l2BatchStats.DirMaxBatchSize = uint64(len(batch))
+	}
+}
+
+func (ds *directoryStage) cacheSetID(trans *transaction) (int, bool) {
+	directory, ok := ds.cache.directory.(*cache.DirectoryImpl)
+	if !ok {
+		return 0, false
+	}
+
+	req := trans.accessReq()
+	if req == nil {
+		return 0, false
+	}
+
+	addr := req.GetAddress()
+	if directory.AddrConverter != nil {
+		addr = directory.AddrConverter.ConvertExternalToInternal(addr)
+	}
+
+	setID := int(addr / uint64(directory.BlockSize) % uint64(directory.NumSets))
+	return setID, true
+}
+
+func (ds *directoryStage) popDirTransaction() {
+	if ds.processingItem == nil || ds.processingItem.popCurrent() {
+		ds.buf.Pop()
+	}
 }
 
 func (ds *directoryStage) Reset(now sim.VTimeInSec) {
@@ -131,7 +230,7 @@ func (ds *directoryStage) handleReadMSHRHit(
 ) bool {
 	trans.mshrEntry = mshrEntry
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
-	ds.buf.Pop()
+	ds.popDirTransaction()
 
 	tracing.AddTaskStep(
 		tracing.MsgIDAtReceiver(trans.read, ds.cache),
@@ -296,7 +395,7 @@ func (ds *directoryStage) doWriteMSHRHit(
 ) bool {
 	trans.mshrEntry = mshrEntry
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
-	ds.buf.Pop()
+	ds.popDirTransaction()
 
 	return true
 }
@@ -407,7 +506,7 @@ func (ds *directoryStage) readFromBank(
 	block.ReadCount++
 	trans.block = block
 	trans.action = bankReadHit
-	ds.buf.Pop()
+	ds.popDirTransaction()
 	bankBuf.Push(trans)
 	return true
 }
@@ -434,7 +533,7 @@ func (ds *directoryStage) writeToBank(
 	block.PID = trans.write.PID
 	trans.block = block
 	trans.action = bankWriteHit
-	ds.buf.Pop()
+	ds.popDirTransaction()
 	bankBuf.Push(trans)
 
 	return true
@@ -468,7 +567,7 @@ func (ds *directoryStage) evict(
 	ds.updateTransForEviction(trans, victim, pid, cacheLineID)
 	ds.updateVictimBlockMetaData(victim, cacheLineID, pid)
 
-	ds.buf.Pop()
+	ds.popDirTransaction()
 	bankBuf.Push(trans)
 	ds.cache.evictingList[trans.victim.Tag] = true
 
@@ -576,7 +675,7 @@ func (ds *directoryStage) fetch(
 		fmt.Sprintf("add-mshr-entry-0x%x-0x%x", mshrEntry.Address, block.Tag),
 	)
 
-	ds.buf.Pop()
+	ds.popDirTransaction()
 
 	trans.action = writeBufferFetch
 	trans.fetchPID = pid

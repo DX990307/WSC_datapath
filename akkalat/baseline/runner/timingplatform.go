@@ -49,6 +49,8 @@ type R9NanoPlatformBuilder struct {
 	l1vBottomReorderPolicy   string
 	l1vBottomReorderWindow   int
 	l1vBottomReorderMaxAgeNS uint64
+	l2DirBatchWindow         int
+	l2DramAccessUnitCoalesce bool
 	forceLocalDataAccess     bool
 
 	engine       sim.Engine
@@ -255,6 +257,20 @@ func (b R9NanoPlatformBuilder) WithL1VBottomReorder(
 	b.l1vBottomReorderPolicy = policy
 	b.l1vBottomReorderWindow = window
 	b.l1vBottomReorderMaxAgeNS = maxAgeNS
+	return b
+}
+
+// WithL2DirBatch configures same-set directory batching in the L2 caches.
+func (b R9NanoPlatformBuilder) WithL2DirBatch(window int) R9NanoPlatformBuilder {
+	b.l2DirBatchWindow = window
+	return b
+}
+
+// WithL2DramAccessUnitCoalescing configures DRAM-access-unit fill coalescing.
+func (b R9NanoPlatformBuilder) WithL2DramAccessUnitCoalescing(
+	enable bool,
+) R9NanoPlatformBuilder {
+	b.l2DramAccessUnitCoalesce = enable
 	return b
 }
 
@@ -538,6 +554,8 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 			b.l1vBottomReorderWindow,
 			b.l1vBottomReorderMaxAgeNS,
 		).
+		WithL2DirBatch(b.l2DirBatchWindow).
+		WithL2DramAccessUnitCoalescing(b.l2DramAccessUnitCoalesce).
 		WithForceLocalDataAccess(b.forceLocalDataAccess).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).
