@@ -40,6 +40,22 @@ type Comp struct {
 	transactionsFromOutside []transaction
 	transactionsFromInside  []transaction
 
+	m2RDMABatchEnabled      bool
+	m2RDMAMaxBatchLines     int
+	m2RDMAMaxWait           sim.VTimeInSec
+	m2RDMABatchTableEntries int
+
+	m2RequesterBatches     map[m2RDMABatchKey]*m2RequesterBatch
+	m2RequesterBatchOrder  []*m2RequesterBatch
+	m2RequesterInflight    map[string]*m2RequesterBatch
+	m2RequesterPendingRsps []m2PendingRequesterRsp
+
+	m2OwnerPendingLocalReqs []*m2OwnerSubReq
+	m2OwnerSubReqs          map[string]*m2OwnerSubReq
+	m2OwnerPendingBatchRsps []*BatchReadRsp
+
+	M2RDMABatchStats RDMABatchStats
+
 	firstSeenFromL1Req      map[string]sim.VTimeInSec
 	firstSeenFromOutsideReq map[string]sim.VTimeInSec
 	firstSeenFromL2Rsp      map[string]sim.VTimeInSec
@@ -59,9 +75,16 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 	if c.isDraining {
 		madeProgress = c.drainRDMA(now) || madeProgress
 	}
+	madeProgress = c.processM2RequesterPendingRsps(now) || madeProgress
+	madeProgress = c.processM2OwnerPendingLocalReqs(now) || madeProgress
+	madeProgress = c.processM2OwnerPendingBatchRsps(now) || madeProgress
 	madeProgress = c.processFromL1(now) || madeProgress
+	madeProgress = c.processM2RequesterBatches(now, false) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
 	madeProgress = c.processFromOutside(now) || madeProgress
+	madeProgress = c.processM2RequesterPendingRsps(now) || madeProgress
+	madeProgress = c.processM2OwnerPendingLocalReqs(now) || madeProgress
+	madeProgress = c.processM2OwnerPendingBatchRsps(now) || madeProgress
 
 	return madeProgress
 }
@@ -105,6 +128,10 @@ func (c *Comp) processRDMARestartReq(now sim.VTimeInSec) bool {
 }
 
 func (c *Comp) drainRDMA(now sim.VTimeInSec) bool {
+	if c.processM2RequesterBatches(now, true) {
+		return true
+	}
+
 	if c.fullyDrained() {
 		drainCompleteRsp := DrainRspBuilder{}.
 			WithSendTime(now).
@@ -124,7 +151,8 @@ func (c *Comp) drainRDMA(now sim.VTimeInSec) bool {
 
 func (c *Comp) fullyDrained() bool {
 	return len(c.transactionsFromOutside) == 0 &&
-		len(c.transactionsFromInside) == 0
+		len(c.transactionsFromInside) == 0 &&
+		!c.m2HasPendingWork()
 }
 
 func (c *Comp) firstSeen(
@@ -185,6 +213,14 @@ func (c *Comp) processFromL2(now sim.VTimeInSec) bool {
 		}
 		switch req := req.(type) {
 		case mem.AccessRsp:
+			if c.isM2OwnerSubRsp(req) {
+				ret := c.processM2OwnerSubRspFromL2(now, req)
+				if !ret {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			ret := c.processRspFromL2(now, req)
 			if !ret {
 				return madeProgress
@@ -204,6 +240,18 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			return madeProgress
 		}
 		switch req := req.(type) {
+		case *BatchReadReq:
+			ret := c.processM2BatchReqFromOutside(now, req)
+			if !ret {
+				return madeProgress
+			}
+			madeProgress = true
+		case *BatchReadRsp:
+			ret := c.processM2BatchRspFromOutside(now, req)
+			if !ret {
+				return madeProgress
+			}
+			madeProgress = true
 		case mem.AccessReq:
 			ret := c.processReqFromOutside(now, req)
 			if !ret {
@@ -227,6 +275,10 @@ func (c *Comp) processReqFromL1(
 	now sim.VTimeInSec,
 	req mem.AccessReq,
 ) bool {
+	if handled, madeProgress := c.tryProcessM2ReqFromL1(now, req); handled {
+		return madeProgress
+	}
+
 	firstSeen := c.firstSeen(&c.firstSeenFromL1Req, req.Meta().ID, now)
 	dst := c.RemoteRDMAAddressTable.Find(req.GetAddress())
 
@@ -495,6 +547,8 @@ func rdmaAccessReqInfo(req sim.Msg) interface{} {
 	case *mem.ReadReq:
 		return req.Info
 	case *mem.WriteReq:
+		return req.Info
+	case *BatchReadReq:
 		return req.Info
 	default:
 		return nil

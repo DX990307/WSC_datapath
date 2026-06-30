@@ -52,6 +52,10 @@ type R9NanoPlatformBuilder struct {
 	l2DirBatchWindow         int
 	l2DramAccessUnitCoalesce bool
 	forceLocalDataAccess     bool
+	m2RDMABatchEnabled       bool
+	m2RDMAMaxBatchLines      int
+	m2RDMAMaxWaitNS          uint64
+	m2RDMABatchTableEntries  int
 
 	engine       sim.Engine
 	visTracer    tracing.Tracer
@@ -74,19 +78,22 @@ type R9NanoPlatformBuilder struct {
 // MakeR9NanoBuilder creates a EmuBuilder with default parameters.
 func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 	b := R9NanoPlatformBuilder{
-		tileWidth:              7,
-		tileHeight:             7,
-		log2PageSize:           12,
-		visTraceStartTime:      -1,
-		visTraceEndTime:        -1,
-		switchLatency:          20,
-		networkFlitSize:        16,
-		numSAPerGPU:            8,
-		numCUPerSA:             4,
-		maxNumHops:             -1,
-		l1vMSHREntries:         160,
-		l1vMaxConcurrentTrans:  160,
-		l1vBottomReorderPolicy: "none",
+		tileWidth:               7,
+		tileHeight:              7,
+		log2PageSize:            12,
+		visTraceStartTime:       -1,
+		visTraceEndTime:         -1,
+		switchLatency:           20,
+		networkFlitSize:         16,
+		numSAPerGPU:             8,
+		numCUPerSA:              4,
+		maxNumHops:              -1,
+		l1vMSHREntries:          160,
+		l1vMaxConcurrentTrans:   160,
+		l1vBottomReorderPolicy:  "none",
+		m2RDMAMaxBatchLines:     8,
+		m2RDMAMaxWaitNS:         25,
+		m2RDMABatchTableEntries: 32,
 	}
 	return b
 }
@@ -279,6 +286,20 @@ func (b R9NanoPlatformBuilder) WithForceLocalDataAccess(
 	enable bool,
 ) R9NanoPlatformBuilder {
 	b.forceLocalDataAccess = enable
+	return b
+}
+
+// WithM2RDMABatch configures requester-side RDMA read batching.
+func (b R9NanoPlatformBuilder) WithM2RDMABatch(
+	enable bool,
+	maxBatchLines int,
+	maxWaitNS uint64,
+	batchTableEntries int,
+) R9NanoPlatformBuilder {
+	b.m2RDMABatchEnabled = enable
+	b.m2RDMAMaxBatchLines = maxBatchLines
+	b.m2RDMAMaxWaitNS = maxWaitNS
+	b.m2RDMABatchTableEntries = batchTableEntries
 	return b
 }
 
@@ -557,6 +578,12 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithL2DirBatch(b.l2DirBatchWindow).
 		WithL2DramAccessUnitCoalescing(b.l2DramAccessUnitCoalesce).
 		WithForceLocalDataAccess(b.forceLocalDataAccess).
+		WithM2RDMABatch(
+			b.m2RDMABatchEnabled,
+			b.m2RDMAMaxBatchLines,
+			b.m2RDMAMaxWaitNS,
+			b.m2RDMABatchTableEntries,
+		).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).
 		WithGMMUPageTable(pageTable)

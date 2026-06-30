@@ -249,7 +249,13 @@ func (r *Runner) buildTimingPlatform() {
 		).
 		WithL2DirBatch(*l2DirBatchWindowFlag).
 		WithL2DramAccessUnitCoalescing(*l2DramAccessUnitCoalesceFlag).
-		WithForceLocalDataAccess(*forceLocalDataAccessFlag)
+		WithForceLocalDataAccess(*forceLocalDataAccessFlag).
+		WithM2RDMABatch(
+			*m2RDMABatchFlag,
+			*m2RDMAMaxBatchLinesFlag,
+			*m2RDMAMaxWaitNSFlag,
+			*m2RDMABatchTableEntriesFlag,
+		)
 
 	if *sharingTracing {
 		traceWriter, err := newPageSharingTraceWriter(

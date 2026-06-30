@@ -12,13 +12,21 @@ type Builder struct {
 	localModules           mem.LowModuleFinder
 	RemoteRDMAAddressTable mem.LowModuleFinder
 	bufferSize             int
+
+	m2RDMABatchEnabled      bool
+	m2RDMAMaxBatchLines     int
+	m2RDMAMaxWaitNS         uint64
+	m2RDMABatchTableEntries int
 }
 
 // MakeBuilder creates a new builder with default configuration values.
 func MakeBuilder() Builder {
 	return Builder{
-		freq:       1 * sim.GHz,
-		bufferSize: 128,
+		freq:                    1 * sim.GHz,
+		bufferSize:              128,
+		m2RDMAMaxBatchLines:     8,
+		m2RDMAMaxWaitNS:         25,
+		m2RDMABatchTableEntries: 32,
 	}
 }
 
@@ -52,6 +60,20 @@ func (b Builder) WithRemoteModules(m mem.LowModuleFinder) Builder {
 	return b
 }
 
+// WithM2RDMABatch configures requester-side RDMA read batching.
+func (b Builder) WithM2RDMABatch(
+	enable bool,
+	maxBatchLines int,
+	maxWaitNS uint64,
+	batchTableEntries int,
+) Builder {
+	b.m2RDMABatchEnabled = enable
+	b.m2RDMAMaxBatchLines = maxBatchLines
+	b.m2RDMAMaxWaitNS = maxWaitNS
+	b.m2RDMABatchTableEntries = batchTableEntries
+	return b
+}
+
 // Build creates a RDMA with the given parameters.
 func (b Builder) Build(name string) *Comp {
 	rdma := &Comp{}
@@ -60,6 +82,12 @@ func (b Builder) Build(name string) *Comp {
 
 	rdma.localModules = b.localModules
 	rdma.RemoteRDMAAddressTable = b.RemoteRDMAAddressTable
+	rdma.ConfigureM2RDMABatch(
+		b.m2RDMABatchEnabled,
+		b.m2RDMAMaxBatchLines,
+		b.m2RDMAMaxWaitNS,
+		b.m2RDMABatchTableEntries,
+	)
 	// rdma.SetFreq(b.freq)
 
 	rdma.ToL1 = sim.NewLimitNumMsgPort(rdma, b.bufferSize, name+".ToL1")

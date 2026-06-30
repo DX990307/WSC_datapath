@@ -50,6 +50,10 @@ type R9NanoGPUBuilder struct {
 	l2DirBatchWindow               int
 	l2DramAccessUnitCoalesce       bool
 	forceLocalDataAccess           bool
+	m2RDMABatchEnabled             bool
+	m2RDMAMaxBatchLines            int
+	m2RDMAMaxWaitNS                uint64
+	m2RDMABatchTableEntries        int
 
 	enableISADebugging bool
 	enableMemTracing   bool
@@ -118,6 +122,9 @@ func MakeR9NanoGPUBuilder() R9NanoGPUBuilder {
 		l1vMSHREntries:                 160,
 		l1vMaxConcurrentTrans:          160,
 		l1vBottomReorderPolicy:         "none",
+		m2RDMAMaxBatchLines:            8,
+		m2RDMAMaxWaitNS:                25,
+		m2RDMABatchTableEntries:        32,
 	}
 	return b
 }
@@ -300,6 +307,20 @@ func (b R9NanoGPUBuilder) WithL2DramAccessUnitCoalescing(
 // their normal routing.
 func (b R9NanoGPUBuilder) WithForceLocalDataAccess(enable bool) R9NanoGPUBuilder {
 	b.forceLocalDataAccess = enable
+	return b
+}
+
+// WithM2RDMABatch configures requester-side RDMA read batching.
+func (b R9NanoGPUBuilder) WithM2RDMABatch(
+	enable bool,
+	maxBatchLines int,
+	maxWaitNS uint64,
+	batchTableEntries int,
+) R9NanoGPUBuilder {
+	b.m2RDMABatchEnabled = enable
+	b.m2RDMAMaxBatchLines = maxBatchLines
+	b.m2RDMAMaxWaitNS = maxWaitNS
+	b.m2RDMABatchTableEntries = batchTableEntries
 	return b
 }
 
@@ -1045,6 +1066,12 @@ func (b *R9NanoGPUBuilder) buildRDMAEngine() {
 		WithFreq(b.freq).
 		WithLocalModules(b.lowModuleFinderForL1).
 		WithRemoteModules(nil).
+		WithM2RDMABatch(
+			b.m2RDMABatchEnabled,
+			b.m2RDMAMaxBatchLines,
+			b.m2RDMAMaxWaitNS,
+			b.m2RDMABatchTableEntries,
+		).
 		Build(name)
 	b.gpu.RDMAEngine = b.rdmaEngine
 	if b.monitor != nil {

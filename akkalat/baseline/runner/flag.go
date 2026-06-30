@@ -88,6 +88,14 @@ var l2DramAccessUnitCoalesceFlag = flag.Bool("l2-dram-access-unit-coalesce", fal
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")
+var m2RDMABatchFlag = flag.Bool("m2-rdma-batch", false,
+	"Enable requester-side RDMA read batching for remote 64B cache-line reads.")
+var m2RDMAMaxBatchLinesFlag = flag.Int("m2-rdma-max-batch-lines", 8,
+	"Maximum unique 64B cache lines per M2 RDMA batch packet.")
+var m2RDMAMaxWaitNSFlag = flag.Uint64("m2-rdma-max-wait-ns", 25,
+	"Maximum requester-side M2 RDMA batch queue wait in ns.")
+var m2RDMABatchTableEntriesFlag = flag.Int("m2-rdma-batch-table-entries", 32,
+	"Maximum active requester-side M2 RDMA batch queues per RDMA engine.")
 var maxNumHopsFlag = flag.Int("max-num-hops", -1,
 	"The maximum number of hops in the network")
 var numMemBankFlag = flag.Int("num-memory-banks", 16,

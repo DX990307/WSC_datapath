@@ -1,166 +1,137 @@
-#!/usr/bin/env python3
-"""Run Akkalat benchmark experiments.
-
-This file is intentionally self-contained. It owns benchmark/config selection,
-command construction, build, process management, dry-run, and rerun-missing
-logic so the main experiment path does not depend on helper modules.
-"""
-
 import argparse
-import atexit
-import concurrent.futures
 from datetime import datetime
 import os
 from pathlib import Path
 import shlex
-import signal
 import subprocess
-import threading
-
+import time
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-TARGETS = ["baseline"]
-
-MAX_WORKERS = 15
-DEFAULT_MAX_WG = 78600
-DEFAULT_MMUTLB_LOOKUP_LATENCY = 80
-DEFAULT_TIMEOUT_MINUTES = 0
-
-DEFAULT_RUN_BENCHMARKS = [
-    "bert",
-    "conv2d",
-    "gpt",
-    "maxpooling",
-    "avgpooling",
-    "fulllayer",
-    "fulllayer-large",
-    "fulllayer-gemm-tiny",
-    "fulllayer-gemm-debug",
-    "fulllayer-7bcompute",
-    "fulllayer-1gb",
-    "im2col",
-    "kvcache",
-    "kvcache-decode",
-    "kvcache-decode-30b",
-    "matrixmultiplication",
-    "matrixmultiplication-middletile",
-    "matrixtranspose",
-    "matrixtranspose-middletile",
-    "relu",
-    "resnet",
+TARGETS = [
+    "baseline",
 ]
 
-TRADITIONAL_LITE_BENCHMARKS = [
-    "conv2d",
-    "maxpooling",
-    "avgpooling",
-    "im2col",
-    "matrixmultiplication",
-    "matrixmultiplication-middletile",
-    "matrixtranspose",
-    "matrixtranspose-middletile",
-    "relu",
-]
+DEFAULT_MAX_WORKERS = 0
+DEFAULT_MAX_WORKLOADS = 16
+DEFAULT_MIN_FREE_RAM_GB = 60.0
+DEFAULT_MEMORY_SCAN_INTERVAL_MINUTES = 30.0
+INITIAL_FILL_SETTLE_SECONDS = 2.0
 
 TRADITIONAL_BENCHMARKS = [
-    "aes",
     "bitonicsort",
-    "fastwalshtransform",
-    "fir",
-    "fft",
-    "floydwarshall",
-    "im2col",
-    "kmeans",
-    "matrixmultiplication",
-    "matrixmultiplication-middletile",
-    "pagerank",
     "relu",
-    "simpleconvolution",
     "spmv",
-]
-
-LLM_BENCHMARKS = [
-    "bert",
-    "gpt",
-    "kvcache",
-    "kvcache-decode",
-    "kvcache-decode-30b",
-    "resnet",
-]
-
-LLM_LIKE_BOTTLENECK_BENCHMARKS = [
-    "matrixmultiplication-llm-prefill-attn",
-    "matrixmultiplication-llm-decode-attn",
-    "matrixmultiplication-llm-prefill-mlp-up",
-    "matrixmultiplication-llm-decode-mlp-up",
-    "matrixmultiplication-llm-prefill-mlp-down",
-    "matrixmultiplication-llm-decode-mlp-down",
-    "conv2d-llm-prefill-pointwise",
-    "conv2d-llm-decode-pointwise",
-    "conv2d-llm-prefill-local",
-    "conv2d-llm-decode-local",
+    "matrixmultiplication",
+    "matrixtranspose",
+    "fastwalshtransform",
+    "fft",
+    "kmeans",
+    "im2col",
+    "aes",
+    "floydwarshall",
+    "pagerank",
+    "simpleconvolution",
+    "fir",
 ]
 
 EXPERIMENTAL_BENCHMARKS = [
-    "fulllayer-large",
-    "fulllayer-gemm-tiny",
-    "fulllayer-gemm-debug",
-    "fulllayer-7bcompute",
-    "fulllayer-1gb",
+    "resnet",
     "llmop",
+    "llminference",
+    "matrixmultiplication-ptw",
+    "matrixmultiplication-ptw-heavy",
 ]
 
+REMOVED_MONOLITHIC_LLM_BENCHMARKS = {
+    "bert",
+    "gpt",
+    "kvcache",
+    "kvcache-decode",
+    "kvcache-decode-30b",
+}
+
 ALL_BENCHMARKS = list(dict.fromkeys(
-    TRADITIONAL_BENCHMARKS
-    + LLM_BENCHMARKS
-    + LLM_LIKE_BOTTLENECK_BENCHMARKS
-    + EXPERIMENTAL_BENCHMARKS
+    TRADITIONAL_BENCHMARKS + EXPERIMENTAL_BENCHMARKS
 ))
+
+DEFAULT_RUN_BENCHMARKS = [
+    # Edit this list to control the default run set when --benchmarks is omitted.
+    # Comment out any workload you do not want in the default sweep.
+    "bitonicsort",
+    "im2col",
+    "floydwarshall",
+    "aes",
+    "relu",
+    "spmv",
+    "matrixmultiplication-ptw",
+    # "matrixmultiplication",
+    "matrixtranspose",
+    "fastwalshtransform",
+    "fft",
+    "kmeans",
+    "im2col",
+    "pagerank",
+    "simpleconvolution",
+    "fir",
+    # "resnet",
+    # "llmop",
+    # "llminference",
+    # "matrixmultiplication-ptw-heavy",
+]
 
 BENCHMARK_ALIASES = {
     "all": ALL_BENCHMARKS,
-    "default": DEFAULT_RUN_BENCHMARKS,
-    "experimental": EXPERIMENTAL_BENCHMARKS,
-    "llm-like-bottleneck": LLM_LIKE_BOTTLENECK_BENCHMARKS,
     "traditional": TRADITIONAL_BENCHMARKS,
-    "traditional-lite": TRADITIONAL_LITE_BENCHMARKS,
-    "llm": LLM_BENCHMARKS,
+    "llm": ["llmop"],
+    "experimental": EXPERIMENTAL_BENCHMARKS,
 }
 
-BENCHMARKS_BY_TARGET = {"baseline": ["default"]}
-DEFAULT_BENCHMARK_FLAGS = []
+
+# Configure which benchmarks to run for each target here. By default, this uses
+# DEFAULT_RUN_BENCHMARKS above so the default run set is controlled in-script.
+BENCHMARKS_BY_TARGET = {
+    "400latency": DEFAULT_RUN_BENCHMARKS,
+    # "TLBSensitiveStudy": ["all"],
+}
+
+DEFAULT_BENCHMARK_FLAGS = [
+    # "-max-wg=157200",
+    "-max-wg=76800",
+    # "-max-wg=38400",
+]
 
 BASE_COMMON_FLAGS = [
     "-timing",
     "-num-memory-banks=16",
     "-bandwidth=48",
-    "-switch-latency=1",
+    "-switch-latency=32",
     "-magic-memory-copy",
     "-report-all",
 ]
 
-DEFAULT_SAMPLED_SWEEP_WARMUPS = [64, 128, 256, 512, 1024, 2048, 4096]
-DEFAULT_SAMPLED_SWEEP_GRANULARITIES = [
-    128,
-    256,
-    512,
-    1024,
-    2048,
-    4096,
-    8192,
-]
-DEFAULT_SAMPLED_PARALLEL_LIMIT = MAX_WORKERS
+DEFAULT_MMUTLB_LOOKUP_LATENCY = 80
+DEFAULT_TIMEOUT_MINUTES = 0.0
+DEFAULT_PHOTON_SAMPLED_WARMUP = 512
+DEFAULT_PHOTON_SAMPLED_GRANULARITY = 512
+DEFAULT_PHOTON_LOOP_SAMPLED_WARMUP = 512
 
-BALANCED_SAMPLED_SWEEP_WARMUPS = [128, 512, 1024]
-BALANCED_SAMPLED_SWEEP_GRANULARITIES = [512, 1024]
-BALANCED_SAMPLED_THRESHOLD = 0.02
-BALANCED_BRANCH_COVERAGE_THRESHOLD = 0.98
-BALANCED_BRANCH_LEAST_SQUARE_THRESHOLD = 0.005
-BALANCED_KERNEL_DISTANCE_THRESHOLD = 8
+M2_DEFAULT_MAX_BATCH_LINES = 8
+M2_DEFAULT_MAX_WAIT_NS = 25
+M2_DEFAULT_BATCH_TABLE_ENTRIES = 32
+
+GLOBAL_PHOTON_FLAGS = [
+    "-sampled",
+    "-branch-sampled",
+    "-kernel-sampled",
+    "-loop-sampled",
+]
+PHOTON_BRANCH_LOOP_FLAGS = {
+    "-branch-sampled",
+    "-loop-sampled",
+}
 
 CONFIGS = [
     ("baseline", []),
-    ("all_local", ["-force-local-data-access"]),
     ("sample_all", ["-sampled", "-branch-sampled", "-kernel-sampled"]),
     (
         "sample_all_loop",
@@ -172,61 +143,126 @@ CONFIGS = [
     ("sample_loop", ["-loop-sampled"]),
 ]
 
-QUICK_BENCHMARKS = ["relu"]
-QUICK_CONFIGS = [
-    "baseline",
-    "sample_all",
-    "sample_all_loop",
-    "sample_wf",
-    "sample_branch",
-    "sample_kernel",
-    "sample_loop",
-]
+MECHANISM_ALIASES = {
+    "all": ["baseline", "m1", "m2", "m1_m2"],
+    "m1+m2": ["m1_m2"],
+    "mechanism1": ["m1"],
+    "mechanism2": ["m2"],
+}
+
+MECHANISM_NAMES = ["baseline", "m1", "m2", "m1_m2"]
 
 output_dir = ""
-running_processes = set()
-running_processes_lock = threading.Lock()
+
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Run baseline benchmark experiments."
-    )
+    parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--rerun-missing",
+        "--only-config",
+        dest="only_config",
         default="",
-        help="Reuse a results directory and rerun missing metrics.",
+        help="Only run experiments with this config name.",
     )
     parser.add_argument(
         "--output-dir",
+        dest="output_dir",
         default="",
-        help="Write outputs to this directory instead of a timestamped one.",
+        help=(
+            "Write results to this directory instead of a timestamped directory "
+            "under akkalat/results."
+        ),
     )
     parser.add_argument(
-        "--max-workers",
-        type=int,
-        default=MAX_WORKERS,
-        help="Maximum number of concurrent experiments.",
+        "--target",
+        "--targets",
+        dest="targets",
+        default=",".join(TARGETS),
+        help=(
+            "Comma-separated benchmark binary targets under akkalat/. "
+            "Default: baseline."
+        ),
     )
     parser.add_argument(
         "--skip-build",
+        dest="skip_build",
         action="store_true",
-        help="Assume target binaries are already built.",
+        help="Use existing target binaries and skip go build.",
+    )
+    parser.add_argument(
+        "--mechanisms",
+        "--mechanism",
+        dest="mechanisms",
+        default="baseline",
+        help=(
+            "Comma-separated mechanism arms to run: baseline,m1,m2,m1_m2,all. "
+            "Aliases: mechanism1=m1, mechanism2=m2, m1+m2=m1_m2."
+        ),
+    )
+    parser.add_argument(
+        "--m1-l2-dir-batch-window",
+        dest="m1_l2_dir_batch_window",
+        type=int,
+        default=4,
+        help="M1 L2 directory batch window.",
+    )
+    parser.add_argument(
+        "--m2-rdma-max-batch-lines",
+        dest="m2_rdma_max_batch_lines",
+        type=int,
+        default=M2_DEFAULT_MAX_BATCH_LINES,
+        help="M2 maximum unique 64B cache lines per RDMA batch packet.",
+    )
+    parser.add_argument(
+        "--m2-rdma-max-wait-ns",
+        dest="m2_rdma_max_wait_ns",
+        type=int,
+        default=M2_DEFAULT_MAX_WAIT_NS,
+        help="M2 requester-side RDMA batch max wait in ns.",
+    )
+    parser.add_argument(
+        "--m2-rdma-batch-table-entries",
+        dest="m2_rdma_batch_table_entries",
+        type=int,
+        default=M2_DEFAULT_BATCH_TABLE_ENTRIES,
+        help="M2 maximum active requester-side RDMA batch queues per RDMA engine.",
     )
     parser.add_argument(
         "--mmutlb-lookup-latency",
+        dest="mmutlb_lookup_latency",
         type=int,
         default=DEFAULT_MMUTLB_LOOKUP_LATENCY,
-        help="Fixed MMUTLB/IOTLB lookup latency, in cycles.",
+        help="Fixed MMUTLB/IOTLB lookup latency in cycles.",
     )
     parser.add_argument(
-        "--switch-latency",
+        "--rerun-missing",
+        dest="rerun_missing",
+        default="",
+        help="Reuse an existing results directory and rerun only experiments whose metrics CSV is missing.",
+    )
+    parser.add_argument(
+        "--max-workers",
+        dest="max_workers",
         type=int,
-        default=0,
-        help="Override -switch-latency. 0 keeps the default.",
+        default=DEFAULT_MAX_WORKERS,
+        help=(
+            "Legacy optional additional cap on concurrent experiments. 0 means "
+            "only --max-workloads and available RAM control launches."
+        ),
+    )
+    parser.add_argument(
+        "--max-workloads",
+        dest="max_workloads",
+        type=int,
+        default=DEFAULT_MAX_WORKLOADS,
+        help=(
+            "Hard cap on concurrently running benchmark workloads. Must be "
+            f"between 1 and {DEFAULT_MAX_WORKLOADS}."
+        ),
     )
     parser.add_argument(
         "--benchmarks",
+        dest="benchmarks",
         default="",
         help=(
             "Comma-separated benchmark list. Presets: "
@@ -236,83 +272,88 @@ def parse_args():
     )
     parser.add_argument(
         "--configs",
+        dest="configs",
         default="",
         help=(
             "Comma-separated config list. Choices: "
             + ",".join(name for name, _ in CONFIGS)
-            + ". Use all for every config."
+            + ". Use photon_all or all for grouped configs."
         ),
     )
     parser.add_argument(
         "--extra-benchmark-flags",
+        dest="extra_benchmark_flags",
         default="",
         help="Additional flags appended to each benchmark binary command.",
     )
-    parser.add_argument("--quick", action="store_true")
     parser.add_argument(
         "--max-wg",
+        dest="max_wg",
         type=int,
-        default=DEFAULT_MAX_WG,
-        help=f"Pass -max-wg to each benchmark. Defaults to {DEFAULT_MAX_WG}; 0 disables.",
+        default=None,
+        help=(
+            "Pass -max-wg to each benchmark. 0 disables the default cap."
+        ),
     )
     parser.add_argument(
         "--timeout-minutes",
+        dest="timeout_minutes",
         type=float,
         default=DEFAULT_TIMEOUT_MINUTES,
         help="Kill an experiment after this many minutes. 0 disables timeout.",
     )
-    parser.add_argument("--photon-debug", action="store_true")
-    parser.add_argument("--photon-verbose", action="store_true")
-    parser.add_argument("--disable-servers", action="store_true")
-    parser.add_argument("--report-l2-source", action="store_true")
-    parser.add_argument("--l2-source-tile-width", type=int, default=7)
-    parser.add_argument("--force-local-data-access", action="store_true")
-    parser.add_argument("--l2-dir-batch-window", type=int, default=0)
-    parser.add_argument("--l2-dram-access-unit-coalesce", action="store_true")
-    add_legacy_compat_args(parser)
-    add_sampled_args(parser)
     parser.add_argument(
-        "--dry-run",
+        "--min-free-ram-gb",
+        dest="min_free_ram_gb",
+        type=float,
+        default=DEFAULT_MIN_FREE_RAM_GB,
+        help=(
+            "Minimum Linux MemAvailable, in GiB, required before launching the "
+            "next benchmark."
+        ),
+    )
+    parser.add_argument(
+        "--memory-scan-interval-minutes",
+        dest="memory_scan_interval_minutes",
+        type=float,
+        default=DEFAULT_MEMORY_SCAN_INTERVAL_MINUTES,
+        help=(
+            "How often to check MemAvailable and consider launching one "
+            "benchmark. A completed benchmark also triggers one immediate "
+            "memory check."
+        ),
+    )
+    parser.add_argument(
+        "--photon-debug",
         action="store_true",
-        help="Print commands without building or running them.",
-    )
-    return parser.parse_args()
-
-
-def add_legacy_compat_args(parser):
-    hidden = argparse.SUPPRESS
-    parser.add_argument("--l1v-remote-max-inflight", type=int, default=0, help=hidden)
-    parser.add_argument("--l1v-mshr-entries", type=int, default=0, help=hidden)
-    parser.add_argument("--l1v-max-concurrent-trans", type=int, default=0, help=hidden)
-    parser.add_argument("--l1v-bottom-reorder-policy", default="", help=hidden)
-    parser.add_argument("--l1v-bottom-reorder-window", type=int, default=0, help=hidden)
-    parser.add_argument("--l1v-bottom-reorder-max-age-ns", type=int, default=-1, help=hidden)
-    parser.add_argument("--trace-sharing", action="store_true", help=hidden)
-    parser.add_argument("--trace-sharing-sample", type=int, default=1, help=hidden)
-    parser.add_argument("--trace-sharing-max-records", type=int, default=1000000, help=hidden)
-    parser.add_argument("--trace-memory-path", action="store_true", help=hidden)
-    parser.add_argument(
-        "--trace-memory-path-warmup-accesses",
-        type=int,
-        default=100000,
-        help=hidden,
+        help="Add -photon-debug to sampled WSG-style configs.",
     )
     parser.add_argument(
-        "--trace-memory-path-max-records",
-        type=int,
-        default=100000,
-        help=hidden,
-    )
-    parser.add_argument(
-        "--trace-memory-path-exit-on-complete",
+        "--photon",
         action="store_true",
-        help=hidden,
+        help=(
+            "Append the script-level Photon sampled flags to every selected "
+            "config."
+        ),
     )
-
-
-def add_sampled_args(parser):
-    parser.add_argument("--sampled-sweep", action="store_true")
-    parser.add_argument("--balanced-sweep", action="store_true")
+    parser.add_argument(
+        "--photon-no-branch-loop",
+        action="store_true",
+        help=(
+            "When --photon is set, skip -branch-sampled and -loop-sampled "
+            "for debugging sampled execution."
+        ),
+    )
+    parser.add_argument(
+        "--photon-verbose",
+        action="store_true",
+        help="Add -photon-debug and -photon-debug-verbose to sampled configs.",
+    )
+    parser.add_argument(
+        "--disable-servers",
+        action="store_true",
+        help="Deprecated no-op. Servers are always left enabled.",
+    )
     parser.add_argument(
         "--sampled-warmups",
         default="",
@@ -323,191 +364,75 @@ def add_sampled_args(parser):
         default="",
         help="Comma-separated -sampled-granularity values for sampled configs.",
     )
-    parser.add_argument("--sampled-threshold", type=float, default=0)
-    parser.add_argument("--branch-sampled-coverage-threshold", type=float, default=0)
-    parser.add_argument("--branch-sampled-threshold", type=float, default=0)
-    parser.add_argument("--kernel-sampled-threshold", type=int, default=0)
-    parser.add_argument("--kernel-sampled-distance-threshold", type=int, default=0)
-    parser.add_argument("--loop-sampled-warmup", type=int, default=0)
-    parser.add_argument("--loop-sampled-min-iters", type=int, default=0)
-    parser.add_argument("--loop-sampled-threshold", type=float, default=0)
     parser.add_argument(
-        "--allow-sampled-parallel",
+        "--dry-run",
         action="store_true",
-        help="Kept for compatibility; sweeps already use max workers.",
+        help="Print commands without building or running them.",
     )
-    parser.add_argument(
-        "--sampled-parallel-limit",
-        type=int,
-        default=DEFAULT_SAMPLED_PARALLEL_LIMIT,
-        help="Maximum max_workers allowed for sampled sweeps. 0 disables cap.",
-    )
-
-
-def build_common_flags(args):
-    common_flags = BASE_COMMON_FLAGS[:]
-    if args.switch_latency > 0:
-        common_flags = replace_or_append_flag(
-            common_flags,
-            "-switch-latency=",
-            f"-switch-latency={args.switch_latency}",
-        )
-    if args.disable_servers:
-        common_flags.append("-disable-servers")
-    if args.report_l2_source:
-        common_flags.append("-report-l2-source")
-        common_flags.append(f"-l2-source-tile-width={args.l2_source_tile_width}")
-    common_flags.append(f"-mmutlb-lookup-latency={args.mmutlb_lookup_latency}")
-    if args.l1v_remote_max_inflight > 0:
-        common_flags.append(f"-l1v-remote-max-inflight={args.l1v_remote_max_inflight}")
-    if args.l1v_mshr_entries > 0:
-        common_flags.append(f"-l1v-mshr-entries={args.l1v_mshr_entries}")
-    if args.l1v_max_concurrent_trans > 0:
-        common_flags.append(
-            f"-l1v-max-concurrent-trans={args.l1v_max_concurrent_trans}"
-        )
-    if args.l1v_bottom_reorder_policy:
-        common_flags.append(
-            f"-l1v-bottom-reorder-policy={args.l1v_bottom_reorder_policy}"
-        )
-    if args.l1v_bottom_reorder_window > 0:
-        common_flags.append(
-            f"-l1v-bottom-reorder-window={args.l1v_bottom_reorder_window}"
-        )
-    if args.l1v_bottom_reorder_max_age_ns >= 0:
-        common_flags.append(
-            f"-l1v-bottom-reorder-max-age-ns={args.l1v_bottom_reorder_max_age_ns}"
-        )
-    if args.l2_dir_batch_window > 0:
-        common_flags.append(f"-l2-dir-batch-window={args.l2_dir_batch_window}")
-    if args.l2_dram_access_unit_coalesce:
-        common_flags.append("-l2-dram-access-unit-coalesce")
-    if args.force_local_data_access:
-        common_flags.append("-force-local-data-access")
-    if args.max_wg > 0:
-        common_flags.append(f"-max-wg={args.max_wg}")
-    return common_flags
-
-
-def replace_or_append_flag(flags, prefix, value):
-    updated = []
-    replaced = False
-    for flag in flags:
-        if flag.startswith(prefix):
-            updated.append(value)
-            replaced = True
-        else:
-            updated.append(flag)
-    if not replaced:
-        updated.append(value)
-    return updated
-
-
-def build_ablation_configs(args):
-    selected_names = selected_config_names(args)
-    sampled_param_grid = build_sampled_param_grid(args)
-    selected = []
-    for name, flags in CONFIGS:
-        if name not in selected_names:
-            continue
-
-        config_flags = flags[:]
-        if (args.photon_debug or args.photon_verbose) and name != "baseline":
-            config_flags.append("-photon-debug")
-        if args.photon_verbose and name != "baseline":
-            config_flags.append("-photon-debug-verbose")
-
-        config_flags += sampled_control_flags(args, config_flags)
-        if "-sampled" not in config_flags or not sampled_param_grid:
-            selected.append((name, config_flags))
-            continue
-
-        for warmup, granularity in sampled_param_grid:
-            swept_flags = config_flags + [
-                f"-sampled-warmup={warmup}",
-                f"-sampled-granularity={granularity}",
-            ]
-            selected.append((f"{name}_w{warmup}_g{granularity}", swept_flags))
-    return selected
-
-
-def sampled_control_flags(args, config_flags):
-    flags = []
-    add_sampled_thresholds(args, config_flags, flags)
-    add_branch_thresholds(args, config_flags, flags)
-    add_kernel_thresholds(args, config_flags, flags)
-    add_loop_thresholds(args, config_flags, flags)
-    return flags
-
-
-def add_sampled_thresholds(args, config_flags, flags):
-    threshold = positive_or_zero(args.sampled_threshold, "sampled-threshold")
-    if threshold == 0 and args.balanced_sweep:
-        threshold = BALANCED_SAMPLED_THRESHOLD
-    if threshold > 0 and "-sampled" in config_flags:
-        flags.append(f"-sampled-threshold={threshold}")
-
-
-def add_branch_thresholds(args, config_flags, flags):
-    coverage = positive_or_zero(
-        args.branch_sampled_coverage_threshold,
-        "branch-sampled-coverage-threshold",
-    )
-    if coverage == 0 and args.balanced_sweep:
-        coverage = BALANCED_BRANCH_COVERAGE_THRESHOLD
-    if coverage > 0 and "-branch-sampled" in config_flags:
-        flags.append(f"-branch-sampled-coverage-threshold={coverage}")
-
-    threshold = positive_or_zero(
-        args.branch_sampled_threshold,
-        "branch-sampled-threshold",
-    )
-    if threshold == 0 and args.balanced_sweep:
-        threshold = BALANCED_BRANCH_LEAST_SQUARE_THRESHOLD
-    if threshold > 0 and "-branch-sampled" in config_flags:
-        flags.append(f"-branch-sampled-threshold={threshold}")
-
-
-def add_kernel_thresholds(args, config_flags, flags):
-    threshold = positive_or_zero(
-        args.kernel_sampled_threshold,
-        "kernel-sampled-threshold",
-    )
-    if threshold > 0 and "-kernel-sampled" in config_flags:
-        flags.append(f"-kernel-sampled-threshold={threshold}")
-
-    distance = positive_or_zero(
-        args.kernel_sampled_distance_threshold,
-        "kernel-sampled-distance-threshold",
-    )
-    if distance == 0 and args.balanced_sweep:
-        distance = BALANCED_KERNEL_DISTANCE_THRESHOLD
-    if distance > 0 and "-kernel-sampled" in config_flags:
-        flags.append(f"-kernel-sampled-distance-threshold={distance}")
-
-
-def add_loop_thresholds(args, config_flags, flags):
-    warmup = positive_or_zero(args.loop_sampled_warmup, "loop-sampled-warmup")
-    if warmup > 0 and "-loop-sampled" in config_flags:
-        flags.append(f"-loop-sampled-warmup={warmup}")
-
-    min_iters = positive_or_zero(args.loop_sampled_min_iters, "loop-sampled-min-iters")
-    if min_iters > 0 and "-loop-sampled" in config_flags:
-        flags.append(f"-loop-sampled-min-iters={min_iters}")
-
-    threshold = positive_or_zero(args.loop_sampled_threshold, "loop-sampled-threshold")
-    if threshold > 0 and "-loop-sampled" in config_flags:
-        flags.append(f"-loop-sampled-threshold={threshold}")
-
-
-def positive_or_zero(value, label):
-    if value < 0:
-        raise ValueError(f"{label} must be non-negative")
-    return value
+    return parser.parse_args()
 
 
 def parse_csv(value):
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def selected_targets(args):
+    targets = parse_csv(args.targets)
+    if not targets:
+        raise ValueError("--target must include at least one target")
+    return unique_preserving_order(targets)
+
+
+def selected_mechanisms(args):
+    expanded = []
+    for item in parse_csv(args.mechanisms):
+        expanded += MECHANISM_ALIASES.get(item, [item])
+    if not expanded:
+        expanded = ["baseline"]
+
+    mechanisms = unique_preserving_order(expanded)
+    unknown = sorted(set(mechanisms) - set(MECHANISM_NAMES))
+    if unknown:
+        allowed = sorted(set(MECHANISM_NAMES) | set(MECHANISM_ALIASES))
+        raise ValueError(
+            f"unknown mechanism: {','.join(unknown)}. "
+            f"Allowed: {', '.join(allowed)}"
+        )
+    return mechanisms
+
+
+def m1_flags(args):
+    flags = ["-l2-dram-access-unit-coalesce"]
+    if args.m1_l2_dir_batch_window > 0:
+        flags.append(f"-l2-dir-batch-window={args.m1_l2_dir_batch_window}")
+    return flags
+
+
+def m2_flags(args):
+    return [
+        "-m2-rdma-batch",
+        f"-m2-rdma-max-batch-lines={args.m2_rdma_max_batch_lines}",
+        f"-m2-rdma-max-wait-ns={args.m2_rdma_max_wait_ns}",
+        f"-m2-rdma-batch-table-entries={args.m2_rdma_batch_table_entries}",
+    ]
+
+
+def mechanism_flags(args, mechanism):
+    if mechanism == "baseline":
+        return []
+    if mechanism == "m1":
+        return m1_flags(args)
+    if mechanism == "m2":
+        return m2_flags(args)
+    if mechanism == "m1_m2":
+        return m1_flags(args) + m2_flags(args)
+    raise ValueError(f"unknown mechanism: {mechanism}")
+
+
+def mechanism_config_name(mechanism, config_name, mechanisms):
+    if len(mechanisms) == 1 and mechanism == "baseline":
+        return config_name
+    return f"{mechanism}_{config_name}"
 
 
 def parse_int_csv(value, label):
@@ -538,75 +463,120 @@ def expand_benchmark_selection(selected):
             expanded += BENCHMARK_ALIASES[item]
         else:
             expanded.append(item)
+    blocked = [
+        item for item in expanded
+        if item in REMOVED_MONOLITHIC_LLM_BENCHMARKS
+    ]
+    if blocked:
+        raise ValueError(
+            "monolithic LLM benchmarks were removed from runall2.py: "
+            + ",".join(blocked)
+            + ". Use runllm_decomposed.py for BERT/GPT experiments."
+        )
     return unique_preserving_order(expanded)
 
 
-def build_sampled_param_grid(args):
-    if args.balanced_sweep:
-        warmups = BALANCED_SAMPLED_SWEEP_WARMUPS[:]
-        granularities = BALANCED_SAMPLED_SWEEP_GRANULARITIES[:]
-    elif args.sampled_sweep:
-        warmups = DEFAULT_SAMPLED_SWEEP_WARMUPS[:]
-        granularities = DEFAULT_SAMPLED_SWEEP_GRANULARITIES[:]
-    else:
-        warmups = parse_int_csv(args.sampled_warmups, "sampled-warmups")
-        granularities = parse_int_csv(args.sampled_granularities, "sampled-granularities")
+def build_common_flags(args):
+    return BASE_COMMON_FLAGS + [
+        f"-mmutlb-lookup-latency={args.mmutlb_lookup_latency}",
+    ]
 
-    if args.sampled_warmups:
-        warmups = parse_int_csv(args.sampled_warmups, "sampled-warmups")
-    if args.sampled_granularities:
-        granularities = parse_int_csv(args.sampled_granularities, "sampled-granularities")
 
+def build_configs(args):
+    if args.configs:
+        return build_selected_configs(args)
+    return build_photon_configs(args, ["baseline"])
+
+
+def build_selected_configs(args):
+    requested = parse_csv(args.configs)
+    photon_configs = {name: flags for name, flags in CONFIGS}
+    selected = []
+
+    for name in requested:
+        if name in ("all", "photon_all"):
+            selected += build_photon_configs(args, list(photon_configs))
+            continue
+
+        if name in photon_configs:
+            selected += build_photon_configs(args, [name])
+            continue
+
+        allowed = sorted(set(photon_configs) | {"photon_all", "all"})
+        raise ValueError(
+            f"unknown config: {name}. Allowed: {', '.join(allowed)}"
+        )
+
+    return unique_preserving_config_names(selected)
+
+
+def unique_preserving_config_names(configs):
+    seen = set()
+    unique = []
+    for name, flags in configs:
+        if name in seen:
+            continue
+        seen.add(name)
+        unique.append((name, flags))
+    return unique
+
+
+def build_photon_configs(args, requested):
+    selected = []
+    for name, flags in CONFIGS:
+        if name not in requested:
+            continue
+        config_flags = flags[:]
+        if (args.photon_debug or args.photon_verbose) and name != "baseline":
+            config_flags.append("-photon-debug")
+        if args.photon_verbose and name != "baseline":
+            config_flags.append("-photon-debug-verbose")
+        selected += expand_sampled_params(args, name, config_flags)
+
+    return selected
+
+
+def expand_sampled_params(args, name, flags):
+    if "-sampled" not in flags:
+        return [(name, flags)]
+
+    warmups = parse_int_csv(args.sampled_warmups, "sampled-warmups")
+    granularities = parse_int_csv(
+        args.sampled_granularities, "sampled-granularities")
     if not warmups and not granularities:
-        return []
+        return [(name, flags)]
     if not warmups:
         warmups = [1024]
     if not granularities:
         granularities = [2048]
-    return [(warmup, granularity) for warmup in warmups for granularity in granularities]
 
-
-def sampled_param_sweep_requested(args):
-    return (
-        args.sampled_sweep
-        or args.balanced_sweep
-        or bool(args.sampled_warmups)
-        or bool(args.sampled_granularities)
-    )
-
-
-def selected_config_names(args):
-    if args.configs:
-        requested = parse_csv(args.configs)
-    elif args.quick:
-        requested = QUICK_CONFIGS[:]
-    else:
-        requested = ["all"]
-
-    all_config_names = [name for name, _ in CONFIGS]
-    if "all" in requested:
-        return all_config_names
-
-    unknown = sorted(set(requested) - set(all_config_names))
-    if unknown:
-        raise ValueError(f"unknown configs: {unknown}")
-    return requested
+    expanded = []
+    for warmup in warmups:
+        for granularity in granularities:
+            expanded.append((
+                f"{name}_w{warmup}_g{granularity}",
+                flags + [
+                    f"-sampled-warmup={warmup}",
+                    f"-sampled-granularity={granularity}",
+                ],
+            ))
+    return expanded
 
 
 def get_benchmarks_for_target(target):
     selected = BENCHMARKS_BY_TARGET.get(target, ["all"])
     selected = expand_benchmark_selection(selected)
+
     unknown = sorted(set(selected) - set(ALL_BENCHMARKS))
     if unknown:
         raise ValueError(f"unknown benchmarks for {target}: {unknown}")
+
     return selected
 
 
 def get_selected_benchmarks(args, target):
     if args.benchmarks:
         selected = parse_csv(args.benchmarks)
-    elif args.quick:
-        selected = QUICK_BENCHMARKS[:]
     else:
         selected = get_benchmarks_for_target(target)
 
@@ -617,18 +587,103 @@ def get_selected_benchmarks(args, target):
     return selected
 
 
-def make_exps(args, ablation_configs):
+def strip_disable_server_flags(flags):
+    return [
+        flag for flag in flags
+        if flag not in ("-disable-servers", "--disable-servers")
+    ]
+
+
+def has_flag_with_prefix(flags, prefix):
+    return any(flag.startswith(prefix) for flag in flags)
+
+
+def append_unique_flag(flags, flag):
+    if flag not in flags:
+        flags.append(flag)
+
+
+def selected_global_photon_flags(args):
+    flags = list(GLOBAL_PHOTON_FLAGS)
+    if args.photon_no_branch_loop:
+        flags = [
+            flag for flag in flags
+            if flag not in PHOTON_BRANCH_LOOP_FLAGS
+        ]
+    return flags
+
+
+def append_default_photon_tuning_flags(args, flags):
+    if (
+        "-loop-sampled" in flags and
+        not has_flag_with_prefix(flags, "-loop-sampled-warmup=")
+    ):
+        flags.append(
+            f"-loop-sampled-warmup={DEFAULT_PHOTON_LOOP_SAMPLED_WARMUP}"
+        )
+
+    if not has_flag_with_prefix(flags, "-sampled-warmup="):
+        flags.append(
+            f"-sampled-warmup={DEFAULT_PHOTON_SAMPLED_WARMUP}"
+        )
+    if not has_flag_with_prefix(flags, "-sampled-granularity="):
+        flags.append(
+            f"-sampled-granularity={DEFAULT_PHOTON_SAMPLED_GRANULARITY}"
+        )
+
+
+def add_global_photon_flags(args, flags):
+    if not args.photon:
+        return flags
+
+    photon_flags = flags[:]
+    for flag in selected_global_photon_flags(args):
+        append_unique_flag(photon_flags, flag)
+
+    if args.photon_debug or args.photon_verbose:
+        append_unique_flag(photon_flags, "-photon-debug")
+    if args.photon_verbose:
+        append_unique_flag(photon_flags, "-photon-debug-verbose")
+
+    append_default_photon_tuning_flags(args, photon_flags)
+
+    return photon_flags
+
+
+def default_benchmark_flags(args):
+    if args.max_wg is not None:
+        if args.max_wg <= 0:
+            return []
+        return [f"-max-wg={args.max_wg}"]
+    return DEFAULT_BENCHMARK_FLAGS[:]
+
+
+def make_exps(args, configs):
     exps = []
-    extra_flags = shlex.split(args.extra_benchmark_flags)
-    for target in TARGETS:
+    extra_flags = strip_disable_server_flags(shlex.split(args.extra_benchmark_flags))
+    mechanisms = selected_mechanisms(args)
+    for target in selected_targets(args):
         for benchmark in get_selected_benchmarks(args, target):
-            for config_name, config_flags in ablation_configs:
-                exps.append({
-                    "target": target,
-                    "benchmark": benchmark,
-                    "config_name": config_name,
-                    "flags": DEFAULT_BENCHMARK_FLAGS + extra_flags + config_flags,
-                })
+            for config_name, config_flags in configs:
+                for mechanism in mechanisms:
+                    flags = (
+                        default_benchmark_flags(args)
+                        + strip_disable_server_flags(config_flags)
+                        + mechanism_flags(args, mechanism)
+                        + extra_flags
+                    )
+                    flags = add_global_photon_flags(args, flags)
+                    exps.append(
+                        {
+                            "target": target,
+                            "benchmark": benchmark,
+                            "mechanism": mechanism,
+                            "config_name": mechanism_config_name(
+                                mechanism, config_name, mechanisms),
+                            "base_config_name": config_name,
+                            "flags": flags,
+                        }
+                    )
     return exps
 
 
@@ -636,10 +691,13 @@ def filter_missing_metric_exps(exps, results_dir):
     missing = []
     missing_dir = Path(results_dir)
     for exp in exps:
-        stem = f'{exp["target"]}_{exp["benchmark"]}_{exp["config_name"]}'
+        stem = (
+            f'{exp["target"]}_{exp["benchmark"]}_{exp["config_name"]}'
+        )
         metrics_csv = missing_dir / f"{stem}_metrics.csv"
         if not metrics_csv.exists():
             missing.append(exp)
+
     return missing
 
 
@@ -652,79 +710,15 @@ def build_env():
 def build_targets(exps):
     env = build_env()
     targets = sorted({exp["target"] for exp in exps})
+
     for target in targets:
         target_dir = os.path.join(ROOT_DIR, target)
         print(f"Building {target} in {target_dir}")
         process = subprocess.Popen(
-            ["go", "build", "-buildvcs=false"],
-            cwd=target_dir,
-            env=env,
-        )
+            ["go", "build", "-buildvcs=false"], cwd=target_dir, env=env)
         process.wait()
         if process.returncode != 0:
             raise RuntimeError(f"failed to build {target}")
-
-
-def register_process(process):
-    with running_processes_lock:
-        running_processes.add(process)
-
-
-def unregister_process(process):
-    with running_processes_lock:
-        running_processes.discard(process)
-
-
-def terminate_process(process, grace_seconds=10):
-    if process.poll() is not None:
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    try:
-        process.wait(timeout=grace_seconds)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    process.wait()
-
-
-def terminate_all_processes():
-    with running_processes_lock:
-        processes = list(running_processes)
-    for process in processes:
-        terminate_process(process)
-
-
-def install_signal_handlers():
-    def handle_signal(signum, _frame):
-        print(f"Received signal {signum}; terminating running experiments.", flush=True)
-        terminate_all_processes()
-        raise SystemExit(128 + signum)
-
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
-
-
-def set_output_dir(path):
-    global output_dir
-    output_dir = path
-
-
-def create_output_dir():
-    global output_dir
-    output_dir = os.path.join(
-        ROOT_DIR,
-        "results",
-        datetime.now().strftime("%Y-%m-%d-%H-%M-%S-sampled-validation"),
-    )
-    os.makedirs(os.path.join(ROOT_DIR, "results"), exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
 
 
 def exp_file_stem(exp):
@@ -736,116 +730,342 @@ def exp_file_stem(exp):
 
 def experiment_command(exp):
     binary = os.path.join(ROOT_DIR, exp["target"], exp["target"])
-    file_stem = exp_file_stem(exp)
-    metric_file_name = f"{file_stem}_metrics"
-    cmd = [
+    metric_file_name = f"{exp_file_stem(exp)}_metrics"
+    return [
         binary,
         f'-benchmark={exp["benchmark"]}',
         *exp["common_flags"],
         *exp["flags"],
         f"-metric-file-name={metric_file_name}",
     ]
-    if exp.get("trace_sharing"):
-        cmd.extend([
-            "-trace-sharing",
-            f"-trace-sharing-file={file_stem}_sharing.csv.gz",
-            f'-trace-sharing-sample={exp["trace_sharing_sample"]}',
-            f'-trace-sharing-max-records={exp["trace_sharing_max_records"]}',
-        ])
-    if exp.get("trace_memory_path"):
-        cmd.extend([
-            "-trace-memory-path",
-            f"-trace-memory-path-file={file_stem}_memory_path",
-            (
-                "-trace-memory-path-warmup-accesses="
-                f'{exp["trace_memory_path_warmup_accesses"]}'
-            ),
-            (
-                "-trace-memory-path-max-records="
-                f'{exp["trace_memory_path_max_records"]}'
-            ),
-        ])
-        if exp.get("trace_memory_path_exit_on_complete"):
-            cmd.append("-trace-memory-path-exit-on-complete")
-    return cmd
 
 
-def run_exp(exp):
-    cmd = experiment_command(exp)
-    cmd_str = shlex.join(cmd)
-    print(cmd_str)
+def read_mem_available_kb():
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as meminfo_file:
+            for line in meminfo_file:
+                if line.startswith("MemAvailable:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        return int(parts[1])
+    except (FileNotFoundError, PermissionError, ValueError):
+        return None
 
+    return None
+
+
+def format_memory_kb(kb):
+    if kb is None:
+        return "unknown"
+    if kb >= 1024 * 1024:
+        return f"{kb / (1024 * 1024):.2f} GiB"
+    if kb >= 1024:
+        return f"{kb / 1024:.2f} MiB"
+    return f"{kb} KiB"
+
+
+def launch_experiment(exp):
     file_stem = exp_file_stem(exp)
     metric_file_name = f"{file_stem}_metrics"
+
+    cmd = experiment_command(exp)
+    cmd_str = shlex.join(cmd)
+    print(cmd_str, flush=True)
+
     out_file_name = f"{file_stem}_out.stdout"
+    out_file = open(out_file_name, "w", encoding="utf-8")
+    start_time = datetime.now()
+    launch_mem_kb = read_mem_available_kb()
+    out_file.write(f"Executing {cmd_str}\n")
+    out_file.write(f"Start time: {start_time}\n")
+    out_file.write(
+        "Launch MemAvailable: "
+        f"{launch_mem_kb} KiB ({format_memory_kb(launch_mem_kb)})\n"
+    )
+    out_file.flush()
 
-    with open(out_file_name, "w") as out_file:
-        out_file.write(f"Executing {cmd_str}\n")
-        start_time = datetime.now()
-        out_file.write(f"Start time: {start_time}\n")
-        out_file.flush()
-
-        process = subprocess.Popen(
-            cmd,
-            stdout=out_file,
-            stderr=out_file,
-            cwd=ROOT_DIR,
-            start_new_session=True,
-        )
-        timed_out = wait_for_experiment(exp, process)
-
-        end_time = datetime.now()
-        out_file.write(f"Return code: {process.returncode}\n")
-        if timed_out:
-            out_file.write(f'Timed out after {exp.get("timeout_seconds", 0)} seconds\n')
-        out_file.write(f"End time: {end_time}\n")
-        out_file.write(f"Elapsed time: {end_time - start_time}\n")
-
-    return exp_result(
-        exp,
-        cmd_str,
-        metric_file_name,
-        end_time - start_time,
-        timed_out,
-        process.returncode,
+    process = subprocess.Popen(
+        cmd,
+        stdout=out_file,
+        stderr=subprocess.STDOUT,
+        cwd=ROOT_DIR,
+        text=True,
+        bufsize=1,
     )
 
-
-def wait_for_experiment(exp, process):
-    register_process(process)
-    timeout_seconds = exp.get("timeout_seconds", 0)
-    timed_out = False
-    try:
-        try:
-            process.wait(timeout=timeout_seconds if timeout_seconds > 0 else None)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            terminate_process(process)
-    finally:
-        unregister_process(process)
-    return timed_out
+    return {
+        "exp": exp,
+        "process": process,
+        "cmd_str": cmd_str,
+        "metric_file_name": metric_file_name,
+        "out_file": out_file,
+        "start_time": start_time,
+        "start_monotonic": time.monotonic(),
+    }
 
 
-def exp_result(exp, cmd_str, metric_file_name, elapsed_time, timed_out, returncode):
+def finalize_experiment(state, timed_out=False):
+    process = state["process"]
+    if timed_out and process.poll() is None:
+        process.kill()
+        process.wait()
+
+    end_time = datetime.now()
+    elapsed_time = end_time - state["start_time"]
+    out_file = state["out_file"]
+    out_file.write(f"Return code: {process.returncode}\n")
+    if timed_out:
+        timeout_seconds = state["exp"].get("timeout_seconds", 0)
+        out_file.write(f"Timed out after {timeout_seconds} seconds\n")
+    out_file.write(f"End time: {end_time}\n")
+    out_file.write(f"Elapsed time: {elapsed_time}\n")
+    out_file.close()
+
+    cmd_str = state["cmd_str"]
     if timed_out:
         print(f"Timed out executing {cmd_str}")
         return {
-            "exp": exp,
+            "exp": state["exp"],
             "returncode": -9,
-            "timeout": exp.get("timeout_seconds", 0),
+            "timeout": state["exp"].get("timeout_seconds", 0),
         }
 
-    if returncode != 0:
+    if process.returncode != 0:
         print(f"Error executing {cmd_str}")
-        return {"exp": exp, "returncode": returncode}
+        return {"exp": state["exp"], "returncode": process.returncode}
 
-    metrics_csv = metric_file_name + ".csv"
+    metrics_csv = state["metric_file_name"] + ".csv"
     if not os.path.exists(metrics_csv):
         print(f"Missing metrics file for {cmd_str}: {metrics_csv}")
-        return {"exp": exp, "returncode": -1, "missing_metrics": metrics_csv}
+        return {
+            "exp": state["exp"],
+            "returncode": -1,
+            "missing_metrics": metrics_csv,
+        }
 
     print(f"Executed {cmd_str}, time {elapsed_time}")
-    return {"exp": exp, "returncode": 0}
+    return {"exp": state["exp"], "returncode": 0}
+
+
+def running_cap_reached(args, running):
+    return len(running) >= effective_workload_cap(args)
+
+
+def effective_workload_cap(args):
+    cap = args.max_workloads
+    if args.max_workers > 0:
+        cap = min(cap, args.max_workers)
+    return cap
+
+
+def print_scheduler_status(prefix, queued, running, completed, failed):
+    print(
+        f"{prefix} queued={len(queued)} running={len(running)} "
+        f"completed={completed} failed={failed}",
+        flush=True,
+    )
+
+
+def try_launch_ready_experiments(
+    queued,
+    running,
+    args,
+    min_mem_available_kb,
+    status_prefix,
+    completed,
+    failed,
+    settle_seconds=0.0,
+    max_launches=None,
+):
+    launched_any = False
+    blocked_reason = ""
+    launched_count = 0
+
+    while (
+        queued
+        and not running_cap_reached(args, running)
+        and (max_launches is None or launched_count < max_launches)
+    ):
+        available_kb = read_mem_available_kb()
+        print(
+            f"{status_prefix} "
+            f"MemAvailable={available_kb} KiB "
+            f"({format_memory_kb(available_kb)}), "
+            f"threshold={min_mem_available_kb} KiB "
+            f"({format_memory_kb(min_mem_available_kb)})",
+            flush=True,
+        )
+        print_scheduler_status(
+            status_prefix, queued, running, completed, failed)
+
+        if available_kb is None:
+            blocked_reason = "mem_unknown"
+            break
+
+        if available_kb < min_mem_available_kb:
+            blocked_reason = "low_mem"
+            break
+
+        exp = queued.pop(0)
+        running.append(launch_experiment(exp))
+        launched_any = True
+        launched_count += 1
+        print_scheduler_status("[launch]", queued, running, completed, failed)
+
+        if settle_seconds > 0 and queued and not running_cap_reached(args, running):
+            time.sleep(settle_seconds)
+
+    if queued and running_cap_reached(args, running):
+        blocked_reason = "cap"
+
+    return launched_any, blocked_reason
+
+
+def memory_gated_run(exps, args):
+    queued = list(exps)
+    running = []
+    completed = 0
+    failed = 0
+    min_mem_available_kb = int(args.min_free_ram_gb * 1024 * 1024)
+    scan_interval_seconds = args.memory_scan_interval_minutes * 60
+    next_scan_time = time.monotonic() + scan_interval_seconds
+    initial_fill = True
+    initial_fill_cap_logged = False
+
+    print(
+        "Memory gate: "
+        f"MemAvailable >= {min_mem_available_kb} KiB "
+        f"({format_memory_kb(min_mem_available_kb)}), "
+        f"scan interval={args.memory_scan_interval_minutes} minutes",
+        flush=True,
+    )
+    print(
+        f"Max running workloads: {effective_workload_cap(args)}",
+        flush=True,
+    )
+    if args.max_workers > 0 and args.max_workers < args.max_workloads:
+        print(f"Legacy max-workers cap also applied: {args.max_workers}", flush=True)
+    else:
+        print("Legacy max-workers cap: disabled", flush=True)
+
+    while queued or running:
+        now = time.monotonic()
+        still_running = []
+        completed_this_round = False
+        for state in running:
+            process = state["process"]
+            timeout_seconds = state["exp"].get("timeout_seconds", 0)
+            timed_out = (
+                timeout_seconds > 0
+                and process.poll() is None
+                and now - state["start_monotonic"] >= timeout_seconds
+            )
+
+            if timed_out:
+                result = finalize_experiment(state, timed_out=True)
+            elif process.poll() is None:
+                still_running.append(state)
+                continue
+            else:
+                result = finalize_experiment(state)
+
+            completed_this_round = True
+            completed += 1
+            if result["returncode"] != 0:
+                failed += 1
+            print(result, flush=True)
+
+        running = still_running
+        if completed_this_round:
+            initial_fill_cap_logged = False
+            if queued and not initial_fill:
+                next_scan_time = time.monotonic()
+
+        if queued and initial_fill:
+            launched_any, blocked_reason = try_launch_ready_experiments(
+                queued,
+                running,
+                args,
+                min_mem_available_kb,
+                "[initial-fill]",
+                completed,
+                failed,
+                settle_seconds=INITIAL_FILL_SETTLE_SECONDS,
+            )
+            if launched_any:
+                initial_fill_cap_logged = False
+
+            if blocked_reason == "mem_unknown":
+                print(
+                    "Initial fill paused: cannot read Linux MemAvailable.",
+                    flush=True,
+                )
+                initial_fill = False
+                next_scan_time = time.monotonic() + scan_interval_seconds
+            elif blocked_reason == "low_mem":
+                print(
+                    "Initial fill complete: not enough free RAM to launch "
+                    "the next benchmark.",
+                    flush=True,
+                )
+                initial_fill = False
+                next_scan_time = time.monotonic() + scan_interval_seconds
+
+            if queued and running_cap_reached(args, running):
+                if not initial_fill_cap_logged:
+                    print(
+                        "Initial fill paused: optional max-workers cap is reached.",
+                        flush=True,
+                    )
+                    print_scheduler_status(
+                        "[initial-fill]", queued, running, completed, failed)
+                    initial_fill_cap_logged = True
+
+            if launched_any:
+                continue
+
+        now = time.monotonic()
+        if queued and not initial_fill and now >= next_scan_time:
+            _, blocked_reason = try_launch_ready_experiments(
+                queued,
+                running,
+                args,
+                min_mem_available_kb,
+                "[memory-scan]",
+                completed,
+                failed,
+                settle_seconds=INITIAL_FILL_SETTLE_SECONDS,
+            )
+
+            if blocked_reason == "mem_unknown":
+                print(
+                    "Waiting: cannot read Linux MemAvailable.",
+                    flush=True,
+                )
+            elif blocked_reason == "low_mem":
+                print(
+                    "Waiting: not enough free RAM to launch the next benchmark.",
+                    flush=True,
+                )
+            elif blocked_reason == "cap":
+                print(
+                    "Waiting: optional max-workers cap is reached.",
+                    flush=True,
+                )
+
+            next_scan_time = time.monotonic() + scan_interval_seconds
+
+        if queued or running:
+            if queued and not initial_fill:
+                now = time.monotonic()
+                sleep_seconds = max(0.1, min(30.0, next_scan_time - now))
+            else:
+                sleep_seconds = 5.0
+            time.sleep(sleep_seconds)
+
+    print_scheduler_status("[summary]", queued, running, completed, failed)
+    if failed > 0:
+        raise SystemExit(1)
 
 
 def dry_run_commands(exps):
@@ -853,106 +1073,82 @@ def dry_run_commands(exps):
         print(shlex.join(experiment_command(exp)))
 
 
-def prepare_output_dir(args):
-    if args.rerun_missing:
-        results_dir = os.path.abspath(args.rerun_missing)
-        if not os.path.isdir(results_dir):
-            raise ValueError(f"results directory does not exist: {results_dir}")
-        set_output_dir(results_dir)
-        return
-
+def create_output_dir(args):
+    global output_dir
     if args.output_dir:
-        results_dir = os.path.abspath(args.output_dir)
-        os.makedirs(results_dir, exist_ok=True)
-        set_output_dir(results_dir)
-        return
+        output_dir = os.path.abspath(args.output_dir)
+    else:
+        output_dir = os.path.join(
+            ROOT_DIR,
+            "results",
+            datetime.now().strftime("%Y-%m-%d-%H-%M-%S-runall"),
+        )
 
-    create_output_dir()
+    results_dir = os.path.join(ROOT_DIR, "results")
+    if not os.path.exists(results_dir):
+        os.makedirs(results_dir)
 
-
-def maybe_filter_missing(args, exps):
-    if not args.rerun_missing:
-        return exps
-
-    results_dir = os.path.abspath(args.rerun_missing)
-    missing = filter_missing_metric_exps(exps, results_dir)
-    if not missing:
-        print(f"No missing-metrics experiments found in {results_dir}")
-        return []
-
-    print(f"Rerunning {len(missing)} experiments with missing metrics in {results_dir}")
-    return missing
-
-
-def choose_max_workers(args, exp_count):
-    if args.max_workers <= 0:
-        raise ValueError("MAX_WORKERS must be greater than 0")
-
-    max_workers = min(args.max_workers, exp_count)
-    if sampled_param_sweep_requested(args):
-        cap = args.sampled_parallel_limit
-        if cap > 0 and max_workers > cap:
-            print(
-                "Sampled parameter sweep parallelism capped at "
-                f"max_workers={cap}. Use --sampled-parallel-limit=0 "
-                "to disable this cap."
-            )
-            max_workers = cap
-    return max_workers
-
-
-def prepare_exps(args, exps, common_flags):
-    timeout_seconds = int(args.timeout_minutes * 60)
-    for exp in exps:
-        exp["common_flags"] = common_flags
-        exp["timeout_seconds"] = timeout_seconds
-        exp["trace_sharing"] = args.trace_sharing
-        exp["trace_sharing_sample"] = args.trace_sharing_sample
-        exp["trace_sharing_max_records"] = args.trace_sharing_max_records
-        exp["trace_memory_path"] = args.trace_memory_path
-        exp["trace_memory_path_warmup_accesses"] = args.trace_memory_path_warmup_accesses
-        exp["trace_memory_path_max_records"] = args.trace_memory_path_max_records
-        exp["trace_memory_path_exit_on_complete"] = args.trace_memory_path_exit_on_complete
-
-
-def print_launch_summary(args, common_flags, exps, max_workers):
-    print(f"Using common flags: {shlex.join(common_flags)}")
-    if args.timeout_minutes > 0:
-        print(f"Experiment timeout: {args.timeout_minutes} minutes")
-    print(f"Launching {len(exps)} experiments with max_workers={max_workers}")
-
-
-def run_all_experiments(exps, max_workers):
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(run_exp, exp) for exp in exps]
-            for future in concurrent.futures.as_completed(futures):
-                print(future.result())
-    finally:
-        terminate_all_processes()
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
 
 def main():
-    install_signal_handlers()
-    atexit.register(terminate_all_processes)
+    global output_dir
 
     args = parse_args()
     common_flags = build_common_flags(args)
-    ablation_configs = build_ablation_configs(args)
-    exps = make_exps(args, ablation_configs)
+    configs = build_configs(args)
+    if args.only_config:
+        configs = [c for c in configs if c[0] == args.only_config]
+        if not configs:
+            raise ValueError(f"no config named '{args.only_config}'")
+    exps = make_exps(args, configs)
     if not exps:
         print("No experiments configured.")
         return
 
-    prepare_output_dir(args)
-    exps = maybe_filter_missing(args, exps)
-    if not exps:
-        return
+    if args.rerun_missing:
+        output_dir = os.path.abspath(args.rerun_missing)
+        if not os.path.isdir(output_dir):
+            raise ValueError(f"results directory does not exist: {output_dir}")
+        exps = filter_missing_metric_exps(exps, output_dir)
+        if not exps:
+            print(f"No missing-metrics experiments found in {output_dir}")
+            return
+        print(
+            f"Rerunning {len(exps)} experiments with missing metrics in {output_dir}"
+        )
+    else:
+        create_output_dir(args)
 
-    max_workers = choose_max_workers(args, len(exps))
-    prepare_exps(args, exps, common_flags)
-    print_launch_summary(args, common_flags, exps, max_workers)
+    timeout_seconds = int(args.timeout_minutes * 60)
+    for exp in exps:
+        exp["common_flags"] = common_flags
+        exp["timeout_seconds"] = timeout_seconds
 
+    if args.max_workers < 0:
+        raise ValueError("--max-workers must be non-negative")
+    if args.max_workloads <= 0:
+        raise ValueError("--max-workloads must be greater than 0")
+    if args.max_workloads > DEFAULT_MAX_WORKLOADS:
+        raise ValueError(
+            f"--max-workloads cannot exceed {DEFAULT_MAX_WORKLOADS}"
+        )
+    if args.min_free_ram_gb < 0:
+        raise ValueError("--min-free-ram-gb must be non-negative")
+    if args.memory_scan_interval_minutes <= 0:
+        raise ValueError("--memory-scan-interval-minutes must be greater than 0")
+
+    print(f"Using common flags: {shlex.join(common_flags)}")
+    print(f"Targets: {','.join(selected_targets(args))}")
+    print(f"Mechanisms: {','.join(selected_mechanisms(args))}")
+    if args.photon:
+        photon_defaults = selected_global_photon_flags(args)
+        append_default_photon_tuning_flags(args, photon_defaults)
+        print(f"Global Photon flags: {shlex.join(photon_defaults)}")
+    if args.timeout_minutes > 0:
+        print(f"Experiment timeout: {args.timeout_minutes} minutes")
+    print(f"Queued {len(exps)} experiments")
     if args.dry_run:
         dry_run_commands(exps)
         return
@@ -961,7 +1157,7 @@ def main():
         print("Skipping target build (--skip-build).")
     else:
         build_targets(exps)
-    run_all_experiments(exps, max_workers)
+    memory_gated_run(exps, args)
 
 
 if __name__ == "__main__":
