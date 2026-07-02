@@ -11,8 +11,7 @@ TARGETS = [
     "baseline",
 ]
 
-DEFAULT_MAX_WORKERS = 0
-DEFAULT_MAX_WORKLOADS = 16
+DEFAULT_MAX_WORKERS = 16
 DEFAULT_MIN_FREE_RAM_GB = 60.0
 DEFAULT_MEMORY_SCAN_INTERVAL_MINUTES = 30.0
 INITIAL_FILL_SETTLE_SECONDS = 2.0
@@ -246,19 +245,15 @@ def parse_args():
         type=int,
         default=DEFAULT_MAX_WORKERS,
         help=(
-            "Legacy optional additional cap on concurrent experiments. 0 means "
-            "only --max-workloads and available RAM control launches."
+            "Maximum number of benchmark workloads to run concurrently."
         ),
     )
     parser.add_argument(
         "--max-workloads",
-        dest="max_workloads",
+        dest="max_workers",
         type=int,
-        default=DEFAULT_MAX_WORKLOADS,
-        help=(
-            "Hard cap on concurrently running benchmark workloads. Must be "
-            f"between 1 and {DEFAULT_MAX_WORKLOADS}."
-        ),
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--benchmarks",
@@ -285,6 +280,65 @@ def parse_args():
         dest="extra_benchmark_flags",
         default="",
         help="Additional flags appended to each benchmark binary command.",
+    )
+    parser.add_argument(
+        "--trace-memory-path",
+        action="store_true",
+        help=(
+            "Enable request-level memory-path tracing. This writes compact "
+            "stage summaries plus a bounded raw window."
+        ),
+    )
+    parser.add_argument(
+        "--trace-memory-path-warmup-accesses",
+        type=int,
+        default=100000,
+        help="Observed L1V accesses to skip before the memory-path raw window.",
+    )
+    parser.add_argument(
+        "--trace-memory-path-max-records",
+        type=int,
+        default=20000,
+        help=(
+            "Maximum memory-path raw records after warmup. Stage summaries are "
+            "still emitted; use --trace-memory-path-exit-on-complete for a "
+            "bounded trace-only run."
+        ),
+    )
+    parser.add_argument(
+        "--trace-memory-path-remote-only",
+        action="store_true",
+        help=(
+            "Only count and write remote L1V memory paths. Warmup and "
+            "max-records are applied to remote paths, not all L1V accesses."
+        ),
+    )
+    parser.add_argument(
+        "--trace-memory-path-stream",
+        action="store_true",
+        help=(
+            "Stream memory-path raw/L1V path rows directly to output files "
+            "and release completed request records."
+        ),
+    )
+    parser.add_argument(
+        "--trace-memory-path-exit-on-complete",
+        action="store_true",
+        help=(
+            "Exit each benchmark after the memory-path raw window is full. "
+            "Useful for focused critical-path tracing."
+        ),
+    )
+    parser.add_argument(
+        "--report-l2-source",
+        action="store_true",
+        help="Emit aggregate L2 data-source and remote-GPM summary CSV files.",
+    )
+    parser.add_argument(
+        "--l2-source-tile-width",
+        type=int,
+        default=7,
+        help="Tile-array width used to compute GPM Manhattan hops.",
     )
     parser.add_argument(
         "--max-wg",
@@ -477,9 +531,33 @@ def expand_benchmark_selection(selected):
 
 
 def build_common_flags(args):
-    return BASE_COMMON_FLAGS + [
+    flags = BASE_COMMON_FLAGS + [
         f"-mmutlb-lookup-latency={args.mmutlb_lookup_latency}",
     ]
+    if args.trace_memory_path:
+        flags += [
+            "-trace-memory-path",
+            (
+                "-trace-memory-path-warmup-accesses="
+                f"{args.trace_memory_path_warmup_accesses}"
+            ),
+            (
+                "-trace-memory-path-max-records="
+                f"{args.trace_memory_path_max_records}"
+            ),
+        ]
+        if args.trace_memory_path_exit_on_complete:
+            flags.append("-trace-memory-path-exit-on-complete")
+        if args.trace_memory_path_remote_only:
+            flags.append("-trace-memory-path-remote-only")
+        if args.trace_memory_path_stream:
+            flags.append("-trace-memory-path-stream")
+    if args.report_l2_source:
+        flags += [
+            "-report-l2-source",
+            f"-l2-source-tile-width={args.l2_source_tile_width}",
+        ]
+    return flags
 
 
 def build_configs(args):
@@ -852,10 +930,7 @@ def running_cap_reached(args, running):
 
 
 def effective_workload_cap(args):
-    cap = args.max_workloads
-    if args.max_workers > 0:
-        cap = min(cap, args.max_workers)
-    return cap
+    return args.max_workers
 
 
 def print_scheduler_status(prefix, queued, running, completed, failed):
@@ -940,13 +1015,9 @@ def memory_gated_run(exps, args):
         flush=True,
     )
     print(
-        f"Max running workloads: {effective_workload_cap(args)}",
+        f"Max concurrent workloads: {effective_workload_cap(args)}",
         flush=True,
     )
-    if args.max_workers > 0 and args.max_workers < args.max_workloads:
-        print(f"Legacy max-workers cap also applied: {args.max_workers}", flush=True)
-    else:
-        print("Legacy max-workers cap: disabled", flush=True)
 
     while queued or running:
         now = time.monotonic()
@@ -1014,7 +1085,7 @@ def memory_gated_run(exps, args):
             if queued and running_cap_reached(args, running):
                 if not initial_fill_cap_logged:
                     print(
-                        "Initial fill paused: optional max-workers cap is reached.",
+                        "Initial fill paused: max-workers cap is reached.",
                         flush=True,
                     )
                     print_scheduler_status(
@@ -1049,7 +1120,7 @@ def memory_gated_run(exps, args):
                 )
             elif blocked_reason == "cap":
                 print(
-                    "Waiting: optional max-workers cap is reached.",
+                    "Waiting: max-workers cap is reached.",
                     flush=True,
                 )
 
@@ -1126,18 +1197,18 @@ def main():
         exp["common_flags"] = common_flags
         exp["timeout_seconds"] = timeout_seconds
 
-    if args.max_workers < 0:
-        raise ValueError("--max-workers must be non-negative")
-    if args.max_workloads <= 0:
-        raise ValueError("--max-workloads must be greater than 0")
-    if args.max_workloads > DEFAULT_MAX_WORKLOADS:
-        raise ValueError(
-            f"--max-workloads cannot exceed {DEFAULT_MAX_WORKLOADS}"
-        )
+    if args.max_workers <= 0:
+        raise ValueError("--max-workers must be greater than 0")
     if args.min_free_ram_gb < 0:
         raise ValueError("--min-free-ram-gb must be non-negative")
     if args.memory_scan_interval_minutes <= 0:
         raise ValueError("--memory-scan-interval-minutes must be greater than 0")
+    if args.trace_memory_path_warmup_accesses < 0:
+        raise ValueError("--trace-memory-path-warmup-accesses must be non-negative")
+    if args.trace_memory_path_max_records < 0:
+        raise ValueError("--trace-memory-path-max-records must be non-negative")
+    if args.l2_source_tile_width <= 0:
+        raise ValueError("--l2-source-tile-width must be greater than 0")
 
     print(f"Using common flags: {shlex.join(common_flags)}")
     print(f"Targets: {','.join(selected_targets(args))}")

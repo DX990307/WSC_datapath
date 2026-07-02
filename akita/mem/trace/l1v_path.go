@@ -86,6 +86,7 @@ type l1vPathHop struct {
 
 type l1vPathStageAggregate struct {
 	paths   map[string]struct{}
+	pathCnt uint64
 	hops    uint64
 	sumNS   uint64
 	minNS   uint64
@@ -1030,7 +1031,122 @@ func (s *memoryPathStats) appendL1VPathHopLocked(rec *memoryPathRecord, hop l1vP
 	rec.l1vPathStageCnt[hop.segment]++
 }
 
+func (s *memoryPathStats) openL1VPathStreamLocked() error {
+	hopsPath := s.prefix + "_l1v_path_hops_raw.csv.gz"
+	if dir := filepath.Dir(hopsPath); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	hopsFile, err := os.Create(hopsPath)
+	if err != nil {
+		return err
+	}
+	s.l1vHopsFile = hopsFile
+	s.l1vHopsGzip = gzip.NewWriter(hopsFile)
+	s.l1vHopsCSV = csv.NewWriter(s.l1vHopsGzip)
+	if err := s.l1vHopsCSV.Write(strings.Split(l1vPathHopsHeader, ",")); err != nil {
+		return err
+	}
+
+	summaryPath := s.prefix + "_l1v_path_summary.csv"
+	if dir := filepath.Dir(summaryPath); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	summaryFile, err := os.Create(summaryPath)
+	if err != nil {
+		return err
+	}
+	s.l1vSummaryFile = summaryFile
+	s.l1vSummaryCSV = csv.NewWriter(summaryFile)
+	return s.l1vSummaryCSV.Write(l1vPathSummaryHeader())
+}
+
+func l1vPathSummaryHeader() []string {
+	header := []string{
+		"path_id", "sequence", "completion_time_ns", "access_type", "pid",
+		"vaddr", "paddr", "page_paddr", "cacheline_addr", "bytes",
+		"requester_gpm", "owner_gpm", "hops", "is_remote", "route",
+		"final_source", "l1v_result", "l2_result", "parent_count",
+		"total_l1v_path_latency_ns",
+		"at_to_l1v_top_min_ns", "at_to_l1v_top_avg_ns", "at_to_l1v_top_max_ns",
+	}
+	for _, stage := range l1vPathStageColumns {
+		header = append(header, stage+"_ns")
+	}
+	return header
+}
+
+func (s *memoryPathStats) streamL1VPathRecordLocked(rec *memoryPathRecord) {
+	if rec == nil || s.streamErr != nil {
+		return
+	}
+	if s.l1vHopsCSV == nil || s.l1vSummaryCSV == nil {
+		s.streamErr = fmt.Errorf("l1v path stream is not open")
+		return
+	}
+	for i, hop := range rec.l1vPathHops {
+		if err := s.l1vHopsCSV.Write(s.l1vPathHopRow(rec, hop, i+1)); err != nil {
+			s.streamErr = err
+			return
+		}
+	}
+	if err := s.l1vSummaryCSV.Write(s.l1vPathSummaryRow(rec)); err != nil {
+		s.streamErr = err
+		return
+	}
+	s.aggregateL1VPathRecordLocked(rec)
+	if s.written%4096 == 0 {
+		s.l1vHopsCSV.Flush()
+		if err := s.l1vHopsCSV.Error(); err != nil && s.streamErr == nil {
+			s.streamErr = err
+		}
+		if s.l1vHopsGzip != nil {
+			if err := s.l1vHopsGzip.Flush(); err != nil && s.streamErr == nil {
+				s.streamErr = err
+			}
+		}
+		s.l1vSummaryCSV.Flush()
+		if err := s.l1vSummaryCSV.Error(); err != nil && s.streamErr == nil {
+			s.streamErr = err
+		}
+	}
+}
+
+func (s *memoryPathStats) aggregateL1VPathRecordLocked(rec *memoryPathRecord) {
+	seenStages := make(map[string]struct{})
+	for _, hop := range rec.l1vPathHops {
+		latency := hop.endNS - hop.startNS
+		agg := s.l1vPathStageAggregates[hop.segment]
+		if agg == nil {
+			agg = &l1vPathStageAggregate{}
+			s.l1vPathStageAggregates[hop.segment] = agg
+		}
+		agg.hops++
+		agg.sumNS += latency
+		agg.totalNS += latency
+		if agg.minNS == 0 || latency < agg.minNS {
+			agg.minNS = latency
+		}
+		if latency > agg.maxNS {
+			agg.maxNS = latency
+		}
+		if _, ok := seenStages[hop.segment]; !ok {
+			agg.pathCnt++
+			seenStages[hop.segment] = struct{}{}
+		}
+	}
+}
+
 func (s *memoryPathStats) dumpL1VPathTraceLocked() error {
+	if s.streaming {
+		if err := s.dumpL1VPathStageSummaryLocked(); err != nil {
+			return err
+		}
+		return s.dumpSpecificDataSummariesLocked()
+	}
 	if err := s.dumpL1VPathHopsLocked(); err != nil {
 		return err
 	}
@@ -1049,13 +1165,16 @@ func (s *memoryPathStats) selectedL1VPathRecordsLocked() []*memoryPathRecord {
 		if rec == nil || !rec.counted || rec.sequence == 0 {
 			continue
 		}
-		if !s.inRawWindow(rec.sequence) {
+		if rec.traceSeq == 0 {
+			continue
+		}
+		if !s.inRawWindow(rec.traceSeq) {
 			continue
 		}
 		records = append(records, rec)
 	}
 	sort.SliceStable(records, func(i, j int) bool {
-		return records[i].sequence < records[j].sequence
+		return s.outputSequence(records[i]) < s.outputSequence(records[j])
 	})
 	return records
 }
@@ -1109,18 +1228,7 @@ func (s *memoryPathStats) dumpL1VPathSummaryLocked() error {
 	csvWriter := csv.NewWriter(file)
 	defer csvWriter.Flush()
 
-	header := []string{
-		"path_id", "sequence", "completion_time_ns", "access_type", "pid",
-		"vaddr", "paddr", "page_paddr", "cacheline_addr", "bytes",
-		"requester_gpm", "owner_gpm", "hops", "is_remote", "route",
-		"final_source", "l1v_result", "l2_result", "parent_count",
-		"total_l1v_path_latency_ns",
-		"at_to_l1v_top_min_ns", "at_to_l1v_top_avg_ns", "at_to_l1v_top_max_ns",
-	}
-	for _, stage := range l1vPathStageColumns {
-		header = append(header, stage+"_ns")
-	}
-	if err := csvWriter.Write(header); err != nil {
+	if err := csvWriter.Write(l1vPathSummaryHeader()); err != nil {
 		return err
 	}
 	for _, rec := range s.selectedL1VPathRecordsLocked() {
@@ -1154,24 +1262,27 @@ func (s *memoryPathStats) dumpL1VPathStageSummaryLocked() error {
 	}); err != nil {
 		return err
 	}
-	aggregates := make(map[string]*l1vPathStageAggregate)
-	for _, rec := range s.selectedL1VPathRecordsLocked() {
-		for _, hop := range rec.l1vPathHops {
-			latency := hop.endNS - hop.startNS
-			agg := aggregates[hop.segment]
-			if agg == nil {
-				agg = &l1vPathStageAggregate{paths: make(map[string]struct{})}
-				aggregates[hop.segment] = agg
-			}
-			agg.paths[rec.originalReqID] = struct{}{}
-			agg.hops++
-			agg.sumNS += latency
-			agg.totalNS += latency
-			if agg.minNS == 0 || latency < agg.minNS {
-				agg.minNS = latency
-			}
-			if latency > agg.maxNS {
-				agg.maxNS = latency
+	aggregates := s.l1vPathStageAggregates
+	if !s.streaming {
+		aggregates = make(map[string]*l1vPathStageAggregate)
+		for _, rec := range s.selectedL1VPathRecordsLocked() {
+			for _, hop := range rec.l1vPathHops {
+				latency := hop.endNS - hop.startNS
+				agg := aggregates[hop.segment]
+				if agg == nil {
+					agg = &l1vPathStageAggregate{paths: make(map[string]struct{})}
+					aggregates[hop.segment] = agg
+				}
+				agg.paths[rec.originalReqID] = struct{}{}
+				agg.hops++
+				agg.sumNS += latency
+				agg.totalNS += latency
+				if agg.minNS == 0 || latency < agg.minNS {
+					agg.minNS = latency
+				}
+				if latency > agg.maxNS {
+					agg.maxNS = latency
+				}
 			}
 		}
 	}
@@ -1187,9 +1298,13 @@ func (s *memoryPathStats) dumpL1VPathStageSummaryLocked() error {
 		if agg == nil || agg.hops == 0 {
 			continue
 		}
+		paths := agg.pathCnt
+		if agg.paths != nil {
+			paths = uint64(len(agg.paths))
+		}
 		row := []string{
 			stage,
-			strconv.Itoa(len(agg.paths)),
+			strconv.FormatUint(paths, 10),
 			strconv.FormatUint(agg.hops, 10),
 			strconv.FormatUint(agg.sumNS/agg.hops, 10),
 			strconv.FormatUint(agg.minNS, 10),
@@ -1502,7 +1617,7 @@ func (s *memoryPathStats) l1vPathSummaryRow(rec *memoryPathRecord) []string {
 	}
 	row := []string{
 		rec.originalReqID,
-		strconv.FormatUint(rec.sequence, 10),
+		strconv.FormatUint(s.outputSequence(rec), 10),
 		strconv.FormatUint(rec.completionTimeNS, 10),
 		rec.accessType,
 		strconv.FormatUint(rec.pid, 10),

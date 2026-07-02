@@ -36,6 +36,10 @@ var memoryPathTraceWarmupAccesses = flag.Uint64("trace-memory-path-warmup-access
 	"Observed L1V memory accesses to skip before writing raw memory-path rows.")
 var memoryPathTraceMaxRecords = flag.Uint64("trace-memory-path-max-records", 100000,
 	"Maximum stable-window memory-path raw records to write; 0 means unlimited after warmup.")
+var memoryPathTraceRemoteOnly = flag.Bool("trace-memory-path-remote-only", false,
+	"Only count and write remote L1V memory paths in memory-path trace outputs.")
+var memoryPathTraceStream = flag.Bool("trace-memory-path-stream", false,
+	"Stream memory-path raw/L1V path rows to disk and release completed request records.")
 var memoryPathTraceExitOnComplete = flag.Bool("trace-memory-path-exit-on-complete", false,
 	"Exit the benchmark process after the memory-path raw trace window reaches max records.")
 var instCountReportFlag = flag.Bool("report-inst-count", false,

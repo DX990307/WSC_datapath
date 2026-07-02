@@ -195,6 +195,8 @@ func (r *Runner) configureMemoryPathTrace() {
 		*memoryPathTraceMaxRecords,
 		configuredLog2PageSize(),
 		*l2SourceTileWidthFlag,
+		*memoryPathTraceRemoteOnly,
+		*memoryPathTraceStream,
 		*memoryPathTraceExitOnComplete,
 		doneCallback,
 	); err != nil {

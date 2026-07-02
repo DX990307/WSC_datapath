@@ -22,6 +22,7 @@ const (
 
 type memoryPathRecord struct {
 	sequence uint64
+	traceSeq uint64
 
 	originalReqID     string
 	translatedReqID   string
@@ -134,15 +135,25 @@ type memoryPathStats struct {
 	maxRecords     uint64
 	log2Page       uint64
 	tileWidth      int
+	remoteOnly     bool
+	streaming      bool
 	exitOnRawFull  bool
 
 	observed uint64
+	matched  uint64
 	written  uint64
 
 	file *os.File
 	gzip *gzip.Writer
 	csv  *csv.Writer
 	raw  []memoryPathRawRow
+
+	l1vHopsFile    *os.File
+	l1vHopsGzip    *gzip.Writer
+	l1vHopsCSV     *csv.Writer
+	l1vSummaryFile *os.File
+	l1vSummaryCSV  *csv.Writer
+	streamErr      error
 
 	records                   map[string]*memoryPathRecord
 	translationReqToOriginal  map[string]string
@@ -153,6 +164,8 @@ type memoryPathStats struct {
 
 	full   memoryPathAggregate
 	steady memoryPathAggregate
+
+	l1vPathStageAggregates map[string]*l1vPathStageAggregate
 
 	stopped      bool
 	doneNotified bool
@@ -188,8 +201,11 @@ func (s *memoryPathStats) resetMapsLocked() {
 	s.full = newMemoryPathAggregate()
 	s.steady = newMemoryPathAggregate()
 	s.observed = 0
+	s.matched = 0
 	s.written = 0
 	s.raw = nil
+	s.streamErr = nil
+	s.l1vPathStageAggregates = make(map[string]*l1vPathStageAggregate)
 	s.stopped = false
 	s.doneNotified = false
 }
@@ -201,6 +217,8 @@ func EnableMemoryPathTrace(
 	maxRecords uint64,
 	log2Page uint64,
 	tileWidth int,
+	remoteOnly bool,
+	streaming bool,
 	exitOnRawFull bool,
 	doneCallback func(),
 ) error {
@@ -233,9 +251,21 @@ func EnableMemoryPathTrace(
 	globalMemoryPathStats.maxRecords = maxRecords
 	globalMemoryPathStats.log2Page = log2Page
 	globalMemoryPathStats.tileWidth = tileWidth
+	globalMemoryPathStats.remoteOnly = remoteOnly
+	globalMemoryPathStats.streaming = streaming
 	globalMemoryPathStats.exitOnRawFull = exitOnRawFull
 	globalMemoryPathStats.doneCallback = doneCallback
 	globalMemoryPathStats.resetMapsLocked()
+	if streaming {
+		if err := globalMemoryPathStats.openStreamingLocked(); err != nil {
+			_ = globalMemoryPathStats.closeLocked()
+			globalMemoryPathStats.enabled = false
+			globalMemoryPathStats.prefix = ""
+			globalMemoryPathStats.streaming = false
+			globalMemoryPathStats.resetMapsLocked()
+			return err
+		}
+	}
 	return nil
 }
 
@@ -247,6 +277,8 @@ func DisableMemoryPathTrace() {
 	_ = globalMemoryPathStats.closeLocked()
 	globalMemoryPathStats.enabled = false
 	globalMemoryPathStats.prefix = ""
+	globalMemoryPathStats.remoteOnly = false
+	globalMemoryPathStats.streaming = false
 	globalMemoryPathStats.exitOnRawFull = false
 	globalMemoryPathStats.doneCallback = nil
 	globalMemoryPathStats.resetMapsLocked()
@@ -308,10 +340,76 @@ func (s *memoryPathStats) closeLocked() error {
 		}
 		s.file = nil
 	}
+	if s.l1vHopsCSV != nil {
+		s.l1vHopsCSV.Flush()
+		if csvErr := s.l1vHopsCSV.Error(); err == nil && csvErr != nil {
+			err = csvErr
+		}
+		s.l1vHopsCSV = nil
+	}
+	if s.l1vHopsGzip != nil {
+		if gzipErr := s.l1vHopsGzip.Close(); err == nil && gzipErr != nil {
+			err = gzipErr
+		}
+		s.l1vHopsGzip = nil
+	}
+	if s.l1vHopsFile != nil {
+		if fileErr := s.l1vHopsFile.Close(); err == nil && fileErr != nil {
+			err = fileErr
+		}
+		s.l1vHopsFile = nil
+	}
+	if s.l1vSummaryCSV != nil {
+		s.l1vSummaryCSV.Flush()
+		if csvErr := s.l1vSummaryCSV.Error(); err == nil && csvErr != nil {
+			err = csvErr
+		}
+		s.l1vSummaryCSV = nil
+	}
+	if s.l1vSummaryFile != nil {
+		if fileErr := s.l1vSummaryFile.Close(); err == nil && fileErr != nil {
+			err = fileErr
+		}
+		s.l1vSummaryFile = nil
+	}
+	if err == nil && s.streamErr != nil {
+		err = s.streamErr
+	}
 	return err
 }
 
+func (s *memoryPathStats) openStreamingLocked() error {
+	if err := s.openRawStreamLocked(); err != nil {
+		return err
+	}
+	if err := s.openL1VPathStreamLocked(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *memoryPathStats) openRawStreamLocked() error {
+	path := s.prefix + "_raw.csv.gz"
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	s.file = file
+	s.gzip = gzip.NewWriter(file)
+	s.csv = csv.NewWriter(s.gzip)
+	return s.csv.Write(strings.Split(memoryPathRawHeader, ","))
+}
+
 func (s *memoryPathStats) dumpRawLocked() error {
+	if s.streaming {
+		return s.streamErr
+	}
 	path := s.prefix + "_raw.csv.gz"
 	if dir := filepath.Dir(path); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -966,12 +1064,32 @@ func (s *memoryPathStats) completeRecordLocked(rec *memoryPathRecord) bool {
 		return false
 	}
 	rec.counted = true
+
+	if s.remoteOnly && !rec.isRemote {
+		if s.streaming {
+			s.releaseRecordLocked(rec)
+		}
+		return false
+	}
+	if s.remoteOnly {
+		s.matched++
+		rec.traceSeq = s.matched
+	} else {
+		rec.traceSeq = rec.sequence
+	}
+
 	s.full.add(rec)
-	if s.inSteadyScope(rec.sequence) {
+	if s.inSteadyScope(rec.traceSeq) {
 		s.steady.add(rec)
 	}
-	if s.inRawWindow(rec.sequence) {
+	if s.inRawWindow(rec.traceSeq) {
 		s.writeRawLocked(rec)
+		if s.streaming {
+			s.streamL1VPathRecordLocked(rec)
+		}
+	}
+	if s.streaming {
+		s.releaseRecordLocked(rec)
 	}
 	if s.traceDoneLocked() {
 		s.stopped = true
@@ -979,6 +1097,44 @@ func (s *memoryPathStats) completeRecordLocked(rec *memoryPathRecord) bool {
 		return true
 	}
 	return false
+}
+
+func (s *memoryPathStats) releaseRecordLocked(rec *memoryPathRecord) {
+	if rec == nil {
+		return
+	}
+	if rec.originalReqID != "" {
+		delete(s.records, rec.originalReqID)
+	}
+	if rec.translationReqID != "" {
+		delete(s.translationReqToOriginal, rec.translationReqID)
+	}
+	if rec.translationTaskID != "" {
+		delete(s.translationTaskToOriginal, rec.translationTaskID)
+	}
+	if rec.translatedReqID != "" {
+		delete(s.translatedReqToOriginal, rec.translatedReqID)
+	}
+	for _, hop := range rec.l1vPathHops {
+		if hop.requestMsgID != "" {
+			delete(s.networkMsgToOriginal, hop.requestMsgID)
+			delete(s.networkMsgDirection, hop.requestMsgID)
+		}
+		if hop.responseMsgID != "" {
+			delete(s.networkMsgToOriginal, hop.responseMsgID)
+			delete(s.networkMsgDirection, hop.responseMsgID)
+		}
+	}
+}
+
+func (s *memoryPathStats) outputSequence(rec *memoryPathRecord) uint64 {
+	if rec == nil {
+		return 0
+	}
+	if rec.traceSeq > 0 {
+		return rec.traceSeq
+	}
+	return rec.sequence
 }
 
 func (s *memoryPathStats) inSteadyScope(sequence uint64) bool {
@@ -1003,7 +1159,7 @@ func (s *memoryPathStats) writeRawLocked(rec *memoryPathRecord) {
 		return
 	}
 	row := []string{
-		strconv.FormatUint(rec.sequence, 10),
+		strconv.FormatUint(s.outputSequence(rec), 10),
 		strconv.FormatUint(rec.completionTimeNS, 10),
 		rec.originalReqID,
 		rec.translatedReqID,
@@ -1036,6 +1192,28 @@ func (s *memoryPathStats) writeRawLocked(rec *memoryPathRecord) {
 		rec.source,
 		strconv.FormatUint(rec.dataSourceLatencyNS, 10),
 		strconv.FormatUint(rec.remoteGPMLatencyNS, 10),
+	}
+	if s.streaming {
+		if s.csv == nil {
+			s.streamErr = fmt.Errorf("memory-path raw stream is not open")
+			return
+		}
+		if err := s.csv.Write(row); err != nil && s.streamErr == nil {
+			s.streamErr = err
+		}
+		s.written++
+		if s.written%4096 == 0 {
+			s.csv.Flush()
+			if err := s.csv.Error(); err != nil && s.streamErr == nil {
+				s.streamErr = err
+			}
+			if s.gzip != nil {
+				if err := s.gzip.Flush(); err != nil && s.streamErr == nil {
+					s.streamErr = err
+				}
+			}
+		}
+		return
 	}
 	s.raw = append(s.raw, memoryPathRawRow{
 		sequence: rec.sequence,
