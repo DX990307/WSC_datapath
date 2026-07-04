@@ -143,6 +143,17 @@ GPU_BENCHMARKS_TIER2_HSACO_ALL = [
 
 GPU_BENCHMARKS_TIER2 = GPU_BENCHMARKS_TIER2_RUNNABLE[:]
 
+# One representative from each currently implemented tier2 wrapper family.
+# Several tier2 names are selectable for traceability, but their Go wrappers
+# are copied from the same implementation.
+GPU_BENCHMARKS_TIER2_UNIQUE = [
+    "rodinia_bfs",      # also covers lonestar_sssp in the current wrapper
+    "graph_pr",        # also covers heteromark_pagerank in tier2
+    "shoc_spmv",       # also covers parboil_spmv, npb_cg, altis_gups
+    "cuda_transpose",
+    "shoc_stencil2d",  # also covers rodinia_hotspot in the current wrapper
+]
+
 GPU_BENCHMARKS_TIER2_SELECTABLE = list(dict.fromkeys(
     GPU_BENCHMARKS_TIER2_RUNNABLE
     + GPU_BENCHMARKS_TIER2_EXISTING_WRAPPER_ALIASES
@@ -181,6 +192,13 @@ RUNNABLE_BENCHMARKS = list(dict.fromkeys(
     + CONCURRENT_BENCHMARKS
 ))
 
+CANONICAL_BENCHMARKS = list(dict.fromkeys(
+    TRADITIONAL_BENCHMARKS
+    + POLYBENCH_BENCHMARKS
+    + ADDITIONAL_STANDALONE_BENCHMARKS
+    + ["rodinia_bfs"]
+))
+
 ALL_BENCHMARKS = list(dict.fromkeys(
     RUNNABLE_BENCHMARKS
     + GPU_BENCHMARKS_TIER2_PENDING_WRAPPERS
@@ -189,7 +207,11 @@ ALL_BENCHMARKS = list(dict.fromkeys(
 DEFAULT_RUN_BENCHMARKS = TRADITIONAL_BENCHMARKS[:]
 
 BENCHMARK_ALIASES = {
-    "all": RUNNABLE_BENCHMARKS,
+    "all": CANONICAL_BENCHMARKS,
+    "canonical": CANONICAL_BENCHMARKS,
+    "unique": CANONICAL_BENCHMARKS,
+    "all_unique": CANONICAL_BENCHMARKS,
+    "all_with_aliases": RUNNABLE_BENCHMARKS,
     "supported": RUNNABLE_BENCHMARKS,
     "traditional": TRADITIONAL_BENCHMARKS,
     "polybench": POLYBENCH_BENCHMARKS,
@@ -199,6 +221,8 @@ BENCHMARK_ALIASES = {
     "tier2": GPU_BENCHMARKS_TIER2,
     "gpu_benchmarks_tier2": GPU_BENCHMARKS_TIER2,
     "tier2_runnable": GPU_BENCHMARKS_TIER2,
+    "tier2_unique": GPU_BENCHMARKS_TIER2_UNIQUE,
+    "gpu_benchmarks_tier2_unique": GPU_BENCHMARKS_TIER2_UNIQUE,
     "tier2_existing_wrapper_aliases": GPU_BENCHMARKS_TIER2_EXISTING_WRAPPER_ALIASES,
     "tier2_all": GPU_BENCHMARKS_TIER2_HSACO_ALL,
     "tier2_hsaco_all": GPU_BENCHMARKS_TIER2_HSACO_ALL,
@@ -337,6 +361,53 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--m1-no-l1v-batch",
+        dest="m1_no_l1v_batch",
+        action="store_true",
+        help="Do not enable the M1 L1V post-coalescer batch helper.",
+    )
+    parser.add_argument(
+        "--m1-l1v-no-adaptive",
+        dest="m1_l1v_no_adaptive",
+        action="store_true",
+        help="Disable adaptive bypass for the M1 L1V batch helper.",
+    )
+    parser.add_argument(
+        "--m1-l1v-batch-lines",
+        dest="m1_l1v_batch_lines",
+        type=int,
+        default=2,
+        help="M1 L1V maximum unique cache lines per same-AU batch.",
+    )
+    parser.add_argument(
+        "--m1-l1v-batch-max-wait-ns",
+        dest="m1_l1v_batch_max_wait_ns",
+        type=int,
+        default=10,
+        help="M1 L1V maximum batch wait in ns.",
+    )
+    parser.add_argument(
+        "--m1-l1v-batch-entries",
+        dest="m1_l1v_batch_entries",
+        type=int,
+        default=32,
+        help="M1 L1V active batch entries per L1V cache.",
+    )
+    parser.add_argument(
+        "--m1-l1v-adaptive-bad-drains",
+        dest="m1_l1v_adaptive_bad_drains",
+        type=int,
+        default=4,
+        help="Consecutive low-quality L1V drains before adaptive bypass.",
+    )
+    parser.add_argument(
+        "--m1-l1v-adaptive-cooldown-ns",
+        dest="m1_l1v_adaptive_cooldown_ns",
+        type=int,
+        default=200,
+        help="M1 L1V adaptive bypass duration in ns.",
+    )
+    parser.add_argument(
         "--m1-cache-batch-lines",
         dest="m1_cache_batch_lines",
         type=int,
@@ -438,7 +509,7 @@ def parse_args():
         "--l1v-tlb-mshr-entries",
         dest="l1v_tlb_mshr_entries",
         type=int,
-        default=160,
+        default=4,
         help="Number of L1V TLB MSHR entries.",
     )
     parser.add_argument(
@@ -447,6 +518,13 @@ def parse_args():
         type=int,
         default=32,
         help="L1V request-path width for ROB, address translator, TLB, and cache.",
+    )
+    parser.add_argument(
+        "--log2-page-size",
+        dest="log2_page_size",
+        type=int,
+        default=None,
+        help="GPU page size as log2(bytes). For example 12=4KB, 15=32KB.",
     )
     parser.add_argument(
         "--rerun-missing",
@@ -673,7 +751,21 @@ def selected_mechanisms(args):
 def mechanism_flags(args, mechanism):
     if mechanism == "baseline":
         return []
-    m1_flags = [
+    m1_l1v_flags = []
+    if not args.m1_no_l1v_batch:
+        m1_l1v_flags = [
+            "-m1-l1v-batch-enable",
+            f"-m1-l1v-batch-lines={args.m1_l1v_batch_lines}",
+            f"-m1-l1v-batch-max-wait-ns={args.m1_l1v_batch_max_wait_ns}",
+            f"-m1-l1v-batch-entries={args.m1_l1v_batch_entries}",
+        ]
+        if not args.m1_l1v_no_adaptive:
+            m1_l1v_flags += [
+                "-m1-l1v-adaptive-enable",
+                f"-m1-l1v-adaptive-bad-drains={args.m1_l1v_adaptive_bad_drains}",
+                f"-m1-l1v-adaptive-cooldown-ns={args.m1_l1v_adaptive_cooldown_ns}",
+            ]
+    m1_flags = m1_l1v_flags + [
         "-m1-l2-helper-enable",
         "-m1-dram-helper-enable",
         f"-m1-cache-batch-lines={args.m1_cache_batch_lines}",
@@ -754,6 +846,8 @@ def build_common_flags(args):
         f"-l1v-tlb-mshr-entries={args.l1v_tlb_mshr_entries}",
         f"-l1v-req-per-cycle={args.l1v_req_per_cycle}",
     ]
+    if args.log2_page_size is not None:
+        flags.append(f"-log2-page-size={args.log2_page_size}")
     if args.trace_memory_path:
         flags += [
             "-trace-memory-path",

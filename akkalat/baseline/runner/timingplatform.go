@@ -49,6 +49,13 @@ type R9NanoPlatformBuilder struct {
 	l1vReqPerCycle           int
 	l1vMaxConcurrentTrans    int
 	forceLocalDataAccess     bool
+	m1L1VBatchEnabled        bool
+	m1L1VBatchEntries        int
+	m1L1VBatchLines          int
+	m1L1VBatchWaitNS         uint64
+	m1L1VAdaptiveEnabled     bool
+	m1L1VAdaptiveBadDrains   int
+	m1L1VAdaptiveCooldownNS  uint64
 	m1CacheHelperEnabled     bool
 	m1DRAMHelperEnabled      bool
 	m1CacheBatchEntries      int
@@ -104,6 +111,11 @@ func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 		l1vTLBMSHREntries:        160,
 		l1vReqPerCycle:           32,
 		l1vMaxConcurrentTrans:    160,
+		m1L1VBatchEntries:        32,
+		m1L1VBatchLines:          2,
+		m1L1VBatchWaitNS:         10,
+		m1L1VAdaptiveBadDrains:   4,
+		m1L1VAdaptiveCooldownNS:  200,
 		m1CacheBatchEntries:      16,
 		m1CacheBatchLines:        4,
 		m1CacheBatchWaitNS:       25,
@@ -245,6 +257,36 @@ func (b R9NanoPlatformBuilder) WithEndpointBufferSize(
 	n int,
 ) R9NanoPlatformBuilder {
 	b.endpointBufferSize = n
+	return b
+}
+
+// WithM1L1VBatchHelper configures the L1V post-coalescer batch helper.
+func (b R9NanoPlatformBuilder) WithM1L1VBatchHelper(
+	enable bool,
+	entries int,
+	lines int,
+	waitNS uint64,
+	adaptiveEnable bool,
+	adaptiveBadDrains int,
+	adaptiveCooldownNS uint64,
+) R9NanoPlatformBuilder {
+	b.m1L1VBatchEnabled = enable
+	b.m1L1VAdaptiveEnabled = adaptiveEnable
+	if entries > 0 {
+		b.m1L1VBatchEntries = entries
+	}
+	if lines > 0 {
+		b.m1L1VBatchLines = lines
+	}
+	if waitNS > 0 {
+		b.m1L1VBatchWaitNS = waitNS
+	}
+	if adaptiveBadDrains > 0 {
+		b.m1L1VAdaptiveBadDrains = adaptiveBadDrains
+	}
+	if adaptiveCooldownNS > 0 {
+		b.m1L1VAdaptiveCooldownNS = adaptiveCooldownNS
+	}
 	return b
 }
 
@@ -663,6 +705,14 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithL1VReqPerCycle(b.l1vReqPerCycle).
 		WithL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
 		WithForceLocalDataAccess(b.forceLocalDataAccess).
+		WithM1L1VBatchHelper(
+			b.m1L1VBatchEnabled,
+			b.m1L1VBatchEntries,
+			b.m1L1VBatchLines,
+			b.m1L1VBatchWaitNS,
+			b.m1L1VAdaptiveEnabled,
+			b.m1L1VAdaptiveBadDrains,
+			b.m1L1VAdaptiveCooldownNS).
 		WithM1LocalBatchHelpers(
 			b.m1CacheHelperEnabled,
 			b.m1DRAMHelperEnabled,

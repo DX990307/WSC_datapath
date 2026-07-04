@@ -26,6 +26,7 @@ type Builder struct {
 	maxRemoteBottomTrans   int
 	remoteDataCacheEnable  bool
 	remoteDataCacheEntries int
+	m1Config               M1Config
 	lowModuleFinder        mem.LowModuleFinder
 	visTracer              tracing.Tracer
 }
@@ -128,6 +129,12 @@ func (b *Builder) WithRemoteDataCache(enable bool, entries int) *Builder {
 	return b
 }
 
+// WithM1Config configures the L1V post-coalescer batch helper.
+func (b *Builder) WithM1Config(config M1Config) *Builder {
+	b.m1Config = config
+	return b
+}
+
 // WithNumReqsPerCycle sets the number of requests that the cache can process
 // per cycle
 func (b *Builder) WithNumReqsPerCycle(n int) *Builder {
@@ -196,6 +203,7 @@ func (b *Builder) Build(name string) *Cache {
 		b.remoteDataCacheEnable,
 		b.remoteDataCacheEntries,
 	)
+	c.ConfigureM1(b.m1Config)
 
 	b.buildStages(c)
 

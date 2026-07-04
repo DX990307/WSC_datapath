@@ -50,6 +50,13 @@ type shaderArrayBuilder struct {
 	l1vTLBMSHREntries        int
 	l1vReqPerCycle           int
 	l1vMaxConcurrentTrans    int
+	m1L1VBatchEnable         bool
+	m1L1VBatchEntries        int
+	m1L1VBatchLines          int
+	m1L1VBatchWaitNS         uint64
+	m1L1VAdaptiveEnable      bool
+	m1L1VAdaptiveBadDrains   int
+	m1L1VAdaptiveCooldownNS  uint64
 	m3RemoteDataCacheEnable  bool
 	m3RemoteDataCacheEntries int
 
@@ -71,6 +78,11 @@ func makeShaderArrayBuilder() shaderArrayBuilder {
 		l1vTLBMSHREntries:        160,
 		l1vReqPerCycle:           32,
 		l1vMaxConcurrentTrans:    160,
+		m1L1VBatchEntries:        32,
+		m1L1VBatchLines:          2,
+		m1L1VBatchWaitNS:         10,
+		m1L1VAdaptiveBadDrains:   4,
+		m1L1VAdaptiveCooldownNS:  200,
 		m3RemoteDataCacheEntries: 128,
 	}
 	return b
@@ -139,6 +151,35 @@ func (b shaderArrayBuilder) withL1VReqPerCycle(n int) shaderArrayBuilder {
 func (b shaderArrayBuilder) withL1VMaxConcurrentTrans(n int) shaderArrayBuilder {
 	if n > 0 {
 		b.l1vMaxConcurrentTrans = n
+	}
+	return b
+}
+
+func (b shaderArrayBuilder) withM1L1VBatchHelper(
+	enable bool,
+	entries int,
+	lines int,
+	waitNS uint64,
+	adaptiveEnable bool,
+	adaptiveBadDrains int,
+	adaptiveCooldownNS uint64,
+) shaderArrayBuilder {
+	b.m1L1VBatchEnable = enable
+	b.m1L1VAdaptiveEnable = adaptiveEnable
+	if entries > 0 {
+		b.m1L1VBatchEntries = entries
+	}
+	if lines > 0 {
+		b.m1L1VBatchLines = lines
+	}
+	if waitNS > 0 {
+		b.m1L1VBatchWaitNS = waitNS
+	}
+	if adaptiveBadDrains > 0 {
+		b.m1L1VAdaptiveBadDrains = adaptiveBadDrains
+	}
+	if adaptiveCooldownNS > 0 {
+		b.m1L1VAdaptiveCooldownNS = adaptiveCooldownNS
 	}
 	return b
 }
@@ -427,6 +468,16 @@ func (b *shaderArrayBuilder) buildL1VCaches(sa *shaderArray) {
 		WithNumReqsPerCycle(b.l1vReqPerCycle).
 		WithMaxNumConcurrentTrans(b.l1vMaxConcurrentTrans).
 		WithMaxRemoteBottomTrans(b.l1vRemoteMaxInflight).
+		WithM1Config(writearound.M1Config{
+			L1VBatchEnabled:              b.m1L1VBatchEnable,
+			L1VBatchEntries:              b.m1L1VBatchEntries,
+			L1VBatchLines:                b.m1L1VBatchLines,
+			L1VBatchWaitNS:               b.m1L1VBatchWaitNS,
+			L1VWindowLines:               2,
+			L1VAdaptiveEnabled:           b.m1L1VAdaptiveEnable,
+			L1VAdaptiveBadDrainThreshold: b.m1L1VAdaptiveBadDrains,
+			L1VAdaptiveCooldownNS:        b.m1L1VAdaptiveCooldownNS,
+		}).
 		WithRemoteDataCache(
 			b.m3RemoteDataCacheEnable,
 			b.m3RemoteDataCacheEntries).

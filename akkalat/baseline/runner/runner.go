@@ -247,6 +247,14 @@ func (r *Runner) buildTimingPlatform() {
 		WithL1VReqPerCycle(*l1vReqPerCycleFlag).
 		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag).
 		WithForceLocalDataAccess(*forceLocalDataAccessFlag).
+		WithM1L1VBatchHelper(
+			*m1L1VBatchEnableFlag,
+			*m1L1VBatchEntriesFlag,
+			*m1L1VBatchLinesFlag,
+			*m1L1VBatchWaitNSFlag,
+			*m1L1VAdaptiveEnableFlag,
+			*m1L1VAdaptiveBadDrainThresholdFlag,
+			*m1L1VAdaptiveCooldownNSFlag).
 		WithM1LocalBatchHelpers(
 			*m1L2HelperEnableFlag,
 			*m1DRAMHelperEnableFlag,

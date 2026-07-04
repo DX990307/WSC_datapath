@@ -274,6 +274,79 @@ func (r *Runner) reportM1Stats() {
 	}
 
 	for _, gpu := range r.platform.GPUs {
+		for _, component := range gpu.L1VCaches {
+			l1v, ok := component.(*writearound.Cache)
+			if !ok {
+				continue
+			}
+			m1 := l1v.GetM1Stats()
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_batch_enabled",
+				boolMetric(m1.L1VBatchEnabled))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_adaptive_enabled",
+				boolMetric(m1.L1VAdaptiveEnabled))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_requests_seen",
+				float64(m1.L1VRequestsSeen))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_batchable_reads",
+				float64(m1.L1VBatchableReads))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_bypass_requests",
+				float64(m1.L1VBypassRequests))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_batches_created",
+				float64(m1.L1VBatchesCreated))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_batches_drained",
+				float64(m1.L1VBatchesDrained))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_lines_in_batches",
+				float64(m1.L1VLinesInBatches))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_requests_in_batches",
+				float64(m1.L1VRequestsInBatches))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_duplicate_line_waiters",
+				float64(m1.L1VDuplicateWaiters))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_avg_lines_per_batch",
+				safeDiv(float64(m1.L1VLinesInBatches),
+					float64(m1.L1VBatchesDrained)))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_avg_wait_ns",
+				safeDiv(m1.L1VTotalWaitNS,
+					float64(m1.L1VWaitSamples)))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_max_lines_per_batch",
+				float64(m1.L1VMaxLinesPerBatch))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_full_drains",
+				float64(m1.L1VFullDrains))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_timeout_drains",
+				float64(m1.L1VTimeoutDrains))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_capacity_drains",
+				float64(m1.L1VCapacityDrains))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_manual_drains",
+				float64(m1.L1VManualDrains))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_adaptive_bypass_requests",
+				float64(m1.L1VAdaptiveBypassRequests))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_adaptive_disable_events",
+				float64(m1.L1VAdaptiveDisableEvents))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_adaptive_bad_drains",
+				float64(m1.L1VAdaptiveBadDrains))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m1_l1v_adaptive_good_drains",
+				float64(m1.L1VAdaptiveGoodDrains))
+		}
+
 		for _, component := range gpu.L2Caches {
 			l2, ok := component.(*writeback.Cache)
 			if !ok {

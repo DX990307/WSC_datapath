@@ -45,6 +45,14 @@ type Cache struct {
 
 	remoteDataCache *remoteDataCache
 
+	m1Config      M1Config
+	m1Stats       M1Stats
+	m1Batches     map[m1BatchKey]*m1BatchEntry
+	m1BatchOrder  []m1BatchKey
+	m1NextBatchID uint64
+	m1BadDrainRun int
+	m1BypassUntil sim.VTimeInSec
+
 	isPaused bool
 }
 
@@ -143,6 +151,10 @@ func (c *Cache) tickCoalesceState(now sim.VTimeInSec) bool {
 	madeProgress := false
 	for i := 0; i < c.numReqPerCycle; i++ {
 		madeProgress = c.coalesceStage.Tick(now) || madeProgress
+	}
+	for i := 0; i < c.numReqPerCycle; i++ {
+		madeProgress = c.processM1Batches(now, false, m1DrainManual) ||
+			madeProgress
 	}
 	return madeProgress
 }

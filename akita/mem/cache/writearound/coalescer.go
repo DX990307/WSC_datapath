@@ -223,12 +223,37 @@ func (c *coalescer) coalesceAndSend(now sim.VTimeInSec) bool {
 		now,
 		len(trans.preCoalesceTransactions),
 	)
-	c.cache.dirBuf.Push(trans)
+	c.sendToDirectoryQueue(now, trans)
 	c.cache.postCoalesceTransactions =
 		append(c.cache.postCoalesceTransactions, trans)
 	c.toCoalesce = nil
 
 	return true
+}
+
+func (c *coalescer) sendToDirectoryQueue(
+	now sim.VTimeInSec,
+	trans *transaction,
+) {
+	if !c.cache.m1Enabled() {
+		c.cache.dirBuf.Push(trans)
+		return
+	}
+
+	c.cache.m1Stats.L1VRequestsSeen++
+	if c.cache.m1AdaptiveBypass(now) {
+		c.cache.m1Stats.L1VAdaptiveBypassRequests++
+		c.cache.m1Stats.L1VBypassRequests++
+		c.cache.dirBuf.Push(trans)
+		return
+	}
+
+	if c.cache.enqueueM1Batch(now, trans) {
+		return
+	}
+
+	c.cache.m1Stats.L1VBypassRequests++
+	c.cache.dirBuf.Push(trans)
 }
 
 func (c *coalescer) recordMemoryPathL1VParents(trans *transaction) {

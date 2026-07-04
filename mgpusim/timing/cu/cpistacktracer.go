@@ -2,6 +2,7 @@ package cu
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
@@ -128,6 +129,8 @@ func separateScalarTask(thisTask tracing.Task) (t taskType) {
 // - "scalar": the wavefront is executing a scalar instruction
 // - "vector": the wavefront is executing a vector instruction
 type CPIStackTracer struct {
+	mu sync.Mutex
+
 	timeTeller sim.TimeTeller
 	cu         *ComputeUnit
 
@@ -184,6 +187,9 @@ func (h *CPIStackTracer) totalCycle() float64 {
 }
 
 func (h *CPIStackTracer) GetCPIStack() map[string]float64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	totalCycle := h.totalCycle()
 
 	stack := make(map[string]float64)
@@ -199,6 +205,9 @@ func (h *CPIStackTracer) GetCPIStack() map[string]float64 {
 }
 
 func (h *CPIStackTracer) GetSIMDCPIStack() map[string]float64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	totalCycle := h.totalCycle()
 
 	stack := make(map[string]float64)
@@ -215,6 +224,9 @@ func (h *CPIStackTracer) GetSIMDCPIStack() map[string]float64 {
 
 // StartTask is called when a task is started.
 func (h *CPIStackTracer) StartTask(task tracing.Task) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	h.inflightTasks[task.ID] = task
 	h.handleTaskStart(task)
 }
@@ -226,6 +238,9 @@ func (h *CPIStackTracer) StepTask(task tracing.Task) {
 
 // EndTask is called when a task is ended.
 func (h *CPIStackTracer) EndTask(task tracing.Task) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	originalTask, found := h.inflightTasks[task.ID]
 	if found {
 		delete(h.inflightTasks, task.ID)

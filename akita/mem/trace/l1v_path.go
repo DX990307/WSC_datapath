@@ -20,6 +20,7 @@ const (
 var l1vPathStageColumns = []string{
 	"at_to_l1v_top",
 	"l1v_coalesce_wait",
+	"l1v_batch_wait",
 	"l1v_dir_lookup",
 	"l1v_dir_stall_post_pipeline_buffer",
 	"l1v_dir_stall_victim_locked",
@@ -296,6 +297,33 @@ func RecordMemoryPathL1VCoalesce(
 		requestMsgID:  pathID,
 		startNS:       rec.l1vCoalesceStartNS,
 		endNS:         rec.l1vCoalesceEmitNS,
+	})
+}
+
+func RecordMemoryPathL1VBatchWait(
+	cacheName string,
+	pathID string,
+	start sim.VTimeInSec,
+	end sim.VTimeInSec,
+) {
+	globalMemoryPathStats.Lock()
+	defer globalMemoryPathStats.Unlock()
+
+	if !globalMemoryPathStats.collectingLocked() {
+		return
+	}
+
+	rec := globalMemoryPathStats.recordByOriginalLocked(pathID)
+	if rec == nil {
+		return
+	}
+	globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
+		segment:       "l1v_batch_wait",
+		fromComponent: cacheName,
+		toComponent:   cacheName,
+		requestMsgID:  pathID,
+		startNS:       timeToNS(start),
+		endNS:         timeToNS(end),
 	})
 }
 
@@ -1932,6 +1960,7 @@ func criticalPathBreakdownForRecord(rec *memoryPathRecord) criticalPathBreakdown
 
 	l1CacheHandle := sumStages(rec, []string{
 		"l1v_coalesce_wait",
+		"l1v_batch_wait",
 		"l1v_dir_lookup",
 		"l1v_dir_stall_post_pipeline_buffer",
 		"l1v_dir_stall_victim_locked",

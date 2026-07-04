@@ -45,6 +45,9 @@ type transaction struct {
 	l1vDirFirstAttemptValid bool
 	l1vDirStallReason       string
 	l1vDirStallStart        sim.VTimeInSec
+
+	m1BatchArrival sim.VTimeInSec
+	m1BatchID      uint64
 }
 
 func (t *transaction) Address() uint64 {

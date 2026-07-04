@@ -86,6 +86,20 @@ var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 160,
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")
+var m1L1VBatchEnableFlag = flag.Bool("m1-l1v-batch-enable", false,
+	"Enable M1 L1V post-coalescer same-AU batch/reorder helper.")
+var m1L1VBatchEntriesFlag = flag.Int("m1-l1v-batch-entries", 32,
+	"Maximum active M1 L1V batch entries per L1V cache.")
+var m1L1VBatchLinesFlag = flag.Int("m1-l1v-batch-lines", 2,
+	"Maximum unique cache lines per M1 L1V same-AU batch.")
+var m1L1VBatchWaitNSFlag = flag.Uint64("m1-l1v-batch-max-wait-ns", 10,
+	"Maximum M1 L1V batch wait in ns before timeout drain.")
+var m1L1VAdaptiveEnableFlag = flag.Bool("m1-l1v-adaptive-enable", false,
+	"Enable adaptive bypass for the M1 L1V batch helper when recent batches are low quality.")
+var m1L1VAdaptiveBadDrainThresholdFlag = flag.Int("m1-l1v-adaptive-bad-drains", 4,
+	"Consecutive single-line M1 L1V drains before entering adaptive bypass.")
+var m1L1VAdaptiveCooldownNSFlag = flag.Uint64("m1-l1v-adaptive-cooldown-ns", 200,
+	"M1 L1V adaptive bypass duration in ns.")
 var m1L2HelperEnableFlag = flag.Bool("m1-l2-helper-enable", false,
 	"Enable M1a local L2 cache batch helper for local read requests.")
 var m1DRAMHelperEnableFlag = flag.Bool("m1-dram-helper-enable", false,
