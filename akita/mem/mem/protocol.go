@@ -316,6 +316,83 @@ func (b DataReadyRspBuilder) Build() *DataReadyRsp {
 	return r
 }
 
+// A RemoteDataFill is a best-effort fill for a cache line that was fetched
+// speculatively for a remote-data side cache. It is not a response to a demand
+// request, so receivers may drop it if they do not implement a remote fill path.
+type RemoteDataFill struct {
+	sim.MsgMeta
+
+	Address uint64
+	PID     vm.PID
+	Data    []byte
+}
+
+// Meta returns the metadata attached to each message.
+func (r *RemoteDataFill) Meta() *sim.MsgMeta {
+	return &r.MsgMeta
+}
+
+// RemoteDataFillBuilder can build remote data fill messages.
+type RemoteDataFillBuilder struct {
+	sendTime sim.VTimeInSec
+	src, dst sim.Port
+	pid      vm.PID
+	address  uint64
+	data     []byte
+}
+
+// WithSendTime sets the send time of the fill to build.
+func (b RemoteDataFillBuilder) WithSendTime(
+	t sim.VTimeInSec,
+) RemoteDataFillBuilder {
+	b.sendTime = t
+	return b
+}
+
+// WithSrc sets the source of the fill to build.
+func (b RemoteDataFillBuilder) WithSrc(src sim.Port) RemoteDataFillBuilder {
+	b.src = src
+	return b
+}
+
+// WithDst sets the destination of the fill to build.
+func (b RemoteDataFillBuilder) WithDst(dst sim.Port) RemoteDataFillBuilder {
+	b.dst = dst
+	return b
+}
+
+// WithPID sets the PID of the fill to build.
+func (b RemoteDataFillBuilder) WithPID(pid vm.PID) RemoteDataFillBuilder {
+	b.pid = pid
+	return b
+}
+
+// WithAddress sets the cache-line address of the fill to build.
+func (b RemoteDataFillBuilder) WithAddress(address uint64) RemoteDataFillBuilder {
+	b.address = address
+	return b
+}
+
+// WithData sets the data carried by the fill to build.
+func (b RemoteDataFillBuilder) WithData(data []byte) RemoteDataFillBuilder {
+	b.data = data
+	return b
+}
+
+// Build creates a new RemoteDataFill.
+func (b RemoteDataFillBuilder) Build() *RemoteDataFill {
+	r := &RemoteDataFill{}
+	r.ID = sim.GetIDGenerator().Generate()
+	r.Src = b.src
+	r.Dst = b.dst
+	r.SendTime = b.sendTime
+	r.TrafficBytes = len(b.data) + accessRspByteOverhead
+	r.Address = b.address
+	r.PID = b.pid
+	r.Data = b.data
+	return r
+}
+
 // A WriteDoneRsp is a respond sent from the lower module to the higher module
 // to mark a previous requests is completed successfully.
 type WriteDoneRsp struct {

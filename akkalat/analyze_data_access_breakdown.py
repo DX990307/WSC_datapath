@@ -9,8 +9,12 @@ from pathlib import Path
 L1_CACHE_STAGES = {
     "l1v_coalesce_wait",
     "l1v_dir_lookup",
+    "l1v_dir_stall_post_pipeline_buffer",
+    "l1v_dir_stall_victim_locked",
+    "l1v_dir_stall_mshr_full",
+    "l1v_dir_stall_bottom_blocked",
+    "l1v_dir_stall_bank_buffer_full",
     "l1v_bank_hit",
-    "l1v_mshr_wait",
     "l1v_bottom_response_parse",
     "l1v_mshr_wakeup",
     "l1v_fill_parent_done",
@@ -78,6 +82,10 @@ ADDRESS_TRANSLATION_STAGES = {
     "at_to_l1v_top",
 }
 
+IGNORED_STAGES = {
+    "l1v_mshr_wait",
+}
+
 MECHANISMS = ["m1_m2", "baseline", "m1", "m2"]
 
 
@@ -102,6 +110,8 @@ def parse_args():
 
 
 def category_for_stage(stage):
+    if stage in IGNORED_STAGES:
+        return ""
     if stage in L1_CACHE_STAGES:
         return "l1_cache"
     if stage in L2_CACHE_STAGES:
@@ -200,6 +210,8 @@ def aggregate_categories(
     totals = {}
     for row in stage_rows:
         category = row["category"]
+        if not category:
+            continue
         if not stage_included_in_data_access(
             row["stage"],
             include_address_translation,
@@ -316,6 +328,8 @@ def main():
             )
 
         for row in stage_rows:
+            if not row["category"]:
+                continue
             included = stage_included_in_data_access(
                 row["stage"],
                 args.include_address_translation,

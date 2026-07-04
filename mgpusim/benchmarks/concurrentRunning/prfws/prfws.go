@@ -43,8 +43,8 @@ type fwsArgs struct {
 
 func (b *Benchmark) configPR() {
 	b.subBenchmarkPR = pr.NewBenchmark(b.driver)
-	b.subBenchmarkPR.NumNodes = 262144 / 32
-	b.subBenchmarkPR.NumConnections = 1048576 / 32
+	b.subBenchmarkPR.NumNodes = 1 << 22
+	b.subBenchmarkPR.NumConnections = 50_000_000
 	b.subBenchmarkPR.MaxIterations = 1
 
 	GPU := 49
@@ -53,7 +53,7 @@ func (b *Benchmark) configPR() {
 
 func (b *Benchmark) configFWS() {
 	b.subBenchmarkFWS = fws.NewBenchmark(b.driver)
-	b.subBenchmarkFWS.NumNodes = 1024 / 2
+	b.subBenchmarkFWS.NumNodes = 8192
 	b.subBenchmarkFWS.NumIterations = 1
 
 	GPU := 50

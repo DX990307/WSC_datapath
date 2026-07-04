@@ -71,51 +71,6 @@ var _ = Describe("DirectoryStage", func() {
 		Expect(ret).To(BeFalse())
 	})
 
-	It("should batch contiguous same-set directory transactions", func() {
-		realCache := MakeBuilder().
-			WithNumReqPerCycle(4).
-			WithL2DirBatch(4).
-			Build("BatchCache")
-		realDS := &directoryStage{
-			cache: realCache,
-		}
-		directory := realCache.directory.(*cache.DirectoryImpl)
-		setStride := uint64(directory.NumSets * directory.BlockSize)
-
-		first := &transaction{
-			read: mem.ReadReqBuilder{}.
-				WithAddress(0x100).
-				WithPID(1).
-				WithByteSize(64).
-				Build(),
-		}
-		second := &transaction{
-			read: mem.ReadReqBuilder{}.
-				WithAddress(0x100 + setStride).
-				WithPID(1).
-				WithByteSize(64).
-				Build(),
-		}
-		third := &transaction{
-			read: mem.ReadReqBuilder{}.
-				WithAddress(0x140).
-				WithPID(1).
-				WithByteSize(64).
-				Build(),
-		}
-		realCache.dirStageBuffer.Push(first)
-		realCache.dirStageBuffer.Push(second)
-		realCache.dirStageBuffer.Push(third)
-
-		batch := realDS.collectDirBatch(10, first)
-
-		Expect(batch).To(Equal([]*transaction{first, second}))
-		Expect(realCache.dirStageBuffer.Peek()).To(BeIdenticalTo(third))
-		Expect(realCache.l2BatchStats.DirBatchGroups).To(Equal(uint64(1)))
-		Expect(realCache.l2BatchStats.DirBatchRequests).To(Equal(uint64(2)))
-		Expect(realCache.l2BatchStats.DirMaxBatchSize).To(Equal(uint64(2)))
-	})
-
 	Context("read", func() {
 		var (
 			read  *mem.ReadReq
@@ -135,7 +90,7 @@ var _ = Describe("DirectoryStage", func() {
 
 			pipeline.EXPECT().CanAccept().Return(false)
 			buf.EXPECT().Peek().Return(&dirPipelineItem{
-				transactions: []*transaction{trans},
+				trans: trans,
 			})
 			buf.EXPECT().Peek().Return(nil)
 		})
@@ -406,7 +361,7 @@ var _ = Describe("DirectoryStage", func() {
 
 			pipeline.EXPECT().CanAccept().Return(false)
 			buf.EXPECT().Peek().Return(&dirPipelineItem{
-				transactions: []*transaction{trans},
+				trans: trans,
 			})
 			buf.EXPECT().Peek().Return(nil)
 		})

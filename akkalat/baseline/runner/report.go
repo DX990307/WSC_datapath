@@ -3,10 +3,10 @@ package runner
 import (
 	"sort"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writearound"
 	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/mgpusim/v3/timing/cu"
-	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 )
 
 func (r *Runner) reportStats() {
@@ -27,10 +27,10 @@ func (r *Runner) reportStats() {
 	r.reportGMMUTransactionCount()
 	r.reportMMUTransactionCount()
 	r.reportDRAMTransactionCount()
-	r.reportL2BatchStats()
-	r.reportM2RDMABatchStats()
 	r.reportIOMMUTLBStats()
 	r.reportMMUCoalescingStats()
+	r.reportM1Stats()
+	r.reportM2M3Stats()
 	if err := memtrace.DumpMemoryPathTrace(); err != nil {
 		panic(err)
 	}
@@ -196,12 +196,15 @@ func (r *Runner) reportCacheHitRate() {
 	for _, tracer := range r.cacheHitRateTracers {
 		readHit := tracer.tracer.GetStepCount("read-hit")
 		readMiss := tracer.tracer.GetStepCount("read-miss")
+		readRemoteDataHit := tracer.tracer.GetStepCount("read-remote-data-hit")
+		readRemoteDataMiss := tracer.tracer.GetStepCount("read-remote-data-miss")
 		readMSHRHit := tracer.tracer.GetStepCount("read-mshr-miss")
 		writeHit := tracer.tracer.GetStepCount("write-hit")
 		writeMiss := tracer.tracer.GetStepCount("write-miss")
 		writeMSHRHit := tracer.tracer.GetStepCount("write-mshr-miss")
 
-		totalTransaction := readHit + readMiss + readMSHRHit +
+		totalTransaction := readHit + readMiss + readRemoteDataHit +
+			readRemoteDataMiss + readMSHRHit +
 			writeHit + writeMiss + writeMSHRHit
 
 		if totalTransaction == 0 {
@@ -212,6 +215,12 @@ func (r *Runner) reportCacheHitRate() {
 			tracer.cache.Name(), "read-hit", float64(readHit))
 		r.metricsCollector.Collect(
 			tracer.cache.Name(), "read-miss", float64(readMiss))
+		r.metricsCollector.Collect(
+			tracer.cache.Name(), "read-remote-data-hit",
+			float64(readRemoteDataHit))
+		r.metricsCollector.Collect(
+			tracer.cache.Name(), "read-remote-data-miss",
+			float64(readRemoteDataMiss))
 		r.metricsCollector.Collect(
 			tracer.cache.Name(), "read-mshr-hit", float64(readMSHRHit))
 		r.metricsCollector.Collect(
@@ -259,80 +268,325 @@ func (r *Runner) reportRDMATransactionCount() {
 	}
 }
 
-func (r *Runner) reportM2RDMABatchStats() {
+func (r *Runner) reportM1Stats() {
 	if r.platform == nil {
 		return
 	}
 
-	total := rdma.RDMABatchStats{}
+	for _, gpu := range r.platform.GPUs {
+		for _, component := range gpu.L2Caches {
+			l2, ok := component.(*writeback.Cache)
+			if !ok {
+				continue
+			}
+			m1 := l2.GetM1Stats()
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_helper_enabled",
+				boolMetric(m1.CacheHelperEnabled))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_helper_enabled",
+				boolMetric(m1.DRAMHelperEnabled))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_local_requests_seen",
+				float64(m1.LocalRequestsSeen))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_local_batchable_reads",
+				float64(m1.LocalBatchableReads))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_bypass_requests",
+				float64(m1.CacheBypassRequests))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_batches_created",
+				float64(m1.CacheBatchesCreated))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_batches_drained",
+				float64(m1.CacheBatchesDrained))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_lines_in_batches",
+				float64(m1.CacheLinesInBatches))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_requests_in_batches",
+				float64(m1.CacheRequestsInBatches))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_duplicate_line_waiters",
+				float64(m1.CacheDuplicateWaiters))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_coalesced_waiters",
+				float64(m1.CacheCoalescedWaiters))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_avg_lines_per_batch",
+				safeDiv(float64(m1.CacheLinesInBatches),
+					float64(m1.CacheBatchesDrained)))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_avg_wait_ns",
+				safeDiv(m1.CacheTotalWaitNS,
+					float64(m1.CacheWaitSamples)))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_max_lines_per_batch",
+				float64(m1.CacheMaxLinesPerBatch))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_full_drains",
+				float64(m1.CacheFullDrains))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_timeout_drains",
+				float64(m1.CacheTimeoutDrains))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_cache_capacity_drains",
+				float64(m1.CacheCapacityDrains))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_l2_probe_lines",
+				float64(m1.L2ProbeLines))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_l2_probe_hits",
+				float64(m1.L2ProbeHits))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_l2_probe_misses",
+				float64(m1.L2ProbeMisses))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_l2_probe_mshr_hits",
+				float64(m1.L2ProbeMSHRHits))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_l2_hit_lines_completed_from_batch",
+				float64(m1.L2HitLinesCompletedFromBatch))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_l2_miss_lines_sent_to_dram_helper",
+				float64(m1.L2MissLinesSentToDRAMHelper))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_miss_lines_seen",
+				float64(m1.DRAMMissLinesSeen))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_batches_created",
+				float64(m1.DRAMBatchesCreated))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_batches_drained",
+				float64(m1.DRAMBatchesDrained))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_lines_in_batches",
+				float64(m1.DRAMLinesInBatches))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_singleton_fallbacks",
+				float64(m1.DRAMSingletonFallbacks))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_avg_lines_per_batch",
+				safeDiv(float64(m1.DRAMLinesInBatches),
+					float64(m1.DRAMBatchesDrained)))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_avg_wait_ns",
+				safeDiv(m1.DRAMTotalWaitNS,
+					float64(m1.DRAMWaitSamples)))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_max_lines_per_batch",
+				float64(m1.DRAMMaxLinesPerBatch))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_full_drains",
+				float64(m1.DRAMFullDrains))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_timeout_drains",
+				float64(m1.DRAMTimeoutDrains))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_capacity_drains",
+				float64(m1.DRAMCapacityDrains))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_multiline_reads",
+				float64(m1.DRAMMultiLineReads))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_singleline_reads",
+				float64(m1.DRAMSingleLineReads))
+			r.metricsCollector.Collect(
+				l2.Name(), "m1_dram_request_reduction_pct",
+				packetReductionPct(
+					float64(m1.DRAMMissLinesSeen),
+					float64(m1.DRAMMultiLineReads+
+						m1.DRAMSingleLineReads)))
+		}
+	}
+}
+
+func (r *Runner) reportM2M3Stats() {
+	if r.platform == nil {
+		return
+	}
+
 	for _, gpu := range r.platform.GPUs {
 		if gpu.RDMAEngine == nil {
 			continue
 		}
-		stats := gpu.RDMAEngine.GetM2RDMABatchStats()
-		total.Add(stats)
-		r.collectM2RDMABatchStats(gpu.RDMAEngine.Name(), stats)
-	}
+		rdmaEngine := gpu.RDMAEngine
+		m2 := rdmaEngine.GetM2Stats()
+		m3 := rdmaEngine.GetM3Stats()
 
-	if r.platform.Driver != nil {
-		r.collectM2RDMABatchStats(r.platform.Driver.Name(), total)
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_enabled", boolMetric(m2.Enabled))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_original_remote_requests",
+			float64(m2.OriginalRemoteRequests))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_batchable_remote_reads",
+			float64(m2.BatchableRemoteReads))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_bypass_requests",
+			float64(m2.BypassRequests))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_batched_packets",
+			float64(m2.BatchedPackets))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_lines_in_batched_packets",
+			float64(m2.LinesInBatchedPackets))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_requests_in_batched_packets",
+			float64(m2.RequestsInBatchedPackets))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_duplicate_line_reads",
+			float64(m2.DuplicateLineReads))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_au_prefetch_enabled",
+			boolMetric(m2.AUPrefetchEnabled))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_au_prefetch_lines_requested",
+			float64(m2.AUPrefetchLinesRequested))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_au_prefetch_lines_returned",
+			float64(m2.AUPrefetchLinesReturned))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_au_prefetch_demand_hits",
+			float64(m2.AUPrefetchDemandHits))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_full_flushes", float64(m2.FullFlushes))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_timeout_flushes",
+			float64(m2.TimeoutFlushes))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_capacity_flushes",
+			float64(m2.CapacityFlushes))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_conflict_flushes",
+			float64(m2.ConflictFlushes))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_drain_flushes",
+			float64(m2.DrainFlushes))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_max_batch_lines",
+			float64(m2.MaxBatchLines))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_max_requests_per_batch",
+			float64(m2.MaxRequestsPerBatch))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_avg_wait_ns",
+			safeDiv(m2.TotalWaitNS, float64(m2.WaitSamples)))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_avg_batch_size",
+			safeDiv(float64(m2.LinesInBatchedPackets),
+				float64(m2.BatchedPackets)))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_packet_reduction_pct",
+			packetReductionPct(
+				float64(m2.BatchableRemoteReads),
+				float64(m2.BatchedPackets)))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_owner_batch_requests",
+			float64(m2.OwnerBatchRequests))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_owner_local_read_reqs",
+			float64(m2.OwnerLocalReadReqs))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_owner_batch_responses",
+			float64(m2.OwnerBatchResponses))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_requester_batch_rsps",
+			float64(m2.RequesterBatchRsps))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m2_requester_unbatch_rsps",
+			float64(m2.RequesterUnbatchRsps))
+
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m3_enabled", boolMetric(m3.Enabled))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m3_owner_received_packets",
+			float64(m3.OwnerReceivedPackets))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m3_owner_served_packets",
+			float64(m3.OwnerServedPackets))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m3_owner_served_lines",
+			float64(m3.OwnerServedLines))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m3_consecutive_cap_hits",
+			float64(m3.ConsecutiveCapHits))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m3_hard_age_escapes",
+			float64(m3.HardAgeEscapes))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m3_fallback_oldest",
+			float64(m3.FallbackOldest))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m3_max_consecutive_service",
+			float64(m3.MaxConsecutive))
+		r.metricsCollector.Collect(
+			rdmaEngine.Name(), "m3_avg_owner_wait_ns",
+			safeDiv(m3.TotalOwnerWaitNS, float64(m3.OwnerWaitSamples)))
+
+		for _, cacheComponent := range gpu.L1VCaches {
+			l1v, ok := cacheComponent.(*writearound.Cache)
+			if !ok {
+				continue
+			}
+			stats := l1v.RemoteDataStats()
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_enabled",
+				boolMetric(stats.Enabled))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_entries",
+				float64(stats.Entries))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_demand_hits",
+				float64(stats.DemandHits))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_demand_misses",
+				float64(stats.DemandMisses))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_demand_fills",
+				float64(stats.DemandFills))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_prefetch_fills",
+				float64(stats.PrefetchFills))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_prefetch_fill_drops",
+				float64(stats.PrefetchFillDrops))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_prefetch_demand_hits",
+				float64(stats.PrefetchDemandHits))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_invalidations",
+				float64(stats.Invalidations))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_evictions",
+				float64(stats.Evictions))
+			r.metricsCollector.Collect(
+				l1v.Name(), "m3_l1_remote_cache_max_occupancy",
+				float64(stats.MaxOccupancy))
+		}
 	}
 }
 
-func (r *Runner) collectM2RDMABatchStats(
-	componentName string,
-	stats rdma.RDMABatchStats,
-) {
-	if !stats.Enabled && stats.BatchableRequests == 0 && stats.BatchPackets == 0 {
-		return
+func boolMetric(v bool) float64 {
+	if v {
+		return 1
 	}
+	return 0
+}
 
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_batchable_requests", float64(stats.BatchableRequests))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_bypassed_requests", float64(stats.BypassedRequests))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_batch_packets", float64(stats.BatchPackets))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_batched_lines", float64(stats.BatchedLines))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_duplicate_requests", float64(stats.DuplicateRequests))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_flush_full", float64(stats.FlushFull))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_flush_timeout", float64(stats.FlushTimeout))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_flush_capacity", float64(stats.FlushCapacity))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_flush_drain", float64(stats.FlushDrain))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_owner_batch_requests", float64(stats.OwnerBatchRequests))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_owner_local_read_reqs", float64(stats.OwnerLocalReadReqs))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_owner_batch_responses", float64(stats.OwnerBatchResponses))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_requester_batch_responses", float64(stats.RequesterBatchRsps))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_requester_unbatch_responses", float64(stats.RequesterUnbatchRsps))
-	r.metricsCollector.Collect(componentName,
-		"m2_rdma_max_wait_ns", stats.MaxWaitNS)
-
-	if stats.BatchableRequests > 0 {
-		packetReduction := 100 *
-			(1 - float64(stats.BatchPackets)/float64(stats.BatchableRequests))
-		r.metricsCollector.Collect(componentName,
-			"m2_rdma_packet_reduction_pct", packetReduction)
-		r.metricsCollector.Collect(componentName,
-			"m2_rdma_avg_wait_ns",
-			stats.TotalWaitNS/float64(stats.BatchableRequests))
+func safeDiv(num, den float64) float64 {
+	if den == 0 {
+		return 0
 	}
+	return num / den
+}
 
-	if stats.BatchPackets > 0 {
-		r.metricsCollector.Collect(componentName,
-			"m2_rdma_avg_batch_lines",
-			float64(stats.BatchedLines)/float64(stats.BatchPackets))
+func packetReductionPct(original, packets float64) float64 {
+	if original == 0 {
+		return 0
 	}
+	return 100 * (1 - packets/original)
 }
 
 func (r *Runner) reportGMMUTransactionCount() {
@@ -397,101 +651,6 @@ func (r *Runner) reportDRAMTransactionCount() {
 			"write_size",
 			float64(t.tracer.writeSize),
 		)
-	}
-}
-
-type l2BatchStatProvider interface {
-	Name() string
-	L2BatchStats() writeback.L2BatchStats
-}
-
-func (r *Runner) reportL2BatchStats() {
-	total := writeback.L2BatchStats{}
-	for _, gpu := range r.platform.GPUs {
-		for _, cache := range gpu.L2Caches {
-			provider, ok := cache.(l2BatchStatProvider)
-			if !ok {
-				continue
-			}
-			stats := provider.L2BatchStats()
-			if !l2BatchStatsNonZero(stats) {
-				continue
-			}
-			r.collectL2BatchStats(provider.Name(), stats)
-			total = combineL2BatchStats(total, stats)
-		}
-	}
-	if l2BatchStatsNonZero(total) {
-		r.collectL2BatchStats(r.platform.Driver.Name(), total)
-	}
-}
-
-func l2BatchStatsNonZero(stats writeback.L2BatchStats) bool {
-	return stats.DirBatchRequests+stats.AccessUnitReads+
-		stats.AccessUnitCoalesced+stats.DRAMReadIssuedBytes+
-		stats.DRAMReadUsefulBytes > 0
-}
-
-func combineL2BatchStats(
-	a, b writeback.L2BatchStats,
-) writeback.L2BatchStats {
-	a.DirBatchGroups += b.DirBatchGroups
-	a.DirBatchRequests += b.DirBatchRequests
-	if b.DirMaxBatchSize > a.DirMaxBatchSize {
-		a.DirMaxBatchSize = b.DirMaxBatchSize
-	}
-	a.AccessUnitReads += b.AccessUnitReads
-	a.AccessUnitCoalesced += b.AccessUnitCoalesced
-	a.DRAMReadIssuedBytes += b.DRAMReadIssuedBytes
-	a.DRAMReadUsefulBytes += b.DRAMReadUsefulBytes
-	return a
-}
-
-func (r *Runner) collectL2BatchStats(
-	where string,
-	stats writeback.L2BatchStats,
-) {
-	r.metricsCollector.Collect(
-		where, "l2_batch_dir_groups", float64(stats.DirBatchGroups))
-	r.metricsCollector.Collect(
-		where, "l2_batch_dir_requests", float64(stats.DirBatchRequests))
-	r.metricsCollector.Collect(
-		where, "l2_batch_dir_max_size", float64(stats.DirMaxBatchSize))
-	if stats.DirBatchGroups > 0 {
-		avg := float64(stats.DirBatchRequests) /
-			float64(stats.DirBatchGroups)
-		r.metricsCollector.Collect(where, "l2_batch_dir_avg_size", avg)
-	}
-	r.metricsCollector.Collect(
-		where, "l2_batch_access_unit_reads",
-		float64(stats.AccessUnitReads))
-	r.metricsCollector.Collect(
-		where, "l2_batch_access_unit_coalesced",
-		float64(stats.AccessUnitCoalesced))
-	r.metricsCollector.Collect(
-		where, "l2_batch_dram_read_issued_bytes",
-		float64(stats.DRAMReadIssuedBytes))
-	r.metricsCollector.Collect(
-		where, "l2_batch_dram_read_useful_bytes",
-		float64(stats.DRAMReadUsefulBytes))
-	if stats.DRAMReadIssuedBytes > 0 {
-		usefulRatio := float64(stats.DRAMReadUsefulBytes) /
-			float64(stats.DRAMReadIssuedBytes)
-		r.metricsCollector.Collect(
-			where, "l2_batch_dram_read_useful_ratio", usefulRatio)
-
-		overfetchBytes := uint64(0)
-		if stats.DRAMReadIssuedBytes > stats.DRAMReadUsefulBytes {
-			overfetchBytes = stats.DRAMReadIssuedBytes -
-				stats.DRAMReadUsefulBytes
-		}
-		r.metricsCollector.Collect(
-			where, "l2_batch_dram_read_overfetch_bytes",
-			float64(overfetchBytes))
-		overfetchPct := float64(overfetchBytes) /
-			float64(stats.DRAMReadIssuedBytes) * 100
-		r.metricsCollector.Collect(
-			where, "l2_batch_dram_read_overfetch_pct", overfetchPct)
 	}
 }
 

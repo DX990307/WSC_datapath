@@ -33,62 +33,184 @@ TRADITIONAL_BENCHMARKS = [
     "fir",
 ]
 
-EXPERIMENTAL_BENCHMARKS = [
-    "resnet",
-    "llmop",
-    "llminference",
-    "matrixmultiplication-ptw",
-    "matrixmultiplication-ptw-heavy",
+POLYBENCH_BENCHMARKS = [
+    "atax",
+    "bicg",
 ]
 
-REMOVED_MONOLITHIC_LLM_BENCHMARKS = {
-    "bert",
-    "gpt",
-    "kvcache",
-    "kvcache-decode",
-    "kvcache-decode-30b",
-}
+MATRIX_VARIANT_BENCHMARKS = [
+    "matrixmultiplication-pipeline-smoke",
+    "matrixmultiplication-middletile",
+    "matrixmultiplication-middletile-pipeline-smoke",
+    "matrixtranspose-middletile",
+]
 
-ALL_BENCHMARKS = list(dict.fromkeys(
-    TRADITIONAL_BENCHMARKS + EXPERIMENTAL_BENCHMARKS
+ADDITIONAL_STANDALONE_BENCHMARKS = [
+    "nbody",
+    "nw",
+    "stencil2d",
+]
+
+GPU_BENCHMARKS_TIER2_RUNNABLE = [
+    "rodinia_bfs",
+    "graph_pr",
+    "heteromark_pagerank",
+    "lonestar_sssp",
+    "shoc_spmv",
+    "parboil_spmv",
+    "npb_cg",
+    "altis_gups",
+    "cuda_transpose",
+    "shoc_stencil2d",
+    "rodinia_hotspot",
+]
+
+GPU_BENCHMARKS_TIER2_EXISTING_WRAPPER_ALIASES = [
+    "heteromark_aes",
+    "heteromark_fir",
+    "polybench_atax",
+    "polybench_bicg",
+    "rodinia_nw",
+    "shoc_fft",
+]
+
+GPU_BENCHMARKS_TIER2_HSACO_ALL = [
+    "altis_cfd",
+    "altis_gups",
+    "altis_particlefilter",
+    "altis_raytracing",
+    "chai_cedd",
+    "chai_hsto",
+    "cuda_convolution_separable",
+    "cuda_nbody",
+    "cuda_scan_large",
+    "cuda_transpose",
+    "graph_cc",
+    "graph_pr",
+    "graph_tc",
+    "heteromark_aes",
+    "heteromark_fir",
+    "heteromark_pagerank",
+    "lonestar_bh",
+    "lonestar_dmr",
+    "lonestar_sssp",
+    "npb_cg",
+    "npb_ep",
+    "npb_is",
+    "npb_mg",
+    "parboil_cutcp",
+    "parboil_histogram",
+    "parboil_lbm",
+    "parboil_sgemm",
+    "parboil_spmv",
+    "parboil_stencil",
+    "polybench_2dconv",
+    "polybench_2mm",
+    "polybench_3dconv",
+    "polybench_3mm",
+    "polybench_atax",
+    "polybench_bicg",
+    "polybench_correlation",
+    "polybench_fdtd2d",
+    "polybench_gemm",
+    "polybench_gramschmidt",
+    "polybench_jacobi2d",
+    "polybench_mvt",
+    "polybench_syr2k",
+    "rodinia_backprop",
+    "rodinia_bfs",
+    "rodinia_gaussian",
+    "rodinia_hotspot",
+    "rodinia_hotspot3d",
+    "rodinia_kmeans",
+    "rodinia_lavamd",
+    "rodinia_lud",
+    "rodinia_nw",
+    "rodinia_pathfinder",
+    "rodinia_srad",
+    "shoc_devicememory",
+    "shoc_fft",
+    "shoc_gemm",
+    "shoc_reduction",
+    "shoc_scan",
+    "shoc_sort",
+    "shoc_spmv",
+    "shoc_stencil2d",
+    "shoc_triad",
+    "tango_binomial_options",
+    "tango_blackscholes",
+]
+
+GPU_BENCHMARKS_TIER2 = GPU_BENCHMARKS_TIER2_RUNNABLE[:]
+
+GPU_BENCHMARKS_TIER2_SELECTABLE = list(dict.fromkeys(
+    GPU_BENCHMARKS_TIER2_RUNNABLE
+    + GPU_BENCHMARKS_TIER2_EXISTING_WRAPPER_ALIASES
 ))
 
-DEFAULT_RUN_BENCHMARKS = [
-    # Edit this list to control the default run set when --benchmarks is omitted.
-    # Comment out any workload you do not want in the default sweep.
-    "bitonicsort",
-    "im2col",
-    "floydwarshall",
-    "aes",
-    "relu",
-    "spmv",
-    "matrixmultiplication-ptw",
-    # "matrixmultiplication",
-    "matrixtranspose",
-    "fastwalshtransform",
-    "fft",
-    "kmeans",
-    "im2col",
-    "pagerank",
-    "simpleconvolution",
-    "fir",
-    # "resnet",
-    # "llmop",
-    # "llminference",
-    # "matrixmultiplication-ptw-heavy",
+GPU_BENCHMARKS_TIER2_PENDING_WRAPPERS = [
+    benchmark for benchmark in GPU_BENCHMARKS_TIER2_HSACO_ALL
+    if benchmark not in GPU_BENCHMARKS_TIER2_SELECTABLE
 ]
 
+TRAINING_BENCHMARKS = [
+    "lenet",
+    "minerva",
+    "vgg16",
+]
+
+CONCURRENT_BENCHMARKS = [
+    "prfws",
+    "btfwt",
+    "fwtfws",
+    "kmsc",
+    "scsc",
+    "mmfir",
+    "prsc",
+    "fwtmt",
+    "spmvmt",
+]
+
+RUNNABLE_BENCHMARKS = list(dict.fromkeys(
+    TRADITIONAL_BENCHMARKS
+    + POLYBENCH_BENCHMARKS
+    + MATRIX_VARIANT_BENCHMARKS
+    + ADDITIONAL_STANDALONE_BENCHMARKS
+    + GPU_BENCHMARKS_TIER2_SELECTABLE
+    + TRAINING_BENCHMARKS
+    + CONCURRENT_BENCHMARKS
+))
+
+ALL_BENCHMARKS = list(dict.fromkeys(
+    RUNNABLE_BENCHMARKS
+    + GPU_BENCHMARKS_TIER2_PENDING_WRAPPERS
+))
+
+DEFAULT_RUN_BENCHMARKS = TRADITIONAL_BENCHMARKS[:]
+
 BENCHMARK_ALIASES = {
-    "all": ALL_BENCHMARKS,
+    "all": RUNNABLE_BENCHMARKS,
+    "supported": RUNNABLE_BENCHMARKS,
     "traditional": TRADITIONAL_BENCHMARKS,
-    "llm": ["llmop"],
-    "experimental": EXPERIMENTAL_BENCHMARKS,
+    "polybench": POLYBENCH_BENCHMARKS,
+    "experimental": MATRIX_VARIANT_BENCHMARKS,
+    "matrix_variants": MATRIX_VARIANT_BENCHMARKS,
+    "standalone": ADDITIONAL_STANDALONE_BENCHMARKS,
+    "tier2": GPU_BENCHMARKS_TIER2,
+    "gpu_benchmarks_tier2": GPU_BENCHMARKS_TIER2,
+    "tier2_runnable": GPU_BENCHMARKS_TIER2,
+    "tier2_existing_wrapper_aliases": GPU_BENCHMARKS_TIER2_EXISTING_WRAPPER_ALIASES,
+    "tier2_all": GPU_BENCHMARKS_TIER2_HSACO_ALL,
+    "tier2_hsaco_all": GPU_BENCHMARKS_TIER2_HSACO_ALL,
+    "gpu_benchmarks_tier2_all": GPU_BENCHMARKS_TIER2_HSACO_ALL,
+    "training": TRAINING_BENCHMARKS,
+    "concurrent": CONCURRENT_BENCHMARKS,
 }
 
 
-# Configure which benchmarks to run for each target here. By default, this uses
-# DEFAULT_RUN_BENCHMARKS above so the default run set is controlled in-script.
+# Configure which benchmarks to run when --benchmarks is omitted.
 BENCHMARKS_BY_TARGET = {
+    "baseline": ["all"],
     "400latency": DEFAULT_RUN_BENCHMARKS,
     # "TLBSensitiveStudy": ["all"],
 }
@@ -108,15 +230,11 @@ BASE_COMMON_FLAGS = [
     "-report-all",
 ]
 
-DEFAULT_MMUTLB_LOOKUP_LATENCY = 80
+DEFAULT_MMUTLB_LOOKUP_LATENCY = 10
 DEFAULT_TIMEOUT_MINUTES = 0.0
 DEFAULT_PHOTON_SAMPLED_WARMUP = 512
 DEFAULT_PHOTON_SAMPLED_GRANULARITY = 512
 DEFAULT_PHOTON_LOOP_SAMPLED_WARMUP = 512
-
-M2_DEFAULT_MAX_BATCH_LINES = 8
-M2_DEFAULT_MAX_WAIT_NS = 25
-M2_DEFAULT_BATCH_TABLE_ENTRIES = 32
 
 GLOBAL_PHOTON_FLAGS = [
     "-sampled",
@@ -143,13 +261,33 @@ CONFIGS = [
 ]
 
 MECHANISM_ALIASES = {
-    "all": ["baseline", "m1", "m2", "m1_m2"],
+    "all": [
+        "baseline",
+        "m1",
+        "m2",
+        "m3",
+        "m1_m2",
+        "m1_m3",
+        "m2_m3",
+        "m1_m2_m3",
+    ],
+    "base": ["baseline"],
     "m1+m2": ["m1_m2"],
-    "mechanism1": ["m1"],
-    "mechanism2": ["m2"],
+    "m1+m3": ["m1_m3"],
+    "m2+m3": ["m2_m3"],
+    "m1+m2+m3": ["m1_m2_m3"],
 }
 
-MECHANISM_NAMES = ["baseline", "m1", "m2", "m1_m2"]
+MECHANISM_NAMES = [
+    "baseline",
+    "m1",
+    "m2",
+    "m3",
+    "m1_m2",
+    "m1_m3",
+    "m2_m3",
+    "m1_m2_m3",
+]
 
 output_dir = ""
 
@@ -194,37 +332,100 @@ def parse_args():
         dest="mechanisms",
         default="baseline",
         help=(
-            "Comma-separated mechanism arms to run: baseline,m1,m2,m1_m2,all. "
-            "Aliases: mechanism1=m1, mechanism2=m2, m1+m2=m1_m2."
+            "Comma-separated mechanism arms to run: baseline,m1,m2,m3,"
+            "m1_m2,m1_m3,m2_m3,m1_m2_m3,all."
         ),
     )
     parser.add_argument(
-        "--m1-l2-dir-batch-window",
-        dest="m1_l2_dir_batch_window",
+        "--m1-cache-batch-lines",
+        dest="m1_cache_batch_lines",
         type=int,
         default=4,
-        help="M1 L2 directory batch window.",
+        help="M1a maximum unique cache lines per same-set local L2 cache batch.",
     )
     parser.add_argument(
-        "--m2-rdma-max-batch-lines",
-        dest="m2_rdma_max_batch_lines",
+        "--m1-cache-batch-max-wait-ns",
+        dest="m1_cache_batch_max_wait_ns",
         type=int,
-        default=M2_DEFAULT_MAX_BATCH_LINES,
-        help="M2 maximum unique 64B cache lines per RDMA batch packet.",
+        default=25,
+        help="M1a maximum cache batch wait in ns.",
     )
     parser.add_argument(
-        "--m2-rdma-max-wait-ns",
-        dest="m2_rdma_max_wait_ns",
+        "--m1-cache-batch-entries",
+        dest="m1_cache_batch_entries",
         type=int,
-        default=M2_DEFAULT_MAX_WAIT_NS,
-        help="M2 requester-side RDMA batch max wait in ns.",
+        default=16,
+        help="M1a active batch entries per L2 cache.",
     )
     parser.add_argument(
-        "--m2-rdma-batch-table-entries",
-        dest="m2_rdma_batch_table_entries",
+        "--m1-dram-batch-lines",
+        dest="m1_dram_batch_lines",
         type=int,
-        default=M2_DEFAULT_BATCH_TABLE_ENTRIES,
-        help="M2 maximum active requester-side RDMA batch queues per RDMA engine.",
+        default=2,
+        help="M1b maximum unique cache lines per 128B DRAM access-unit batch.",
+    )
+    parser.add_argument(
+        "--m1-dram-batch-max-wait-ns",
+        dest="m1_dram_batch_max_wait_ns",
+        type=int,
+        default=25,
+        help="M1b maximum DRAM batch wait in ns.",
+    )
+    parser.add_argument(
+        "--m1-dram-batch-entries",
+        dest="m1_dram_batch_entries",
+        type=int,
+        default=16,
+        help="M1b active DRAM batch entries per L2 cache.",
+    )
+    parser.add_argument(
+        "--m2-max-batch-lines",
+        dest="m2_max_batch_lines",
+        type=int,
+        default=8,
+        help="M2 maximum unique cache lines per bitmap RDMA batch.",
+    )
+    parser.add_argument(
+        "--m2-max-wait-ns",
+        dest="m2_max_wait_ns",
+        type=int,
+        default=50,
+        help="M2 maximum collection wait in ns.",
+    )
+    parser.add_argument(
+        "--m2-batch-table-entries",
+        dest="m2_batch_table_entries",
+        type=int,
+        default=64,
+        help="M2 active requester-side batch table entries per RDMA engine.",
+    )
+    parser.add_argument(
+        "--m3-l1-remote-cache-entries",
+        dest="m3_l1_remote_cache_entries",
+        type=int,
+        default=128,
+        help="M3 64B remote-data entries per L1V cache.",
+    )
+    parser.add_argument(
+        "--m3-fair-quantum-lines",
+        dest="m3_fair_quantum_lines",
+        type=int,
+        default=8,
+        help="M3 DRR quantum in cache lines.",
+    )
+    parser.add_argument(
+        "--m3-max-consecutive-batches",
+        dest="m3_max_consecutive_batches",
+        type=int,
+        default=2,
+        help="M3 maximum consecutive packets served from one requester.",
+    )
+    parser.add_argument(
+        "--m3-hard-age-limit-ns",
+        dest="m3_hard_age_limit_ns",
+        type=int,
+        default=500,
+        help="M3 hard age escape threshold in ns.",
     )
     parser.add_argument(
         "--mmutlb-lookup-latency",
@@ -232,6 +433,20 @@ def parse_args():
         type=int,
         default=DEFAULT_MMUTLB_LOOKUP_LATENCY,
         help="Fixed MMUTLB/IOTLB lookup latency in cycles.",
+    )
+    parser.add_argument(
+        "--l1v-tlb-mshr-entries",
+        dest="l1v_tlb_mshr_entries",
+        type=int,
+        default=160,
+        help="Number of L1V TLB MSHR entries.",
+    )
+    parser.add_argument(
+        "--l1v-req-per-cycle",
+        dest="l1v_req_per_cycle",
+        type=int,
+        default=32,
+        help="L1V request-path width for ROB, address translator, TLB, and cache.",
     )
     parser.add_argument(
         "--rerun-missing",
@@ -455,31 +670,44 @@ def selected_mechanisms(args):
     return mechanisms
 
 
-def m1_flags(args):
-    flags = ["-l2-dram-access-unit-coalesce"]
-    if args.m1_l2_dir_batch_window > 0:
-        flags.append(f"-l2-dir-batch-window={args.m1_l2_dir_batch_window}")
-    return flags
-
-
-def m2_flags(args):
-    return [
-        "-m2-rdma-batch",
-        f"-m2-rdma-max-batch-lines={args.m2_rdma_max_batch_lines}",
-        f"-m2-rdma-max-wait-ns={args.m2_rdma_max_wait_ns}",
-        f"-m2-rdma-batch-table-entries={args.m2_rdma_batch_table_entries}",
-    ]
-
-
 def mechanism_flags(args, mechanism):
     if mechanism == "baseline":
         return []
+    m1_flags = [
+        "-m1-l2-helper-enable",
+        "-m1-dram-helper-enable",
+        f"-m1-cache-batch-lines={args.m1_cache_batch_lines}",
+        f"-m1-cache-batch-max-wait-ns={args.m1_cache_batch_max_wait_ns}",
+        f"-m1-cache-batch-entries={args.m1_cache_batch_entries}",
+        f"-m1-dram-batch-lines={args.m1_dram_batch_lines}",
+        f"-m1-dram-batch-max-wait-ns={args.m1_dram_batch_max_wait_ns}",
+        f"-m1-dram-batch-entries={args.m1_dram_batch_entries}",
+    ]
+    m2_flags = [
+        "-m2-rdma-batch-enable",
+        f"-m2-max-batch-lines={args.m2_max_batch_lines}",
+        f"-m2-max-wait-ns={args.m2_max_wait_ns}",
+        f"-m2-batch-table-entries={args.m2_batch_table_entries}",
+    ]
+    m2_au_flags = m2_flags + ["-m2-au-prefetch-enable"]
+    m3_flags = [
+        "-m3-l1-remote-cache-enable",
+        f"-m3-l1-remote-cache-entries={args.m3_l1_remote_cache_entries}",
+    ]
     if mechanism == "m1":
-        return m1_flags(args)
+        return m1_flags
     if mechanism == "m2":
-        return m2_flags(args)
+        return m2_flags
+    if mechanism == "m3":
+        return m3_flags
     if mechanism == "m1_m2":
-        return m1_flags(args) + m2_flags(args)
+        return m1_flags + m2_flags
+    if mechanism == "m1_m3":
+        return m1_flags + m3_flags
+    if mechanism == "m2_m3":
+        return m2_au_flags + m3_flags
+    if mechanism == "m1_m2_m3":
+        return m1_flags + m2_au_flags + m3_flags
     raise ValueError(f"unknown mechanism: {mechanism}")
 
 
@@ -517,22 +745,14 @@ def expand_benchmark_selection(selected):
             expanded += BENCHMARK_ALIASES[item]
         else:
             expanded.append(item)
-    blocked = [
-        item for item in expanded
-        if item in REMOVED_MONOLITHIC_LLM_BENCHMARKS
-    ]
-    if blocked:
-        raise ValueError(
-            "monolithic LLM benchmarks were removed from runall2.py: "
-            + ",".join(blocked)
-            + ". Use runllm_decomposed.py for BERT/GPT experiments."
-        )
     return unique_preserving_order(expanded)
 
 
 def build_common_flags(args):
     flags = BASE_COMMON_FLAGS + [
         f"-mmutlb-lookup-latency={args.mmutlb_lookup_latency}",
+        f"-l1v-tlb-mshr-entries={args.l1v_tlb_mshr_entries}",
+        f"-l1v-req-per-cycle={args.l1v_req_per_cycle}",
     ]
     if args.trace_memory_path:
         flags += [
@@ -648,6 +868,12 @@ def get_benchmarks_for_target(target):
     unknown = sorted(set(selected) - set(ALL_BENCHMARKS))
     if unknown:
         raise ValueError(f"unknown benchmarks for {target}: {unknown}")
+    pending = sorted(set(selected) & set(GPU_BENCHMARKS_TIER2_PENDING_WRAPPERS))
+    if pending:
+        raise ValueError(
+            "tier2 HSACO exists but Go wrapper is not implemented for "
+            f"{target}: {', '.join(pending)}"
+        )
 
     return selected
 
@@ -662,6 +888,12 @@ def get_selected_benchmarks(args, target):
     unknown = sorted(set(selected) - set(ALL_BENCHMARKS))
     if unknown:
         raise ValueError(f"unknown benchmarks: {unknown}")
+    pending = sorted(set(selected) & set(GPU_BENCHMARKS_TIER2_PENDING_WRAPPERS))
+    if pending:
+        raise ValueError(
+            "these tier2 workloads have compiled HSACO but still need "
+            "MGPUSim Go wrappers: " + ", ".join(pending)
+        )
     return selected
 
 
@@ -1232,4 +1464,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as err:
+        raise SystemExit(f"error: {err}")

@@ -12,39 +12,38 @@ import (
 
 // A Builder can build an writearound cache
 type Builder struct {
-	engine                sim.Engine
-	freq                  sim.Freq
-	log2BlockSize         uint64
-	totalByteSize         uint64
-	wayAssociativity      int
-	numMSHREntry          int
-	numBank               int
-	dirLatency            int
-	bankLatency           int
-	numReqPerCycle        int
-	maxNumConcurrentTrans int
-	maxRemoteBottomTrans  int
-	bottomReorderPolicy   string
-	bottomReorderWindow   int
-	bottomReorderMaxAgeNS uint64
-	lowModuleFinder       mem.LowModuleFinder
-	visTracer             tracing.Tracer
+	engine                 sim.Engine
+	freq                   sim.Freq
+	log2BlockSize          uint64
+	totalByteSize          uint64
+	wayAssociativity       int
+	numMSHREntry           int
+	numBank                int
+	dirLatency             int
+	bankLatency            int
+	numReqPerCycle         int
+	maxNumConcurrentTrans  int
+	maxRemoteBottomTrans   int
+	remoteDataCacheEnable  bool
+	remoteDataCacheEntries int
+	lowModuleFinder        mem.LowModuleFinder
+	visTracer              tracing.Tracer
 }
 
 // NewBuilder creates a builder with default parameter setting
 func NewBuilder() *Builder {
 	return &Builder{
-		freq:                  1 * sim.GHz,
-		log2BlockSize:         6,
-		totalByteSize:         4 * mem.KB,
-		wayAssociativity:      4,
-		numMSHREntry:          4,
-		numBank:               1,
-		numReqPerCycle:        4,
-		maxNumConcurrentTrans: 16,
-		dirLatency:            2,
-		bankLatency:           20,
-		bottomReorderPolicy:   bottomReorderPolicyNone,
+		freq:                   1 * sim.GHz,
+		log2BlockSize:          6,
+		totalByteSize:          4 * mem.KB,
+		wayAssociativity:       4,
+		numMSHREntry:           4,
+		numBank:                1,
+		numReqPerCycle:         4,
+		maxNumConcurrentTrans:  16,
+		dirLatency:             2,
+		bankLatency:            20,
+		remoteDataCacheEntries: 128,
 	}
 }
 
@@ -118,16 +117,14 @@ func (b *Builder) WithMaxRemoteBottomTrans(n int) *Builder {
 	return b
 }
 
-// WithBottomReorder configures an optional post-L1V bottom request reorder
-// queue. The default "none" policy preserves the original direct-issue path.
-func (b *Builder) WithBottomReorder(
-	policy string,
-	window int,
-	maxAgeNS uint64,
-) *Builder {
-	b.bottomReorderPolicy = policy
-	b.bottomReorderWindow = window
-	b.bottomReorderMaxAgeNS = maxAgeNS
+// WithRemoteDataCache configures the L1V remote-only data side cache. When
+// enabled, remote demand fills and M2 prefetch fills are stored outside the
+// normal L1V directory/storage capacity.
+func (b *Builder) WithRemoteDataCache(enable bool, entries int) *Builder {
+	b.remoteDataCacheEnable = enable
+	if entries > 0 {
+		b.remoteDataCacheEntries = entries
+	}
 	return b
 }
 
@@ -189,16 +186,16 @@ func (b *Builder) Build(name string) *Cache {
 		numSets, b.wayAssociativity, 1<<b.log2BlockSize,
 		cache.NewLRUVictimFinder())
 	c.storage = mem.NewStorage(b.totalByteSize)
+	c.dirLatency = b.dirLatency
 	c.bankLatency = b.bankLatency
 	c.wayAssociativity = b.wayAssociativity
 	c.lowModuleFinder = b.lowModuleFinder
 	c.maxNumConcurrentTrans = b.maxNumConcurrentTrans
 	c.maxRemoteBottomTrans = b.maxRemoteBottomTrans
-	c.bottomReorderPolicy = normalizeBottomReorderPolicy(b.bottomReorderPolicy)
-	c.bottomReorderWindow = b.bottomReorderWindow
-	c.bottomReorderMaxAgeNS = b.bottomReorderMaxAgeNS
-	c.bottomReorderOpenRows = make(map[bottomReorderBankKey]uint64)
-	c.bottomReorderChannels = make(map[bottomReorderChannelKey]uint64)
+	c.remoteDataCache = newRemoteDataCache(
+		b.remoteDataCacheEnable,
+		b.remoteDataCacheEntries,
+	)
 
 	b.buildStages(c)
 

@@ -24,9 +24,9 @@ type Benchmark struct {
 
 func (b *Benchmark) configMM() {
 	b.subBenchmarkMM = mm.NewBenchmark(b.driver)
-	b.subBenchmarkMM.X = 2048 / 16
-	b.subBenchmarkMM.Y = 2048 * 16
-	b.subBenchmarkMM.Z = 2048 / 16
+	b.subBenchmarkMM.X = 256
+	b.subBenchmarkMM.Y = 262144
+	b.subBenchmarkMM.Z = 256
 
 	GPU := 49
 	b.subBenchmarkMM.SelectGPU([]int{GPU})
@@ -34,8 +34,7 @@ func (b *Benchmark) configMM() {
 
 func (b *Benchmark) configFIR() {
 	b.subBenchmarkFIR = fir.NewBenchmark(b.driver)
-	b.subBenchmarkFIR.Length = 1048576 * 2
-	// fir.Length = 1024 * 16 * 8
+	b.subBenchmarkFIR.Length = 1 << 26
 
 	GPU := 50
 	b.subBenchmarkFIR.SelectGPU([]int{GPU})

@@ -24,8 +24,8 @@ type Benchmark struct {
 
 func (b *Benchmark) configSPMV() {
 	b.subBenchmarkSPMV = spmv.NewBenchmark(b.driver)
-	b.subBenchmarkSPMV.Dim = 10485760 / 4
-	b.subBenchmarkSPMV.Sparsity = 0.000000001
+	b.subBenchmarkSPMV.Dim = 1 << 22
+	b.subBenchmarkSPMV.Sparsity = 50_000_000.0 / (1 << 22) / (1 << 22)
 
 	GPU := 49
 	b.subBenchmarkSPMV.SelectGPU([]int{GPU})
@@ -33,9 +33,7 @@ func (b *Benchmark) configSPMV() {
 
 func (b *Benchmark) configMT() {
 	b.subBenchmarkMT = mt.NewBenchmark(b.driver)
-	b.subBenchmarkMT.Width = 4096 / 2
-	// matrixtranspose.Width = 4096 / 2
-	// benchmark = matrixtranspose
+	b.subBenchmarkMT.Width = 8192
 
 	GPU := 50
 	b.subBenchmarkMT.SelectGPU([]int{GPU})

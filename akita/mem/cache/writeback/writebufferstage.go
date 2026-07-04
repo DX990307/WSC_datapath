@@ -25,7 +25,16 @@ func (wb *writeBufferStage) Tick(now sim.VTimeInSec) bool {
 
 	madeProgress = wb.write(now) || madeProgress
 	madeProgress = wb.processReturnRsp(now) || madeProgress
-	madeProgress = wb.processNewTransaction(now) || madeProgress
+	madeProgress = wb.cache.processM1DRAMBatches(
+		now, false, m1DrainManual) || madeProgress
+	newTransProgress := wb.processNewTransaction(now)
+	madeProgress = newTransProgress || madeProgress
+	if !newTransProgress &&
+		wb.cache.writeBufferBuffer.Peek() == nil &&
+		wb.cache.m1HasDRAMBatches() {
+		madeProgress = wb.cache.processM1DRAMBatches(
+			now, true, m1DrainManual) || madeProgress
+	}
 
 	return madeProgress
 }
@@ -118,58 +127,52 @@ func (wb *writeBufferStage) fetchFromBottom(
 	now sim.VTimeInSec,
 	trans *transaction,
 ) bool {
-	coalescing := wb.l2DramAccessUnitCoalesceEnabled()
-	cacheLineBytes := uint64(1 << wb.cache.log2BlockSize)
-
-	var lowModulePort sim.Port
-	if coalescing {
-		lowModulePort = wb.cache.lowModuleFinder.Find(trans.fetchAddress)
-		if wb.coalesceAccessUnitFetch(trans, lowModulePort) {
-			wb.cache.writeBufferBuffer.Pop()
-			return true
+	if wb.cache.m1DRAMEnabled() && wb.cache.m1DRAMFetchBatchable(trans) {
+		if !wb.cache.enqueueM1DRAMMiss(now, trans) {
+			return false
 		}
+		wb.cache.writeBufferBuffer.Pop()
+		return true
 	}
 
+	ok := wb.issueSingleFetch(now, trans)
+	if ok {
+		wb.cache.writeBufferBuffer.Pop()
+	}
+	return ok
+}
+
+func (wb *writeBufferStage) issueSingleFetch(
+	now sim.VTimeInSec,
+	trans *transaction,
+) bool {
 	if wb.tooManyInflightFetches() {
 		return false
 	}
 	if !wb.cache.bottomSender.CanSend(1) {
 		return false
 	}
-	if lowModulePort == nil {
-		lowModulePort = wb.cache.lowModuleFinder.Find(trans.fetchAddress)
-	}
 
-	readAddress := trans.fetchAddress
-	readSize := cacheLineBytes
-	if coalescing {
-		readAddress = wb.l2DramAccessUnitBase(trans.fetchAddress)
-		readSize = wb.cache.l2DramAccessUnitBytes
-		wb.cache.l2BatchStats.AccessUnitReads++
-	}
-	wb.cache.l2BatchStats.DRAMReadIssuedBytes += readSize
-	wb.cache.l2BatchStats.DRAMReadUsefulBytes += cacheLineBytes
+	lowModulePort := wb.cache.lowModuleFinder.Find(trans.fetchAddress)
+	cacheLineBytes := uint64(1 << wb.cache.log2BlockSize)
 
 	read := mem.ReadReqBuilder{}.
 		WithSrc(wb.cache.bottomPort).
 		WithDst(lowModulePort).
 		WithPID(trans.fetchPID).
-		WithAddress(readAddress).
-		WithByteSize(readSize).
+		WithAddress(trans.fetchAddress).
+		WithByteSize(cacheLineBytes).
 		WithInfo(accessReqInfo(trans.accessReq())).
 		Build()
 	trans.fetchReadReq = read
 
 	wb.cache.bottomSender.Send(read)
-	memtrace.RecordMemoryPathL2WriteBufferSend(
-		wb.cache.Name(),
-		accessReqInfo(trans.accessReq()),
-		read.Meta().ID,
-		now,
-	)
+	wb.recordM1DRAMReadSend(now, read, trans)
 
 	wb.inflightFetch = append(wb.inflightFetch, trans)
-	wb.cache.writeBufferBuffer.Pop()
+	if wb.cache.m1DRAMEnabled() {
+		wb.cache.m1Stats.DRAMSingleLineReads++
+	}
 
 	tracing.TraceReqInitiate(read, wb.cache,
 		tracing.MsgIDAtReceiver(trans.req(), wb.cache))
@@ -177,76 +180,17 @@ func (wb *writeBufferStage) fetchFromBottom(
 	return true
 }
 
-func (wb *writeBufferStage) l2DramAccessUnitCoalesceEnabled() bool {
-	cacheLineBytes := uint64(1 << wb.cache.log2BlockSize)
-	return wb.cache.l2DramAccessUnitCoalesce &&
-		wb.cache.l2DramAccessUnitBytes > cacheLineBytes
-}
-
-func (wb *writeBufferStage) coalesceAccessUnitFetch(
-	trans *transaction,
-	lowModulePort sim.Port,
-) bool {
-	if len(wb.inflightFetch) >= wb.maxInflightFetch {
-		return false
-	}
-
-	read := wb.findAccessUnitRead(trans, lowModulePort)
-	if read == nil {
-		return false
-	}
-
-	trans.fetchReadReq = read
-	wb.inflightFetch = append(wb.inflightFetch, trans)
-	wb.cache.l2BatchStats.DRAMReadUsefulBytes +=
-		uint64(1 << wb.cache.log2BlockSize)
-	wb.cache.l2BatchStats.AccessUnitCoalesced++
-	return true
-}
-
-func (wb *writeBufferStage) findAccessUnitRead(
-	trans *transaction,
-	lowModulePort sim.Port,
-) *mem.ReadReq {
-	unitBase := wb.l2DramAccessUnitBase(trans.fetchAddress)
-	for _, inflight := range wb.inflightFetch {
-		read := inflight.fetchReadReq
-		if wb.accessUnitReadMatches(read, trans, lowModulePort, unitBase) &&
-			inflight.fetchAddress != trans.fetchAddress {
-			return read
-		}
-	}
-
-	return nil
-}
-
-func (wb *writeBufferStage) accessUnitReadMatches(
+func (wb *writeBufferStage) recordM1DRAMReadSend(
+	now sim.VTimeInSec,
 	read *mem.ReadReq,
 	trans *transaction,
-	lowModulePort sim.Port,
-	unitBase uint64,
-) bool {
-	if read == nil {
-		return false
-	}
-	if read.Dst != lowModulePort {
-		return false
-	}
-	if read.PID != trans.fetchPID {
-		return false
-	}
-	if read.AccessByteSize != wb.cache.l2DramAccessUnitBytes {
-		return false
-	}
-	return read.Address == unitBase
-}
-
-func (wb *writeBufferStage) l2DramAccessUnitBase(addr uint64) uint64 {
-	unit := wb.cache.l2DramAccessUnitBytes
-	if unit == 0 {
-		return addr
-	}
-	return addr / unit * unit
+) {
+	memtrace.RecordMemoryPathL2WriteBufferSend(
+		wb.cache.Name(),
+		accessReqInfo(trans.accessReq()),
+		read.Meta().ID,
+		now,
+	)
 }
 
 func (wb *writeBufferStage) processWriteBufferEvictAndWrite(
@@ -379,6 +323,9 @@ func (wb *writeBufferStage) processReturnRsp(now sim.VTimeInSec) bool {
 		return wb.processDataReadyRsp(now, msg)
 	case *mem.WriteDoneRsp:
 		return wb.processWriteDoneRsp(now, msg)
+	case *mem.RemoteDataFill:
+		wb.cache.bottomPort.Retrieve(now)
+		return true
 	default:
 		panic("unknown msg type")
 	}
@@ -611,4 +558,6 @@ func (wb *writeBufferStage) tooManyInflightEvictions() bool {
 
 func (wb *writeBufferStage) Reset(now sim.VTimeInSec) {
 	wb.cache.writeBufferBuffer.Clear()
+	wb.cache.m1DRAMBatches = nil
+	wb.cache.m1DRAMBatchOrder = nil
 }

@@ -77,29 +77,53 @@ var l1vRemoteMaxInflightFlag = flag.Int("l1v-remote-max-inflight", 0,
 	"Limit in-flight remote L1V bottom transactions per L1V cache; 0 disables remote-only throttling.")
 var l1vMSHREntriesFlag = flag.Int("l1v-mshr-entries", 160,
 	"Number of L1V cache MSHR entries per L1V cache.")
+var l1vTLBMSHREntriesFlag = flag.Int("l1v-tlb-mshr-entries", 160,
+	"Number of L1V TLB MSHR entries per L1V TLB.")
+var l1vReqPerCycleFlag = flag.Int("l1v-req-per-cycle", 32,
+	"L1V request-path width for ROB, address translator, TLB, and cache.")
 var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 160,
 	"Maximum concurrent L1V cache transactions per L1V cache.")
-var l1vBottomReorderPolicyFlag = flag.String("l1v-bottom-reorder-policy", "none",
-	"L1V bottom request reorder policy: none, fifo, or hlq.")
-var l1vBottomReorderWindowFlag = flag.Int("l1v-bottom-reorder-window", 0,
-	"Maximum entries in the optional L1V bottom reorder queue. 0 disables the queue.")
-var l1vBottomReorderMaxAgeNSFlag = flag.Uint64("l1v-bottom-reorder-max-age-ns", 0,
-	"Maximum L1V bottom reorder queue age in ns. 0 means unlimited.")
-var l2DirBatchWindowFlag = flag.Int("l2-dir-batch-window", 0,
-	"Maximum same-set L2 directory requests to batch into one lookup. 0 disables batching.")
-var l2DramAccessUnitCoalesceFlag = flag.Bool("l2-dram-access-unit-coalesce", false,
-	"Coalesce adjacent L2 cache-line fills into one DRAM access-unit read.")
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")
-var m2RDMABatchFlag = flag.Bool("m2-rdma-batch", false,
-	"Enable requester-side RDMA read batching for remote 64B cache-line reads.")
-var m2RDMAMaxBatchLinesFlag = flag.Int("m2-rdma-max-batch-lines", 8,
-	"Maximum unique 64B cache lines per M2 RDMA batch packet.")
-var m2RDMAMaxWaitNSFlag = flag.Uint64("m2-rdma-max-wait-ns", 25,
-	"Maximum requester-side M2 RDMA batch queue wait in ns.")
-var m2RDMABatchTableEntriesFlag = flag.Int("m2-rdma-batch-table-entries", 32,
-	"Maximum active requester-side M2 RDMA batch queues per RDMA engine.")
+var m1L2HelperEnableFlag = flag.Bool("m1-l2-helper-enable", false,
+	"Enable M1a local L2 cache batch helper for local read requests.")
+var m1DRAMHelperEnableFlag = flag.Bool("m1-dram-helper-enable", false,
+	"Enable M1b confirmed-L2-miss DRAM batch helper for local read misses.")
+var m1CacheBatchEntriesFlag = flag.Int("m1-cache-batch-entries", 16,
+	"Maximum active M1a local L2 cache batch entries per L2 cache.")
+var m1CacheBatchLinesFlag = flag.Int("m1-cache-batch-lines", 4,
+	"Maximum unique cache lines per M1a same-set cache batch.")
+var m1CacheBatchWaitNSFlag = flag.Uint64("m1-cache-batch-max-wait-ns", 25,
+	"Maximum M1a cache batch wait in ns before timeout drain.")
+var m1DRAMBatchEntriesFlag = flag.Int("m1-dram-batch-entries", 16,
+	"Maximum active M1b DRAM batch entries per L2 cache.")
+var m1DRAMBatchLinesFlag = flag.Int("m1-dram-batch-lines", 2,
+	"Maximum unique cache lines per M1b 128B DRAM access-unit batch.")
+var m1DRAMBatchWaitNSFlag = flag.Uint64("m1-dram-batch-max-wait-ns", 25,
+	"Maximum M1b DRAM batch wait in ns before timeout drain.")
+var m2RDMABatchEnableFlag = flag.Bool("m2-rdma-batch-enable", false,
+	"Enable requester-side RDMA bitmap batching for remote 64B reads.")
+var m2AUPrefetchEnableFlag = flag.Bool("m2-au-prefetch-enable", false,
+	"Enable M2 same-128B-access-unit mate-line prefetch for remote 64B reads.")
+var m2MaxBatchLinesFlag = flag.Int("m2-max-batch-lines", 8,
+	"Maximum unique cache lines per M2 bitmap RDMA batch.")
+var m2MaxWaitNSFlag = flag.Uint64("m2-max-wait-ns", 50,
+	"Maximum M2 batch collection wait in ns before timeout flush.")
+var m2BatchTableEntriesFlag = flag.Int("m2-batch-table-entries", 64,
+	"Maximum active M2 requester-side batch table entries per RDMA engine.")
+var m3OwnerFairEnableFlag = flag.Bool("m3-owner-fair-enable", false,
+	"Enable owner-side per-requester fair RDMA service queue.")
+var m3L1RemoteCacheEnableFlag = flag.Bool("m3-l1-remote-cache-enable", false,
+	"Enable M3 L1V remote-only data area for remote demand and prefetch fills.")
+var m3L1RemoteCacheEntriesFlag = flag.Int("m3-l1-remote-cache-entries", 128,
+	"Number of 64B lines in each L1V remote-only data area.")
+var m3FairQuantumLinesFlag = flag.Int("m3-fair-quantum-lines", 8,
+	"M3 DRR quantum in cache lines.")
+var m3MaxConsecutiveFlag = flag.Int("m3-max-consecutive-batches", 2,
+	"M3 maximum consecutive packets served from one requester when others wait.")
+var m3HardAgeLimitNSFlag = flag.Uint64("m3-hard-age-limit-ns", 500,
+	"M3 hard age escape threshold in ns; 0 disables hard-age escape.")
 var maxNumHopsFlag = flag.Int("max-num-hops", -1,
 	"The maximum number of hops in the network")
 var numMemBankFlag = flag.Int("num-memory-banks", 16,
@@ -119,7 +143,7 @@ var visTracerDBFileName = flag.String("trace-vis-db-file", "",
 		"the database name is always randomly generated.")
 var mmuWalkCoalescing = flag.Bool("mmu-walk-coalescing", false,
 	"Enable MMU page-walk coalescing.")
-var mmutlbLookupLatency = flag.Int("mmutlb-lookup-latency", 80,
+var mmutlbLookupLatency = flag.Int("mmutlb-lookup-latency", 10,
 	"Fixed MMUTLB/IOTLB lookup latency, in cycles, applied before each buffered translation request is looked up.")
 var disableServersFlag = flag.Bool("disable-servers", false,
 	"Disable profiling and monitoring servers. Useful for automated tests.")

@@ -47,10 +47,11 @@ type shaderArrayBuilder struct {
 	log2PageSize             uint64
 	l1vRemoteMaxInflight     int
 	l1vMSHREntries           int
+	l1vTLBMSHREntries        int
+	l1vReqPerCycle           int
 	l1vMaxConcurrentTrans    int
-	l1vBottomReorderPolicy   string
-	l1vBottomReorderWindow   int
-	l1vBottomReorderMaxAgeNS uint64
+	m3RemoteDataCacheEnable  bool
+	m3RemoteDataCacheEntries int
 
 	isaDebugging  bool
 	visTracer     tracing.Tracer
@@ -60,15 +61,17 @@ type shaderArrayBuilder struct {
 
 func makeShaderArrayBuilder() shaderArrayBuilder {
 	b := shaderArrayBuilder{
-		gpuID:                  0,
-		name:                   "SA",
-		numCU:                  4,
-		freq:                   1 * sim.GHz,
-		log2CacheLineSize:      6,
-		log2PageSize:           12,
-		l1vMSHREntries:         160,
-		l1vMaxConcurrentTrans:  160,
-		l1vBottomReorderPolicy: "none",
+		gpuID:                    0,
+		name:                     "SA",
+		numCU:                    4,
+		freq:                     1 * sim.GHz,
+		log2CacheLineSize:        6,
+		log2PageSize:             12,
+		l1vMSHREntries:           160,
+		l1vTLBMSHREntries:        160,
+		l1vReqPerCycle:           32,
+		l1vMaxConcurrentTrans:    160,
+		m3RemoteDataCacheEntries: 128,
 	}
 	return b
 }
@@ -119,6 +122,20 @@ func (b shaderArrayBuilder) withL1VMSHREntries(n int) shaderArrayBuilder {
 	return b
 }
 
+func (b shaderArrayBuilder) withL1VTLBMSHREntries(n int) shaderArrayBuilder {
+	if n > 0 {
+		b.l1vTLBMSHREntries = n
+	}
+	return b
+}
+
+func (b shaderArrayBuilder) withL1VReqPerCycle(n int) shaderArrayBuilder {
+	if n > 0 {
+		b.l1vReqPerCycle = n
+	}
+	return b
+}
+
 func (b shaderArrayBuilder) withL1VMaxConcurrentTrans(n int) shaderArrayBuilder {
 	if n > 0 {
 		b.l1vMaxConcurrentTrans = n
@@ -126,14 +143,14 @@ func (b shaderArrayBuilder) withL1VMaxConcurrentTrans(n int) shaderArrayBuilder 
 	return b
 }
 
-func (b shaderArrayBuilder) withL1VBottomReorder(
-	policy string,
-	window int,
-	maxAgeNS uint64,
+func (b shaderArrayBuilder) withM3RemoteDataCache(
+	enable bool,
+	entries int,
 ) shaderArrayBuilder {
-	b.l1vBottomReorderPolicy = policy
-	b.l1vBottomReorderWindow = window
-	b.l1vBottomReorderMaxAgeNS = maxAgeNS
+	b.m3RemoteDataCacheEnable = enable
+	if entries > 0 {
+		b.m3RemoteDataCacheEntries = entries
+	}
 	return b
 }
 
@@ -199,6 +216,10 @@ func (b *shaderArrayBuilder) connectComponents(sa *shaderArray) {
 }
 
 func (b *shaderArrayBuilder) connectVectorMem(sa *shaderArray) {
+	bufferSize := b.l1vReqPerCycle * 4
+	if bufferSize < 8 {
+		bufferSize = 8
+	}
 	for i := 0; i < b.numCU; i++ {
 		cu := sa.cus[i]
 		rob := sa.l1vROBs[i]
@@ -210,23 +231,23 @@ func (b *shaderArrayBuilder) connectVectorMem(sa *shaderArray) {
 			LowModule: rob.GetPortByName("Top"),
 		}
 		b.connectWithDirectConnection(cu.ToVectorMem,
-			rob.GetPortByName("Top"), 8)
+			rob.GetPortByName("Top"), bufferSize)
 
 		atTopPort := at.GetPortByName("Top")
 		rob.BottomUnit = atTopPort
 		b.connectWithDirectConnection(
-			rob.GetPortByName("Bottom"), atTopPort, 8)
+			rob.GetPortByName("Bottom"), atTopPort, bufferSize)
 
 		tlbTopPort := tlb.GetPortByName("Top")
 		at.SetTranslationProvider(tlbTopPort)
 		b.connectWithDirectConnection(
-			at.GetPortByName("Translation"), tlbTopPort, 8)
+			at.GetPortByName("Translation"), tlbTopPort, bufferSize)
 
 		at.SetLowModuleFinder(&mem.SingleLowModuleFinder{
 			LowModule: l1v.GetPortByName("Top"),
 		})
 		b.connectWithDirectConnection(l1v.GetPortByName("Top"),
-			at.GetPortByName("Bottom"), 8)
+			at.GetPortByName("Bottom"), bufferSize)
 	}
 }
 
@@ -339,7 +360,7 @@ func (b *shaderArrayBuilder) buildL1VReorderBuffers(sa *shaderArray) {
 		WithEngine(b.engine).
 		WithFreq(b.freq).
 		WithBufferSize(128).
-		WithNumReqPerCycle(4)
+		WithNumReqPerCycle(b.l1vReqPerCycle)
 
 	for i := 0; i < b.numCU; i++ {
 		name := fmt.Sprintf("%s.L1VROB[%d]", b.name, i)
@@ -357,6 +378,7 @@ func (b *shaderArrayBuilder) buildL1VAddressTranslators(sa *shaderArray) {
 		WithEngine(b.engine).
 		WithFreq(b.freq).
 		WithDeviceID(b.gpuID).
+		WithNumReqPerCycle(b.l1vReqPerCycle).
 		WithLog2PageSize(b.log2PageSize)
 	if b.sharingTracer != nil {
 		builder = builder.WithSharingTracer(b.sharingTracer)
@@ -377,10 +399,10 @@ func (b *shaderArrayBuilder) buildL1VTLBs(sa *shaderArray) {
 	builder := tlb.MakeBuilder().
 		WithEngine(b.engine).
 		WithFreq(b.freq).
-		WithNumMSHREntry(4).
+		WithNumMSHREntry(b.l1vTLBMSHREntries).
 		WithNumSets(1).
 		WithNumWays(32).
-		WithNumReqPerCycle(4)
+		WithNumReqPerCycle(b.l1vReqPerCycle)
 
 	for i := 0; i < b.numCU; i++ {
 		name := fmt.Sprintf("%s.L1VTLB[%d]", b.name, i)
@@ -402,13 +424,12 @@ func (b *shaderArrayBuilder) buildL1VCaches(sa *shaderArray) {
 		WithLog2BlockSize(b.log2CacheLineSize).
 		WithWayAssociativity(4).
 		WithNumMSHREntry(b.l1vMSHREntries).
+		WithNumReqsPerCycle(b.l1vReqPerCycle).
 		WithMaxNumConcurrentTrans(b.l1vMaxConcurrentTrans).
 		WithMaxRemoteBottomTrans(b.l1vRemoteMaxInflight).
-		WithBottomReorder(
-			b.l1vBottomReorderPolicy,
-			b.l1vBottomReorderWindow,
-			b.l1vBottomReorderMaxAgeNS,
-		).
+		WithRemoteDataCache(
+			b.m3RemoteDataCacheEnable,
+			b.m3RemoteDataCacheEntries).
 		WithTotalByteSize(16 * mem.KB)
 
 	if b.visTracer != nil {

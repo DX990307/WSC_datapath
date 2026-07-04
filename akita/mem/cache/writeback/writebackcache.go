@@ -48,30 +48,18 @@ type Cache struct {
 	log2BlockSize   uint64
 	numReqPerCycle  int
 
-	l2DirBatchWindow         int
-	l2DramAccessUnitCoalesce bool
-	l2DramAccessUnitBytes    uint64
-	l2BatchStats             L2BatchStats
+	m1Config           M1Config
+	m1Stats            M1Stats
+	m1CacheBatches     map[m1CacheBatchKey]*m1CacheBatchEntry
+	m1CacheBatchOrder  []m1CacheBatchKey
+	m1NextCacheBatchID uint64
+	m1DRAMBatches      map[m1DRAMBatchKey]*m1DRAMBatchEntry
+	m1DRAMBatchOrder   []m1DRAMBatchKey
+	m1NextDRAMBatchID  uint64
 
 	state                cacheState
 	inFlightTransactions []*transaction
 	evictingList         map[uint64]bool
-}
-
-// L2BatchStats reports locality-aware batching inside the writeback L2 cache.
-type L2BatchStats struct {
-	DirBatchGroups      uint64
-	DirBatchRequests    uint64
-	DirMaxBatchSize     uint64
-	AccessUnitReads     uint64
-	AccessUnitCoalesced uint64
-	DRAMReadIssuedBytes uint64
-	DRAMReadUsefulBytes uint64
-}
-
-// L2BatchStats returns counters for locality-aware L2 batching.
-func (c *Cache) L2BatchStats() L2BatchStats {
-	return c.l2BatchStats
 }
 
 // SetLowModuleFinder sets the LowModuleFinder used by the cache.

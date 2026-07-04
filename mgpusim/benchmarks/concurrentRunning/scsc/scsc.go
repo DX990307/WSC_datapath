@@ -23,8 +23,8 @@ type Benchmark struct {
 
 func (b *Benchmark) configkm() {
 	b.subBenchmarkSC1 = sc.NewBenchmark(b.driver)
-	b.subBenchmarkSC1.Height = 2048 / 2
-	b.subBenchmarkSC1.Width = 2048
+	b.subBenchmarkSC1.Height = 8192
+	b.subBenchmarkSC1.Width = 8192
 	b.subBenchmarkSC1.SetMaskSize(3)
 
 	GPU := 49
@@ -33,8 +33,8 @@ func (b *Benchmark) configkm() {
 
 func (b *Benchmark) configSC() {
 	b.subBenchmarkSC2 = sc.NewBenchmark(b.driver)
-	b.subBenchmarkSC2.Height = 2048 / 2
-	b.subBenchmarkSC2.Width = 2048
+	b.subBenchmarkSC2.Height = 8192
+	b.subBenchmarkSC2.Width = 8192
 	b.subBenchmarkSC2.SetMaskSize(3)
 
 	GPU := 50

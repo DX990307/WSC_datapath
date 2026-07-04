@@ -13,20 +13,11 @@ import (
 )
 
 type dirPipelineItem struct {
-	transactions []*transaction
+	trans *transaction
 }
 
 func (i *dirPipelineItem) TaskID() string {
-	return i.current().id + "_dir_pipeline"
-}
-
-func (i *dirPipelineItem) current() *transaction {
-	return i.transactions[0]
-}
-
-func (i *dirPipelineItem) popCurrent() bool {
-	i.transactions = i.transactions[1:]
-	return len(i.transactions) == 0
+	return i.trans.id + "_dir_pipeline"
 }
 
 type directoryStage struct {
@@ -59,7 +50,7 @@ func (ds *directoryStage) processTransaction(
 		}
 
 		ds.processingItem = item.(*dirPipelineItem)
-		trans := ds.processingItem.current()
+		trans := ds.processingItem.trans
 
 		addr := trans.accessReq().GetAddress()
 		cacheLineID, _ := getCacheLineID(addr, ds.cache.log2BlockSize)
@@ -92,56 +83,17 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 			break
 		}
 
-		first := item.(*transaction)
-		batch := ds.collectDirBatch(now, first)
+		trans := item.(*transaction)
+		ds.recordDirStart(now, trans)
 		ds.pipeline.Accept(now, &dirPipelineItem{
-			transactions: batch,
+			trans: trans,
 		})
+		ds.cache.dirStageBuffer.Pop()
 
 		madeProgress = true
 	}
 
 	return madeProgress
-}
-
-func (ds *directoryStage) collectDirBatch(
-	now sim.VTimeInSec,
-	first *transaction,
-) []*transaction {
-	batch := []*transaction{first}
-	ds.recordDirStart(now, first)
-	ds.cache.dirStageBuffer.Pop()
-
-	window := ds.cache.l2DirBatchWindow
-	if window <= 1 {
-		return batch
-	}
-
-	firstSet, ok := ds.cacheSetID(first)
-	if !ok {
-		ds.recordDirBatch(batch)
-		return batch
-	}
-
-	for len(batch) < window {
-		item := ds.cache.dirStageBuffer.Peek()
-		if item == nil {
-			break
-		}
-
-		next := item.(*transaction)
-		nextSet, ok := ds.cacheSetID(next)
-		if !ok || nextSet != firstSet {
-			break
-		}
-
-		batch = append(batch, next)
-		ds.recordDirStart(now, next)
-		ds.cache.dirStageBuffer.Pop()
-	}
-
-	ds.recordDirBatch(batch)
-	return batch
 }
 
 func (ds *directoryStage) recordDirStart(
@@ -158,48 +110,16 @@ func (ds *directoryStage) recordDirStart(
 	}
 }
 
-func (ds *directoryStage) recordDirBatch(batch []*transaction) {
-	if len(batch) == 0 {
-		return
-	}
-
-	ds.cache.l2BatchStats.DirBatchGroups++
-	ds.cache.l2BatchStats.DirBatchRequests += uint64(len(batch))
-	if uint64(len(batch)) > ds.cache.l2BatchStats.DirMaxBatchSize {
-		ds.cache.l2BatchStats.DirMaxBatchSize = uint64(len(batch))
-	}
-}
-
-func (ds *directoryStage) cacheSetID(trans *transaction) (int, bool) {
-	directory, ok := ds.cache.directory.(*cache.DirectoryImpl)
-	if !ok {
-		return 0, false
-	}
-
-	req := trans.accessReq()
-	if req == nil {
-		return 0, false
-	}
-
-	addr := req.GetAddress()
-	if directory.AddrConverter != nil {
-		addr = directory.AddrConverter.ConvertExternalToInternal(addr)
-	}
-
-	setID := int(addr / uint64(directory.BlockSize) % uint64(directory.NumSets))
-	return setID, true
-}
-
 func (ds *directoryStage) popDirTransaction() {
-	if ds.processingItem == nil || ds.processingItem.popCurrent() {
-		ds.buf.Pop()
-	}
+	ds.buf.Pop()
 }
 
 func (ds *directoryStage) Reset(now sim.VTimeInSec) {
 	ds.pipeline.Clear()
 	ds.buf.Clear()
 	ds.cache.dirStageBuffer.Clear()
+	ds.cache.m1CacheBatches = nil
+	ds.cache.m1CacheBatchOrder = nil
 }
 
 func (ds *directoryStage) doRead(
@@ -230,15 +150,12 @@ func (ds *directoryStage) handleReadMSHRHit(
 ) bool {
 	trans.mshrEntry = mshrEntry
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
+	ds.attachM1ReadPeersToMSHR(trans, mshrEntry)
 	ds.popDirTransaction()
 
-	tracing.AddTaskStep(
-		tracing.MsgIDAtReceiver(trans.read, ds.cache),
-		ds.cache,
-		"read-mshr-hit",
-	)
-	ds.recordMemoryPathCacheResult(now, trans, "read-mshr-hit")
-	ds.recordL2AccessSource(now, trans, "l2_mshr")
+	ds.recordReadGroupResult(
+		now, trans, "read-mshr-hit", "read-mshr-hit",
+		"l2_mshr", "mshr-hit")
 
 	return true
 }
@@ -252,13 +169,6 @@ func (ds *directoryStage) handleReadHit(
 		return false
 	}
 
-	tracing.AddTaskStep(
-		tracing.MsgIDAtReceiver(trans.read, ds.cache),
-		ds.cache,
-		"read-hit",
-	)
-	ds.recordMemoryPathCacheResult(now, trans, "read-hit")
-
 	// fmt.Printf("%.10f, %s, dir read hit, %s, %04X, %04X, (%d, %d), %v\n",
 	// 	now, ds.cache.Name(),
 	// 	trans.read.ID,
@@ -270,7 +180,9 @@ func (ds *directoryStage) handleReadHit(
 
 	ok := ds.readFromBank(trans, block)
 	if ok {
-		ds.recordL2AccessSource(now, trans, "l2_cache")
+		ds.recordReadGroupResult(
+			now, trans, "read-hit", "read-hit",
+			"l2_cache", "hit")
 	}
 	return ok
 }
@@ -294,12 +206,9 @@ func (ds *directoryStage) handleReadMiss(
 	if ds.needEviction(victim) {
 		ok := ds.evict(now, trans, victim)
 		if ok {
-			tracing.AddTaskStep(
-				tracing.MsgIDAtReceiver(trans.read, ds.cache),
-				ds.cache,
-				"read-miss",
-			)
-			ds.recordMemoryPathCacheResult(now, trans, "read-miss")
+			ds.recordReadGroupResult(
+				now, trans, "read-miss", "read-miss",
+				"", "miss")
 
 			// fmt.Printf("%.10f, %s, dir read miss, %s, %04X, %04X, (%d, %d), %v\n",
 			// 	now, ds.cache.Name(),
@@ -316,12 +225,9 @@ func (ds *directoryStage) handleReadMiss(
 
 	ok := ds.fetch(now, trans, victim)
 	if ok {
-		tracing.AddTaskStep(
-			tracing.MsgIDAtReceiver(trans.read, ds.cache),
-			ds.cache,
-			"read-miss",
-		)
-		ds.recordMemoryPathCacheResult(now, trans, "read-miss")
+		ds.recordReadGroupResult(
+			now, trans, "read-miss", "read-miss",
+			"", "miss")
 
 		// fmt.Printf("%.10f, %s, dir read miss, %s, %04X, %04X, (%d, %d), %v\n",
 		// 	now, ds.cache.Name(),
@@ -523,12 +429,9 @@ func (ds *directoryStage) writeToBank(
 		return false
 	}
 
-	addr := trans.write.Address
-	cachelineID, _ := getCacheLineID(addr, ds.cache.log2BlockSize)
-
 	ds.cache.directory.Visit(block)
 	block.IsLocked = true
-	block.Tag = cachelineID
+	block.Tag, _ = getCacheLineID(trans.write.Address, ds.cache.log2BlockSize)
 	block.IsValid = true
 	block.PID = trans.write.PID
 	trans.block = block
@@ -616,6 +519,7 @@ func (ds *directoryStage) updateTransForEviction(
 		trans.fetchPID = pid
 		trans.fetchAddress = cacheLineID
 		trans.action = bankEvictAndFetch
+		ds.attachM1ReadPeersToMSHR(trans, mshrEntry)
 	} else {
 		trans.action = bankEvictAndWrite
 	}
@@ -684,8 +588,51 @@ func (ds *directoryStage) fetch(
 
 	mshrEntry.Block = block
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
+	ds.attachM1ReadPeersToMSHR(trans, mshrEntry)
 
 	return true
+}
+
+func (ds *directoryStage) attachM1ReadPeersToMSHR(
+	trans *transaction,
+	mshrEntry *cache.MSHREntry,
+) {
+	for _, peer := range trans.m1CoalescedReads {
+		peer.mshrEntry = mshrEntry
+		peer.block = trans.block
+		mshrEntry.Requests = append(mshrEntry.Requests, peer)
+	}
+}
+
+func (ds *directoryStage) recordReadGroupResult(
+	now sim.VTimeInSec,
+	trans *transaction,
+	step string,
+	cacheResult string,
+	sourceBase string,
+	m1Result string,
+) {
+	for _, readTrans := range trans.m1ReadGroup() {
+		if readTrans.read == nil {
+			continue
+		}
+		if step != "" {
+			tracing.AddTaskStep(
+				tracing.MsgIDAtReceiver(readTrans.read, ds.cache),
+				ds.cache,
+				step,
+			)
+		}
+		if cacheResult != "" {
+			ds.recordMemoryPathCacheResult(now, readTrans, cacheResult)
+		}
+		if sourceBase != "" {
+			ds.recordL2AccessSource(now, readTrans, sourceBase)
+		}
+		if m1Result != "" {
+			ds.cache.recordM1L2ProbeResult(readTrans, m1Result)
+		}
+	}
 }
 
 func (ds *directoryStage) isWritingFullLine(write *mem.WriteReq) bool {

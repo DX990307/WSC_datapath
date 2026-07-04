@@ -40,7 +40,7 @@ type fwtArgs struct {
 
 func (b *Benchmark) configFWS() {
 	b.subBenchmarkFWS = fws.NewBenchmark(b.driver)
-	b.subBenchmarkFWS.NumNodes = 1024 * 4
+	b.subBenchmarkFWS.NumNodes = 8192
 	b.subBenchmarkFWS.NumIterations = 1
 
 	GPU := 49
@@ -49,7 +49,7 @@ func (b *Benchmark) configFWS() {
 
 func (b *Benchmark) configFWT() {
 	b.subBenchmarkFWT = fwt.NewBenchmark(b.driver)
-	b.subBenchmarkFWT.Length = 65536 * 4
+	b.subBenchmarkFWT.Length = 1 << 27
 
 	GPU := 50
 	b.subBenchmarkFWT.SelectGPU([]int{GPU})

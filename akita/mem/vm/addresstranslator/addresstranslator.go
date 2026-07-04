@@ -254,7 +254,7 @@ func (t *AddressTranslator) parseTranslation(now sim.VTimeInSec) bool {
 
 //nolint:funlen,gocyclo
 func (t *AddressTranslator) respond(now sim.VTimeInSec) bool {
-	rsp := t.bottomPort.Peek()
+	rspPort, rsp := t.nextBottomRsp()
 	if rsp == nil {
 		return false
 	}
@@ -340,8 +340,16 @@ func (t *AddressTranslator) respond(now sim.VTimeInSec) bool {
 		}
 	}
 
-	t.bottomPort.Retrieve(now)
+	rspPort.Retrieve(now)
 	return true
+}
+
+func (t *AddressTranslator) nextBottomRsp() (sim.Port, sim.Msg) {
+	rsp := t.bottomPort.Peek()
+	if rsp != nil {
+		return t.bottomPort, rsp
+	}
+	return nil, nil
 }
 
 func (t *AddressTranslator) createTranslatedReq(

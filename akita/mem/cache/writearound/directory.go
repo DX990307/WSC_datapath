@@ -24,6 +24,14 @@ type directory struct {
 	buf      sim.Buffer
 }
 
+const (
+	l1vDirStallPostPipelineBuffer = "l1v_dir_stall_post_pipeline_buffer"
+	l1vDirStallVictimLocked       = "l1v_dir_stall_victim_locked"
+	l1vDirStallMSHRFull           = "l1v_dir_stall_mshr_full"
+	l1vDirStallBottomBlocked      = "l1v_dir_stall_bottom_blocked"
+	l1vDirStallBankBufferFull     = "l1v_dir_stall_bank_buffer_full"
+)
+
 func (d *directory) Tick(now sim.VTimeInSec) (madeProgress bool) {
 	for i := 0; i < d.cache.numReqPerCycle; i++ {
 		if !d.pipeline.CanAccept() {
@@ -36,6 +44,9 @@ func (d *directory) Tick(now sim.VTimeInSec) (madeProgress bool) {
 		}
 
 		trans := item.(*transaction)
+		trans.l1vDirStart = now
+		trans.l1vDirFirstAttemptValid = false
+		trans.l1vDirStallReason = ""
 		memtrace.RecordMemoryPathL1VDirStart(
 			d.cache.Name(), trans.id, now)
 		d.pipeline.Accept(now, dirPipelineItem{trans})
@@ -53,6 +64,7 @@ func (d *directory) Tick(now sim.VTimeInSec) (madeProgress bool) {
 		}
 
 		trans := item.(dirPipelineItem).trans
+		d.recordDirFirstAttempt(now, trans)
 
 		if trans.read != nil {
 			madeProgress = d.processRead(now, trans) || madeProgress
@@ -65,6 +77,51 @@ func (d *directory) Tick(now sim.VTimeInSec) (madeProgress bool) {
 	return madeProgress
 }
 
+func (d *directory) recordDirFirstAttempt(
+	now sim.VTimeInSec,
+	trans *transaction,
+) {
+	if trans.l1vDirFirstAttemptValid {
+		return
+	}
+	trans.l1vDirFirstAttempt = now
+	trans.l1vDirFirstAttemptValid = true
+
+	expected := d.cache.Freq.NCyclesLater(d.cache.dirLatency, trans.l1vDirStart)
+	if now > expected {
+		memtrace.RecordMemoryPathL1VDirStall(
+			d.cache.Name(), trans.id, l1vDirStallPostPipelineBuffer,
+			expected, now)
+	}
+}
+
+func (d *directory) markDirStall(
+	now sim.VTimeInSec,
+	trans *transaction,
+	reason string,
+) bool {
+	if trans.l1vDirStallReason == reason {
+		return false
+	}
+	d.closeDirStall(now, trans)
+	trans.l1vDirStallReason = reason
+	trans.l1vDirStallStart = now
+	return false
+}
+
+func (d *directory) closeDirStall(
+	now sim.VTimeInSec,
+	trans *transaction,
+) {
+	if trans.l1vDirStallReason == "" {
+		return
+	}
+	memtrace.RecordMemoryPathL1VDirStall(
+		d.cache.Name(), trans.id, trans.l1vDirStallReason,
+		trans.l1vDirStallStart, now)
+	trans.l1vDirStallReason = ""
+}
+
 func (d *directory) processRead(now sim.VTimeInSec, trans *transaction) bool {
 	read := trans.read
 	addr := read.Address
@@ -75,6 +132,14 @@ func (d *directory) processRead(now sim.VTimeInSec, trans *transaction) bool {
 	mshrEntry := d.cache.mshr.Query(pid, cacheLineID)
 	if mshrEntry != nil {
 		return d.processMSHRHit(now, trans, mshrEntry)
+	}
+
+	bottomModule := d.cache.lowModuleFinder.Find(cacheLineID)
+	remoteRead := d.cache.isRemoteBottomModule(bottomModule)
+	if remoteRead && d.cache.remoteDataCacheEnabled() {
+		if data, ok := d.cache.remoteDataCache.lookup(pid, cacheLineID); ok {
+			return d.processRemoteDataHit(now, trans, cacheLineID, data)
+		}
 	}
 
 	block := d.cache.directory.Lookup(pid, cacheLineID)
@@ -91,6 +156,7 @@ func (d *directory) processMSHRHit(
 	mshrEntry *cache.MSHREntry,
 ) bool {
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
+	d.closeDirStall(now, trans)
 
 	if trans.read != nil {
 		tracing.AddTaskStep(trans.id, d.cache, "read-mshr-hit")
@@ -111,12 +177,12 @@ func (d *directory) processReadHit(
 	block *cache.Block,
 ) bool {
 	if block.IsLocked {
-		return false
+		return d.markDirStall(now, trans, l1vDirStallVictimLocked)
 	}
 
 	bankBuf := d.getBankBuf(block)
 	if !bankBuf.CanPush() {
-		return false
+		return d.markDirStall(now, trans, l1vDirStallBankBufferFull)
 	}
 
 	trans.block = block
@@ -125,9 +191,33 @@ func (d *directory) processReadHit(
 	d.cache.directory.Visit(block)
 	bankBuf.Push(trans)
 
+	d.closeDirStall(now, trans)
 	d.buf.Pop()
 	tracing.AddTaskStep(trans.id, d.cache, "read-hit")
 	d.recordMemoryPathCacheResult(now, trans, "read-hit")
+
+	return true
+}
+
+func (d *directory) processRemoteDataHit(
+	now sim.VTimeInSec,
+	trans *transaction,
+	cacheLineID uint64,
+	data []byte,
+) bool {
+	bankBuf := d.getRemoteDataBankBuf(cacheLineID)
+	if !bankBuf.CanPush() {
+		return d.markDirStall(now, trans, l1vDirStallBankBufferFull)
+	}
+
+	trans.bankAction = bankActionRemoteDataHit
+	trans.remoteDataHitData = data
+	bankBuf.Push(trans)
+
+	d.closeDirStall(now, trans)
+	d.buf.Pop()
+	tracing.AddTaskStep(trans.id, d.cache, "read-remote-data-hit")
+	d.recordMemoryPathCacheResult(now, trans, "read-remote-data-hit")
 
 	return true
 }
@@ -143,17 +233,32 @@ func (d *directory) processReadMiss(
 
 	victim := d.cache.directory.FindVictim(cacheLineID)
 	if victim.IsLocked || victim.ReadCount > 0 {
-		return false
+		return d.markDirStall(now, trans, l1vDirStallVictimLocked)
 	}
 
 	if d.cache.mshr.IsFull() {
-		return false
+		return d.markDirStall(now, trans, l1vDirStallMSHRFull)
+	}
+
+	bottomModule := d.cache.lowModuleFinder.Find(cacheLineID)
+	if d.cache.isRemoteBottomModule(bottomModule) &&
+		d.cache.remoteDataCacheEnabled() {
+		if !d.fetchRemoteDataFromBottom(now, trans, bottomModule) {
+			return d.markDirStall(now, trans, l1vDirStallBottomBlocked)
+		}
+
+		d.closeDirStall(now, trans)
+		d.buf.Pop()
+		tracing.AddTaskStep(trans.id, d.cache, "read-remote-data-miss")
+		d.recordMemoryPathCacheResult(now, trans, "read-remote-data-miss")
+		return true
 	}
 
 	if !d.fetchFromBottom(now, trans, victim) {
-		return false
+		return d.markDirStall(now, trans, l1vDirStallBottomBlocked)
 	}
 
+	d.closeDirStall(now, trans)
 	d.buf.Pop()
 	tracing.AddTaskStep(trans.id, d.cache, "read-miss")
 	d.recordMemoryPathCacheResult(now, trans, "read-miss")
@@ -170,6 +275,9 @@ func (d *directory) processWrite(
 	pid := write.PID
 	blockSize := uint64(1 << d.cache.log2BlockSize)
 	cacheLineID := addr / blockSize * blockSize
+	if d.cache.remoteDataCacheEnabled() {
+		d.cache.remoteDataCache.invalidate(write.PID, cacheLineID)
+	}
 
 	mshrEntry := d.cache.mshr.Query(pid, cacheLineID)
 	if mshrEntry != nil {
@@ -177,7 +285,7 @@ func (d *directory) processWrite(
 		if ok {
 			return d.processMSHRHit(now, trans, mshrEntry)
 		}
-		return false
+		return d.markDirStall(now, trans, l1vDirStallBottomBlocked)
 	}
 
 	block := d.cache.directory.Lookup(pid, cacheLineID)
@@ -193,22 +301,20 @@ func (d *directory) writeMiss(
 	trans *transaction,
 ) bool {
 	if ok := d.writeBottom(now, trans); ok {
+		d.closeDirStall(now, trans)
 		tracing.AddTaskStep(trans.id, d.cache, "write-miss")
 		d.recordMemoryPathCacheResult(now, trans, "write-miss")
 		d.buf.Pop()
 		return true
 	}
 
-	return false
+	return d.markDirStall(now, trans, l1vDirStallBottomBlocked)
 }
 
 func (d *directory) writeBottom(now sim.VTimeInSec, trans *transaction) bool {
 	write := trans.write
 	addr := write.Address
 	bottomModule := d.cache.lowModuleFinder.Find(addr)
-	if d.cache.bottomReorderEnabled() {
-		return d.enqueueWriteBottom(now, trans, bottomModule)
-	}
 
 	if !d.cache.canSendToBottomModule(bottomModule) {
 		return false
@@ -238,52 +344,24 @@ func (d *directory) writeBottom(now sim.VTimeInSec, trans *transaction) bool {
 	return true
 }
 
-func (d *directory) enqueueWriteBottom(
-	now sim.VTimeInSec,
-	trans *transaction,
-	bottomModule sim.Port,
-) bool {
-	if !d.cache.canEnqueueBottomReorder() {
-		return false
-	}
-
-	write := trans.write
-	writeToBottom := mem.WriteReqBuilder{}.
-		WithSendTime(now).
-		WithSrc(d.cache.bottomPort).
-		WithDst(bottomModule).
-		WithAddress(write.Address).
-		WithPID(write.PID).
-		WithData(write.Data).
-		WithDirtyMask(write.DirtyMask).
-		WithInfo(d.memoryPathInfo(trans)).
-		Build()
-
-	trans.writeToBottom = writeToBottom
-	d.cache.enqueueBottomReorder(
-		now, trans, writeToBottom, bottomModule, write.Address)
-
-	return true
-}
-
 func (d *directory) processWriteHit(
 	now sim.VTimeInSec,
 	trans *transaction,
 	block *cache.Block,
 ) bool {
 	if block.IsLocked || block.ReadCount > 0 {
-		return false
+		return d.markDirStall(now, trans, l1vDirStallVictimLocked)
 	}
 
 	bankBuf := d.getBankBuf(block)
 	if !bankBuf.CanPush() {
-		return false
+		return d.markDirStall(now, trans, l1vDirStallBankBufferFull)
 	}
 
 	if trans.writeToBottom == nil {
 		ok := d.writeBottom(now, trans)
 		if !ok {
-			return false
+			return d.markDirStall(now, trans, l1vDirStallBottomBlocked)
 		}
 	}
 
@@ -300,6 +378,7 @@ func (d *directory) processWriteHit(
 	trans.block = block
 	bankBuf.Push(trans)
 
+	d.closeDirStall(now, trans)
 	tracing.AddTaskStep(trans.id, d.cache, "write-hit")
 	d.recordMemoryPathCacheResult(now, trans, "write-hit")
 	d.buf.Pop()
@@ -318,9 +397,6 @@ func (d *directory) fetchFromBottom(
 	cacheLineID := addr / blockSize * blockSize
 
 	bottomModule := d.cache.lowModuleFinder.Find(cacheLineID)
-	if d.cache.bottomReorderEnabled() {
-		return d.enqueueReadBottom(now, trans, victim, bottomModule, cacheLineID)
-	}
 
 	if !d.cache.canSendToBottomModule(bottomModule) {
 		return false
@@ -359,19 +435,20 @@ func (d *directory) fetchFromBottom(
 	return true
 }
 
-func (d *directory) enqueueReadBottom(
+func (d *directory) fetchRemoteDataFromBottom(
 	now sim.VTimeInSec,
 	trans *transaction,
-	victim *cache.Block,
 	bottomModule sim.Port,
-	cacheLineID uint64,
 ) bool {
-	if !d.cache.canEnqueueBottomReorder() {
+	addr := trans.Address()
+	pid := trans.PID()
+	blockSize := uint64(1 << d.cache.log2BlockSize)
+	cacheLineID := addr / blockSize * blockSize
+
+	if !d.cache.canSendToBottomModule(bottomModule) {
 		return false
 	}
 
-	pid := trans.PID()
-	blockSize := uint64(1 << d.cache.log2BlockSize)
 	readToBottom := mem.ReadReqBuilder{}.
 		WithSendTime(now).
 		WithSrc(d.cache.bottomPort).
@@ -381,23 +458,24 @@ func (d *directory) enqueueReadBottom(
 		WithByteSize(blockSize).
 		WithInfo(d.memoryPathInfo(trans)).
 		Build()
+	err := d.cache.bottomPort.Send(readToBottom)
+	if err != nil {
+		return false
+	}
 
+	tracing.TraceReqInitiate(readToBottom, d.cache, trans.id)
 	trans.readToBottom = readToBottom
-	trans.block = victim
+	trans.remoteDataFill = true
+	d.cache.trackBottomTransaction(trans, bottomModule)
 
 	mshrEntry := d.cache.mshr.Add(pid, cacheLineID)
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
 	mshrEntry.ReadReq = readToBottom
-	mshrEntry.Block = victim
-
-	victim.Tag = cacheLineID
-	victim.PID = pid
-	victim.IsValid = true
-	victim.IsLocked = true
-	d.cache.directory.Visit(victim)
-
-	d.cache.enqueueBottomReorder(
-		now, trans, readToBottom, bottomModule, cacheLineID)
+	mshrEntry.Block = &cache.Block{
+		PID:     pid,
+		Tag:     cacheLineID,
+		IsValid: true,
+	}
 
 	return true
 }
@@ -406,6 +484,13 @@ func (d *directory) getBankBuf(block *cache.Block) sim.Buffer {
 	numWaysPerSet := d.cache.directory.WayAssociativity()
 	blockID := block.SetID*numWaysPerSet + block.WayID
 	bankID := blockID % len(d.cache.bankBufs)
+	return d.cache.bankBufs[bankID]
+}
+
+func (d *directory) getRemoteDataBankBuf(cacheLineID uint64) sim.Buffer {
+	blockSize := uint64(1 << d.cache.log2BlockSize)
+	blockID := cacheLineID / blockSize
+	bankID := int(blockID % uint64(len(d.cache.bankBufs)))
 	return d.cache.bankBufs[bankID]
 }
 

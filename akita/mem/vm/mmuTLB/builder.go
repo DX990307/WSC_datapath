@@ -45,7 +45,7 @@ func MakeBuilder() Builder {
 		inflightTransactions:    0,
 		log2PageSize:            12,
 		translationRequests:     make(map[uint64]map[vm.PID]*vm.TranslationReq),
-		lookupLatencyCycles:     80,
+		lookupLatencyCycles:     10,
 	}
 }
 

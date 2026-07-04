@@ -153,6 +153,8 @@ type memoryPathStats struct {
 	l1vHopsCSV     *csv.Writer
 	l1vSummaryFile *os.File
 	l1vSummaryCSV  *csv.Writer
+	cpFile         *os.File
+	cpCSV          *csv.Writer
 	streamErr      error
 
 	records                   map[string]*memoryPathRecord
@@ -166,6 +168,7 @@ type memoryPathStats struct {
 	steady memoryPathAggregate
 
 	l1vPathStageAggregates map[string]*l1vPathStageAggregate
+	criticalPathAggregate  criticalPathAggregate
 
 	stopped      bool
 	doneNotified bool
@@ -206,6 +209,7 @@ func (s *memoryPathStats) resetMapsLocked() {
 	s.raw = nil
 	s.streamErr = nil
 	s.l1vPathStageAggregates = make(map[string]*l1vPathStageAggregate)
+	s.criticalPathAggregate = newCriticalPathAggregate()
 	s.stopped = false
 	s.doneNotified = false
 }
@@ -316,7 +320,10 @@ func DumpMemoryPathTrace() error {
 	if err := globalMemoryPathStats.dumpStageLatencyLocked(); err != nil {
 		return err
 	}
-	return globalMemoryPathStats.dumpL1VPathTraceLocked()
+	if err := globalMemoryPathStats.dumpL1VPathTraceLocked(); err != nil {
+		return err
+	}
+	return globalMemoryPathStats.dumpCriticalPathTraceLocked()
 }
 
 func (s *memoryPathStats) closeLocked() error {
@@ -372,6 +379,19 @@ func (s *memoryPathStats) closeLocked() error {
 		}
 		s.l1vSummaryFile = nil
 	}
+	if s.cpCSV != nil {
+		s.cpCSV.Flush()
+		if csvErr := s.cpCSV.Error(); err == nil && csvErr != nil {
+			err = csvErr
+		}
+		s.cpCSV = nil
+	}
+	if s.cpFile != nil {
+		if fileErr := s.cpFile.Close(); err == nil && fileErr != nil {
+			err = fileErr
+		}
+		s.cpFile = nil
+	}
 	if err == nil && s.streamErr != nil {
 		err = s.streamErr
 	}
@@ -383,6 +403,9 @@ func (s *memoryPathStats) openStreamingLocked() error {
 		return err
 	}
 	if err := s.openL1VPathStreamLocked(); err != nil {
+		return err
+	}
+	if err := s.openCriticalPathStreamLocked(); err != nil {
 		return err
 	}
 	return nil

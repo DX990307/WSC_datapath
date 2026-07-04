@@ -12,21 +12,28 @@ type Builder struct {
 	localModules           mem.LowModuleFinder
 	RemoteRDMAAddressTable mem.LowModuleFinder
 	bufferSize             int
-
-	m2RDMABatchEnabled      bool
-	m2RDMAMaxBatchLines     int
-	m2RDMAMaxWaitNS         uint64
-	m2RDMABatchTableEntries int
+	m2Enabled              bool
+	m2AUPrefetchEnabled    bool
+	m2MaxBatchLines        int
+	m2MaxWaitNS            uint64
+	m2BatchTableEntries    int
+	m3Enabled              bool
+	m3FairQuantumLines     int
+	m3MaxConsecutive       int
+	m3HardAgeNS            uint64
 }
 
 // MakeBuilder creates a new builder with default configuration values.
 func MakeBuilder() Builder {
 	return Builder{
-		freq:                    1 * sim.GHz,
-		bufferSize:              128,
-		m2RDMAMaxBatchLines:     8,
-		m2RDMAMaxWaitNS:         25,
-		m2RDMABatchTableEntries: 32,
+		freq:                1 * sim.GHz,
+		bufferSize:          128,
+		m2MaxBatchLines:     8,
+		m2MaxWaitNS:         50,
+		m2BatchTableEntries: 64,
+		m3FairQuantumLines:  8,
+		m3MaxConsecutive:    2,
+		m3HardAgeNS:         500,
 	}
 }
 
@@ -60,17 +67,33 @@ func (b Builder) WithRemoteModules(m mem.LowModuleFinder) Builder {
 	return b
 }
 
-// WithM2RDMABatch configures requester-side RDMA read batching.
-func (b Builder) WithM2RDMABatch(
+// WithM2BitmapBatch configures requester-side bitmap read batching.
+func (b Builder) WithM2BitmapBatch(
 	enable bool,
+	auPrefetchEnable bool,
 	maxBatchLines int,
 	maxWaitNS uint64,
 	batchTableEntries int,
 ) Builder {
-	b.m2RDMABatchEnabled = enable
-	b.m2RDMAMaxBatchLines = maxBatchLines
-	b.m2RDMAMaxWaitNS = maxWaitNS
-	b.m2RDMABatchTableEntries = batchTableEntries
+	b.m2Enabled = enable
+	b.m2AUPrefetchEnabled = auPrefetchEnable
+	b.m2MaxBatchLines = maxBatchLines
+	b.m2MaxWaitNS = maxWaitNS
+	b.m2BatchTableEntries = batchTableEntries
+	return b
+}
+
+// WithM3OwnerFairQueue configures owner-side per-requester fair scheduling.
+func (b Builder) WithM3OwnerFairQueue(
+	enable bool,
+	fairQuantumLines int,
+	maxConsecutive int,
+	hardAgeNS uint64,
+) Builder {
+	b.m3Enabled = enable
+	b.m3FairQuantumLines = fairQuantumLines
+	b.m3MaxConsecutive = maxConsecutive
+	b.m3HardAgeNS = hardAgeNS
 	return b
 }
 
@@ -82,11 +105,18 @@ func (b Builder) Build(name string) *Comp {
 
 	rdma.localModules = b.localModules
 	rdma.RemoteRDMAAddressTable = b.RemoteRDMAAddressTable
-	rdma.ConfigureM2RDMABatch(
-		b.m2RDMABatchEnabled,
-		b.m2RDMAMaxBatchLines,
-		b.m2RDMAMaxWaitNS,
-		b.m2RDMABatchTableEntries,
+	rdma.ConfigureM2(
+		b.m2Enabled,
+		b.m2AUPrefetchEnabled,
+		b.m2MaxBatchLines,
+		b.m2MaxWaitNS,
+		b.m2BatchTableEntries,
+	)
+	rdma.ConfigureM3(
+		b.m3Enabled,
+		b.m3FairQuantumLines,
+		b.m3MaxConsecutive,
+		b.m3HardAgeNS,
 	)
 	// rdma.SetFreq(b.freq)
 

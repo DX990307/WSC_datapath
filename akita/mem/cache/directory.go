@@ -85,6 +85,12 @@ func (d *DirectoryImpl) getSet(reqAddr uint64) (set *Set, setID int) {
 	return
 }
 
+// SetID returns the set that an address maps to.
+func (d *DirectoryImpl) SetID(reqAddr uint64) int {
+	_, setID := d.getSet(reqAddr)
+	return setID
+}
+
 // Lookup finds the block that reqAddr. If the reqAddr is valid
 // in the cache, return the block information. Otherwise, return nil
 func (d *DirectoryImpl) Lookup(PID vm.PID, reqAddr uint64) *Block {

@@ -24,10 +24,10 @@ type Benchmark struct {
 
 func (b *Benchmark) configkm() {
 	b.subBenchmarkKM = km.NewBenchmark(b.driver)
-	b.subBenchmarkKM.NumPoints = 1048576
-	b.subBenchmarkKM.NumClusters = 8 / 4
-	b.subBenchmarkKM.NumFeatures = 32 / 16
-	b.subBenchmarkKM.MaxIter = 3 * 6
+	b.subBenchmarkKM.NumPoints = 1 << 21
+	b.subBenchmarkKM.NumClusters = 8
+	b.subBenchmarkKM.NumFeatures = 32
+	b.subBenchmarkKM.MaxIter = 3
 
 	GPU := 49
 	b.subBenchmarkKM.SelectGPU([]int{GPU})
@@ -35,8 +35,8 @@ func (b *Benchmark) configkm() {
 
 func (b *Benchmark) configSC() {
 	b.subBenchmarkSC = sc.NewBenchmark(b.driver)
-	b.subBenchmarkSC.Height = 2048
-	b.subBenchmarkSC.Width = 2048 * 4
+	b.subBenchmarkSC.Height = 8192
+	b.subBenchmarkSC.Width = 8192
 	b.subBenchmarkSC.SetMaskSize(3)
 
 	GPU := 50

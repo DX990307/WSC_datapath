@@ -39,6 +39,10 @@ func (q *FCFSSubTransactionQueue) Push(t *signal.Transaction) {
 // Tick breaks down transactions to commands and dispatches the command to the
 // command queues.
 func (q *FCFSSubTransactionQueue) Tick(now sim.VTimeInSec) bool {
+	return q.tickFCFS()
+}
+
+func (q *FCFSSubTransactionQueue) tickFCFS() bool {
 	for i, subTrans := range q.Queue {
 		cmd := q.CmdCreator.Create(subTrans)
 

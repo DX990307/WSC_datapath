@@ -21,6 +21,7 @@ type Cache struct {
 	storage          *mem.Storage
 	directory        cache.Directory
 	mshr             cache.MSHR
+	dirLatency       int
 	bankLatency      int
 	wayAssociativity int
 	lowModuleFinder  mem.LowModuleFinder
@@ -42,13 +43,7 @@ type Cache struct {
 	maxRemoteBottomTrans int
 	remoteBottomTrans    int
 
-	bottomReorderPolicy   string
-	bottomReorderWindow   int
-	bottomReorderMaxAgeNS uint64
-	bottomReorderQueue    []*bottomReorderEntry
-	bottomReorderOpenRows map[bottomReorderBankKey]uint64
-	bottomReorderChannels map[bottomReorderChannelKey]uint64
-	bottomReorderSequence uint64
+	remoteDataCache *remoteDataCache
 
 	isPaused bool
 }
@@ -108,7 +103,6 @@ func (c *Cache) runPipeline(now sim.VTimeInSec) bool {
 	madeProgress := false
 	madeProgress = c.tickRespondStage(now) || madeProgress
 	madeProgress = c.tickParseBottomStage(now) || madeProgress
-	madeProgress = c.tickBottomReorder(now) || madeProgress
 	madeProgress = c.tickBankStage(now) || madeProgress
 	madeProgress = c.tickDirectoryStage(now) || madeProgress
 	madeProgress = c.tickCoalesceState(now) || madeProgress
@@ -130,18 +124,6 @@ func (c *Cache) tickParseBottomStage(now sim.VTimeInSec) bool {
 		madeProgress = c.parseBottomStage.Tick(now) || madeProgress
 	}
 
-	return madeProgress
-}
-
-func (c *Cache) tickBottomReorder(now sim.VTimeInSec) bool {
-	if !c.bottomReorderEnabled() {
-		return false
-	}
-
-	madeProgress := false
-	for i := 0; i < c.numReqPerCycle; i++ {
-		madeProgress = c.issueBottomReorder(now) || madeProgress
-	}
 	return madeProgress
 }
 

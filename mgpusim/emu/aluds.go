@@ -21,6 +21,14 @@ func (u *ALUImpl) runDS(state InstEmuState) {
 		u.runDSREADB64(state)
 	case 119:
 		u.runDSREAD2B64(state)
+	case 222:
+		u.runDSWRITEB96(state)
+	case 223:
+		u.runDSWRITEB128(state)
+	case 254:
+		u.runDSREADB96(state)
+	case 255:
+		u.runDSREADB128(state)
 	default:
 		log.Panicf("Opcode %d for DS format is not implemented", inst.Opcode)
 	}
@@ -164,5 +172,57 @@ func (u *ALUImpl) runDSREAD2B64(state InstEmuState) {
 
 		addr1 := layout.ADDR[i] + inst.Offset1*8
 		copy(sp[dstOffset+i*16+8:dstOffset+i*16+16], lds[addr1:addr1+8])
+	}
+}
+
+func (u *ALUImpl) runDSWRITEB96(state InstEmuState) {
+	u.runDSWRITEBytes(state, 12)
+}
+
+func (u *ALUImpl) runDSWRITEB128(state InstEmuState) {
+	u.runDSWRITEBytes(state, 16)
+}
+
+func (u *ALUImpl) runDSREADB96(state InstEmuState) {
+	u.runDSREADBytes(state, 12)
+}
+
+func (u *ALUImpl) runDSREADB128(state InstEmuState) {
+	u.runDSREADBytes(state, 16)
+}
+
+func (u *ALUImpl) runDSWRITEBytes(state InstEmuState, byteSize uint32) {
+	inst := state.Inst()
+	sp := state.Scratchpad()
+	layout := sp.AsDS()
+	lds := u.LDS()
+
+	dataOffset := uint(8 + 64*4)
+	for i := uint(0); i < 64; i++ {
+		if !laneMasked(layout.EXEC, i) {
+			continue
+		}
+
+		addr := layout.ADDR[i] + inst.Offset0
+		src := dataOffset + i*16
+		copy(lds[addr:addr+byteSize], sp[src:src+uint(byteSize)])
+	}
+}
+
+func (u *ALUImpl) runDSREADBytes(state InstEmuState, byteSize uint32) {
+	inst := state.Inst()
+	sp := state.Scratchpad()
+	layout := sp.AsDS()
+	lds := u.LDS()
+
+	dstOffset := uint(8 + 64*4 + 256*4*2)
+	for i := uint(0); i < 64; i++ {
+		if !laneMasked(layout.EXEC, i) {
+			continue
+		}
+
+		addr := layout.ADDR[i] + inst.Offset0
+		dst := dstOffset + i*16
+		copy(sp[dst:dst+uint(byteSize)], lds[addr:addr+byteSize])
 	}
 }

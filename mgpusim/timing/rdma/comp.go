@@ -40,21 +40,33 @@ type Comp struct {
 	transactionsFromOutside []transaction
 	transactionsFromInside  []transaction
 
-	m2RDMABatchEnabled      bool
-	m2RDMAMaxBatchLines     int
-	m2RDMAMaxWait           sim.VTimeInSec
-	m2RDMABatchTableEntries int
+	m2Enabled           bool
+	m2AUPrefetchEnabled bool
+	m2MaxBatchLines     int
+	m2MaxWait           sim.VTimeInSec
+	m2BatchTableEntries int
+	m2Batches           map[m2BatchKey]*m2RequesterBatch
+	m2BatchOrder        []m2BatchKey
+	m2RequesterInflight map[string]*m2RequesterBatch
+	m2PendingRsps       []m2PendingRequesterRsp
+	m2PendingFills      []m2PendingRemoteFill
+	m2NextBatchID       uint64
+	m2OwnerPendingReqs  []*m2OwnerSubReq
+	m2OwnerSubReqs      map[string]*m2OwnerSubReq
+	m2OwnerPendingRsps  []*BitmapReadRsp
+	M2Stats             M2Stats
 
-	m2RequesterBatches     map[m2RDMABatchKey]*m2RequesterBatch
-	m2RequesterBatchOrder  []*m2RequesterBatch
-	m2RequesterInflight    map[string]*m2RequesterBatch
-	m2RequesterPendingRsps []m2PendingRequesterRsp
-
-	m2OwnerPendingLocalReqs []*m2OwnerSubReq
-	m2OwnerSubReqs          map[string]*m2OwnerSubReq
-	m2OwnerPendingBatchRsps []*BatchReadRsp
-
-	M2RDMABatchStats RDMABatchStats
+	m3Enabled        bool
+	m3FairQuantum    int
+	m3MaxConsecutive int
+	m3HardAge        sim.VTimeInSec
+	m3Queues         map[string][]m3OwnerServiceRequest
+	m3Active         []string
+	m3Deficit        map[string]int
+	m3RoundRobin     int
+	m3LastRequester  string
+	m3Consecutive    int
+	M3Stats          M3Stats
 
 	firstSeenFromL1Req      map[string]sim.VTimeInSec
 	firstSeenFromOutsideReq map[string]sim.VTimeInSec
@@ -76,15 +88,17 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 		madeProgress = c.drainRDMA(now) || madeProgress
 	}
 	madeProgress = c.processM2RequesterPendingRsps(now) || madeProgress
+	madeProgress = c.processM2RequesterPendingFills(now) || madeProgress
 	madeProgress = c.processM2OwnerPendingLocalReqs(now) || madeProgress
 	madeProgress = c.processM2OwnerPendingBatchRsps(now) || madeProgress
-	madeProgress = c.processFromL1(now) || madeProgress
+	madeProgress = c.processM3OwnerQueue(now) || madeProgress
 	madeProgress = c.processM2RequesterBatches(now, false) || madeProgress
+	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
 	madeProgress = c.processFromOutside(now) || madeProgress
+	madeProgress = c.processM3OwnerQueue(now) || madeProgress
 	madeProgress = c.processM2RequesterPendingRsps(now) || madeProgress
-	madeProgress = c.processM2OwnerPendingLocalReqs(now) || madeProgress
-	madeProgress = c.processM2OwnerPendingBatchRsps(now) || madeProgress
+	madeProgress = c.processM2RequesterPendingFills(now) || madeProgress
 
 	return madeProgress
 }
@@ -131,6 +145,13 @@ func (c *Comp) drainRDMA(now sim.VTimeInSec) bool {
 	if c.processM2RequesterBatches(now, true) {
 		return true
 	}
+	if c.processM2RequesterPendingRsps(now) ||
+		c.processM2RequesterPendingFills(now) ||
+		c.processM2OwnerPendingLocalReqs(now) ||
+		c.processM2OwnerPendingBatchRsps(now) ||
+		c.processM3OwnerQueue(now) {
+		return true
+	}
 
 	if c.fullyDrained() {
 		drainCompleteRsp := DrainRspBuilder{}.
@@ -152,7 +173,8 @@ func (c *Comp) drainRDMA(now sim.VTimeInSec) bool {
 func (c *Comp) fullyDrained() bool {
 	return len(c.transactionsFromOutside) == 0 &&
 		len(c.transactionsFromInside) == 0 &&
-		!c.m2HasPendingWork()
+		!c.m2HasPendingWork() &&
+		!c.m3HasPendingWork()
 }
 
 func (c *Comp) firstSeen(
@@ -240,14 +262,14 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			return madeProgress
 		}
 		switch req := req.(type) {
-		case *BatchReadReq:
-			ret := c.processM2BatchReqFromOutside(now, req)
+		case *BitmapReadReq:
+			ret := c.processBitmapReqFromOutside(now, req)
 			if !ret {
 				return madeProgress
 			}
 			madeProgress = true
-		case *BatchReadRsp:
-			ret := c.processM2BatchRspFromOutside(now, req)
+		case *BitmapReadRsp:
+			ret := c.processBitmapRspFromOutside(now, req)
 			if !ret {
 				return madeProgress
 			}
@@ -275,10 +297,6 @@ func (c *Comp) processReqFromL1(
 	now sim.VTimeInSec,
 	req mem.AccessReq,
 ) bool {
-	if handled, madeProgress := c.tryProcessM2ReqFromL1(now, req); handled {
-		return madeProgress
-	}
-
 	firstSeen := c.firstSeen(&c.firstSeenFromL1Req, req.Meta().ID, now)
 	dst := c.RemoteRDMAAddressTable.Find(req.GetAddress())
 
@@ -286,6 +304,21 @@ func (c *Comp) processReqFromL1(
 		panic("RDMA loop back detected")
 	}
 
+	if handled, madeProgress := c.tryProcessM2ReqFromL1(
+		now, req, dst, firstSeen,
+	); handled {
+		return madeProgress
+	}
+
+	return c.sendReqFromL1(now, req, dst, firstSeen)
+}
+
+func (c *Comp) sendReqFromL1(
+	now sim.VTimeInSec,
+	req mem.AccessReq,
+	dst sim.Port,
+	firstSeen sim.VTimeInSec,
+) bool {
 	cloned := c.cloneReq(req)
 	cloned.Meta().Src = c.ToOutside
 	cloned.Meta().Dst = dst
@@ -341,6 +374,22 @@ func (c *Comp) processReqFromOutside(
 	req mem.AccessReq,
 ) bool {
 	firstSeen := c.firstSeen(&c.firstSeenFromOutsideReq, req.Meta().ID, now)
+	if c.m3Enabled {
+		c.enqueueM3OwnerRequest(now, req, firstSeen)
+		c.ToOutside.Retrieve(now)
+		c.forgetSeen(c.firstSeenFromOutsideReq, req.Meta().ID)
+		return true
+	}
+
+	return c.sendReqFromOutside(now, req, firstSeen, true)
+}
+
+func (c *Comp) sendReqFromOutside(
+	now sim.VTimeInSec,
+	req mem.AccessReq,
+	firstSeen sim.VTimeInSec,
+	retrieveOutside bool,
+) bool {
 	dst := c.localModules.Find(req.GetAddress())
 
 	cloned := c.cloneReq(req)
@@ -366,7 +415,9 @@ func (c *Comp) processReqFromOutside(
 			firstSeen,
 			now,
 		)
-		c.ToOutside.Retrieve(now)
+		if retrieveOutside {
+			c.ToOutside.Retrieve(now)
+		}
 		c.forgetSeen(c.firstSeenFromOutsideReq, req.Meta().ID)
 
 		c.traceOutsideInStart(req, cloned)
@@ -548,7 +599,7 @@ func rdmaAccessReqInfo(req sim.Msg) interface{} {
 		return req.Info
 	case *mem.WriteReq:
 		return req.Info
-	case *BatchReadReq:
+	case *BitmapReadReq:
 		return req.Info
 	default:
 		return nil

@@ -21,8 +21,12 @@ var l1vPathStageColumns = []string{
 	"at_to_l1v_top",
 	"l1v_coalesce_wait",
 	"l1v_dir_lookup",
+	"l1v_dir_stall_post_pipeline_buffer",
+	"l1v_dir_stall_victim_locked",
+	"l1v_dir_stall_mshr_full",
+	"l1v_dir_stall_bottom_blocked",
+	"l1v_dir_stall_bank_buffer_full",
 	"l1v_bank_hit",
-	"l1v_mshr_wait",
 	"l1v_bottom_send_to_local_l2",
 	"l1v_bottom_send_to_local_rdma",
 	"local_rdma_request_output_wait",
@@ -69,6 +73,69 @@ var l1vPathStageColumns = []string{
 	"l1v_fill_parent_done",
 }
 
+var l1vDirStallStages = []string{
+	"l1v_dir_stall_post_pipeline_buffer",
+	"l1v_dir_stall_victim_locked",
+	"l1v_dir_stall_mshr_full",
+	"l1v_dir_stall_bottom_blocked",
+	"l1v_dir_stall_bank_buffer_full",
+}
+
+var criticalPathComponentColumns = []string{
+	"total_request",
+	"address_translation",
+	"address_translation_tlb",
+	"at_to_l1v_top",
+	"data_access_total",
+	"l1_cache_handle",
+	"local_l2_cache",
+	"local_dram",
+	"network",
+	"remote_l2_cache",
+	"remote_dram",
+	"other_data_access",
+	"data_access_over_accounted",
+}
+
+type criticalPathBreakdown struct {
+	totalRequestNS          uint64
+	addressTranslationNS    uint64
+	addressTranslationTLBNS uint64
+	atToL1VTopNS            uint64
+	dataAccessTotalNS       uint64
+	l1CacheHandleNS         uint64
+	localL2CacheNS          uint64
+	localDRAMNS             uint64
+	networkNS               uint64
+	remoteL2CacheNS         uint64
+	remoteDRAMNS            uint64
+	otherDataAccessNS       uint64
+	dataAccessOverAccounted uint64
+	dataAccessAccountedNS   uint64
+}
+
+type criticalPathComponentAggregate struct {
+	paths       uint64
+	remotePaths uint64
+	sumNS       uint64
+	minNS       uint64
+	maxNS       uint64
+	valuesNS    []uint64
+}
+
+type criticalPathAggregate struct {
+	records        uint64
+	remoteRecords  uint64
+	totalRequestNS uint64
+	components     map[string]*criticalPathComponentAggregate
+}
+
+func newCriticalPathAggregate() criticalPathAggregate {
+	return criticalPathAggregate{
+		components: make(map[string]*criticalPathComponentAggregate),
+	}
+}
+
 type l1vPathHop struct {
 	parentReqID   string
 	parentCount   int
@@ -113,7 +180,6 @@ type specificDataAggregate struct {
 
 	latenciesNS     []uint64
 	totalLatencyNS  uint64
-	mshrWaitNS      uint64
 	crossReqNS      uint64
 	crossReturnNS   uint64
 	remoteServiceNS uint64
@@ -246,6 +312,38 @@ func RecordMemoryPathL1VDirStart(cacheName, pathID string, now sim.VTimeInSec) {
 	}
 	rec.l1vDirStartNS = timeToNS(now)
 	_ = cacheName
+}
+
+func RecordMemoryPathL1VDirStall(
+	cacheName string,
+	pathID string,
+	segment string,
+	start sim.VTimeInSec,
+	end sim.VTimeInSec,
+) {
+	globalMemoryPathStats.Lock()
+	defer globalMemoryPathStats.Unlock()
+
+	if !globalMemoryPathStats.collectingLocked() {
+		return
+	}
+	rec := globalMemoryPathStats.recordByOriginalLocked(pathID)
+	if rec == nil {
+		return
+	}
+	startNS := timeToNS(start)
+	endNS := timeToNS(end)
+	if endNS <= startNS {
+		return
+	}
+	globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
+		segment:       segment,
+		fromComponent: cacheName,
+		toComponent:   cacheName,
+		requestMsgID:  pathID,
+		startNS:       startNS,
+		endNS:         endNS,
+	})
 }
 
 func RecordMemoryPathL2TopReceive(
@@ -745,16 +843,6 @@ func RecordMemoryPathL1VBottomResponse(
 		startNS:       rec.l1vBottomResponseNS,
 		endNS:         rec.l1vBottomResponseNS,
 	})
-	if rec.l1vDirResultNS > 0 && rec.l1vBottomResponseNS >= rec.l1vDirResultNS {
-		globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
-			segment:       "l1v_mshr_wait",
-			fromComponent: cacheName,
-			toComponent:   cacheName,
-			startNS:       rec.l1vDirResultNS,
-			endNS:         rec.l1vBottomResponseNS,
-			notes:         "inclusive wait for lower-level response",
-		})
-	}
 }
 
 func RecordMemoryPathL1VMSHRWakeup(cacheName string, pathID string, now sim.VTimeInSec) {
@@ -873,12 +961,19 @@ func (s *memoryPathStats) noteCacheResultLocked(
 	case "l1v":
 		rec.l1vDirResultNS = nowNS
 		if rec.l1vDirStartNS > 0 && nowNS >= rec.l1vDirStartNS {
+			elapsed := nowNS - rec.l1vDirStartNS
+			stallNS := sumStages(rec, l1vDirStallStages)
+			activeNS := uint64(0)
+			if elapsed > stallNS {
+				activeNS = elapsed - stallNS
+			}
 			s.appendL1VPathHopLocked(rec, l1vPathHop{
 				segment:       "l1v_dir_lookup",
 				fromComponent: cacheName,
 				toComponent:   cacheName,
 				startNS:       rec.l1vDirStartNS,
-				endNS:         nowNS,
+				endNS:         rec.l1vDirStartNS + activeNS,
+				notes:         "active_only_excludes_dir_stalls",
 			})
 		}
 		if result == "mshr-hit" || result == "miss" {
@@ -1064,6 +1159,22 @@ func (s *memoryPathStats) openL1VPathStreamLocked() error {
 	return s.l1vSummaryCSV.Write(l1vPathSummaryHeader())
 }
 
+func (s *memoryPathStats) openCriticalPathStreamLocked() error {
+	path := s.prefix + "_critical_path_breakdown.csv"
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	s.cpFile = file
+	s.cpCSV = csv.NewWriter(file)
+	return s.cpCSV.Write(criticalPathBreakdownHeader())
+}
+
 func l1vPathSummaryHeader() []string {
 	header := []string{
 		"path_id", "sequence", "completion_time_ns", "access_type", "pid",
@@ -1097,7 +1208,12 @@ func (s *memoryPathStats) streamL1VPathRecordLocked(rec *memoryPathRecord) {
 		s.streamErr = err
 		return
 	}
+	if err := s.writeCriticalPathBreakdownRecordLocked(rec); err != nil {
+		s.streamErr = err
+		return
+	}
 	s.aggregateL1VPathRecordLocked(rec)
+	s.aggregateCriticalPathRecordLocked(rec)
 	if s.written%4096 == 0 {
 		s.l1vHopsCSV.Flush()
 		if err := s.l1vHopsCSV.Error(); err != nil && s.streamErr == nil {
@@ -1111,6 +1227,12 @@ func (s *memoryPathStats) streamL1VPathRecordLocked(rec *memoryPathRecord) {
 		s.l1vSummaryCSV.Flush()
 		if err := s.l1vSummaryCSV.Error(); err != nil && s.streamErr == nil {
 			s.streamErr = err
+		}
+		if s.cpCSV != nil {
+			s.cpCSV.Flush()
+			if err := s.cpCSV.Error(); err != nil && s.streamErr == nil {
+				s.streamErr = err
+			}
 		}
 	}
 }
@@ -1318,6 +1440,238 @@ func (s *memoryPathStats) dumpL1VPathStageSummaryLocked() error {
 	return csvWriter.Error()
 }
 
+func (s *memoryPathStats) dumpCriticalPathTraceLocked() error {
+	if s.streaming {
+		return s.dumpCriticalPathStageSummaryLocked(s.criticalPathAggregate)
+	}
+	records := s.selectedL1VPathRecordsLocked()
+	if err := s.dumpCriticalPathBreakdownLocked(records); err != nil {
+		return err
+	}
+	agg := newCriticalPathAggregate()
+	for _, rec := range records {
+		agg.addRecord(rec)
+	}
+	return s.dumpCriticalPathStageSummaryLocked(agg)
+}
+
+func criticalPathBreakdownHeader() []string {
+	return []string{
+		"path_id", "sequence", "completion_time_ns", "access_type", "pid",
+		"vaddr", "paddr", "page_paddr", "cacheline_addr", "bytes",
+		"requester_gpm", "owner_gpm", "hops", "is_remote", "route",
+		"final_source", "l1v_result", "l2_result", "parent_count",
+		"total_request_ns", "address_translation_ns",
+		"address_translation_tlb_ns", "at_to_l1v_top_ns",
+		"data_access_total_ns", "data_access_accounted_ns",
+		"l1_cache_handle_ns", "local_l2_cache_ns", "local_dram_ns",
+		"network_ns", "remote_l2_cache_ns", "remote_dram_ns",
+		"other_data_access_ns", "data_access_over_accounted_ns",
+		"l1v_tlb_latency_ns", "l2tlb_latency_ns",
+	}
+}
+
+func (s *memoryPathStats) dumpCriticalPathBreakdownLocked(
+	records []*memoryPathRecord,
+) error {
+	path := s.prefix + "_critical_path_breakdown.csv"
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	csvWriter := csv.NewWriter(file)
+	defer csvWriter.Flush()
+
+	if err := csvWriter.Write(criticalPathBreakdownHeader()); err != nil {
+		return err
+	}
+	for _, rec := range records {
+		row := s.criticalPathBreakdownRow(rec)
+		if err := csvWriter.Write(row); err != nil {
+			return err
+		}
+	}
+	return csvWriter.Error()
+}
+
+func (s *memoryPathStats) writeCriticalPathBreakdownRecordLocked(
+	rec *memoryPathRecord,
+) error {
+	if s.cpCSV == nil {
+		return nil
+	}
+	return s.cpCSV.Write(s.criticalPathBreakdownRow(rec))
+}
+
+func (s *memoryPathStats) criticalPathBreakdownRow(
+	rec *memoryPathRecord,
+) []string {
+	breakdown := criticalPathBreakdownForRecord(rec)
+	return []string{
+		rec.originalReqID,
+		strconv.FormatUint(s.outputSequence(rec), 10),
+		strconv.FormatUint(rec.completionTimeNS, 10),
+		rec.accessType,
+		strconv.FormatUint(rec.pid, 10),
+		strconv.FormatUint(rec.vaddr, 10),
+		strconv.FormatUint(rec.paddr, 10),
+		strconv.FormatUint(pageBaseForLog(rec.paddr, s.log2Page), 10),
+		strconv.FormatUint(cachelineAddr(rec), 10),
+		strconv.FormatUint(rec.bytes, 10),
+		strconv.Itoa(rec.requesterGPM),
+		strconv.Itoa(rec.providerGPM),
+		strconv.Itoa(rec.hops),
+		strconv.FormatBool(rec.isRemote),
+		routeForRecord(rec),
+		finalSourceForRecord(rec),
+		rec.l1vCacheResult,
+		rec.l2CacheResult,
+		strconv.Itoa(rec.parentCount),
+		strconv.FormatUint(breakdown.totalRequestNS, 10),
+		strconv.FormatUint(breakdown.addressTranslationNS, 10),
+		strconv.FormatUint(breakdown.addressTranslationTLBNS, 10),
+		strconv.FormatUint(breakdown.atToL1VTopNS, 10),
+		strconv.FormatUint(breakdown.dataAccessTotalNS, 10),
+		strconv.FormatUint(breakdown.dataAccessAccountedNS, 10),
+		strconv.FormatUint(breakdown.l1CacheHandleNS, 10),
+		strconv.FormatUint(breakdown.localL2CacheNS, 10),
+		strconv.FormatUint(breakdown.localDRAMNS, 10),
+		strconv.FormatUint(breakdown.networkNS, 10),
+		strconv.FormatUint(breakdown.remoteL2CacheNS, 10),
+		strconv.FormatUint(breakdown.remoteDRAMNS, 10),
+		strconv.FormatUint(breakdown.otherDataAccessNS, 10),
+		strconv.FormatUint(breakdown.dataAccessOverAccounted, 10),
+		strconv.FormatUint(rec.l1vTLBLatencyNS, 10),
+		strconv.FormatUint(rec.l2TLBLatencyNS, 10),
+	}
+}
+
+func (s *memoryPathStats) aggregateCriticalPathRecordLocked(
+	rec *memoryPathRecord,
+) {
+	s.criticalPathAggregate.addRecord(rec)
+}
+
+func (a *criticalPathAggregate) addRecord(rec *memoryPathRecord) {
+	if rec == nil {
+		return
+	}
+	breakdown := criticalPathBreakdownForRecord(rec)
+	a.records++
+	if rec.isRemote {
+		a.remoteRecords++
+	}
+	a.totalRequestNS += breakdown.totalRequestNS
+	values := criticalPathComponentValues(breakdown)
+	for _, component := range criticalPathComponentColumns {
+		value := values[component]
+		if value == 0 && component != "total_request" {
+			continue
+		}
+		agg := a.components[component]
+		if agg == nil {
+			agg = &criticalPathComponentAggregate{}
+			a.components[component] = agg
+		}
+		agg.paths++
+		if rec.isRemote {
+			agg.remotePaths++
+		}
+		agg.sumNS += value
+		if agg.minNS == 0 || value < agg.minNS {
+			agg.minNS = value
+		}
+		if value > agg.maxNS {
+			agg.maxNS = value
+		}
+		agg.valuesNS = append(agg.valuesNS, value)
+	}
+}
+
+func (s *memoryPathStats) dumpCriticalPathStageSummaryLocked(
+	agg criticalPathAggregate,
+) error {
+	path := s.prefix + "_critical_path_stage_summary.csv"
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	csvWriter := csv.NewWriter(file)
+	defer csvWriter.Flush()
+
+	if err := csvWriter.Write([]string{
+		"component", "paths", "remote_paths", "avg_latency_ns",
+		"p50_latency_ns", "p90_latency_ns", "p99_latency_ns",
+		"min_latency_ns", "max_latency_ns", "total_latency_ns",
+		"avg_fraction_of_total_request",
+		"total_fraction_of_total_request",
+	}); err != nil {
+		return err
+	}
+
+	components := append([]string{}, criticalPathComponentColumns...)
+	for component := range agg.components {
+		if !stringInSlice(component, components) {
+			components = append(components, component)
+		}
+	}
+	for _, component := range components {
+		componentAgg := agg.components[component]
+		if componentAgg == nil || componentAgg.paths == 0 {
+			continue
+		}
+		sort.Slice(componentAgg.valuesNS, func(i, j int) bool {
+			return componentAgg.valuesNS[i] < componentAgg.valuesNS[j]
+		})
+		avgFraction := 0.0
+		if agg.records > 0 && componentAgg.paths > 0 && agg.totalRequestNS > 0 {
+			avgComponent := float64(componentAgg.sumNS) /
+				float64(componentAgg.paths)
+			avgRequest := float64(agg.totalRequestNS) / float64(agg.records)
+			if avgRequest > 0 {
+				avgFraction = avgComponent / avgRequest
+			}
+		}
+		totalFraction := 0.0
+		if agg.totalRequestNS > 0 {
+			totalFraction = float64(componentAgg.sumNS) /
+				float64(agg.totalRequestNS)
+		}
+		row := []string{
+			component,
+			strconv.FormatUint(componentAgg.paths, 10),
+			strconv.FormatUint(componentAgg.remotePaths, 10),
+			strconv.FormatUint(avg(componentAgg.sumNS, componentAgg.paths), 10),
+			strconv.FormatUint(percentileUint64(componentAgg.valuesNS, 0.50), 10),
+			strconv.FormatUint(percentileUint64(componentAgg.valuesNS, 0.90), 10),
+			strconv.FormatUint(percentileUint64(componentAgg.valuesNS, 0.99), 10),
+			strconv.FormatUint(componentAgg.minNS, 10),
+			strconv.FormatUint(componentAgg.maxNS, 10),
+			strconv.FormatUint(componentAgg.sumNS, 10),
+			fmt.Sprintf("%.6f", avgFraction),
+			fmt.Sprintf("%.6f", totalFraction),
+		}
+		if err := csvWriter.Write(row); err != nil {
+			return err
+		}
+	}
+	return csvWriter.Error()
+}
+
 func (s *memoryPathStats) dumpSpecificDataSummariesLocked() error {
 	records := s.selectedL1VPathRecordsLocked()
 	if err := s.dumpSpecificDataSummaryLocked(
@@ -1359,8 +1713,8 @@ func (s *memoryPathStats) dumpSpecificDataSummaryLocked(
 		"bytes", "parent_requests", "avg_parent_count",
 		"avg_total_l1v_path_latency_ns", "p50_total_l1v_path_latency_ns",
 		"p90_total_l1v_path_latency_ns", "p99_total_l1v_path_latency_ns",
-		"avg_l1v_mshr_wait_ns", "avg_cross_gpu_request_ns",
-		"avg_cross_gpu_return_ns", "avg_remote_l2_dram_service_ns",
+		"avg_cross_gpu_request_ns", "avg_cross_gpu_return_ns",
+		"avg_remote_l2_dram_service_ns",
 		"avg_hops", "requester_gpu_count", "owner_gpu_count",
 		"requester_gpus", "owner_gpus", "top_requester_gpm",
 		"top_requester_paths", "top_owner_gpm", "top_owner_paths",
@@ -1452,7 +1806,6 @@ func (a *specificDataAggregate) addRecord(rec *memoryPathRecord) {
 	}
 	a.totalLatencyNS += rec.l1vCacheLatencyNS
 	a.latenciesNS = append(a.latenciesNS, rec.l1vCacheLatencyNS)
-	a.mshrWaitNS += rec.l1vPathStageSumNS["l1v_mshr_wait"]
 	a.crossReqNS += l1vPathCrossGPURequestNS(rec)
 	a.crossReturnNS += l1vPathCrossGPUReturnNS(rec)
 	a.remoteServiceNS += l1vPathRemoteServiceNS(rec)
@@ -1505,7 +1858,6 @@ func (a *specificDataAggregate) csvRow() []string {
 		strconv.FormatUint(percentileUint64(a.latenciesNS, 0.50), 10),
 		strconv.FormatUint(percentileUint64(a.latenciesNS, 0.90), 10),
 		strconv.FormatUint(percentileUint64(a.latenciesNS, 0.99), 10),
-		strconv.FormatUint(avg(a.mshrWaitNS, a.paths), 10),
 		strconv.FormatUint(avg(a.crossReqNS, a.paths), 10),
 		strconv.FormatUint(avg(a.crossReturnNS, a.paths), 10),
 		strconv.FormatUint(avg(a.remoteServiceNS, a.paths), 10),
@@ -1564,6 +1916,143 @@ func l1vPathRemoteServiceNS(rec *memoryPathRecord) uint64 {
 		sum += rec.l1vPathStageSumNS[stage]
 	}
 	return sum
+}
+
+func criticalPathBreakdownForRecord(rec *memoryPathRecord) criticalPathBreakdown {
+	if rec == nil {
+		return criticalPathBreakdown{}
+	}
+
+	atToL1V := rec.l1vPathStageSumNS["at_to_l1v_top"]
+	translationTLB := rec.l1vTLBLatencyNS
+	if translationTLB == 0 || rec.l2TLBLatencyNS > translationTLB {
+		translationTLB = rec.l2TLBLatencyNS
+	}
+	addressTranslation := translationTLB + atToL1V
+
+	l1CacheHandle := sumStages(rec, []string{
+		"l1v_coalesce_wait",
+		"l1v_dir_lookup",
+		"l1v_dir_stall_post_pipeline_buffer",
+		"l1v_dir_stall_victim_locked",
+		"l1v_dir_stall_mshr_full",
+		"l1v_dir_stall_bottom_blocked",
+		"l1v_dir_stall_bank_buffer_full",
+		"l1v_bank_hit",
+		"l1v_bottom_response_parse",
+		"l1v_mshr_wakeup",
+		"l1v_fill_parent_done",
+	})
+
+	l2Cache := sumStages(rec, []string{
+		"l2_top_to_dir",
+		"l2_dir_lookup",
+		"l2_bank_hit",
+		"l2_mshr_wait",
+		"l2_writebuffer_wait",
+		"l2_fill_and_response",
+	})
+	dram := sumStages(rec, []string{
+		"l2_bottom_send_to_dram",
+		"dram_queue_and_service",
+		"dram_to_l2_response",
+	})
+
+	var localL2, localDRAM, remoteL2, remoteDRAM, network uint64
+	if rec.isRemote {
+		remoteL2 = l2Cache
+		remoteDRAM = dram
+		network = sumStages(rec, []string{
+			"l1v_bottom_send_to_local_rdma",
+			"local_rdma_request_output_wait",
+			"remote_rdma_request_output_wait",
+			"remote_rdma_to_remote_l2",
+			"remote_l2_to_remote_rdma_response",
+			"remote_rdma_response_output_wait",
+			"local_rdma_response_output_wait",
+			"local_rdma_to_l1v_response",
+		})
+		network += criticalPathCrossGPURequestNS(rec)
+		network += criticalPathCrossGPUReturnNS(rec)
+	} else {
+		l1CacheHandle += sumStages(rec, []string{
+			"l1v_bottom_send_to_local_l2",
+		})
+		localL2 = l2Cache
+		localDRAM = dram
+	}
+
+	dataAccessTotal := rec.l1vCacheLatencyNS
+	accounted := l1CacheHandle + localL2 + localDRAM +
+		network + remoteL2 + remoteDRAM
+	var other, over uint64
+	if dataAccessTotal > accounted {
+		other = dataAccessTotal - accounted
+	} else if accounted > dataAccessTotal {
+		over = accounted - dataAccessTotal
+	}
+
+	return criticalPathBreakdown{
+		totalRequestNS:          addressTranslation + dataAccessTotal,
+		addressTranslationNS:    addressTranslation,
+		addressTranslationTLBNS: translationTLB,
+		atToL1VTopNS:            atToL1V,
+		dataAccessTotalNS:       dataAccessTotal,
+		l1CacheHandleNS:         l1CacheHandle,
+		localL2CacheNS:          localL2,
+		localDRAMNS:             localDRAM,
+		networkNS:               network,
+		remoteL2CacheNS:         remoteL2,
+		remoteDRAMNS:            remoteDRAM,
+		otherDataAccessNS:       other,
+		dataAccessOverAccounted: over,
+		dataAccessAccountedNS:   accounted,
+	}
+}
+
+func sumStages(rec *memoryPathRecord, stages []string) uint64 {
+	if rec == nil {
+		return 0
+	}
+	var sum uint64
+	for _, stage := range stages {
+		sum += rec.l1vPathStageSumNS[stage]
+	}
+	return sum
+}
+
+func criticalPathCrossGPURequestNS(rec *memoryPathRecord) uint64 {
+	coarse := rec.l1vPathStageSumNS["local_rdma_to_remote_rdma_request"]
+	if coarse > 0 {
+		return coarse
+	}
+	return sumStagePrefix(rec, "cross_gpu_request_")
+}
+
+func criticalPathCrossGPUReturnNS(rec *memoryPathRecord) uint64 {
+	coarse := rec.l1vPathStageSumNS["remote_rdma_to_local_rdma_response"]
+	if coarse > 0 {
+		return coarse
+	}
+	return sumStagePrefix(rec, "cross_gpu_return_")
+}
+
+func criticalPathComponentValues(b criticalPathBreakdown) map[string]uint64 {
+	return map[string]uint64{
+		"total_request":              b.totalRequestNS,
+		"address_translation":        b.addressTranslationNS,
+		"address_translation_tlb":    b.addressTranslationTLBNS,
+		"at_to_l1v_top":              b.atToL1VTopNS,
+		"data_access_total":          b.dataAccessTotalNS,
+		"l1_cache_handle":            b.l1CacheHandleNS,
+		"local_l2_cache":             b.localL2CacheNS,
+		"local_dram":                 b.localDRAMNS,
+		"network":                    b.networkNS,
+		"remote_l2_cache":            b.remoteL2CacheNS,
+		"remote_dram":                b.remoteDRAMNS,
+		"other_data_access":          b.otherDataAccessNS,
+		"data_access_over_accounted": b.dataAccessOverAccounted,
+	}
 }
 
 func sumStagePrefix(rec *memoryPathRecord, prefix string) uint64 {

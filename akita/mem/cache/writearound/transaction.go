@@ -14,6 +14,7 @@ const (
 	bankActionReadHit
 	bankActionWrite
 	bankActionWriteFetched
+	bankActionRemoteDataHit
 )
 
 type transaction struct {
@@ -31,11 +32,19 @@ type transaction struct {
 	block                 *cache.Block
 	data                  []byte
 	writeFetchedDirtyMask []bool
+	remoteDataHitData     []byte
 
-	fetchAndWrite bool
-	done          bool
-	startTime     sim.VTimeInSec
-	remoteBottom  bool
+	fetchAndWrite  bool
+	done           bool
+	startTime      sim.VTimeInSec
+	remoteBottom   bool
+	remoteDataFill bool
+
+	l1vDirStart             sim.VTimeInSec
+	l1vDirFirstAttempt      sim.VTimeInSec
+	l1vDirFirstAttemptValid bool
+	l1vDirStallReason       string
+	l1vDirStallStart        sim.VTimeInSec
 }
 
 func (t *transaction) Address() uint64 {

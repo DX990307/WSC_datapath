@@ -24,7 +24,7 @@ type Benchmark struct {
 
 func (b *Benchmark) configFWT() {
 	b.subBenchmarkFWT = fwt.NewBenchmark(b.driver)
-	b.subBenchmarkFWT.Length = 65536 * 2
+	b.subBenchmarkFWT.Length = 1 << 27
 
 	GPU := 49
 	b.subBenchmarkFWT.SelectGPU([]int{GPU})
@@ -32,9 +32,7 @@ func (b *Benchmark) configFWT() {
 
 func (b *Benchmark) configMT() {
 	b.subBenchmarkMT = mt.NewBenchmark(b.driver)
-	b.subBenchmarkMT.Width = 4096
-	// matrixtranspose.Width = 4096 / 2
-	// benchmark = matrixtranspose
+	b.subBenchmarkMT.Width = 8192
 
 	GPU := 50
 	b.subBenchmarkMT.SelectGPU([]int{GPU})

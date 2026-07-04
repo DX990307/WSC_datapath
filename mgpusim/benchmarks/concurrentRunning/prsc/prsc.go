@@ -24,8 +24,8 @@ type Benchmark struct {
 
 func (b *Benchmark) configPR() {
 	b.subBenchmarkPR = pr.NewBenchmark(b.driver)
-	b.subBenchmarkPR.NumNodes = 262144 / 32
-	b.subBenchmarkPR.NumConnections = 1048576 / 32
+	b.subBenchmarkPR.NumNodes = 1 << 22
+	b.subBenchmarkPR.NumConnections = 50_000_000
 	b.subBenchmarkPR.MaxIterations = 1
 
 	GPU := 49
@@ -34,8 +34,8 @@ func (b *Benchmark) configPR() {
 
 func (b *Benchmark) configSC() {
 	b.subBenchmarkSC = sc.NewBenchmark(b.driver)
-	b.subBenchmarkSC.Height = 2048 / 2
-	b.subBenchmarkSC.Width = 2048
+	b.subBenchmarkSC.Height = 8192
+	b.subBenchmarkSC.Width = 8192
 	b.subBenchmarkSC.SetMaskSize(3)
 
 	GPU := 50

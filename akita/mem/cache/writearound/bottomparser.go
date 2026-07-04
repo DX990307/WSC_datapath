@@ -4,6 +4,7 @@ import (
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
+	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 )
@@ -23,6 +24,8 @@ func (p *bottomParser) Tick(now sim.VTimeInSec) bool {
 		return p.processDoneRsp(now, rsp)
 	case *mem.DataReadyRsp:
 		return p.processDataReady(now, rsp)
+	case *mem.RemoteDataFill:
+		return p.processRemoteDataFill(now, rsp)
 	default:
 		panic("cannot process response")
 	}
@@ -73,6 +76,10 @@ func (p *bottomParser) processDataReady(
 		return true
 	}
 	pid := trans.readToBottom.PID
+	if trans.remoteDataFill {
+		return p.processRemoteDataReady(now, dr, trans, pid)
+	}
+
 	bankBuf := p.getBankBuf(trans.block)
 	if !bankBuf.CanPush() {
 		return false
@@ -107,6 +114,55 @@ func (p *bottomParser) processDataReady(
 
 	tracing.TraceReqFinalize(trans.readToBottom, p.cache)
 
+	return true
+}
+
+func (p *bottomParser) processRemoteDataReady(
+	now sim.VTimeInSec,
+	dr *mem.DataReadyRsp,
+	trans *transaction,
+	pid vm.PID,
+) bool {
+	addr := trans.Address()
+	cachelineID := (addr >> p.cache.log2BlockSize) << p.cache.log2BlockSize
+	data := append([]byte(nil), dr.Data...)
+	dirtyMask := make([]bool, 1<<p.cache.log2BlockSize)
+	mshrEntry := p.cache.mshr.Query(pid, cachelineID)
+	memtrace.RecordMemoryPathL1VBottomResponse(
+		p.cache.Name(),
+		trans.id,
+		dr.Meta().ID,
+		dr.Meta().SendTime,
+		now,
+		dr.Meta().Src,
+		dr.Meta().Dst,
+	)
+	p.mergeMSHRData(mshrEntry, data, dirtyMask)
+	p.cache.remoteDataCache.fillDemand(pid, cachelineID, data)
+	p.finalizeMSHRTrans(mshrEntry, data, now)
+	p.cache.mshr.Remove(pid, cachelineID)
+
+	p.removeTransaction(trans)
+	p.cache.bottomPort.Retrieve(now)
+	p.cache.releaseBottomTransaction(trans)
+
+	tracing.TraceReqFinalize(trans.readToBottom, p.cache)
+	return true
+}
+
+func (p *bottomParser) processRemoteDataFill(
+	now sim.VTimeInSec,
+	fill *mem.RemoteDataFill,
+) bool {
+	blockSize := uint64(1 << p.cache.log2BlockSize)
+	cachelineID := fill.Address / blockSize * blockSize
+	if p.cache.remoteDataCacheEnabled() &&
+		uint64(len(fill.Data)) == blockSize {
+		p.cache.remoteDataCache.fillPrefetch(fill.PID, cachelineID, fill.Data)
+	} else if p.cache.remoteDataCache != nil {
+		p.cache.remoteDataCache.stats.PrefetchFillDrops++
+	}
+	p.cache.bottomPort.Retrieve(now)
 	return true
 }
 

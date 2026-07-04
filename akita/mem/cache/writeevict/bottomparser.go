@@ -22,6 +22,9 @@ func (p *bottomParser) Tick(now sim.VTimeInSec) bool {
 		return p.processDoneRsp(now, rsp)
 	case *mem.DataReadyRsp:
 		return p.processDataReady(now, rsp)
+	case *mem.RemoteDataFill:
+		p.cache.bottomPort.Retrieve(now)
+		return true
 	default:
 		panic("cannot process response")
 	}

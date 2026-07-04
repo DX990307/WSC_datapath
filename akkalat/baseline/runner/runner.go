@@ -243,21 +243,33 @@ func (r *Runner) buildTimingPlatform() {
 		WithEndpointBufferSize(*endpointBufferSizeFlag).
 		WithL1VRemoteMaxInflight(*l1vRemoteMaxInflightFlag).
 		WithL1VMSHREntries(*l1vMSHREntriesFlag).
+		WithL1VTLBMSHREntries(*l1vTLBMSHREntriesFlag).
+		WithL1VReqPerCycle(*l1vReqPerCycleFlag).
 		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag).
-		WithL1VBottomReorder(
-			*l1vBottomReorderPolicyFlag,
-			*l1vBottomReorderWindowFlag,
-			*l1vBottomReorderMaxAgeNSFlag,
-		).
-		WithL2DirBatch(*l2DirBatchWindowFlag).
-		WithL2DramAccessUnitCoalescing(*l2DramAccessUnitCoalesceFlag).
 		WithForceLocalDataAccess(*forceLocalDataAccessFlag).
-		WithM2RDMABatch(
-			*m2RDMABatchFlag,
-			*m2RDMAMaxBatchLinesFlag,
-			*m2RDMAMaxWaitNSFlag,
-			*m2RDMABatchTableEntriesFlag,
-		)
+		WithM1LocalBatchHelpers(
+			*m1L2HelperEnableFlag,
+			*m1DRAMHelperEnableFlag,
+			*m1CacheBatchEntriesFlag,
+			*m1CacheBatchLinesFlag,
+			*m1CacheBatchWaitNSFlag,
+			*m1DRAMBatchEntriesFlag,
+			*m1DRAMBatchLinesFlag,
+			*m1DRAMBatchWaitNSFlag).
+		WithM2BitmapBatch(
+			*m2RDMABatchEnableFlag,
+			*m2AUPrefetchEnableFlag,
+			*m2MaxBatchLinesFlag,
+			*m2MaxWaitNSFlag,
+			*m2BatchTableEntriesFlag).
+		WithM3RemoteDataCache(
+			*m3L1RemoteCacheEnableFlag,
+			*m3L1RemoteCacheEntriesFlag).
+		WithM3OwnerFairQueue(
+			*m3OwnerFairEnableFlag,
+			*m3FairQuantumLinesFlag,
+			*m3MaxConsecutiveFlag,
+			*m3HardAgeLimitNSFlag)
 
 	if *sharingTracing {
 		traceWriter, err := newPageSharingTraceWriter(

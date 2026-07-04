@@ -77,6 +77,8 @@ func (s *bankStage) finalizeTrans(now sim.VTimeInSec) bool {
 		return s.finalizeWriteTrans(now, trans)
 	case bankActionWriteFetched:
 		return s.finalizeWriteFetchedTrans(now, trans)
+	case bankActionRemoteDataHit:
+		return s.finalizeRemoteDataHitTrans(now, trans)
 	default:
 		panic("cannot handle trans bank action")
 	}
@@ -98,6 +100,25 @@ func (s *bankStage) finalizeReadHitTrans(
 	for _, t := range trans.preCoalesceTransactions {
 		offset := t.read.Address - block.Tag
 		t.data = data[offset : offset+t.read.AccessByteSize]
+		t.done = true
+	}
+
+	s.removeTransaction(trans)
+	s.postPipelineBuf.Pop()
+
+	recordMemoryPathCacheComplete(s.cache.Name(), trans, now)
+	tracing.EndTask(trans.id, s.cache)
+	return true
+}
+
+func (s *bankStage) finalizeRemoteDataHitTrans(
+	now sim.VTimeInSec,
+	trans *transaction,
+) bool {
+	base := (trans.Address() >> s.cache.log2BlockSize) << s.cache.log2BlockSize
+	for _, t := range trans.preCoalesceTransactions {
+		offset := t.read.Address - base
+		t.data = trans.remoteDataHitData[offset : offset+t.read.AccessByteSize]
 		t.done = true
 	}
 

@@ -27,6 +27,16 @@ import (
 	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 )
 
+const (
+	defaultL2CacheSize           = 1 * mem.MB
+	defaultL2WayAssociativity    = 4
+	defaultL2MSHREntries         = 16
+	defaultL2ReqPerCycle         = 4
+	defaultL2WriteBufferCapacity = 256
+	defaultL2MaxInflightFetch    = 32
+	defaultL2MaxInflightEviction = 32
+)
+
 // R9NanoGPUBuilder can build R9 Nano GPUs.
 type R9NanoGPUBuilder struct {
 	engine                         sim.Engine
@@ -43,17 +53,29 @@ type R9NanoGPUBuilder struct {
 	log2MemoryBankInterleavingSize uint64
 	l1vRemoteMaxInflight           int
 	l1vMSHREntries                 int
+	l1vTLBMSHREntries              int
+	l1vReqPerCycle                 int
 	l1vMaxConcurrentTrans          int
-	l1vBottomReorderPolicy         string
-	l1vBottomReorderWindow         int
-	l1vBottomReorderMaxAgeNS       uint64
-	l2DirBatchWindow               int
-	l2DramAccessUnitCoalesce       bool
 	forceLocalDataAccess           bool
-	m2RDMABatchEnabled             bool
-	m2RDMAMaxBatchLines            int
-	m2RDMAMaxWaitNS                uint64
-	m2RDMABatchTableEntries        int
+	m1CacheHelperEnabled           bool
+	m1DRAMHelperEnabled            bool
+	m1CacheBatchEntries            int
+	m1CacheBatchLines              int
+	m1CacheBatchWaitNS             uint64
+	m1DRAMBatchEntries             int
+	m1DRAMBatchLines               int
+	m1DRAMBatchWaitNS              uint64
+	m2Enabled                      bool
+	m2AUPrefetchEnabled            bool
+	m2MaxBatchLines                int
+	m2MaxWaitNS                    uint64
+	m2BatchTableEntries            int
+	m3Enabled                      bool
+	m3RemoteDataCacheEnabled       bool
+	m3RemoteDataCacheEntries       int
+	m3FairQuantumLines             int
+	m3MaxConsecutive               int
+	m3HardAgeNS                    uint64
 
 	enableISADebugging bool
 	enableMemTracing   bool
@@ -117,14 +139,25 @@ func MakeR9NanoGPUBuilder() R9NanoGPUBuilder {
 		log2CacheLineSize:              6,
 		log2PageSize:                   12,
 		log2MemoryBankInterleavingSize: 12,
-		l2CacheSize:                    4 * mem.MB,
+		l2CacheSize:                    defaultL2CacheSize,
 		dramSize:                       8 * mem.GB,
 		l1vMSHREntries:                 160,
+		l1vTLBMSHREntries:              160,
+		l1vReqPerCycle:                 32,
 		l1vMaxConcurrentTrans:          160,
-		l1vBottomReorderPolicy:         "none",
-		m2RDMAMaxBatchLines:            8,
-		m2RDMAMaxWaitNS:                25,
-		m2RDMABatchTableEntries:        32,
+		m1CacheBatchEntries:            16,
+		m1CacheBatchLines:              4,
+		m1CacheBatchWaitNS:             25,
+		m1DRAMBatchEntries:             16,
+		m1DRAMBatchLines:               2,
+		m1DRAMBatchWaitNS:              25,
+		m2MaxBatchLines:                8,
+		m2MaxWaitNS:                    50,
+		m2BatchTableEntries:            64,
+		m3RemoteDataCacheEntries:       128,
+		m3FairQuantumLines:             8,
+		m3MaxConsecutive:               2,
+		m3HardAgeNS:                    500,
 	}
 	return b
 }
@@ -265,38 +298,27 @@ func (b R9NanoGPUBuilder) WithL1VMSHREntries(n int) R9NanoGPUBuilder {
 	return b
 }
 
+// WithL1VTLBMSHREntries sets the number of L1V TLB MSHR entries.
+func (b R9NanoGPUBuilder) WithL1VTLBMSHREntries(n int) R9NanoGPUBuilder {
+	if n > 0 {
+		b.l1vTLBMSHREntries = n
+	}
+	return b
+}
+
+// WithL1VReqPerCycle sets the L1V request-path width.
+func (b R9NanoGPUBuilder) WithL1VReqPerCycle(n int) R9NanoGPUBuilder {
+	if n > 0 {
+		b.l1vReqPerCycle = n
+	}
+	return b
+}
+
 // WithL1VMaxConcurrentTrans sets the L1V cache concurrency window.
 func (b R9NanoGPUBuilder) WithL1VMaxConcurrentTrans(n int) R9NanoGPUBuilder {
 	if n > 0 {
 		b.l1vMaxConcurrentTrans = n
 	}
-	return b
-}
-
-// WithL1VBottomReorder configures an optional post-L1V bottom request reorder
-// queue used by M1 experiments.
-func (b R9NanoGPUBuilder) WithL1VBottomReorder(
-	policy string,
-	window int,
-	maxAgeNS uint64,
-) R9NanoGPUBuilder {
-	b.l1vBottomReorderPolicy = policy
-	b.l1vBottomReorderWindow = window
-	b.l1vBottomReorderMaxAgeNS = maxAgeNS
-	return b
-}
-
-// WithL2DirBatch configures same-set directory batching in the L2 caches.
-func (b R9NanoGPUBuilder) WithL2DirBatch(window int) R9NanoGPUBuilder {
-	b.l2DirBatchWindow = window
-	return b
-}
-
-// WithL2DramAccessUnitCoalescing configures DRAM-access-unit fill coalescing.
-func (b R9NanoGPUBuilder) WithL2DramAccessUnitCoalescing(
-	enable bool,
-) R9NanoGPUBuilder {
-	b.l2DramAccessUnitCoalesce = enable
 	return b
 }
 
@@ -310,17 +332,91 @@ func (b R9NanoGPUBuilder) WithForceLocalDataAccess(enable bool) R9NanoGPUBuilder
 	return b
 }
 
-// WithM2RDMABatch configures requester-side RDMA read batching.
-func (b R9NanoGPUBuilder) WithM2RDMABatch(
+// WithM1LocalBatchHelpers configures local L2/DRAM batch helpers.
+func (b R9NanoGPUBuilder) WithM1LocalBatchHelpers(
+	cacheEnable bool,
+	dramEnable bool,
+	cacheEntries int,
+	cacheLines int,
+	cacheWaitNS uint64,
+	dramEntries int,
+	dramLines int,
+	dramWaitNS uint64,
+) R9NanoGPUBuilder {
+	b.m1CacheHelperEnabled = cacheEnable
+	b.m1DRAMHelperEnabled = dramEnable
+	if cacheEntries > 0 {
+		b.m1CacheBatchEntries = cacheEntries
+	}
+	if cacheLines > 0 {
+		b.m1CacheBatchLines = cacheLines
+	}
+	if cacheWaitNS > 0 {
+		b.m1CacheBatchWaitNS = cacheWaitNS
+	}
+	if dramEntries > 0 {
+		b.m1DRAMBatchEntries = dramEntries
+	}
+	if dramLines > 0 {
+		b.m1DRAMBatchLines = dramLines
+	}
+	if dramWaitNS > 0 {
+		b.m1DRAMBatchWaitNS = dramWaitNS
+	}
+	return b
+}
+
+// WithM2BitmapBatch configures requester-side RDMA bitmap batching.
+func (b R9NanoGPUBuilder) WithM2BitmapBatch(
 	enable bool,
+	auPrefetchEnable bool,
 	maxBatchLines int,
 	maxWaitNS uint64,
 	batchTableEntries int,
 ) R9NanoGPUBuilder {
-	b.m2RDMABatchEnabled = enable
-	b.m2RDMAMaxBatchLines = maxBatchLines
-	b.m2RDMAMaxWaitNS = maxWaitNS
-	b.m2RDMABatchTableEntries = batchTableEntries
+	b.m2Enabled = enable
+	b.m2AUPrefetchEnabled = auPrefetchEnable
+	if maxBatchLines > 0 {
+		b.m2MaxBatchLines = maxBatchLines
+	}
+	if maxWaitNS > 0 {
+		b.m2MaxWaitNS = maxWaitNS
+	}
+	if batchTableEntries > 0 {
+		b.m2BatchTableEntries = batchTableEntries
+	}
+	return b
+}
+
+// WithM3RemoteDataCache configures the L1V remote-only data area.
+func (b R9NanoGPUBuilder) WithM3RemoteDataCache(
+	enable bool,
+	entries int,
+) R9NanoGPUBuilder {
+	b.m3RemoteDataCacheEnabled = enable
+	if entries > 0 {
+		b.m3RemoteDataCacheEntries = entries
+	}
+	return b
+}
+
+// WithM3OwnerFairQueue configures owner-side per-requester fair service.
+func (b R9NanoGPUBuilder) WithM3OwnerFairQueue(
+	enable bool,
+	fairQuantumLines int,
+	maxConsecutive int,
+	hardAgeNS uint64,
+) R9NanoGPUBuilder {
+	b.m3Enabled = enable
+	if fairQuantumLines > 0 {
+		b.m3FairQuantumLines = fairQuantumLines
+	}
+	if maxConsecutive > 0 {
+		b.m3MaxConsecutive = maxConsecutive
+	}
+	if hardAgeNS > 0 {
+		b.m3HardAgeNS = hardAgeNS
+	}
 	return b
 }
 
@@ -658,12 +754,12 @@ func (b *R9NanoGPUBuilder) buildSAs() {
 		withLog2PageSize(b.log2PageSize).
 		withL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
 		withL1VMSHREntries(b.l1vMSHREntries).
+		withL1VTLBMSHREntries(b.l1vTLBMSHREntries).
+		withL1VReqPerCycle(b.l1vReqPerCycle).
 		withL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
-		withL1VBottomReorder(
-			b.l1vBottomReorderPolicy,
-			b.l1vBottomReorderWindow,
-			b.l1vBottomReorderMaxAgeNS,
-		).
+		withM3RemoteDataCache(
+			b.m3RemoteDataCacheEnabled,
+			b.m3RemoteDataCacheEntries).
 		withNumCU(b.numCUPerShaderArray)
 
 	if b.enableISADebugging {
@@ -689,20 +785,29 @@ func (b *R9NanoGPUBuilder) buildSAs() {
 
 func (b *R9NanoGPUBuilder) buildL2Caches() {
 	byteSize := b.l2CacheSize / uint64(b.numMemoryBank)
-	_, _, _, _, _, dramBusWidth, _ := b.dramGeometry()
 	l2Builder := writeback.MakeBuilder().
 		WithEngine(b.engine).
 		WithFreq(b.freq).
 		WithLog2BlockSize(b.log2CacheLineSize).
-		WithWayAssociativity(16).
+		WithWayAssociativity(defaultL2WayAssociativity).
 		WithByteSize(byteSize).
-		WithNumMSHREntry(64).
-		WithNumReqPerCycle(16).
-		WithL2DirBatch(b.l2DirBatchWindow).
-		WithL2DramAccessUnitCoalescing(
-			b.l2DramAccessUnitCoalesce,
-			uint64(dramBusWidth/8*4),
-		)
+		WithNumMSHREntry(defaultL2MSHREntries).
+		WithNumReqPerCycle(defaultL2ReqPerCycle).
+		WithWriteBufferSize(defaultL2WriteBufferCapacity).
+		WithMaxInflightFetch(defaultL2MaxInflightFetch).
+		WithMaxInflightEviction(defaultL2MaxInflightEviction).
+		WithM1Config(writeback.M1Config{
+			CacheHelperEnabled: b.m1CacheHelperEnabled,
+			DRAMHelperEnabled:  b.m1DRAMHelperEnabled,
+			CacheBatchEntries:  b.m1CacheBatchEntries,
+			CacheBatchLines:    b.m1CacheBatchLines,
+			CacheBatchWaitNS:   b.m1CacheBatchWaitNS,
+			CacheWindowLines:   b.m1CacheBatchLines,
+			DRAMBatchEntries:   b.m1DRAMBatchEntries,
+			DRAMBatchLines:     b.m1DRAMBatchLines,
+			DRAMBatchWaitNS:    b.m1DRAMBatchWaitNS,
+			DRAMWindowLines:    2,
+		})
 
 	for i := 0; i < b.numMemoryBank; i++ {
 		cacheName := fmt.Sprintf("%s.L2[%d]", b.gpuName, i)
@@ -740,8 +845,8 @@ func (b *R9NanoGPUBuilder) buildL2TLB() {
 		WithFreq(b.freq).
 		WithNumWays(16).
 		WithNumSets(32).
-		WithNumMSHREntry(32).
-		WithNumReqPerCycle(32).
+		WithNumMSHREntry(128).
+		WithNumReqPerCycle(4).
 		WithPageSize(1 << b.log2PageSize).
 		WithLowModule(b.gmmu.GetPortByName("Top")).
 		WithDeviceID(b.gpuID).
@@ -780,7 +885,7 @@ func (b *R9NanoGPUBuilder) buildGMMU() {
 		WithLog2PageSize(b.log2PageSize).
 		WithMaxNumReqInFlight(16).
 		WithPageTable(b.pageTable).
-		WithPageWalkingLatency(100).
+		WithPageWalkingLatency(50).
 		WithLowModule(b.mmu.GetPortByName("Top")).
 		WithIsPrediction(true).
 		Build(fmt.Sprintf("%s.GMMU", b.gpuName))
@@ -987,6 +1092,7 @@ func (b *R9NanoGPUBuilder) populateL1Vs(sa *shaderArray) {
 func (b *R9NanoGPUBuilder) populateL1VAddressTranslators(sa *shaderArray) {
 	for _, at := range sa.l1vATs {
 		b.l1vAddrTrans = append(b.l1vAddrTrans, at)
+		b.gpu.L1VAddrTrans = append(b.gpu.L1VAddrTrans, at)
 
 		if b.monitor != nil {
 			b.monitor.RegisterComponent(at)
@@ -1066,12 +1172,17 @@ func (b *R9NanoGPUBuilder) buildRDMAEngine() {
 		WithFreq(b.freq).
 		WithLocalModules(b.lowModuleFinderForL1).
 		WithRemoteModules(nil).
-		WithM2RDMABatch(
-			b.m2RDMABatchEnabled,
-			b.m2RDMAMaxBatchLines,
-			b.m2RDMAMaxWaitNS,
-			b.m2RDMABatchTableEntries,
-		).
+		WithM2BitmapBatch(
+			b.m2Enabled,
+			b.m2AUPrefetchEnabled,
+			b.m2MaxBatchLines,
+			b.m2MaxWaitNS,
+			b.m2BatchTableEntries).
+		WithM3OwnerFairQueue(
+			b.m3Enabled,
+			b.m3FairQuantumLines,
+			b.m3MaxConsecutive,
+			b.m3HardAgeNS).
 		Build(name)
 	b.gpu.RDMAEngine = b.rdmaEngine
 	if b.monitor != nil {

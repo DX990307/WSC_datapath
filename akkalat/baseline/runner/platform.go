@@ -41,6 +41,7 @@ type GPU struct {
 	PMC            *pagemigrationcontroller.PageMigrationController
 	CUs            []TraceableComponent
 	L1VCaches      []TraceableComponent
+	L1VAddrTrans   []TraceableComponent
 	L1SCaches      []TraceableComponent
 	L1ICaches      []TraceableComponent
 	L2Caches       []TraceableComponent

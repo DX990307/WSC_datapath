@@ -45,17 +45,29 @@ type R9NanoPlatformBuilder struct {
 	endpointBufferSize       int
 	l1vRemoteMaxInflight     int
 	l1vMSHREntries           int
+	l1vTLBMSHREntries        int
+	l1vReqPerCycle           int
 	l1vMaxConcurrentTrans    int
-	l1vBottomReorderPolicy   string
-	l1vBottomReorderWindow   int
-	l1vBottomReorderMaxAgeNS uint64
-	l2DirBatchWindow         int
-	l2DramAccessUnitCoalesce bool
 	forceLocalDataAccess     bool
-	m2RDMABatchEnabled       bool
-	m2RDMAMaxBatchLines      int
-	m2RDMAMaxWaitNS          uint64
-	m2RDMABatchTableEntries  int
+	m1CacheHelperEnabled     bool
+	m1DRAMHelperEnabled      bool
+	m1CacheBatchEntries      int
+	m1CacheBatchLines        int
+	m1CacheBatchWaitNS       uint64
+	m1DRAMBatchEntries       int
+	m1DRAMBatchLines         int
+	m1DRAMBatchWaitNS        uint64
+	m2Enabled                bool
+	m2AUPrefetchEnabled      bool
+	m2MaxBatchLines          int
+	m2MaxWaitNS              uint64
+	m2BatchTableEntries      int
+	m3Enabled                bool
+	m3RemoteDataCacheEnabled bool
+	m3RemoteDataCacheEntries int
+	m3FairQuantumLines       int
+	m3MaxConsecutive         int
+	m3HardAgeNS              uint64
 
 	engine       sim.Engine
 	visTracer    tracing.Tracer
@@ -78,22 +90,33 @@ type R9NanoPlatformBuilder struct {
 // MakeR9NanoBuilder creates a EmuBuilder with default parameters.
 func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 	b := R9NanoPlatformBuilder{
-		tileWidth:               7,
-		tileHeight:              7,
-		log2PageSize:            12,
-		visTraceStartTime:       -1,
-		visTraceEndTime:         -1,
-		switchLatency:           20,
-		networkFlitSize:         16,
-		numSAPerGPU:             8,
-		numCUPerSA:              4,
-		maxNumHops:              -1,
-		l1vMSHREntries:          160,
-		l1vMaxConcurrentTrans:   160,
-		l1vBottomReorderPolicy:  "none",
-		m2RDMAMaxBatchLines:     8,
-		m2RDMAMaxWaitNS:         25,
-		m2RDMABatchTableEntries: 32,
+		tileWidth:                7,
+		tileHeight:               7,
+		log2PageSize:             12,
+		visTraceStartTime:        -1,
+		visTraceEndTime:          -1,
+		switchLatency:            20,
+		networkFlitSize:          16,
+		numSAPerGPU:              8,
+		numCUPerSA:               4,
+		maxNumHops:               -1,
+		l1vMSHREntries:           160,
+		l1vTLBMSHREntries:        160,
+		l1vReqPerCycle:           32,
+		l1vMaxConcurrentTrans:    160,
+		m1CacheBatchEntries:      16,
+		m1CacheBatchLines:        4,
+		m1CacheBatchWaitNS:       25,
+		m1DRAMBatchEntries:       16,
+		m1DRAMBatchLines:         2,
+		m1DRAMBatchWaitNS:        25,
+		m2MaxBatchLines:          8,
+		m2MaxWaitNS:              50,
+		m2BatchTableEntries:      64,
+		m3RemoteDataCacheEntries: 128,
+		m3FairQuantumLines:       8,
+		m3MaxConsecutive:         2,
+		m3HardAgeNS:              500,
 	}
 	return b
 }
@@ -225,6 +248,94 @@ func (b R9NanoPlatformBuilder) WithEndpointBufferSize(
 	return b
 }
 
+// WithM1LocalBatchHelpers configures local L2/DRAM batch helpers.
+func (b R9NanoPlatformBuilder) WithM1LocalBatchHelpers(
+	cacheEnable bool,
+	dramEnable bool,
+	cacheEntries int,
+	cacheLines int,
+	cacheWaitNS uint64,
+	dramEntries int,
+	dramLines int,
+	dramWaitNS uint64,
+) R9NanoPlatformBuilder {
+	b.m1CacheHelperEnabled = cacheEnable
+	b.m1DRAMHelperEnabled = dramEnable
+	if cacheEntries > 0 {
+		b.m1CacheBatchEntries = cacheEntries
+	}
+	if cacheLines > 0 {
+		b.m1CacheBatchLines = cacheLines
+	}
+	if cacheWaitNS > 0 {
+		b.m1CacheBatchWaitNS = cacheWaitNS
+	}
+	if dramEntries > 0 {
+		b.m1DRAMBatchEntries = dramEntries
+	}
+	if dramLines > 0 {
+		b.m1DRAMBatchLines = dramLines
+	}
+	if dramWaitNS > 0 {
+		b.m1DRAMBatchWaitNS = dramWaitNS
+	}
+	return b
+}
+
+// WithM2BitmapBatch configures requester-side RDMA bitmap batching.
+func (b R9NanoPlatformBuilder) WithM2BitmapBatch(
+	enable bool,
+	auPrefetchEnable bool,
+	maxBatchLines int,
+	maxWaitNS uint64,
+	batchTableEntries int,
+) R9NanoPlatformBuilder {
+	b.m2Enabled = enable
+	b.m2AUPrefetchEnabled = auPrefetchEnable
+	if maxBatchLines > 0 {
+		b.m2MaxBatchLines = maxBatchLines
+	}
+	if maxWaitNS > 0 {
+		b.m2MaxWaitNS = maxWaitNS
+	}
+	if batchTableEntries > 0 {
+		b.m2BatchTableEntries = batchTableEntries
+	}
+	return b
+}
+
+// WithM3RemoteDataCache configures each L1V cache's remote-only data area.
+func (b R9NanoPlatformBuilder) WithM3RemoteDataCache(
+	enable bool,
+	entries int,
+) R9NanoPlatformBuilder {
+	b.m3RemoteDataCacheEnabled = enable
+	if entries > 0 {
+		b.m3RemoteDataCacheEntries = entries
+	}
+	return b
+}
+
+// WithM3OwnerFairQueue configures owner-side per-requester fair service.
+func (b R9NanoPlatformBuilder) WithM3OwnerFairQueue(
+	enable bool,
+	fairQuantumLines int,
+	maxConsecutive int,
+	hardAgeNS uint64,
+) R9NanoPlatformBuilder {
+	b.m3Enabled = enable
+	if fairQuantumLines > 0 {
+		b.m3FairQuantumLines = fairQuantumLines
+	}
+	if maxConsecutive > 0 {
+		b.m3MaxConsecutive = maxConsecutive
+	}
+	if hardAgeNS > 0 {
+		b.m3HardAgeNS = hardAgeNS
+	}
+	return b
+}
+
 // WithL1VRemoteMaxInflight limits in-flight remote L1V cache-line misses per
 // L1V cache. A non-positive value disables the remote-only throttle.
 func (b R9NanoPlatformBuilder) WithL1VRemoteMaxInflight(
@@ -244,6 +355,26 @@ func (b R9NanoPlatformBuilder) WithL1VMSHREntries(
 	return b
 }
 
+// WithL1VTLBMSHREntries sets the number of L1V TLB MSHR entries.
+func (b R9NanoPlatformBuilder) WithL1VTLBMSHREntries(
+	n int,
+) R9NanoPlatformBuilder {
+	if n > 0 {
+		b.l1vTLBMSHREntries = n
+	}
+	return b
+}
+
+// WithL1VReqPerCycle sets the L1V request-path width.
+func (b R9NanoPlatformBuilder) WithL1VReqPerCycle(
+	n int,
+) R9NanoPlatformBuilder {
+	if n > 0 {
+		b.l1vReqPerCycle = n
+	}
+	return b
+}
+
 // WithL1VMaxConcurrentTrans sets the L1V cache concurrency window.
 func (b R9NanoPlatformBuilder) WithL1VMaxConcurrentTrans(
 	n int,
@@ -254,52 +385,11 @@ func (b R9NanoPlatformBuilder) WithL1VMaxConcurrentTrans(
 	return b
 }
 
-// WithL1VBottomReorder configures an optional post-L1V bottom request reorder
-// queue used by M1 experiments.
-func (b R9NanoPlatformBuilder) WithL1VBottomReorder(
-	policy string,
-	window int,
-	maxAgeNS uint64,
-) R9NanoPlatformBuilder {
-	b.l1vBottomReorderPolicy = policy
-	b.l1vBottomReorderWindow = window
-	b.l1vBottomReorderMaxAgeNS = maxAgeNS
-	return b
-}
-
-// WithL2DirBatch configures same-set directory batching in the L2 caches.
-func (b R9NanoPlatformBuilder) WithL2DirBatch(window int) R9NanoPlatformBuilder {
-	b.l2DirBatchWindow = window
-	return b
-}
-
-// WithL2DramAccessUnitCoalescing configures DRAM-access-unit fill coalescing.
-func (b R9NanoPlatformBuilder) WithL2DramAccessUnitCoalescing(
-	enable bool,
-) R9NanoPlatformBuilder {
-	b.l2DramAccessUnitCoalesce = enable
-	return b
-}
-
 // WithForceLocalDataAccess routes L1V data-cache misses to local L2/DRAM.
 func (b R9NanoPlatformBuilder) WithForceLocalDataAccess(
 	enable bool,
 ) R9NanoPlatformBuilder {
 	b.forceLocalDataAccess = enable
-	return b
-}
-
-// WithM2RDMABatch configures requester-side RDMA read batching.
-func (b R9NanoPlatformBuilder) WithM2RDMABatch(
-	enable bool,
-	maxBatchLines int,
-	maxWaitNS uint64,
-	batchTableEntries int,
-) R9NanoPlatformBuilder {
-	b.m2RDMABatchEnabled = enable
-	b.m2RDMAMaxBatchLines = maxBatchLines
-	b.m2RDMAMaxWaitNS = maxWaitNS
-	b.m2RDMABatchTableEntries = batchTableEntries
 	return b
 }
 
@@ -564,26 +654,38 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithNumCUPerShaderArray(b.numCUPerSA).
 		WithNumShaderArray(b.numSAPerGPU).
 		WithNumMemoryBank(numMemoryBank).
-		WithL2CacheSize(4*mem.MB).
+		WithL2CacheSize(defaultL2CacheSize).
 		WithLog2MemoryBankInterleavingSize(7).
 		WithLog2PageSize(b.log2PageSize).
 		WithL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
 		WithL1VMSHREntries(b.l1vMSHREntries).
+		WithL1VTLBMSHREntries(b.l1vTLBMSHREntries).
+		WithL1VReqPerCycle(b.l1vReqPerCycle).
 		WithL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
-		WithL1VBottomReorder(
-			b.l1vBottomReorderPolicy,
-			b.l1vBottomReorderWindow,
-			b.l1vBottomReorderMaxAgeNS,
-		).
-		WithL2DirBatch(b.l2DirBatchWindow).
-		WithL2DramAccessUnitCoalescing(b.l2DramAccessUnitCoalesce).
 		WithForceLocalDataAccess(b.forceLocalDataAccess).
-		WithM2RDMABatch(
-			b.m2RDMABatchEnabled,
-			b.m2RDMAMaxBatchLines,
-			b.m2RDMAMaxWaitNS,
-			b.m2RDMABatchTableEntries,
-		).
+		WithM1LocalBatchHelpers(
+			b.m1CacheHelperEnabled,
+			b.m1DRAMHelperEnabled,
+			b.m1CacheBatchEntries,
+			b.m1CacheBatchLines,
+			b.m1CacheBatchWaitNS,
+			b.m1DRAMBatchEntries,
+			b.m1DRAMBatchLines,
+			b.m1DRAMBatchWaitNS).
+		WithM2BitmapBatch(
+			b.m2Enabled,
+			b.m2AUPrefetchEnabled,
+			b.m2MaxBatchLines,
+			b.m2MaxWaitNS,
+			b.m2BatchTableEntries).
+		WithM3RemoteDataCache(
+			b.m3RemoteDataCacheEnabled,
+			b.m3RemoteDataCacheEntries).
+		WithM3OwnerFairQueue(
+			b.m3Enabled,
+			b.m3FairQuantumLines,
+			b.m3MaxConsecutive,
+			b.m3HardAgeNS).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).
 		WithGMMUPageTable(pageTable)

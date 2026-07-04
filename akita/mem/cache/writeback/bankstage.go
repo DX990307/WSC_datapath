@@ -224,25 +224,47 @@ func (s *bankStage) finalizeReadHit(
 	now sim.VTimeInSec,
 	trans *transaction,
 ) bool {
-	if !s.cache.topSender.CanSend(1) {
+	readGroup := trans.m1ReadGroup()
+	if !s.cache.topSender.CanSend(len(readGroup)) {
 		return false
 	}
 
-	read := trans.read
-	addr := read.Address
-	_, offset := getCacheLineID(addr, s.cache.log2BlockSize)
 	block := trans.block
-
 	data, err := s.cache.storage.Read(
-		block.CacheAddress+offset, read.AccessByteSize)
+		block.CacheAddress, 1<<s.cache.log2BlockSize)
 	if err != nil {
 		panic(err)
 	}
 
-	s.removeTransaction(now, trans)
+	for _, readTrans := range readGroup {
+		s.respondReadHit(now, readTrans, data)
+		s.removeTransaction(now, readTrans)
+	}
 	s.inflightTransCount--
 	s.downwardInflightTransCount--
 	block.ReadCount--
+
+	// log.Printf("%.10f, %s, bank read hit finalize， %s, %04X, %04X, (%d, %d), %v\n",
+	// 	now, s.cache.Name(),
+	// 	trans.read.ID,
+	// 	trans.read.Address, block.Tag,
+	// 	block.SetID, block.WayID,
+	// 	dataReady.Data,
+	// )
+
+	return true
+}
+
+func (s *bankStage) respondReadHit(
+	now sim.VTimeInSec,
+	trans *transaction,
+	cacheLineData []byte,
+) {
+	read := trans.read
+	addr := read.Address
+	_, offset := getCacheLineID(addr, s.cache.log2BlockSize)
+	data := make([]byte, read.AccessByteSize)
+	copy(data, cacheLineData[offset:offset+read.AccessByteSize])
 
 	dataReady := mem.DataReadyRspBuilder{}.
 		WithSendTime(now).
@@ -264,16 +286,6 @@ func (s *bankStage) finalizeReadHit(
 		now,
 	)
 	tracing.TraceReqComplete(read, s.cache)
-
-	// log.Printf("%.10f, %s, bank read hit finalize， %s, %04X, %04X, (%d, %d), %v\n",
-	// 	now, s.cache.Name(),
-	// 	trans.read.ID,
-	// 	trans.read.Address, block.Tag,
-	// 	block.SetID, block.WayID,
-	// 	dataReady.Data,
-	// )
-
-	return true
 }
 
 func (s *bankStage) finalizeWriteHit(
