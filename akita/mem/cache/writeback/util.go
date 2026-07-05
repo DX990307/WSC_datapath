@@ -20,6 +20,9 @@ func bankID(block *cache.Block, wayAssocitivity, numBanks int) int {
 }
 
 func clearPort(p sim.Port, now sim.VTimeInSec) {
+	if p == nil {
+		return
+	}
 	for {
 		item := p.Retrieve(now)
 		if item == nil {

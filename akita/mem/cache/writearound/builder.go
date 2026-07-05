@@ -129,7 +129,7 @@ func (b *Builder) WithRemoteDataCache(enable bool, entries int) *Builder {
 	return b
 }
 
-// WithM1Config configures the L1V post-coalescer batch helper.
+// WithM1Config configures the M1 direct local DRAM AU coalescer.
 func (b *Builder) WithM1Config(config M1Config) *Builder {
 	b.m1Config = config
 	return b
@@ -173,6 +173,9 @@ func (b *Builder) Build(name string) *Cache {
 	c.bottomPort = sim.NewLimitNumMsgPort(c, b.numReqPerCycle,
 		name+".BottomPort")
 	c.AddPort("Bottom", c.bottomPort)
+	c.directDramPort = sim.NewLimitNumMsgPort(c, b.numReqPerCycle,
+		name+".DirectDramPort")
+	c.AddPort("DirectDram", c.directDramPort)
 	c.controlPort = sim.NewLimitNumMsgPort(c, b.numReqPerCycle,
 		name+".ControlPort")
 	c.AddPort("Control", c.controlPort)

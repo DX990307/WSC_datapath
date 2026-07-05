@@ -136,6 +136,7 @@ func (f *flusher) handleCacheRestart(
 
 	clearPort(f.cache.topPort, now)
 	clearPort(f.cache.bottomPort, now)
+	clearPort(f.cache.cleanFillPort, now)
 
 	f.cache.state = cacheStateRunning
 

@@ -1,0 +1,15 @@
+benchmark,remote_ratio_pct,remote_accesses,total_accesses,top_source
+rodinia_bfs,0.00,0,50000,local_dram
+floydwarshall,2.69,10404,387375,local_l2_cache
+simpleconvolution,15.14,14135,93355,remote_dram
+spmv,23.18,591836,2553135,local_dram
+kmeans,43.77,318135,726877,local_dram
+fir,44.88,130244,290227,remote_l2_cache
+aes,47.76,135408,283531,remote_dram
+fft,60.01,226079,376735,remote_dram
+relu,64.51,166814,258575,remote_write_allocate
+im2col,86.99,742643,853737,remote_dram
+atax,87.62,55237,63044,remote_dram
+bicg,87.77,55526,63266,remote_dram
+nw,91.00,45642,50154,remote_dram
+stencil2d,97.41,402292,412977,remote_dram

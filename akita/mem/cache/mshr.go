@@ -17,6 +17,11 @@ type MSHREntry struct {
 	ReadReq   *mem.ReadReq
 	DataReady *mem.DataReadyRsp
 	Data      []byte
+
+	// ResponseInFlight is set while an MSHR entry is queued in, or being
+	// drained by, the cache response stage. It lets write-back caches keep an
+	// entry alive during early restart without enqueueing duplicate responses.
+	ResponseInFlight bool
 }
 
 // NewMSHREntry returns a new MSHR entry object

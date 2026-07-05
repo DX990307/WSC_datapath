@@ -30,6 +30,7 @@ import (
 const (
 	defaultL2CacheSize           = 1 * mem.MB
 	defaultL2WayAssociativity    = 4
+	defaultL2DirectoryLatency    = 4
 	defaultL2MSHREntries         = 16
 	defaultL2ReqPerCycle         = 4
 	defaultL2WriteBufferCapacity = 256
@@ -57,21 +58,7 @@ type R9NanoGPUBuilder struct {
 	l1vReqPerCycle                 int
 	l1vMaxConcurrentTrans          int
 	forceLocalDataAccess           bool
-	m1L1VBatchEnabled              bool
-	m1L1VBatchEntries              int
-	m1L1VBatchLines                int
-	m1L1VBatchWaitNS               uint64
-	m1L1VAdaptiveEnabled           bool
-	m1L1VAdaptiveBadDrainThreshold int
-	m1L1VAdaptiveCooldownNS        uint64
-	m1CacheHelperEnabled           bool
-	m1DRAMHelperEnabled            bool
-	m1CacheBatchEntries            int
-	m1CacheBatchLines              int
-	m1CacheBatchWaitNS             uint64
-	m1DRAMBatchEntries             int
-	m1DRAMBatchLines               int
-	m1DRAMBatchWaitNS              uint64
+	m1DirectDramBypassEnabled      bool
 	m2Enabled                      bool
 	m2AUPrefetchEnabled            bool
 	m2MaxBatchLines                int
@@ -152,17 +139,6 @@ func MakeR9NanoGPUBuilder() R9NanoGPUBuilder {
 		l1vTLBMSHREntries:              160,
 		l1vReqPerCycle:                 32,
 		l1vMaxConcurrentTrans:          160,
-		m1L1VBatchEntries:              32,
-		m1L1VBatchLines:                2,
-		m1L1VBatchWaitNS:               10,
-		m1L1VAdaptiveBadDrainThreshold: 4,
-		m1L1VAdaptiveCooldownNS:        200,
-		m1CacheBatchEntries:            16,
-		m1CacheBatchLines:              4,
-		m1CacheBatchWaitNS:             25,
-		m1DRAMBatchEntries:             16,
-		m1DRAMBatchLines:               2,
-		m1DRAMBatchWaitNS:              25,
 		m2MaxBatchLines:                8,
 		m2MaxWaitNS:                    50,
 		m2BatchTableEntries:            64,
@@ -344,67 +320,13 @@ func (b R9NanoGPUBuilder) WithForceLocalDataAccess(enable bool) R9NanoGPUBuilder
 	return b
 }
 
-// WithM1L1VBatchHelper configures the L1V post-coalescer batch helper.
-func (b R9NanoGPUBuilder) WithM1L1VBatchHelper(
+// WithM1DirectDramBypass enables the narrow M1 mechanism: local L1V misses
+// that are predicted absent in L2 bypass L2 and use the L1V-side 128B DRAM
+// access-unit coalescer.
+func (b R9NanoGPUBuilder) WithM1DirectDramBypass(
 	enable bool,
-	entries int,
-	lines int,
-	waitNS uint64,
-	adaptiveEnable bool,
-	adaptiveBadDrainThreshold int,
-	adaptiveCooldownNS uint64,
 ) R9NanoGPUBuilder {
-	b.m1L1VBatchEnabled = enable
-	b.m1L1VAdaptiveEnabled = adaptiveEnable
-	if entries > 0 {
-		b.m1L1VBatchEntries = entries
-	}
-	if lines > 0 {
-		b.m1L1VBatchLines = lines
-	}
-	if waitNS > 0 {
-		b.m1L1VBatchWaitNS = waitNS
-	}
-	if adaptiveBadDrainThreshold > 0 {
-		b.m1L1VAdaptiveBadDrainThreshold = adaptiveBadDrainThreshold
-	}
-	if adaptiveCooldownNS > 0 {
-		b.m1L1VAdaptiveCooldownNS = adaptiveCooldownNS
-	}
-	return b
-}
-
-// WithM1LocalBatchHelpers configures local L2/DRAM batch helpers.
-func (b R9NanoGPUBuilder) WithM1LocalBatchHelpers(
-	cacheEnable bool,
-	dramEnable bool,
-	cacheEntries int,
-	cacheLines int,
-	cacheWaitNS uint64,
-	dramEntries int,
-	dramLines int,
-	dramWaitNS uint64,
-) R9NanoGPUBuilder {
-	b.m1CacheHelperEnabled = cacheEnable
-	b.m1DRAMHelperEnabled = dramEnable
-	if cacheEntries > 0 {
-		b.m1CacheBatchEntries = cacheEntries
-	}
-	if cacheLines > 0 {
-		b.m1CacheBatchLines = cacheLines
-	}
-	if cacheWaitNS > 0 {
-		b.m1CacheBatchWaitNS = cacheWaitNS
-	}
-	if dramEntries > 0 {
-		b.m1DRAMBatchEntries = dramEntries
-	}
-	if dramLines > 0 {
-		b.m1DRAMBatchLines = dramLines
-	}
-	if dramWaitNS > 0 {
-		b.m1DRAMBatchWaitNS = dramWaitNS
-	}
+	b.m1DirectDramBypassEnabled = enable
 	return b
 }
 
@@ -608,20 +530,37 @@ func (b *R9NanoGPUBuilder) connectL1ToL2() {
 	l1ToL2Conn.PlugIn(b.rdmaEngine.ToL1, 1024)
 	l1ToL2Conn.PlugIn(b.rdmaEngine.ToL2, 1024)
 
+	directBypassTargets := make(map[string]writearound.M1DirectBypassTarget)
 	for _, l2 := range b.l2Caches {
-		lowModuleFinder.LowModules = append(lowModuleFinder.LowModules,
-			l2.GetPortByName("Top"))
+		l2Top := l2.GetPortByName("Top")
+		l2CleanFill := l2.GetPortByName("CleanFill")
+		lowModuleFinder.LowModules = append(lowModuleFinder.LowModules, l2Top)
+		directBypassTargets[l2Top.Name()] = writearound.M1DirectBypassTarget{
+			Predictor:     l2,
+			CleanFillPort: l2CleanFill,
+		}
 		if b.forceLocalDataAccess {
 			l1vLowModuleFinder.LowModules = append(
 				l1vLowModuleFinder.LowModules,
-				l2.GetPortByName("Top"))
+				l2Top)
 		}
-		l1ToL2Conn.PlugIn(l2.GetPortByName("Top"), 64)
+		l1ToL2Conn.PlugIn(l2Top, 64)
+		if b.l2ToDramConnection != nil {
+			b.l2ToDramConnection.PlugIn(l2CleanFill, 16)
+		}
 	}
 
 	for _, l1v := range b.l1vCaches {
 		l1v.SetLowModuleFinder(l1vLowModuleFinder)
+		l1v.ConfigureM1DirectDramBypass(
+			b.m1DirectDramBypassEnabled,
+			b.lowModuleFinderForL2,
+			directBypassTargets)
 		l1ToL2Conn.PlugIn(l1v.GetPortByName("Bottom"), 16)
+		if b.l2ToDramConnection != nil {
+			b.l2ToDramConnection.PlugIn(
+				l1v.GetPortByName("DirectDram"), 16)
+		}
 	}
 
 	for _, l1s := range b.l1sCaches {
@@ -655,6 +594,7 @@ func (b *R9NanoGPUBuilder) connectL2AndDRAM() {
 			dram.GetPortByName("Top"))
 	}
 
+	b.lowModuleFinderForL2 = lowModuleFinder
 	b.dmaEngine.SetLocalDataSource(lowModuleFinder)
 	b.l2ToDramConnection.PlugIn(b.dmaEngine.ToMem, 64)
 
@@ -799,14 +739,6 @@ func (b *R9NanoGPUBuilder) buildSAs() {
 		withL1VTLBMSHREntries(b.l1vTLBMSHREntries).
 		withL1VReqPerCycle(b.l1vReqPerCycle).
 		withL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
-		withM1L1VBatchHelper(
-			b.m1L1VBatchEnabled,
-			b.m1L1VBatchEntries,
-			b.m1L1VBatchLines,
-			b.m1L1VBatchWaitNS,
-			b.m1L1VAdaptiveEnabled,
-			b.m1L1VAdaptiveBadDrainThreshold,
-			b.m1L1VAdaptiveCooldownNS).
 		withM3RemoteDataCache(
 			b.m3RemoteDataCacheEnabled,
 			b.m3RemoteDataCacheEntries).
@@ -841,23 +773,13 @@ func (b *R9NanoGPUBuilder) buildL2Caches() {
 		WithLog2BlockSize(b.log2CacheLineSize).
 		WithWayAssociativity(defaultL2WayAssociativity).
 		WithByteSize(byteSize).
+		WithDirectoryLatency(defaultL2DirectoryLatency).
 		WithNumMSHREntry(defaultL2MSHREntries).
 		WithNumReqPerCycle(defaultL2ReqPerCycle).
 		WithWriteBufferSize(defaultL2WriteBufferCapacity).
 		WithMaxInflightFetch(defaultL2MaxInflightFetch).
 		WithMaxInflightEviction(defaultL2MaxInflightEviction).
-		WithM1Config(writeback.M1Config{
-			CacheHelperEnabled: b.m1CacheHelperEnabled,
-			DRAMHelperEnabled:  b.m1DRAMHelperEnabled,
-			CacheBatchEntries:  b.m1CacheBatchEntries,
-			CacheBatchLines:    b.m1CacheBatchLines,
-			CacheBatchWaitNS:   b.m1CacheBatchWaitNS,
-			CacheWindowLines:   b.m1CacheBatchLines,
-			DRAMBatchEntries:   b.m1DRAMBatchEntries,
-			DRAMBatchLines:     b.m1DRAMBatchLines,
-			DRAMBatchWaitNS:    b.m1DRAMBatchWaitNS,
-			DRAMWindowLines:    2,
-		})
+		WithM1Config(writeback.M1Config{})
 
 	for i := 0; i < b.numMemoryBank; i++ {
 		cacheName := fmt.Sprintf("%s.L2[%d]", b.gpuName, i)
@@ -935,7 +857,7 @@ func (b *R9NanoGPUBuilder) buildGMMU() {
 		WithLog2PageSize(b.log2PageSize).
 		WithMaxNumReqInFlight(16).
 		WithPageTable(b.pageTable).
-		WithPageWalkingLatency(50).
+		WithPageWalkingLatency(10).
 		WithLowModule(b.mmu.GetPortByName("Top")).
 		WithIsPrediction(true).
 		Build(fmt.Sprintf("%s.GMMU", b.gpuName))

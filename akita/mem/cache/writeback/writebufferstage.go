@@ -25,16 +25,8 @@ func (wb *writeBufferStage) Tick(now sim.VTimeInSec) bool {
 
 	madeProgress = wb.write(now) || madeProgress
 	madeProgress = wb.processReturnRsp(now) || madeProgress
-	madeProgress = wb.cache.processM1DRAMBatches(
-		now, false, m1DrainManual) || madeProgress
 	newTransProgress := wb.processNewTransaction(now)
 	madeProgress = newTransProgress || madeProgress
-	if !newTransProgress &&
-		wb.cache.writeBufferBuffer.Peek() == nil &&
-		wb.cache.m1HasDRAMBatches() {
-		madeProgress = wb.cache.processM1DRAMBatches(
-			now, true, m1DrainManual) || madeProgress
-	}
 
 	return madeProgress
 }
@@ -65,6 +57,9 @@ func (wb *writeBufferStage) processWriteBufferFetch(
 	trans *transaction,
 ) bool {
 	if wb.findDataLocally(trans) {
+		if trans.m1DirectBypass {
+			return wb.completeM1DirectBypassLocalData(now, trans)
+		}
 		return wb.sendFetchedDataToBank(now, trans)
 	}
 
@@ -127,14 +122,6 @@ func (wb *writeBufferStage) fetchFromBottom(
 	now sim.VTimeInSec,
 	trans *transaction,
 ) bool {
-	if wb.cache.m1DRAMEnabled() && wb.cache.m1DRAMFetchBatchable(trans) {
-		if !wb.cache.enqueueM1DRAMMiss(now, trans) {
-			return false
-		}
-		wb.cache.writeBufferBuffer.Pop()
-		return true
-	}
-
 	ok := wb.issueSingleFetch(now, trans)
 	if ok {
 		wb.cache.writeBufferBuffer.Pop()
@@ -153,15 +140,16 @@ func (wb *writeBufferStage) issueSingleFetch(
 		return false
 	}
 
-	lowModulePort := wb.cache.lowModuleFinder.Find(trans.fetchAddress)
-	cacheLineBytes := uint64(1 << wb.cache.log2BlockSize)
+	readAddress := trans.fetchAddress
+	readBytes := uint64(1 << wb.cache.log2BlockSize)
+	lowModulePort := wb.cache.lowModuleFinder.Find(readAddress)
 
 	read := mem.ReadReqBuilder{}.
 		WithSrc(wb.cache.bottomPort).
 		WithDst(lowModulePort).
 		WithPID(trans.fetchPID).
-		WithAddress(trans.fetchAddress).
-		WithByteSize(cacheLineBytes).
+		WithAddress(readAddress).
+		WithByteSize(readBytes).
 		WithInfo(accessReqInfo(trans.accessReq())).
 		Build()
 	trans.fetchReadReq = read
@@ -170,9 +158,6 @@ func (wb *writeBufferStage) issueSingleFetch(
 	wb.recordM1DRAMReadSend(now, read, trans)
 
 	wb.inflightFetch = append(wb.inflightFetch, trans)
-	if wb.cache.m1DRAMEnabled() {
-		wb.cache.m1Stats.DRAMSingleLineReads++
-	}
 
 	tracing.TraceReqInitiate(read, wb.cache,
 		tracing.MsgIDAtReceiver(trans.req(), wb.cache))
@@ -336,7 +321,7 @@ func (wb *writeBufferStage) processDataReadyRsp(
 	dataReady *mem.DataReadyRsp,
 ) bool {
 	fetches := wb.findInflightFetchesByFetchReadReqID(dataReady.RespondTo)
-	if !wb.canPushFetchedDataToBanks(fetches) {
+	if !wb.canCompleteFetchedData(fetches) {
 		return false
 	}
 
@@ -349,9 +334,35 @@ func (wb *writeBufferStage) processDataReadyRsp(
 	return true
 }
 
+func (wb *writeBufferStage) canCompleteFetchedData(
+	fetches []*transaction,
+) bool {
+	directBypassResponses := 0
+	normalFetches := make([]*transaction, 0, len(fetches))
+	for _, trans := range fetches {
+		if trans.m1DirectBypass {
+			directBypassResponses++
+			continue
+		}
+		normalFetches = append(normalFetches, trans)
+	}
+
+	if directBypassResponses > 0 &&
+		!wb.cache.topSender.CanSend(directBypassResponses) {
+		return false
+	}
+	if !wb.canPushFetchedDataToBanks(normalFetches) {
+		return false
+	}
+	return true
+}
+
 func (wb *writeBufferStage) canPushFetchedDataToBanks(
 	fetches []*transaction,
 ) bool {
+	if len(fetches) == 0 {
+		return true
+	}
 	if len(fetches) == 1 {
 		bankBuf := wb.bankBufferForFetch(fetches[0])
 		return bankBuf.CanPush()
@@ -384,6 +395,12 @@ func (wb *writeBufferStage) completeFetchedData(
 	dataReady *mem.DataReadyRsp,
 	trans *transaction,
 ) {
+	if trans.m1DirectBypass {
+		wb.completeM1DirectBypassFetchedData(now, dataReady, trans)
+		wb.removeInflightFetch(trans)
+		return
+	}
+
 	bankBuf := wb.bankBufferForFetch(trans)
 
 	trans.fetchedData = wb.extractFetchedCacheLine(dataReady.Data, trans)
@@ -433,6 +450,134 @@ func (wb *writeBufferStage) completeFetchedData(
 	// 	trans.fetchedData,
 	// )
 
+}
+
+func (wb *writeBufferStage) completeM1DirectBypassLocalData(
+	now sim.VTimeInSec,
+	trans *transaction,
+) bool {
+	if !wb.cache.topSender.CanSend(1) {
+		trans.fetchedData = nil
+		return false
+	}
+
+	data := append([]byte(nil), trans.fetchedData...)
+	wb.respondM1DirectBypassRead(now, trans, data)
+	wb.backgroundFillM1DirectBypassLine(trans, data)
+	wb.removeTransaction(now, trans)
+	wb.cache.writeBufferBuffer.Pop()
+	return true
+}
+
+func (wb *writeBufferStage) completeM1DirectBypassFetchedData(
+	now sim.VTimeInSec,
+	dataReady *mem.DataReadyRsp,
+	trans *transaction,
+) {
+	data := wb.extractFetchedCacheLine(dataReady.Data, trans)
+	trans.fetchedData = data
+
+	memtrace.RecordMemoryPathL2DRAMResponse(
+		wb.cache.Name(),
+		accessReqInfo(trans.accessReq()),
+		trans.fetchReadReq.Meta().ID,
+		dataReady.Meta().ID,
+		dataReady.Meta().SendTime,
+		now,
+		dataReady.Meta().Src,
+		dataReady.Meta().Dst,
+	)
+	memtrace.RecordL2LocalDRAMFill(
+		wb.cache.Name(),
+		uint64(len(data)),
+		now-trans.fetchReadReq.SendTime,
+		now,
+		"read",
+	)
+	memtrace.RecordL2AccessSource(
+		wb.cache.Name(),
+		accessReqInfo(trans.accessReq()),
+		trans.fetchAddress,
+		uint64(len(data)),
+		now-trans.fetchReadReq.SendTime,
+		now,
+		accessReqOp(trans.accessReq()),
+		"dram",
+	)
+
+	wb.respondM1DirectBypassRead(now, trans, data)
+	wb.backgroundFillM1DirectBypassLine(trans, data)
+	wb.removeTransaction(now, trans)
+}
+
+func (wb *writeBufferStage) respondM1DirectBypassRead(
+	now sim.VTimeInSec,
+	trans *transaction,
+	cacheLineData []byte,
+) {
+	read := trans.read
+	_, offset := getCacheLineID(read.Address, wb.cache.log2BlockSize)
+	data := make([]byte, read.AccessByteSize)
+	if offset+read.AccessByteSize <= uint64(len(cacheLineData)) {
+		copy(data, cacheLineData[offset:offset+read.AccessByteSize])
+	} else {
+		copy(data, cacheLineData)
+	}
+
+	dataReady := mem.DataReadyRspBuilder{}.
+		WithSendTime(now).
+		WithSrc(wb.cache.topPort).
+		WithDst(read.Src).
+		WithRspTo(read.ID).
+		WithData(data).
+		Build()
+	wb.cache.topSender.Send(dataReady)
+	tracing.TraceReqComplete(read, wb.cache)
+}
+
+func (wb *writeBufferStage) backgroundFillM1DirectBypassLine(
+	trans *transaction,
+	cacheLineData []byte,
+) bool {
+	lineBytes := uint64(1 << wb.cache.log2BlockSize)
+	if trans == nil || uint64(len(cacheLineData)) < lineBytes {
+		return false
+	}
+
+	pid := trans.fetchPID
+	line := trans.fetchAddress
+	if block := wb.cache.directory.Lookup(pid, line); block != nil && block.IsValid {
+		if block.IsLocked || block.ReadCount > 0 || block.IsDirty {
+			return false
+		}
+		if err := wb.cache.storage.Write(block.CacheAddress, cacheLineData[:lineBytes]); err != nil {
+			panic(err)
+		}
+		block.IsDirty = false
+		block.DirtyMask = nil
+		wb.cache.directory.Visit(block)
+		return true
+	}
+
+	victim := wb.cache.directory.FindVictim(line)
+	if victim == nil ||
+		victim.IsLocked ||
+		victim.ReadCount > 0 ||
+		(victim.IsValid && victim.IsDirty) {
+		return false
+	}
+
+	if err := wb.cache.storage.Write(victim.CacheAddress, cacheLineData[:lineBytes]); err != nil {
+		panic(err)
+	}
+	victim.PID = pid
+	victim.Tag = line
+	victim.IsValid = true
+	victim.IsDirty = false
+	victim.IsLocked = false
+	victim.DirtyMask = nil
+	wb.cache.directory.Visit(victim)
+	return true
 }
 
 func (wb *writeBufferStage) extractFetchedCacheLine(
@@ -506,6 +651,20 @@ func (wb *writeBufferStage) removeInflightFetch(f *transaction) {
 	panic("not found")
 }
 
+func (wb *writeBufferStage) removeTransaction(now sim.VTimeInSec, trans *transaction) {
+	for i, t := range wb.cache.inFlightTransactions {
+		if trans == t {
+			wb.cache.inFlightTransactions = append(
+				wb.cache.inFlightTransactions[:i],
+				wb.cache.inFlightTransactions[i+1:]...,
+			)
+			return
+		}
+	}
+
+	panic("transaction not found")
+}
+
 func (wb *writeBufferStage) processWriteDoneRsp(
 	now sim.VTimeInSec,
 	writeDone *mem.WriteDoneRsp,
@@ -558,6 +717,4 @@ func (wb *writeBufferStage) tooManyInflightEvictions() bool {
 
 func (wb *writeBufferStage) Reset(now sim.VTimeInSec) {
 	wb.cache.writeBufferBuffer.Clear()
-	wb.cache.m1DRAMBatches = nil
-	wb.cache.m1DRAMBatchOrder = nil
 }

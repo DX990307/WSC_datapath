@@ -145,7 +145,8 @@ func (b Builder) WithBankLatency(n int) Builder {
 	return b
 }
 
-// WithM1Config configures local L2/DRAM batch helpers.
+// WithM1Config keeps the M1 builder hook stable. L2-side M1 work is limited to
+// background clean fills for direct local DRAM bypass.
 func (b Builder) WithM1Config(config M1Config) Builder {
 	b.m1Config = normalizeM1Config(config)
 	return b
@@ -203,6 +204,10 @@ func (b *Builder) createPorts(cache *Cache) {
 	cache.bottomPort = sim.NewLimitNumMsgPort(cache,
 		cache.numReqPerCycle*2, cache.Name()+".BottomPort")
 	cache.AddPort("Bottom", cache.bottomPort)
+
+	cache.cleanFillPort = sim.NewLimitNumMsgPort(cache,
+		cache.numReqPerCycle*2, cache.Name()+".CleanFillPort")
+	cache.AddPort("CleanFill", cache.cleanFillPort)
 
 	cache.controlPort = sim.NewLimitNumMsgPort(cache,
 		cache.numReqPerCycle*2, cache.Name()+".ControlPort")

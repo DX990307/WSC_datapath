@@ -118,8 +118,6 @@ func (ds *directoryStage) Reset(now sim.VTimeInSec) {
 	ds.pipeline.Clear()
 	ds.buf.Clear()
 	ds.cache.dirStageBuffer.Clear()
-	ds.cache.m1CacheBatches = nil
-	ds.cache.m1CacheBatchOrder = nil
 }
 
 func (ds *directoryStage) doRead(
@@ -150,12 +148,11 @@ func (ds *directoryStage) handleReadMSHRHit(
 ) bool {
 	trans.mshrEntry = mshrEntry
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
-	ds.attachM1ReadPeersToMSHR(trans, mshrEntry)
 	ds.popDirTransaction()
 
 	ds.recordReadGroupResult(
 		now, trans, "read-mshr-hit", "read-mshr-hit",
-		"l2_mshr", "mshr-hit")
+		"l2_mshr")
 
 	return true
 }
@@ -182,7 +179,7 @@ func (ds *directoryStage) handleReadHit(
 	if ok {
 		ds.recordReadGroupResult(
 			now, trans, "read-hit", "read-hit",
-			"l2_cache", "hit")
+			"l2_cache")
 	}
 	return ok
 }
@@ -208,7 +205,7 @@ func (ds *directoryStage) handleReadMiss(
 		if ok {
 			ds.recordReadGroupResult(
 				now, trans, "read-miss", "read-miss",
-				"", "miss")
+				"")
 
 			// fmt.Printf("%.10f, %s, dir read miss, %s, %04X, %04X, (%d, %d), %v\n",
 			// 	now, ds.cache.Name(),
@@ -227,7 +224,7 @@ func (ds *directoryStage) handleReadMiss(
 	if ok {
 		ds.recordReadGroupResult(
 			now, trans, "read-miss", "read-miss",
-			"", "miss")
+			"")
 
 		// fmt.Printf("%.10f, %s, dir read miss, %s, %04X, %04X, (%d, %d), %v\n",
 		// 	now, ds.cache.Name(),
@@ -429,9 +426,10 @@ func (ds *directoryStage) writeToBank(
 		return false
 	}
 
+	newTag, _ := getCacheLineID(trans.write.Address, ds.cache.log2BlockSize)
 	ds.cache.directory.Visit(block)
 	block.IsLocked = true
-	block.Tag, _ = getCacheLineID(trans.write.Address, ds.cache.log2BlockSize)
+	block.Tag = newTag
 	block.IsValid = true
 	block.PID = trans.write.PID
 	trans.block = block
@@ -519,7 +517,6 @@ func (ds *directoryStage) updateTransForEviction(
 		trans.fetchPID = pid
 		trans.fetchAddress = cacheLineID
 		trans.action = bankEvictAndFetch
-		ds.attachM1ReadPeersToMSHR(trans, mshrEntry)
 	} else {
 		trans.action = bankEvictAndWrite
 	}
@@ -588,20 +585,8 @@ func (ds *directoryStage) fetch(
 
 	mshrEntry.Block = block
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
-	ds.attachM1ReadPeersToMSHR(trans, mshrEntry)
 
 	return true
-}
-
-func (ds *directoryStage) attachM1ReadPeersToMSHR(
-	trans *transaction,
-	mshrEntry *cache.MSHREntry,
-) {
-	for _, peer := range trans.m1CoalescedReads {
-		peer.mshrEntry = mshrEntry
-		peer.block = trans.block
-		mshrEntry.Requests = append(mshrEntry.Requests, peer)
-	}
 }
 
 func (ds *directoryStage) recordReadGroupResult(
@@ -610,28 +595,22 @@ func (ds *directoryStage) recordReadGroupResult(
 	step string,
 	cacheResult string,
 	sourceBase string,
-	m1Result string,
 ) {
-	for _, readTrans := range trans.m1ReadGroup() {
-		if readTrans.read == nil {
-			continue
-		}
-		if step != "" {
-			tracing.AddTaskStep(
-				tracing.MsgIDAtReceiver(readTrans.read, ds.cache),
-				ds.cache,
-				step,
-			)
-		}
-		if cacheResult != "" {
-			ds.recordMemoryPathCacheResult(now, readTrans, cacheResult)
-		}
-		if sourceBase != "" {
-			ds.recordL2AccessSource(now, readTrans, sourceBase)
-		}
-		if m1Result != "" {
-			ds.cache.recordM1L2ProbeResult(readTrans, m1Result)
-		}
+	if trans.read == nil {
+		return
+	}
+	if step != "" {
+		tracing.AddTaskStep(
+			tracing.MsgIDAtReceiver(trans.read, ds.cache),
+			ds.cache,
+			step,
+		)
+	}
+	if cacheResult != "" {
+		ds.recordMemoryPathCacheResult(now, trans, cacheResult)
+	}
+	if sourceBase != "" {
+		ds.recordL2AccessSource(now, trans, sourceBase)
 	}
 }
 

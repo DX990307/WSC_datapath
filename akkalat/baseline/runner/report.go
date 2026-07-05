@@ -281,70 +281,70 @@ func (r *Runner) reportM1Stats() {
 			}
 			m1 := l1v.GetM1Stats()
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_batch_enabled",
-				boolMetric(m1.L1VBatchEnabled))
+				l1v.Name(), "m1_l1v_direct_dram_bypass_enabled",
+				boolMetric(m1.L1VDirectDramBypassEnabled))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_adaptive_enabled",
-				boolMetric(m1.L1VAdaptiveEnabled))
+				l1v.Name(), "m1_l1v_direct_bypass_lookups",
+				float64(m1.L1VDirectBypassLookups))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_requests_seen",
-				float64(m1.L1VRequestsSeen))
+				l1v.Name(), "m1_l1v_direct_bypass_pred_absent",
+				float64(m1.L1VDirectBypassPredAbsent))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_batchable_reads",
-				float64(m1.L1VBatchableReads))
+				l1v.Name(), "m1_l1v_direct_bypass_issued",
+				float64(m1.L1VDirectBypassIssued))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_bypass_requests",
-				float64(m1.L1VBypassRequests))
+				l1v.Name(), "m1_l1v_direct_bypass_blocked",
+				float64(m1.L1VDirectBypassBlocked))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_batches_created",
-				float64(m1.L1VBatchesCreated))
+				l1v.Name(), "m1_l1v_direct_bypass_responses",
+				float64(m1.L1VDirectBypassResponses))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_batches_drained",
-				float64(m1.L1VBatchesDrained))
+				l1v.Name(), "m1_l1v_direct_l2_fill_issued",
+				float64(m1.L1VDirectL2FillIssued))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_lines_in_batches",
-				float64(m1.L1VLinesInBatches))
+				l1v.Name(), "m1_l1v_direct_l2_fill_dropped",
+				float64(m1.L1VDirectL2FillDropped))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_requests_in_batches",
-				float64(m1.L1VRequestsInBatches))
+				l1v.Name(), "m1_l1v_direct_dram_batches_created",
+				float64(m1.L1VDirectDRAMBatchesCreated))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_duplicate_line_waiters",
-				float64(m1.L1VDuplicateWaiters))
+				l1v.Name(), "m1_l1v_direct_dram_batches_drained",
+				float64(m1.L1VDirectDRAMBatchesDrained))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_avg_lines_per_batch",
-				safeDiv(float64(m1.L1VLinesInBatches),
-					float64(m1.L1VBatchesDrained)))
+				l1v.Name(), "m1_l1v_direct_dram_lines_in_batches",
+				float64(m1.L1VDirectDRAMLinesInBatches))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_avg_wait_ns",
-				safeDiv(m1.L1VTotalWaitNS,
-					float64(m1.L1VWaitSamples)))
+				l1v.Name(), "m1_l1v_direct_dram_avg_lines_per_batch",
+				safeDiv(float64(m1.L1VDirectDRAMLinesInBatches),
+					float64(m1.L1VDirectDRAMBatchesDrained)))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_max_lines_per_batch",
-				float64(m1.L1VMaxLinesPerBatch))
+				l1v.Name(), "m1_l1v_direct_dram_avg_wait_ns",
+				safeDiv(m1.L1VDirectDRAMTotalWaitNS,
+					float64(m1.L1VDirectDRAMWaitSamples)))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_full_drains",
-				float64(m1.L1VFullDrains))
+				l1v.Name(), "m1_l1v_direct_dram_max_lines_per_batch",
+				float64(m1.L1VDirectDRAMMaxLinesPerBatch))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_timeout_drains",
-				float64(m1.L1VTimeoutDrains))
+				l1v.Name(), "m1_l1v_direct_dram_singleton_fallbacks",
+				float64(m1.L1VDirectDRAMSingletonFallbacks))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_capacity_drains",
-				float64(m1.L1VCapacityDrains))
+				l1v.Name(), "m1_l1v_direct_dram_full_drains",
+				float64(m1.L1VDirectDRAMFullDrains))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_manual_drains",
-				float64(m1.L1VManualDrains))
+				l1v.Name(), "m1_l1v_direct_dram_timeout_drains",
+				float64(m1.L1VDirectDRAMTimeoutDrains))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_adaptive_bypass_requests",
-				float64(m1.L1VAdaptiveBypassRequests))
+				l1v.Name(), "m1_l1v_direct_dram_capacity_drains",
+				float64(m1.L1VDirectDRAMCapacityDrains))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_adaptive_disable_events",
-				float64(m1.L1VAdaptiveDisableEvents))
+				l1v.Name(), "m1_l1v_direct_dram_manual_drains",
+				float64(m1.L1VDirectDRAMManualDrains))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_adaptive_bad_drains",
-				float64(m1.L1VAdaptiveBadDrains))
+				l1v.Name(), "m1_l1v_direct_dram_multi_line_reads",
+				float64(m1.L1VDirectDRAMMultiLineReads))
 			r.metricsCollector.Collect(
-				l1v.Name(), "m1_l1v_adaptive_good_drains",
-				float64(m1.L1VAdaptiveGoodDrains))
+				l1v.Name(), "m1_l1v_direct_dram_single_line_reads",
+				float64(m1.L1VDirectDRAMSingleLineReads))
 		}
 
 		for _, component := range gpu.L2Caches {
@@ -354,123 +354,14 @@ func (r *Runner) reportM1Stats() {
 			}
 			m1 := l2.GetM1Stats()
 			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_helper_enabled",
-				boolMetric(m1.CacheHelperEnabled))
+				l2.Name(), "m1_direct_clean_fill_received",
+				float64(m1.DirectCleanFillReceived))
 			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_helper_enabled",
-				boolMetric(m1.DRAMHelperEnabled))
+				l2.Name(), "m1_direct_clean_fill_installed",
+				float64(m1.DirectCleanFillInstalled))
 			r.metricsCollector.Collect(
-				l2.Name(), "m1_local_requests_seen",
-				float64(m1.LocalRequestsSeen))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_local_batchable_reads",
-				float64(m1.LocalBatchableReads))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_bypass_requests",
-				float64(m1.CacheBypassRequests))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_batches_created",
-				float64(m1.CacheBatchesCreated))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_batches_drained",
-				float64(m1.CacheBatchesDrained))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_lines_in_batches",
-				float64(m1.CacheLinesInBatches))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_requests_in_batches",
-				float64(m1.CacheRequestsInBatches))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_duplicate_line_waiters",
-				float64(m1.CacheDuplicateWaiters))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_coalesced_waiters",
-				float64(m1.CacheCoalescedWaiters))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_avg_lines_per_batch",
-				safeDiv(float64(m1.CacheLinesInBatches),
-					float64(m1.CacheBatchesDrained)))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_avg_wait_ns",
-				safeDiv(m1.CacheTotalWaitNS,
-					float64(m1.CacheWaitSamples)))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_max_lines_per_batch",
-				float64(m1.CacheMaxLinesPerBatch))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_full_drains",
-				float64(m1.CacheFullDrains))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_timeout_drains",
-				float64(m1.CacheTimeoutDrains))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_cache_capacity_drains",
-				float64(m1.CacheCapacityDrains))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_l2_probe_lines",
-				float64(m1.L2ProbeLines))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_l2_probe_hits",
-				float64(m1.L2ProbeHits))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_l2_probe_misses",
-				float64(m1.L2ProbeMisses))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_l2_probe_mshr_hits",
-				float64(m1.L2ProbeMSHRHits))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_l2_hit_lines_completed_from_batch",
-				float64(m1.L2HitLinesCompletedFromBatch))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_l2_miss_lines_sent_to_dram_helper",
-				float64(m1.L2MissLinesSentToDRAMHelper))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_miss_lines_seen",
-				float64(m1.DRAMMissLinesSeen))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_batches_created",
-				float64(m1.DRAMBatchesCreated))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_batches_drained",
-				float64(m1.DRAMBatchesDrained))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_lines_in_batches",
-				float64(m1.DRAMLinesInBatches))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_singleton_fallbacks",
-				float64(m1.DRAMSingletonFallbacks))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_avg_lines_per_batch",
-				safeDiv(float64(m1.DRAMLinesInBatches),
-					float64(m1.DRAMBatchesDrained)))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_avg_wait_ns",
-				safeDiv(m1.DRAMTotalWaitNS,
-					float64(m1.DRAMWaitSamples)))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_max_lines_per_batch",
-				float64(m1.DRAMMaxLinesPerBatch))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_full_drains",
-				float64(m1.DRAMFullDrains))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_timeout_drains",
-				float64(m1.DRAMTimeoutDrains))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_capacity_drains",
-				float64(m1.DRAMCapacityDrains))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_multiline_reads",
-				float64(m1.DRAMMultiLineReads))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_singleline_reads",
-				float64(m1.DRAMSingleLineReads))
-			r.metricsCollector.Collect(
-				l2.Name(), "m1_dram_request_reduction_pct",
-				packetReductionPct(
-					float64(m1.DRAMMissLinesSeen),
-					float64(m1.DRAMMultiLineReads+
-						m1.DRAMSingleLineReads)))
+				l2.Name(), "m1_direct_clean_fill_dropped",
+				float64(m1.DirectCleanFillDropped))
 		}
 	}
 }

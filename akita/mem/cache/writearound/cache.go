@@ -5,16 +5,30 @@ import (
 
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
+	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 )
+
+// M1DirectBypassPredictor predicts whether an L2 cache line is absent.
+type M1DirectBypassPredictor interface {
+	PredictM1DirectDramBypass(pid vm.PID, cacheLineID uint64) bool
+}
+
+// M1DirectBypassTarget describes the L2-side state needed by the L1V direct
+// DRAM bypass path.
+type M1DirectBypassTarget struct {
+	Predictor     M1DirectBypassPredictor
+	CleanFillPort sim.Port
+}
 
 // A Cache is a customized L1 cache the for R9nano GPUs.
 type Cache struct {
 	*sim.TickingComponent
 
-	topPort     sim.Port
-	bottomPort  sim.Port
-	controlPort sim.Port
+	topPort        sim.Port
+	bottomPort     sim.Port
+	directDramPort sim.Port
+	controlPort    sim.Port
 
 	numReqPerCycle   int
 	log2BlockSize    uint64
@@ -45,13 +59,15 @@ type Cache struct {
 
 	remoteDataCache *remoteDataCache
 
-	m1Config      M1Config
-	m1Stats       M1Stats
-	m1Batches     map[m1BatchKey]*m1BatchEntry
-	m1BatchOrder  []m1BatchKey
-	m1NextBatchID uint64
-	m1BadDrainRun int
-	m1BypassUntil sim.VTimeInSec
+	m1DirectDramBypassEnabled bool
+	m1DirectDramFinder        mem.LowModuleFinder
+	m1DirectBypassTargets     map[string]M1DirectBypassTarget
+
+	m1Config                M1Config
+	m1Stats                 M1Stats
+	m1DirectDRAMBatches     map[m1DirectDRAMBatchKey]*m1DirectDRAMBatchEntry
+	m1DirectDRAMBatchOrder  []m1DirectDRAMBatchKey
+	m1NextDirectDRAMBatchID uint64
 
 	isPaused bool
 }
@@ -60,6 +76,20 @@ type Cache struct {
 // the data on a certain address.
 func (c *Cache) SetLowModuleFinder(lmf mem.LowModuleFinder) {
 	c.lowModuleFinder = lmf
+}
+
+// ConfigureM1DirectDramBypass configures L1-side L2-miss bypass. The normal
+// low-module finder still identifies the target L2/RDMA path, while dramFinder
+// identifies the local DRAM bank for direct local reads.
+func (c *Cache) ConfigureM1DirectDramBypass(
+	enable bool,
+	dramFinder mem.LowModuleFinder,
+	targets map[string]M1DirectBypassTarget,
+) {
+	c.m1DirectDramBypassEnabled = enable
+	c.m1DirectDramFinder = dramFinder
+	c.m1DirectBypassTargets = targets
+	c.m1Stats.L1VDirectDramBypassEnabled = enable
 }
 
 func (c *Cache) canSendToBottomModule(module sim.Port) bool {
@@ -113,6 +143,7 @@ func (c *Cache) runPipeline(now sim.VTimeInSec) bool {
 	madeProgress = c.tickParseBottomStage(now) || madeProgress
 	madeProgress = c.tickBankStage(now) || madeProgress
 	madeProgress = c.tickDirectoryStage(now) || madeProgress
+	madeProgress = c.tickM1DirectDRAMStage(now) || madeProgress
 	madeProgress = c.tickCoalesceState(now) || madeProgress
 	return madeProgress
 }
@@ -147,14 +178,19 @@ func (c *Cache) tickDirectoryStage(now sim.VTimeInSec) bool {
 	return c.directoryStage.Tick(now)
 }
 
+func (c *Cache) tickM1DirectDRAMStage(now sim.VTimeInSec) bool {
+	madeProgress := false
+	for i := 0; i < c.numReqPerCycle; i++ {
+		madeProgress = c.processM1DirectDRAMBatches(
+			now, false, m1DrainManual) || madeProgress
+	}
+	return madeProgress
+}
+
 func (c *Cache) tickCoalesceState(now sim.VTimeInSec) bool {
 	madeProgress := false
 	for i := 0; i < c.numReqPerCycle; i++ {
 		madeProgress = c.coalesceStage.Tick(now) || madeProgress
-	}
-	for i := 0; i < c.numReqPerCycle; i++ {
-		madeProgress = c.processM1Batches(now, false, m1DrainManual) ||
-			madeProgress
 	}
 	return madeProgress
 }

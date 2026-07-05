@@ -119,6 +119,9 @@ type bankPipelineElem struct {
 }
 
 func (e bankPipelineElem) TaskID() string {
+	if e.trans.req() == nil {
+		return e.trans.id + "_write_back_bank_pipeline"
+	}
 	return e.trans.req().Meta().ID + "_write_back_bank_pipeline"
 }
 
@@ -224,8 +227,7 @@ func (s *bankStage) finalizeReadHit(
 	now sim.VTimeInSec,
 	trans *transaction,
 ) bool {
-	readGroup := trans.m1ReadGroup()
-	if !s.cache.topSender.CanSend(len(readGroup)) {
+	if !s.cache.topSender.CanSend(1) {
 		return false
 	}
 
@@ -236,10 +238,8 @@ func (s *bankStage) finalizeReadHit(
 		panic(err)
 	}
 
-	for _, readTrans := range readGroup {
-		s.respondReadHit(now, readTrans, data)
-		s.removeTransaction(now, readTrans)
-	}
+	s.respondReadHit(now, trans, data)
+	s.removeTransaction(now, trans)
 	s.inflightTransCount--
 	s.downwardInflightTransCount--
 	block.ReadCount--
@@ -379,13 +379,13 @@ func (s *bankStage) finalizeBankWriteFetched(
 	now sim.VTimeInSec,
 	trans *transaction,
 ) bool {
+	mshrEntry := trans.mshrEntry
 	if !s.cache.mshrStageBuffer.CanPush() {
 		return false
 	}
+	s.cache.pushMSHRResponse(mshrEntry)
 
-	mshrEntry := trans.mshrEntry
 	block := mshrEntry.Block
-	s.cache.mshrStageBuffer.Push(mshrEntry)
 
 	err := s.cache.storage.Write(block.CacheAddress, mshrEntry.Data)
 	if err != nil {

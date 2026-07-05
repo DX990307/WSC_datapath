@@ -41,10 +41,7 @@ type transaction struct {
 	evictingDirtyMask []bool
 	evictionWriteReq  *mem.WriteReq
 	mshrEntry         *cache.MSHREntry
-	m1FromCacheBatch  bool
-	m1CacheBatchID    uint64
-	m1DRAMBatchID     uint64
-	m1CoalescedReads  []*transaction
+	m1DirectBypass    bool
 }
 
 func (t transaction) accessReq() mem.AccessReq {
@@ -55,17 +52,6 @@ func (t transaction) accessReq() mem.AccessReq {
 		return t.write
 	}
 	return nil
-}
-
-func (t *transaction) m1ReadGroup() []*transaction {
-	if len(t.m1CoalescedReads) == 0 {
-		return []*transaction{t}
-	}
-
-	group := make([]*transaction, 0, 1+len(t.m1CoalescedReads))
-	group = append(group, t)
-	group = append(group, t.m1CoalescedReads...)
-	return group
 }
 
 func (t transaction) req() sim.Msg {

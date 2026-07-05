@@ -6,7 +6,7 @@ import csv
 from pathlib import Path
 
 
-MECHANISMS = ("m1_m2", "baseline", "m1", "m2", "m3")
+MECHANISMS = ("m1_m2_m3", "m1_m2", "baseline", "m1", "m2", "m3")
 CONFIG_SUFFIXES = ("sample_all_loop", "sample_all")
 COMPONENTS = (
     "total_request",

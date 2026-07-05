@@ -14,18 +14,31 @@ type bottomParser struct {
 }
 
 func (p *bottomParser) Tick(now sim.VTimeInSec) bool {
-	item := p.cache.bottomPort.Peek()
+	if p.processPort(now, p.cache.bottomPort) {
+		return true
+	}
+	return p.processPort(now, p.cache.directDramPort)
+}
+
+func (p *bottomParser) processPort(
+	now sim.VTimeInSec,
+	port sim.Port,
+) bool {
+	if port == nil {
+		return false
+	}
+	item := port.Peek()
 	if item == nil {
 		return false
 	}
 
 	switch rsp := item.(type) {
 	case *mem.WriteDoneRsp:
-		return p.processDoneRsp(now, rsp)
+		return p.processDoneRsp(now, port, rsp)
 	case *mem.DataReadyRsp:
-		return p.processDataReady(now, rsp)
+		return p.processDataReady(now, port, rsp)
 	case *mem.RemoteDataFill:
-		return p.processRemoteDataFill(now, rsp)
+		return p.processRemoteDataFill(now, port, rsp)
 	default:
 		panic("cannot process response")
 	}
@@ -33,11 +46,12 @@ func (p *bottomParser) Tick(now sim.VTimeInSec) bool {
 
 func (p *bottomParser) processDoneRsp(
 	now sim.VTimeInSec,
+	port sim.Port,
 	done *mem.WriteDoneRsp,
 ) bool {
 	trans := p.findTransactionByWriteToBottomID(done.GetRspTo())
 	if trans == nil || trans.fetchAndWrite {
-		p.cache.bottomPort.Retrieve(now)
+		port.Retrieve(now)
 		return true
 	}
 
@@ -46,7 +60,7 @@ func (p *bottomParser) processDoneRsp(
 	}
 
 	p.removeTransaction(trans)
-	p.cache.bottomPort.Retrieve(now)
+	port.Retrieve(now)
 	p.cache.releaseBottomTransaction(trans)
 
 	tracing.TraceReqFinalize(trans.writeToBottom, p.cache)
@@ -68,16 +82,21 @@ func (p *bottomParser) processDoneRsp(
 
 func (p *bottomParser) processDataReady(
 	now sim.VTimeInSec,
+	port sim.Port,
 	dr *mem.DataReadyRsp,
 ) bool {
-	trans := p.findTransactionByReadToBottomID(dr.GetRspTo())
-	if trans == nil {
-		p.cache.bottomPort.Retrieve(now)
+	transactions := p.findTransactionsByReadToBottomID(dr.GetRspTo())
+	if len(transactions) == 0 {
+		port.Retrieve(now)
 		return true
 	}
+	trans := transactions[0]
 	pid := trans.readToBottom.PID
 	if trans.remoteDataFill {
-		return p.processRemoteDataReady(now, dr, trans, pid)
+		return p.processRemoteDataReady(now, port, dr, trans, pid)
+	}
+	if trans.directDramBypass {
+		return p.processDirectDramDataReady(now, port, dr, transactions)
 	}
 
 	bankBuf := p.getBankBuf(trans.block)
@@ -109,7 +128,7 @@ func (p *bottomParser) processDataReady(
 	bankBuf.Push(trans)
 
 	p.removeTransaction(trans)
-	p.cache.bottomPort.Retrieve(now)
+	port.Retrieve(now)
 	p.cache.releaseBottomTransaction(trans)
 
 	tracing.TraceReqFinalize(trans.readToBottom, p.cache)
@@ -117,8 +136,93 @@ func (p *bottomParser) processDataReady(
 	return true
 }
 
+func (p *bottomParser) processDirectDramDataReady(
+	now sim.VTimeInSec,
+	port sim.Port,
+	dr *mem.DataReadyRsp,
+	transactions []*transaction,
+) bool {
+	if !p.canPushDirectDramFetchedLines(transactions) {
+		return false
+	}
+
+	lineBytes := uint64(1 << p.cache.log2BlockSize)
+	for _, trans := range transactions {
+		cachelineID := (trans.Address() >> p.cache.log2BlockSize) <<
+			p.cache.log2BlockSize
+		offset := cachelineID - trans.readToBottom.Address
+		if offset+lineBytes > uint64(len(dr.Data)) {
+			panic("direct DRAM batch response is smaller than requested line")
+		}
+
+		data := append([]byte(nil), dr.Data[offset:offset+lineBytes]...)
+		dirtyMask := make([]bool, lineBytes)
+		mshrEntry := p.cache.mshr.Query(trans.PID(), cachelineID)
+		if mshrEntry == nil {
+			panic("direct DRAM batch response without MSHR entry")
+		}
+
+		memtrace.RecordMemoryPathM1DirectDRAMResponse(
+			p.cache.Name(),
+			trans.id,
+			trans.readToBottom.Meta().ID,
+			dr.Meta().ID,
+			trans.readToBottom.Meta().SendTime,
+			dr.Meta().SendTime,
+			now,
+			trans.readToBottom.Meta().Src,
+			trans.readToBottom.Meta().Dst,
+			dr.Meta().Src,
+			dr.Meta().Dst,
+		)
+		p.mergeMSHRData(mshrEntry, data, dirtyMask)
+		memtrace.RecordMemoryPathDataSource(
+			p.cache.Name(),
+			accessReqInfo(trans.accessReq()),
+			cachelineID,
+			lineBytes,
+			now-trans.readToBottom.SendTime,
+			now,
+			"read",
+			"dram",
+		)
+		p.cache.m1Stats.L1VDirectBypassResponses++
+
+		p.finalizeMSHRTrans(mshrEntry, data, now)
+		p.cache.mshr.Remove(trans.PID(), cachelineID)
+		p.sendM1DirectL2Fill(now, trans, data)
+
+		trans.bankAction = bankActionWriteFetched
+		trans.data = data
+		trans.writeFetchedDirtyMask = dirtyMask
+		p.getBankBuf(trans.block).Push(trans)
+
+		p.removeTransaction(trans)
+		p.cache.releaseBottomTransaction(trans)
+	}
+
+	port.Retrieve(now)
+	tracing.TraceReqFinalize(transactions[0].readToBottom, p.cache)
+	return true
+}
+
+func (p *bottomParser) canPushDirectDramFetchedLines(
+	transactions []*transaction,
+) bool {
+	required := make(map[sim.Buffer]int)
+	for _, trans := range transactions {
+		bankBuf := p.getBankBuf(trans.block)
+		required[bankBuf]++
+		if bankBuf.Capacity()-bankBuf.Size() < required[bankBuf] {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *bottomParser) processRemoteDataReady(
 	now sim.VTimeInSec,
+	port sim.Port,
 	dr *mem.DataReadyRsp,
 	trans *transaction,
 	pid vm.PID,
@@ -143,7 +247,7 @@ func (p *bottomParser) processRemoteDataReady(
 	p.cache.mshr.Remove(pid, cachelineID)
 
 	p.removeTransaction(trans)
-	p.cache.bottomPort.Retrieve(now)
+	port.Retrieve(now)
 	p.cache.releaseBottomTransaction(trans)
 
 	tracing.TraceReqFinalize(trans.readToBottom, p.cache)
@@ -152,6 +256,7 @@ func (p *bottomParser) processRemoteDataReady(
 
 func (p *bottomParser) processRemoteDataFill(
 	now sim.VTimeInSec,
+	port sim.Port,
 	fill *mem.RemoteDataFill,
 ) bool {
 	blockSize := uint64(1 << p.cache.log2BlockSize)
@@ -162,7 +267,7 @@ func (p *bottomParser) processRemoteDataFill(
 	} else if p.cache.remoteDataCache != nil {
 		p.cache.remoteDataCache.stats.PrefetchFillDrops++
 	}
-	p.cache.bottomPort.Retrieve(now)
+	port.Retrieve(now)
 	return true
 }
 
@@ -236,6 +341,18 @@ func (p *bottomParser) findTransactionByReadToBottomID(
 		}
 	}
 	return nil
+}
+
+func (p *bottomParser) findTransactionsByReadToBottomID(
+	id string,
+) []*transaction {
+	transactions := make([]*transaction, 0, 2)
+	for _, trans := range p.cache.postCoalesceTransactions {
+		if trans.readToBottom != nil && trans.readToBottom.ID == id {
+			transactions = append(transactions, trans)
+		}
+	}
+	return transactions
 }
 
 func (p *bottomParser) removeTransaction(trans *transaction) {

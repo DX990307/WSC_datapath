@@ -35,6 +35,11 @@ DRAM_STAGES = {
     "dram_to_l2_response",
 }
 
+M1_DIRECT_DRAM_STAGES = {
+    "m1_direct_dram_request_service",
+    "m1_direct_dram_to_l1v_response",
+}
+
 NETWORK_STAGES = {
     "l1v_bottom_send_to_local_rdma",
     "local_rdma_request_output_wait",
@@ -84,9 +89,11 @@ ADDRESS_TRANSLATION_STAGES = {
 
 IGNORED_STAGES = {
     "l1v_mshr_wait",
+    "m1_background_l2_fill_send",
+    "m1_background_l2_fill_install",
 }
 
-MECHANISMS = ["m1_m2", "baseline", "m1", "m2"]
+MECHANISMS = ["m1_m2_m3", "m1_m2", "baseline", "m1", "m2", "m3"]
 
 
 def parse_args():
@@ -118,6 +125,8 @@ def category_for_stage(stage):
         return "l2_cache"
     if stage in DRAM_STAGES:
         return "dram"
+    if stage in M1_DIRECT_DRAM_STAGES:
+        return "m1_direct_dram"
     if stage in NETWORK_STAGES:
         return "network"
     if stage in LOCAL_DATA_PATH_STAGES:

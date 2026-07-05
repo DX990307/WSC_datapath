@@ -254,6 +254,14 @@ func (d *directory) processReadMiss(
 		return true
 	}
 
+	if d.tryM1DirectDramBypass(now, trans, victim) {
+		d.closeDirStall(now, trans)
+		d.buf.Pop()
+		tracing.AddTaskStep(trans.id, d.cache, "read-direct-dram-bypass")
+		d.recordMemoryPathCacheResult(now, trans, "read-miss")
+		return true
+	}
+
 	if !d.fetchFromBottom(now, trans, victim) {
 		return d.markDirStall(now, trans, l1vDirStallBottomBlocked)
 	}

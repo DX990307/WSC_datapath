@@ -20,9 +20,10 @@ const (
 type Cache struct {
 	*sim.TickingComponent
 
-	topPort     sim.Port
-	bottomPort  sim.Port
-	controlPort sim.Port
+	topPort       sim.Port
+	bottomPort    sim.Port
+	cleanFillPort sim.Port
+	controlPort   sim.Port
 
 	dirStageBuffer           sim.Buffer
 	dirToBankBuffers         []sim.Buffer
@@ -48,14 +49,8 @@ type Cache struct {
 	log2BlockSize   uint64
 	numReqPerCycle  int
 
-	m1Config           M1Config
-	m1Stats            M1Stats
-	m1CacheBatches     map[m1CacheBatchKey]*m1CacheBatchEntry
-	m1CacheBatchOrder  []m1CacheBatchKey
-	m1NextCacheBatchID uint64
-	m1DRAMBatches      map[m1DRAMBatchKey]*m1DRAMBatchEntry
-	m1DRAMBatchOrder   []m1DRAMBatchKey
-	m1NextDRAMBatchID  uint64
+	m1Config M1Config
+	m1Stats  M1Stats
 
 	state                cacheState
 	inFlightTransactions []*transaction
@@ -125,6 +120,7 @@ func (c *Cache) discardInflightTransactions(now sim.VTimeInSec) {
 	c.writeBuffer.Reset(now)
 
 	clearPort(c.topPort, now)
+	clearPort(c.cleanFillPort, now)
 
 	c.topSender.Clear()
 

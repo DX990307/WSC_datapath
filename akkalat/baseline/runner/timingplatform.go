@@ -49,21 +49,7 @@ type R9NanoPlatformBuilder struct {
 	l1vReqPerCycle           int
 	l1vMaxConcurrentTrans    int
 	forceLocalDataAccess     bool
-	m1L1VBatchEnabled        bool
-	m1L1VBatchEntries        int
-	m1L1VBatchLines          int
-	m1L1VBatchWaitNS         uint64
-	m1L1VAdaptiveEnabled     bool
-	m1L1VAdaptiveBadDrains   int
-	m1L1VAdaptiveCooldownNS  uint64
-	m1CacheHelperEnabled     bool
-	m1DRAMHelperEnabled      bool
-	m1CacheBatchEntries      int
-	m1CacheBatchLines        int
-	m1CacheBatchWaitNS       uint64
-	m1DRAMBatchEntries       int
-	m1DRAMBatchLines         int
-	m1DRAMBatchWaitNS        uint64
+	m1DirectDramBypassEnable bool
 	m2Enabled                bool
 	m2AUPrefetchEnabled      bool
 	m2MaxBatchLines          int
@@ -111,17 +97,6 @@ func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 		l1vTLBMSHREntries:        160,
 		l1vReqPerCycle:           32,
 		l1vMaxConcurrentTrans:    160,
-		m1L1VBatchEntries:        32,
-		m1L1VBatchLines:          2,
-		m1L1VBatchWaitNS:         10,
-		m1L1VAdaptiveBadDrains:   4,
-		m1L1VAdaptiveCooldownNS:  200,
-		m1CacheBatchEntries:      16,
-		m1CacheBatchLines:        4,
-		m1CacheBatchWaitNS:       25,
-		m1DRAMBatchEntries:       16,
-		m1DRAMBatchLines:         2,
-		m1DRAMBatchWaitNS:        25,
 		m2MaxBatchLines:          8,
 		m2MaxWaitNS:              50,
 		m2BatchTableEntries:      64,
@@ -260,67 +235,11 @@ func (b R9NanoPlatformBuilder) WithEndpointBufferSize(
 	return b
 }
 
-// WithM1L1VBatchHelper configures the L1V post-coalescer batch helper.
-func (b R9NanoPlatformBuilder) WithM1L1VBatchHelper(
+// WithM1DirectDramBypass enables the narrow M1 direct local DRAM bypass.
+func (b R9NanoPlatformBuilder) WithM1DirectDramBypass(
 	enable bool,
-	entries int,
-	lines int,
-	waitNS uint64,
-	adaptiveEnable bool,
-	adaptiveBadDrains int,
-	adaptiveCooldownNS uint64,
 ) R9NanoPlatformBuilder {
-	b.m1L1VBatchEnabled = enable
-	b.m1L1VAdaptiveEnabled = adaptiveEnable
-	if entries > 0 {
-		b.m1L1VBatchEntries = entries
-	}
-	if lines > 0 {
-		b.m1L1VBatchLines = lines
-	}
-	if waitNS > 0 {
-		b.m1L1VBatchWaitNS = waitNS
-	}
-	if adaptiveBadDrains > 0 {
-		b.m1L1VAdaptiveBadDrains = adaptiveBadDrains
-	}
-	if adaptiveCooldownNS > 0 {
-		b.m1L1VAdaptiveCooldownNS = adaptiveCooldownNS
-	}
-	return b
-}
-
-// WithM1LocalBatchHelpers configures local L2/DRAM batch helpers.
-func (b R9NanoPlatformBuilder) WithM1LocalBatchHelpers(
-	cacheEnable bool,
-	dramEnable bool,
-	cacheEntries int,
-	cacheLines int,
-	cacheWaitNS uint64,
-	dramEntries int,
-	dramLines int,
-	dramWaitNS uint64,
-) R9NanoPlatformBuilder {
-	b.m1CacheHelperEnabled = cacheEnable
-	b.m1DRAMHelperEnabled = dramEnable
-	if cacheEntries > 0 {
-		b.m1CacheBatchEntries = cacheEntries
-	}
-	if cacheLines > 0 {
-		b.m1CacheBatchLines = cacheLines
-	}
-	if cacheWaitNS > 0 {
-		b.m1CacheBatchWaitNS = cacheWaitNS
-	}
-	if dramEntries > 0 {
-		b.m1DRAMBatchEntries = dramEntries
-	}
-	if dramLines > 0 {
-		b.m1DRAMBatchLines = dramLines
-	}
-	if dramWaitNS > 0 {
-		b.m1DRAMBatchWaitNS = dramWaitNS
-	}
+	b.m1DirectDramBypassEnable = enable
 	return b
 }
 
@@ -705,23 +624,8 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithL1VReqPerCycle(b.l1vReqPerCycle).
 		WithL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
 		WithForceLocalDataAccess(b.forceLocalDataAccess).
-		WithM1L1VBatchHelper(
-			b.m1L1VBatchEnabled,
-			b.m1L1VBatchEntries,
-			b.m1L1VBatchLines,
-			b.m1L1VBatchWaitNS,
-			b.m1L1VAdaptiveEnabled,
-			b.m1L1VAdaptiveBadDrains,
-			b.m1L1VAdaptiveCooldownNS).
-		WithM1LocalBatchHelpers(
-			b.m1CacheHelperEnabled,
-			b.m1DRAMHelperEnabled,
-			b.m1CacheBatchEntries,
-			b.m1CacheBatchLines,
-			b.m1CacheBatchWaitNS,
-			b.m1DRAMBatchEntries,
-			b.m1DRAMBatchLines,
-			b.m1DRAMBatchWaitNS).
+		WithM1DirectDramBypass(
+			b.m1DirectDramBypassEnable).
 		WithM2BitmapBatch(
 			b.m2Enabled,
 			b.m2AUPrefetchEnabled,

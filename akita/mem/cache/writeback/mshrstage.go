@@ -33,6 +33,11 @@ func (s *mshrStage) Reset(now sim.VTimeInSec) {
 	s.cache.mshrStageBuffer.Clear()
 }
 
+func (c *Cache) pushMSHRResponse(mshrEntry *cache.MSHREntry) {
+	mshrEntry.ResponseInFlight = true
+	c.mshrStageBuffer.Push(mshrEntry)
+}
+
 func (s *mshrStage) processOneReq(now sim.VTimeInSec) bool {
 	if !s.cache.topSender.CanSend(1) {
 		return false
@@ -54,6 +59,7 @@ func (s *mshrStage) processOneReq(now sim.VTimeInSec) bool {
 
 		mshrEntry.Requests = mshrEntry.Requests[1:]
 		if len(mshrEntry.Requests) == 0 {
+			mshrEntry.ResponseInFlight = false
 			s.processingMSHREntry = nil
 		}
 
@@ -62,6 +68,7 @@ func (s *mshrStage) processOneReq(now sim.VTimeInSec) bool {
 
 	mshrEntry.Requests = mshrEntry.Requests[1:]
 	if len(mshrEntry.Requests) == 0 {
+		mshrEntry.ResponseInFlight = false
 		s.processingMSHREntry = nil
 	}
 

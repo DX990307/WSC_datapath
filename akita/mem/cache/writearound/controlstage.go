@@ -57,6 +57,7 @@ func (s *controlStage) processCurrentFlush(now sim.VTimeInSec) bool {
 func (s *controlStage) hardResetCache(now sim.VTimeInSec) {
 	s.flushPort(s.cache.topPort, now)
 	s.flushPort(s.cache.bottomPort, now)
+	s.flushPort(s.cache.directDramPort, now)
 	s.flushBuffer(s.cache.dirBuf)
 	for _, bankBuf := range s.cache.bankBufs {
 		s.flushBuffer(bankBuf)
@@ -80,6 +81,10 @@ func (s *controlStage) hardResetCache(now sim.VTimeInSec) {
 }
 
 func (s *controlStage) flushPort(port sim.Port, now sim.VTimeInSec) {
+	if port == nil {
+		return
+	}
+
 	for port.Peek() != nil {
 		port.Retrieve(now)
 	}
@@ -127,13 +132,9 @@ func (s *controlStage) doCacheRestart(now sim.VTimeInSec, req *cache.RestartReq)
 
 	s.ctrlPort.Retrieve(now)
 
-	for s.cache.topPort.Peek() != nil {
-		s.cache.topPort.Retrieve(now)
-	}
-
-	for s.cache.bottomPort.Peek() != nil {
-		s.cache.bottomPort.Retrieve(now)
-	}
+	s.flushPort(s.cache.topPort, now)
+	s.flushPort(s.cache.bottomPort, now)
+	s.flushPort(s.cache.directDramPort, now)
 
 	rsp := cache.RestartRspBuilder{}.
 		WithSendTime(now).

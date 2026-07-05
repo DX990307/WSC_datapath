@@ -232,27 +232,9 @@ func (c *coalescer) coalesceAndSend(now sim.VTimeInSec) bool {
 }
 
 func (c *coalescer) sendToDirectoryQueue(
-	now sim.VTimeInSec,
+	_ sim.VTimeInSec,
 	trans *transaction,
 ) {
-	if !c.cache.m1Enabled() {
-		c.cache.dirBuf.Push(trans)
-		return
-	}
-
-	c.cache.m1Stats.L1VRequestsSeen++
-	if c.cache.m1AdaptiveBypass(now) {
-		c.cache.m1Stats.L1VAdaptiveBypassRequests++
-		c.cache.m1Stats.L1VBypassRequests++
-		c.cache.dirBuf.Push(trans)
-		return
-	}
-
-	if c.cache.enqueueM1Batch(now, trans) {
-		return
-	}
-
-	c.cache.m1Stats.L1VBypassRequests++
 	c.cache.dirBuf.Push(trans)
 }
 

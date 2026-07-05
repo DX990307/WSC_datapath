@@ -34,11 +34,14 @@ type transaction struct {
 	writeFetchedDirtyMask []bool
 	remoteDataHitData     []byte
 
-	fetchAndWrite  bool
-	done           bool
-	startTime      sim.VTimeInSec
-	remoteBottom   bool
-	remoteDataFill bool
+	fetchAndWrite    bool
+	done             bool
+	startTime        sim.VTimeInSec
+	remoteBottom     bool
+	remoteDataFill   bool
+	directDramBypass bool
+	directDramPort   sim.Port
+	l2FillPort       sim.Port
 
 	l1vDirStart             sim.VTimeInSec
 	l1vDirFirstAttempt      sim.VTimeInSec
@@ -46,8 +49,8 @@ type transaction struct {
 	l1vDirStallReason       string
 	l1vDirStallStart        sim.VTimeInSec
 
-	m1BatchArrival sim.VTimeInSec
-	m1BatchID      uint64
+	m1DirectDRAMBatchArrival sim.VTimeInSec
+	m1DirectDRAMBatchID      uint64
 }
 
 func (t *transaction) Address() uint64 {

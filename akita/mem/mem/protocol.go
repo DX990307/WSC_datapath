@@ -393,6 +393,92 @@ func (b RemoteDataFillBuilder) Build() *RemoteDataFill {
 	return r
 }
 
+// A CleanDataFill is a best-effort clean cache-line fill. It is used by
+// requester-side bypass paths that fetch data from DRAM directly and then
+// update an intermediate cache without delaying the demand response.
+type CleanDataFill struct {
+	sim.MsgMeta
+
+	Address uint64
+	PID     vm.PID
+	Data    []byte
+	Info    interface{}
+}
+
+// Meta returns the metadata attached to each message.
+func (r *CleanDataFill) Meta() *sim.MsgMeta {
+	return &r.MsgMeta
+}
+
+// CleanDataFillBuilder can build clean data fill messages.
+type CleanDataFillBuilder struct {
+	sendTime sim.VTimeInSec
+	src, dst sim.Port
+	pid      vm.PID
+	address  uint64
+	data     []byte
+	info     interface{}
+}
+
+// WithSendTime sets the send time of the fill to build.
+func (b CleanDataFillBuilder) WithSendTime(
+	t sim.VTimeInSec,
+) CleanDataFillBuilder {
+	b.sendTime = t
+	return b
+}
+
+// WithSrc sets the source of the fill to build.
+func (b CleanDataFillBuilder) WithSrc(src sim.Port) CleanDataFillBuilder {
+	b.src = src
+	return b
+}
+
+// WithDst sets the destination of the fill to build.
+func (b CleanDataFillBuilder) WithDst(dst sim.Port) CleanDataFillBuilder {
+	b.dst = dst
+	return b
+}
+
+// WithPID sets the PID of the fill to build.
+func (b CleanDataFillBuilder) WithPID(pid vm.PID) CleanDataFillBuilder {
+	b.pid = pid
+	return b
+}
+
+// WithAddress sets the cache-line address of the fill to build.
+func (b CleanDataFillBuilder) WithAddress(address uint64) CleanDataFillBuilder {
+	b.address = address
+	return b
+}
+
+// WithData sets the data carried by the fill to build.
+func (b CleanDataFillBuilder) WithData(data []byte) CleanDataFillBuilder {
+	b.data = data
+	return b
+}
+
+// WithInfo sets optional metadata for the fill to build.
+func (b CleanDataFillBuilder) WithInfo(info interface{}) CleanDataFillBuilder {
+	b.info = info
+	return b
+}
+
+// Build creates a new CleanDataFill.
+func (b CleanDataFillBuilder) Build() *CleanDataFill {
+	r := &CleanDataFill{}
+	r.ID = sim.GetIDGenerator().Generate()
+	r.Src = b.src
+	r.Dst = b.dst
+	r.SendTime = b.sendTime
+	r.TrafficBytes = len(b.data) + accessRspByteOverhead
+	r.Address = b.address
+	r.PID = b.pid
+	r.Data = b.data
+	r.Info = b.info
+	return r
+}
+
 // A WriteDoneRsp is a respond sent from the lower module to the higher module
 // to mark a previous requests is completed successfully.
 type WriteDoneRsp struct {

@@ -296,9 +296,18 @@ MECHANISM_ALIASES = {
         "m1_m2_m3",
     ],
     "base": ["baseline"],
+    "m1.1": ["m1"],
+    "m1.2": ["m1"],
+    "m1_1": ["m1"],
+    "m1_2": ["m1"],
+    "m1.1+m1.2": ["m1"],
     "m1+m2": ["m1_m2"],
     "m1+m3": ["m1_m3"],
     "m2+m3": ["m2_m3"],
+    "m1.1+m2+m3": ["m1_m2_m3"],
+    "m1.2+m2+m3": ["m1_m2_m3"],
+    "m1_1_m2_m3": ["m1_m2_m3"],
+    "m1_2_m2_m3": ["m1_m2_m3"],
     "m1+m2+m3": ["m1_m2_m3"],
 }
 
@@ -357,97 +366,9 @@ def parse_args():
         default="baseline",
         help=(
             "Comma-separated mechanism arms to run: baseline,m1,m2,m3,"
-            "m1_m2,m1_m3,m2_m3,m1_m2_m3,all."
+            "m1_m2,m1_m3,m2_m3,m1_m2_m3,all. M1 is direct "
+            "local DRAM bypass with 128B AU coalescing."
         ),
-    )
-    parser.add_argument(
-        "--m1-no-l1v-batch",
-        dest="m1_no_l1v_batch",
-        action="store_true",
-        help="Do not enable the M1 L1V post-coalescer batch helper.",
-    )
-    parser.add_argument(
-        "--m1-l1v-no-adaptive",
-        dest="m1_l1v_no_adaptive",
-        action="store_true",
-        help="Disable adaptive bypass for the M1 L1V batch helper.",
-    )
-    parser.add_argument(
-        "--m1-l1v-batch-lines",
-        dest="m1_l1v_batch_lines",
-        type=int,
-        default=2,
-        help="M1 L1V maximum unique cache lines per same-AU batch.",
-    )
-    parser.add_argument(
-        "--m1-l1v-batch-max-wait-ns",
-        dest="m1_l1v_batch_max_wait_ns",
-        type=int,
-        default=10,
-        help="M1 L1V maximum batch wait in ns.",
-    )
-    parser.add_argument(
-        "--m1-l1v-batch-entries",
-        dest="m1_l1v_batch_entries",
-        type=int,
-        default=32,
-        help="M1 L1V active batch entries per L1V cache.",
-    )
-    parser.add_argument(
-        "--m1-l1v-adaptive-bad-drains",
-        dest="m1_l1v_adaptive_bad_drains",
-        type=int,
-        default=4,
-        help="Consecutive low-quality L1V drains before adaptive bypass.",
-    )
-    parser.add_argument(
-        "--m1-l1v-adaptive-cooldown-ns",
-        dest="m1_l1v_adaptive_cooldown_ns",
-        type=int,
-        default=200,
-        help="M1 L1V adaptive bypass duration in ns.",
-    )
-    parser.add_argument(
-        "--m1-cache-batch-lines",
-        dest="m1_cache_batch_lines",
-        type=int,
-        default=4,
-        help="M1a maximum unique cache lines per same-set local L2 cache batch.",
-    )
-    parser.add_argument(
-        "--m1-cache-batch-max-wait-ns",
-        dest="m1_cache_batch_max_wait_ns",
-        type=int,
-        default=25,
-        help="M1a maximum cache batch wait in ns.",
-    )
-    parser.add_argument(
-        "--m1-cache-batch-entries",
-        dest="m1_cache_batch_entries",
-        type=int,
-        default=16,
-        help="M1a active batch entries per L2 cache.",
-    )
-    parser.add_argument(
-        "--m1-dram-batch-lines",
-        dest="m1_dram_batch_lines",
-        type=int,
-        default=2,
-        help="M1b maximum unique cache lines per 128B DRAM access-unit batch.",
-    )
-    parser.add_argument(
-        "--m1-dram-batch-max-wait-ns",
-        dest="m1_dram_batch_max_wait_ns",
-        type=int,
-        default=25,
-        help="M1b maximum DRAM batch wait in ns.",
-    )
-    parser.add_argument(
-        "--m1-dram-batch-entries",
-        dest="m1_dram_batch_entries",
-        type=int,
-        default=16,
-        help="M1b active DRAM batch entries per L2 cache.",
     )
     parser.add_argument(
         "--m2-max-batch-lines",
@@ -476,27 +397,6 @@ def parse_args():
         type=int,
         default=128,
         help="M3 64B remote-data entries per L1V cache.",
-    )
-    parser.add_argument(
-        "--m3-fair-quantum-lines",
-        dest="m3_fair_quantum_lines",
-        type=int,
-        default=8,
-        help="M3 DRR quantum in cache lines.",
-    )
-    parser.add_argument(
-        "--m3-max-consecutive-batches",
-        dest="m3_max_consecutive_batches",
-        type=int,
-        default=2,
-        help="M3 maximum consecutive packets served from one requester.",
-    )
-    parser.add_argument(
-        "--m3-hard-age-limit-ns",
-        dest="m3_hard_age_limit_ns",
-        type=int,
-        default=500,
-        help="M3 hard age escape threshold in ns.",
     )
     parser.add_argument(
         "--mmutlb-lookup-latency",
@@ -707,7 +607,7 @@ def parse_args():
     parser.add_argument(
         "--disable-servers",
         action="store_true",
-        help="Deprecated no-op. Servers are always left enabled.",
+        help="Pass -disable-servers to each benchmark process.",
     )
     parser.add_argument(
         "--sampled-warmups",
@@ -759,30 +659,7 @@ def selected_mechanisms(args):
 def mechanism_flags(args, mechanism):
     if mechanism == "baseline":
         return []
-    m1_l1v_flags = []
-    if not args.m1_no_l1v_batch:
-        m1_l1v_flags = [
-            "-m1-l1v-batch-enable",
-            f"-m1-l1v-batch-lines={args.m1_l1v_batch_lines}",
-            f"-m1-l1v-batch-max-wait-ns={args.m1_l1v_batch_max_wait_ns}",
-            f"-m1-l1v-batch-entries={args.m1_l1v_batch_entries}",
-        ]
-        if not args.m1_l1v_no_adaptive:
-            m1_l1v_flags += [
-                "-m1-l1v-adaptive-enable",
-                f"-m1-l1v-adaptive-bad-drains={args.m1_l1v_adaptive_bad_drains}",
-                f"-m1-l1v-adaptive-cooldown-ns={args.m1_l1v_adaptive_cooldown_ns}",
-            ]
-    m1_flags = m1_l1v_flags + [
-        "-m1-l2-helper-enable",
-        "-m1-dram-helper-enable",
-        f"-m1-cache-batch-lines={args.m1_cache_batch_lines}",
-        f"-m1-cache-batch-max-wait-ns={args.m1_cache_batch_max_wait_ns}",
-        f"-m1-cache-batch-entries={args.m1_cache_batch_entries}",
-        f"-m1-dram-batch-lines={args.m1_dram_batch_lines}",
-        f"-m1-dram-batch-max-wait-ns={args.m1_dram_batch_max_wait_ns}",
-        f"-m1-dram-batch-entries={args.m1_dram_batch_entries}",
-    ]
+    m1_flags = ["-m1-direct-dram-bypass-enable"]
     m2_flags = [
         "-m2-rdma-batch-enable",
         f"-m2-max-batch-lines={args.m2_max_batch_lines}",
@@ -856,6 +733,8 @@ def build_common_flags(args):
     ]
     if args.log2_page_size is not None:
         flags.append(f"-log2-page-size={args.log2_page_size}")
+    if args.disable_servers:
+        flags.append("-disable-servers")
     if args.trace_memory_path:
         flags += [
             "-trace-memory-path",

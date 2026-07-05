@@ -52,6 +52,10 @@ var l1vPathStageColumns = []string{
 	"l2_bottom_send_to_dram",
 	"dram_queue_and_service",
 	"dram_to_l2_response",
+	"m1_direct_dram_request_service",
+	"m1_direct_dram_to_l1v_response",
+	"m1_background_l2_fill_send",
+	"m1_background_l2_fill_install",
 	"l2_fill_and_response",
 	"remote_l2_to_remote_rdma_response",
 	"remote_rdma_response_output_wait",
@@ -91,6 +95,7 @@ var criticalPathComponentColumns = []string{
 	"l1_cache_handle",
 	"local_l2_cache",
 	"local_dram",
+	"m1_direct_dram",
 	"network",
 	"remote_l2_cache",
 	"remote_dram",
@@ -107,6 +112,7 @@ type criticalPathBreakdown struct {
 	l1CacheHandleNS         uint64
 	localL2CacheNS          uint64
 	localDRAMNS             uint64
+	m1DirectDRAMNS          uint64
 	networkNS               uint64
 	remoteL2CacheNS         uint64
 	remoteDRAMNS            uint64
@@ -587,6 +593,80 @@ func RecordMemoryPathL2DRAMResponse(
 	})
 }
 
+func RecordMemoryPathM1DirectDRAMResponse(
+	cacheName string,
+	pathID string,
+	requestID string,
+	responseID string,
+	requestSend sim.VTimeInSec,
+	responseSend sim.VTimeInSec,
+	responseReceive sim.VTimeInSec,
+	requestSrc sim.Port,
+	requestDst sim.Port,
+	responseSrc sim.Port,
+	responseDst sim.Port,
+) {
+	globalMemoryPathStats.Lock()
+	defer globalMemoryPathStats.Unlock()
+
+	if !globalMemoryPathStats.collectingLocked() {
+		return
+	}
+	rec := globalMemoryPathStats.recordByOriginalLocked(pathID)
+	if rec == nil {
+		return
+	}
+	rec.route = "local"
+	rec.l1vBottomResponseNS = timeToNS(responseReceive)
+
+	reqSendNS := timeToNS(requestSend)
+	rspSendNS := timeToNS(responseSend)
+	reqFromComponent, reqFromPort := componentAndPort(requestSrc)
+	reqToComponent, reqToPort := componentAndPort(requestDst)
+	if rspSendNS >= reqSendNS {
+		globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
+			segment:       "m1_direct_dram_request_service",
+			fromComponent: reqFromComponent,
+			fromPort:      reqFromPort,
+			toComponent:   reqToComponent,
+			toPort:        reqToPort,
+			requestMsgID:  requestID,
+			responseMsgID: responseID,
+			startNS:       reqSendNS,
+			endNS:         rspSendNS,
+			notes:         "direct_local_dram_bypass",
+		})
+	}
+
+	rspFromComponent, rspFromPort := componentAndPort(responseSrc)
+	rspToComponent, rspToPort := componentAndPort(responseDst)
+	if rspToComponent == "" {
+		rspToComponent = cacheName
+	}
+	if rec.l1vBottomResponseNS >= rspSendNS {
+		globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
+			segment:       "m1_direct_dram_to_l1v_response",
+			fromComponent: rspFromComponent,
+			fromPort:      rspFromPort,
+			toComponent:   rspToComponent,
+			toPort:        rspToPort,
+			requestMsgID:  requestID,
+			responseMsgID: responseID,
+			startNS:       rspSendNS,
+			endNS:         rec.l1vBottomResponseNS,
+			notes:         "direct_local_dram_bypass",
+		})
+	}
+	globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
+		segment:       "l1v_bottom_response_parse",
+		fromComponent: cacheName,
+		toComponent:   cacheName,
+		responseMsgID: responseID,
+		startNS:       rec.l1vBottomResponseNS,
+		endNS:         rec.l1vBottomResponseNS,
+	})
+}
+
 func RecordMemoryPathRDMARequestFromL1(
 	rdmaName string,
 	info interface{},
@@ -878,6 +958,61 @@ func RecordMemoryPathL1VBottomResponse(
 	})
 }
 
+func RecordMemoryPathM1BackgroundL2Fill(
+	cacheName string,
+	info interface{},
+	fillID string,
+	send sim.VTimeInSec,
+	receive sim.VTimeInSec,
+	src sim.Port,
+	dst sim.Port,
+	installed bool,
+) {
+	globalMemoryPathStats.Lock()
+	defer globalMemoryPathStats.Unlock()
+
+	if !globalMemoryPathStats.collectingLocked() {
+		return
+	}
+	rec := globalMemoryPathStats.recordForPathInfoLocked(info, fillID)
+	if rec == nil {
+		return
+	}
+	sendNS := timeToNS(send)
+	receiveNS := timeToNS(receive)
+	fromComponent, fromPort := componentAndPort(src)
+	toComponent, toPort := componentAndPort(dst)
+	if toComponent == "" {
+		toComponent = cacheName
+	}
+	if receiveNS >= sendNS {
+		globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
+			segment:       "m1_background_l2_fill_send",
+			fromComponent: fromComponent,
+			fromPort:      fromPort,
+			toComponent:   toComponent,
+			toPort:        toPort,
+			requestMsgID:  fillID,
+			startNS:       sendNS,
+			endNS:         receiveNS,
+			notes:         "background_fill_not_on_demand_path",
+		})
+	}
+	note := "installed"
+	if !installed {
+		note = "dropped"
+	}
+	globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
+		segment:       "m1_background_l2_fill_install",
+		fromComponent: cacheName,
+		toComponent:   cacheName,
+		requestMsgID:  fillID,
+		startNS:       receiveNS,
+		endNS:         receiveNS,
+		notes:         note,
+	})
+}
+
 func RecordMemoryPathL1VMSHRWakeup(cacheName string, pathID string, now sim.VTimeInSec) {
 	globalMemoryPathStats.Lock()
 	defer globalMemoryPathStats.Unlock()
@@ -1013,6 +1148,9 @@ func (s *memoryPathStats) noteCacheResultLocked(
 			rec.l1vMSHRStartNS = nowNS
 		}
 	case "l2":
+		if result == "bypass" {
+			return
+		}
 		rec.l2DirResultNS = nowNS
 		if rec.l2DirStartNS > 0 && nowNS >= rec.l2DirStartNS {
 			s.appendL1VPathHopLocked(rec, l1vPathHop{
@@ -1545,7 +1683,8 @@ func criticalPathBreakdownHeader() []string {
 		"address_translation_tlb_ns", "at_to_l1v_top_ns",
 		"data_access_total_ns", "data_access_accounted_ns",
 		"l1_cache_handle_ns", "local_l2_cache_ns", "local_dram_ns",
-		"network_ns", "remote_l2_cache_ns", "remote_dram_ns",
+		"m1_direct_dram_ns", "network_ns",
+		"remote_l2_cache_ns", "remote_dram_ns",
 		"other_data_access_ns", "data_access_over_accounted_ns",
 		"l1v_tlb_latency_ns", "l2tlb_latency_ns",
 	}
@@ -1623,6 +1762,7 @@ func (s *memoryPathStats) criticalPathBreakdownRow(
 		strconv.FormatUint(breakdown.l1CacheHandleNS, 10),
 		strconv.FormatUint(breakdown.localL2CacheNS, 10),
 		strconv.FormatUint(breakdown.localDRAMNS, 10),
+		strconv.FormatUint(breakdown.m1DirectDRAMNS, 10),
 		strconv.FormatUint(breakdown.networkNS, 10),
 		strconv.FormatUint(breakdown.remoteL2CacheNS, 10),
 		strconv.FormatUint(breakdown.remoteDRAMNS, 10),
@@ -2038,6 +2178,10 @@ func criticalPathBreakdownForRecord(rec *memoryPathRecord) criticalPathBreakdown
 		"dram_queue_and_service",
 		"dram_to_l2_response",
 	})
+	m1DirectDRAM := sumStages(rec, []string{
+		"m1_direct_dram_request_service",
+		"m1_direct_dram_to_l1v_response",
+	})
 
 	var localL2, localDRAM, remoteL2, remoteDRAM, network uint64
 	if rec.isRemote {
@@ -2065,7 +2209,7 @@ func criticalPathBreakdownForRecord(rec *memoryPathRecord) criticalPathBreakdown
 
 	dataAccessTotal := rec.l1vCacheLatencyNS
 	accounted := l1CacheHandle + localL2 + localDRAM +
-		network + remoteL2 + remoteDRAM
+		m1DirectDRAM + network + remoteL2 + remoteDRAM
 	var other, over uint64
 	if dataAccessTotal > accounted {
 		other = dataAccessTotal - accounted
@@ -2082,6 +2226,7 @@ func criticalPathBreakdownForRecord(rec *memoryPathRecord) criticalPathBreakdown
 		l1CacheHandleNS:         l1CacheHandle,
 		localL2CacheNS:          localL2,
 		localDRAMNS:             localDRAM,
+		m1DirectDRAMNS:          m1DirectDRAM,
 		networkNS:               network,
 		remoteL2CacheNS:         remoteL2,
 		remoteDRAMNS:            remoteDRAM,
@@ -2128,6 +2273,7 @@ func criticalPathComponentValues(b criticalPathBreakdown) map[string]uint64 {
 		"l1_cache_handle":            b.l1CacheHandleNS,
 		"local_l2_cache":             b.localL2CacheNS,
 		"local_dram":                 b.localDRAMNS,
+		"m1_direct_dram":             b.m1DirectDRAMNS,
 		"network":                    b.networkNS,
 		"remote_l2_cache":            b.remoteL2CacheNS,
 		"remote_dram":                b.remoteDRAMNS,

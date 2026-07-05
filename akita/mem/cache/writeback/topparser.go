@@ -16,54 +16,13 @@ func (p *topParser) Tick(now sim.VTimeInSec) bool {
 		return false
 	}
 
-	if p.cache.m1CacheEnabled() &&
-		p.cache.processM1CacheBatches(now, false, m1DrainManual) {
-		return true
-	}
-
 	req := p.cache.topPort.Peek()
 	if req == nil {
-		if p.cache.m1CacheEnabled() && p.cache.m1HasCacheBatches() {
-			return p.cache.processM1CacheBatches(
-				now, true, m1DrainManual)
-		}
-		return false
+		return p.processCleanFillPort(now)
 	}
 
-	if p.cache.m1CacheEnabled() {
-		return p.processWithM1Cache(now, req)
-	}
-
-	return p.processNormalRequest(now, req)
-}
-
-func (p *topParser) processWithM1Cache(
-	now sim.VTimeInSec,
-	req sim.Msg,
-) bool {
-	if accessReq, ok := req.(mem.AccessReq); ok &&
-		p.cache.m1IsLocalSource(accessReq.Meta().Src) {
-		p.cache.m1Stats.LocalRequestsSeen++
-	}
-
-	if read, ok := req.(*mem.ReadReq); ok &&
-		p.cache.m1CacheReadBatchable(read) {
-		trans := p.createTransaction(req)
-		if !p.cache.enqueueM1CacheRead(now, trans) {
-			return false
-		}
-		p.recordReceive(now, req, trans)
-		p.cache.topPort.Retrieve(now)
-		return true
-	}
-
-	if p.cache.m1HasCacheBatches() {
-		return p.cache.processM1CacheBatches(now, true, m1DrainManual)
-	}
-
-	if accessReq, ok := req.(mem.AccessReq); ok &&
-		p.cache.m1IsLocalSource(accessReq.Meta().Src) {
-		p.cache.m1Stats.CacheBypassRequests++
+	if fill, ok := req.(*mem.CleanDataFill); ok {
+		return p.processCleanDataFill(now, p.cache.topPort, fill)
 	}
 
 	return p.processNormalRequest(now, req)
@@ -73,11 +32,12 @@ func (p *topParser) processNormalRequest(
 	now sim.VTimeInSec,
 	req sim.Msg,
 ) bool {
+	trans := p.createTransaction(req)
+
 	if !p.cache.dirStageBuffer.CanPush() {
 		return false
 	}
 
-	trans := p.createTransaction(req)
 	p.cache.dirStageBuffer.Push(trans)
 
 	p.recordReceive(now, req, trans)
