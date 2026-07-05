@@ -137,6 +137,7 @@ type memoryPathStats struct {
 	tileWidth      int
 	remoteOnly     bool
 	streaming      bool
+	tailWindow     bool
 	exitOnRawFull  bool
 
 	observed uint64
@@ -163,6 +164,7 @@ type memoryPathStats struct {
 	translatedReqToOriginal   map[string]string
 	networkMsgToOriginal      map[string]string
 	networkMsgDirection       map[string]string
+	tailRecordIDs             []string
 
 	full   memoryPathAggregate
 	steady memoryPathAggregate
@@ -207,6 +209,7 @@ func (s *memoryPathStats) resetMapsLocked() {
 	s.matched = 0
 	s.written = 0
 	s.raw = nil
+	s.tailRecordIDs = nil
 	s.streamErr = nil
 	s.l1vPathStageAggregates = make(map[string]*l1vPathStageAggregate)
 	s.criticalPathAggregate = newCriticalPathAggregate()
@@ -223,6 +226,7 @@ func EnableMemoryPathTrace(
 	tileWidth int,
 	remoteOnly bool,
 	streaming bool,
+	tailWindow bool,
 	exitOnRawFull bool,
 	doneCallback func(),
 ) error {
@@ -242,6 +246,12 @@ func EnableMemoryPathTrace(
 	if tileWidth <= 0 {
 		tileWidth = defaultL2SourceTileWidth
 	}
+	if tailWindow && streaming {
+		return fmt.Errorf("memory-path tail window cannot be used with streaming")
+	}
+	if tailWindow && exitOnRawFull {
+		return fmt.Errorf("memory-path tail window cannot exit on raw full")
+	}
 
 	if dir := filepath.Dir(prefix + "_raw.csv.gz"); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -257,6 +267,7 @@ func EnableMemoryPathTrace(
 	globalMemoryPathStats.tileWidth = tileWidth
 	globalMemoryPathStats.remoteOnly = remoteOnly
 	globalMemoryPathStats.streaming = streaming
+	globalMemoryPathStats.tailWindow = tailWindow
 	globalMemoryPathStats.exitOnRawFull = exitOnRawFull
 	globalMemoryPathStats.doneCallback = doneCallback
 	globalMemoryPathStats.resetMapsLocked()
@@ -283,6 +294,7 @@ func DisableMemoryPathTrace() {
 	globalMemoryPathStats.prefix = ""
 	globalMemoryPathStats.remoteOnly = false
 	globalMemoryPathStats.streaming = false
+	globalMemoryPathStats.tailWindow = false
 	globalMemoryPathStats.exitOnRawFull = false
 	globalMemoryPathStats.doneCallback = nil
 	globalMemoryPathStats.resetMapsLocked()
@@ -1109,6 +1121,8 @@ func (s *memoryPathStats) completeRecordLocked(rec *memoryPathRecord) bool {
 		s.writeRawLocked(rec)
 		if s.streaming {
 			s.streamL1VPathRecordLocked(rec)
+		} else if s.tailWindow {
+			s.rememberTailRecordLocked(rec)
 		}
 	}
 	if s.streaming {
@@ -1120,6 +1134,23 @@ func (s *memoryPathStats) completeRecordLocked(rec *memoryPathRecord) bool {
 		return true
 	}
 	return false
+}
+
+func (s *memoryPathStats) rememberTailRecordLocked(rec *memoryPathRecord) {
+	if rec == nil || rec.originalReqID == "" || s.maxRecords == 0 {
+		return
+	}
+	s.tailRecordIDs = append(s.tailRecordIDs, rec.originalReqID)
+	limit := int(s.maxRecords)
+	for len(s.tailRecordIDs) > limit {
+		oldID := s.tailRecordIDs[0]
+		copy(s.tailRecordIDs, s.tailRecordIDs[1:])
+		s.tailRecordIDs = s.tailRecordIDs[:len(s.tailRecordIDs)-1]
+		if oldID == rec.originalReqID {
+			continue
+		}
+		s.releaseRecordLocked(s.records[oldID])
+	}
 }
 
 func (s *memoryPathStats) releaseRecordLocked(rec *memoryPathRecord) {
@@ -1171,6 +1202,9 @@ func (s *memoryPathStats) inRawWindow(sequence uint64) bool {
 	if !s.inSteadyScope(sequence) {
 		return false
 	}
+	if s.tailWindow {
+		return true
+	}
 	if s.maxRecords == 0 {
 		return true
 	}
@@ -1178,7 +1212,7 @@ func (s *memoryPathStats) inRawWindow(sequence uint64) bool {
 }
 
 func (s *memoryPathStats) writeRawLocked(rec *memoryPathRecord) {
-	if s.maxRecords > 0 && s.written >= s.maxRecords {
+	if !s.tailWindow && s.maxRecords > 0 && s.written >= s.maxRecords {
 		return
 	}
 	row := []string{
@@ -1242,11 +1276,18 @@ func (s *memoryPathStats) writeRawLocked(rec *memoryPathRecord) {
 		sequence: rec.sequence,
 		row:      row,
 	})
-	s.written++
+	if s.tailWindow && s.maxRecords > 0 && uint64(len(s.raw)) > s.maxRecords {
+		copy(s.raw, s.raw[1:])
+		s.raw = s.raw[:len(s.raw)-1]
+	}
+	if !s.tailWindow || s.maxRecords == 0 || s.written < s.maxRecords {
+		s.written++
+	}
 }
 
 func (s *memoryPathStats) traceDoneLocked() bool {
-	return s.exitOnRawFull &&
+	return !s.tailWindow &&
+		s.exitOnRawFull &&
 		!s.doneNotified &&
 		s.maxRecords > 0 &&
 		s.written >= s.maxRecords

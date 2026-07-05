@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
@@ -635,13 +636,17 @@ func (wb *writeBufferStage) drainM1DRAMBatch(
 	}
 
 	lowModulePort := wb.cache.lowModuleFinder.Find(minAddr)
+	infos := make([]interface{}, 0, len(entry.transactions))
+	for _, trans := range entry.transactions {
+		infos = append(infos, accessReqInfo(trans.accessReq()))
+	}
 	read := mem.ReadReqBuilder{}.
 		WithSrc(wb.cache.bottomPort).
 		WithDst(lowModulePort).
 		WithPID(entry.transactions[0].fetchPID).
 		WithAddress(minAddr).
 		WithByteSize(uint64(spanLines) * lineBytes).
-		WithInfo(accessReqInfo(entry.transactions[0].accessReq())).
+		WithInfo(memtrace.WithMemoryPathBatchInfo(infos...)).
 		Build()
 
 	for _, trans := range entry.transactions {

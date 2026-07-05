@@ -489,26 +489,29 @@ func RecordMemoryPathDRAMRequestReceive(
 	if !globalMemoryPathStats.collectingLocked() {
 		return
 	}
-	rec := globalMemoryPathStats.recordForPathInfoLocked(info, requestID)
-	if rec == nil {
+	recs := globalMemoryPathStats.recordsForPathInfoLocked(info, requestID)
+	if len(recs) == 0 {
 		return
 	}
-	rec.dramReceiveNS = timeToNS(receive)
+	receiveNS := timeToNS(receive)
 	fromComponent, fromPort := componentAndPort(src)
 	toComponent, toPort := componentAndPort(dst)
 	if toComponent == "" {
 		toComponent = dramName
 	}
-	globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
-		segment:       "l2_bottom_send_to_dram",
-		fromComponent: fromComponent,
-		fromPort:      fromPort,
-		toComponent:   toComponent,
-		toPort:        toPort,
-		requestMsgID:  requestID,
-		startNS:       timeToNS(send),
-		endNS:         rec.dramReceiveNS,
-	})
+	for _, rec := range recs {
+		rec.dramReceiveNS = receiveNS
+		globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
+			segment:       "l2_bottom_send_to_dram",
+			fromComponent: fromComponent,
+			fromPort:      fromPort,
+			toComponent:   toComponent,
+			toPort:        toPort,
+			requestMsgID:  requestID,
+			startNS:       timeToNS(send),
+			endNS:         receiveNS,
+		})
+	}
 }
 
 func RecordMemoryPathDRAMResponse(
@@ -524,21 +527,23 @@ func RecordMemoryPathDRAMResponse(
 	if !globalMemoryPathStats.collectingLocked() {
 		return
 	}
-	rec := globalMemoryPathStats.recordForPathInfoLocked(info, requestID)
-	if rec == nil {
+	recs := globalMemoryPathStats.recordsForPathInfoLocked(info, requestID)
+	if len(recs) == 0 {
 		return
 	}
 	nowNS := timeToNS(now)
-	if rec.dramReceiveNS > 0 && nowNS >= rec.dramReceiveNS {
-		globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
-			segment:       "dram_queue_and_service",
-			fromComponent: dramName,
-			toComponent:   dramName,
-			requestMsgID:  requestID,
-			responseMsgID: responseID,
-			startNS:       rec.dramReceiveNS,
-			endNS:         nowNS,
-		})
+	for _, rec := range recs {
+		if rec.dramReceiveNS > 0 && nowNS >= rec.dramReceiveNS {
+			globalMemoryPathStats.appendL1VPathHopLocked(rec, l1vPathHop{
+				segment:       "dram_queue_and_service",
+				fromComponent: dramName,
+				toComponent:   dramName,
+				requestMsgID:  requestID,
+				responseMsgID: responseID,
+				startNS:       rec.dramReceiveNS,
+				endNS:         nowNS,
+			})
+		}
 	}
 }
 
@@ -1109,6 +1114,53 @@ func (s *memoryPathStats) recordForPathInfoLocked(info interface{}, fallbackReqI
 		s.applyAccessInfoLocked(rec, accessInfo)
 	}
 	return rec
+}
+
+func (s *memoryPathStats) recordsForPathInfoLocked(info interface{}, fallbackReqID string) []*memoryPathRecord {
+	switch batchInfo := info.(type) {
+	case MemoryPathBatchInfo:
+		return s.recordsForBatchPathInfoLocked(batchInfo.Infos, fallbackReqID)
+	case *MemoryPathBatchInfo:
+		if batchInfo == nil {
+			return nil
+		}
+		return s.recordsForBatchPathInfoLocked(batchInfo.Infos, fallbackReqID)
+	default:
+		rec := s.recordForPathInfoLocked(info, fallbackReqID)
+		if rec == nil {
+			return nil
+		}
+		return []*memoryPathRecord{rec}
+	}
+}
+
+func (s *memoryPathStats) recordsForBatchPathInfoLocked(infos []interface{}, fallbackReqID string) []*memoryPathRecord {
+	if len(infos) == 0 {
+		rec := s.recordForPathInfoLocked(nil, fallbackReqID)
+		if rec == nil {
+			return nil
+		}
+		return []*memoryPathRecord{rec}
+	}
+
+	records := make([]*memoryPathRecord, 0, len(infos))
+	seen := make(map[string]struct{}, len(infos))
+	for _, info := range infos {
+		rec := s.recordForPathInfoLocked(info, fallbackReqID)
+		if rec == nil {
+			continue
+		}
+		key := rec.originalReqID
+		if key == "" {
+			key = fmt.Sprintf("%p", rec)
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		records = append(records, rec)
+	}
+	return records
 }
 
 func (s *memoryPathStats) recordForNetworkMessageLocked(

@@ -197,6 +197,7 @@ func (r *Runner) configureMemoryPathTrace() {
 		*l2SourceTileWidthFlag,
 		*memoryPathTraceRemoteOnly,
 		*memoryPathTraceStream,
+		*memoryPathTraceTailWindow,
 		*memoryPathTraceExitOnComplete,
 		doneCallback,
 	); err != nil {

@@ -615,6 +615,14 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--trace-memory-path-tail-window",
+        action="store_true",
+        help=(
+            "Keep the last max-records memory-path rows after warmup and "
+            "dump that tail window at benchmark end."
+        ),
+    )
+    parser.add_argument(
         "--trace-memory-path-exit-on-complete",
         action="store_true",
         help=(
@@ -866,6 +874,8 @@ def build_common_flags(args):
             flags.append("-trace-memory-path-remote-only")
         if args.trace_memory_path_stream:
             flags.append("-trace-memory-path-stream")
+        if args.trace_memory_path_tail_window:
+            flags.append("-trace-memory-path-tail-window")
     if args.report_l2_source:
         flags += [
             "-report-l2-source",
@@ -1493,6 +1503,19 @@ def main():
     global output_dir
 
     args = parse_args()
+    if args.trace_memory_path_tail_window and args.trace_memory_path_stream:
+        raise ValueError(
+            "--trace-memory-path-tail-window cannot be used with "
+            "--trace-memory-path-stream"
+        )
+    if (
+        args.trace_memory_path_tail_window
+        and args.trace_memory_path_exit_on_complete
+    ):
+        raise ValueError(
+            "--trace-memory-path-tail-window cannot be used with "
+            "--trace-memory-path-exit-on-complete"
+        )
     common_flags = build_common_flags(args)
     configs = build_configs(args)
     if args.only_config:

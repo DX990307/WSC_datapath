@@ -57,6 +57,27 @@ type L2AccessInfo struct {
 	TranslatedReqID   string
 }
 
+// MemoryPathBatchInfo carries multiple original request identities for one
+// lower-level memory transaction, such as an M1 DRAM access-unit batch.
+type MemoryPathBatchInfo struct {
+	Infos []interface{}
+}
+
+// WithMemoryPathBatchInfo builds an Info payload that fans lower-level path
+// stages out to every request that shares the same memory transaction.
+func WithMemoryPathBatchInfo(infos ...interface{}) interface{} {
+	filtered := make([]interface{}, 0, len(infos))
+	for _, info := range infos {
+		if info != nil {
+			filtered = append(filtered, info)
+		}
+	}
+	if len(filtered) == 1 {
+		return filtered[0]
+	}
+	return MemoryPathBatchInfo{Infos: filtered}
+}
+
 type l2LocalKey struct {
 	gpm       int
 	component string

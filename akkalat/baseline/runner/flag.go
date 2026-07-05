@@ -40,6 +40,8 @@ var memoryPathTraceRemoteOnly = flag.Bool("trace-memory-path-remote-only", false
 	"Only count and write remote L1V memory paths in memory-path trace outputs.")
 var memoryPathTraceStream = flag.Bool("trace-memory-path-stream", false,
 	"Stream memory-path raw/L1V path rows to disk and release completed request records.")
+var memoryPathTraceTailWindow = flag.Bool("trace-memory-path-tail-window", false,
+	"Keep the last max-records memory-path rows after warmup and dump them at the end.")
 var memoryPathTraceExitOnComplete = flag.Bool("trace-memory-path-exit-on-complete", false,
 	"Exit the benchmark process after the memory-path raw trace window reaches max records.")
 var instCountReportFlag = flag.Bool("report-inst-count", false,
