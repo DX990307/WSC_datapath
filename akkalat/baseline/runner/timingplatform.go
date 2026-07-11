@@ -100,7 +100,7 @@ func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 		dramRowReorderMaxAge:   64,
 		remoteDataPath: rdma.RemoteDataPathConfig{
 			MaxBatchLines:     8,
-			MaxWaitNS:         50,
+			MaxWaitNS:         0,
 			MaxBatches:        64,
 			ReuseTableEntries: 4096,
 		},

@@ -75,12 +75,77 @@ func remoteTestRead(src sim.Port, address uint64) *mem.ReadReq {
 		Build()
 }
 
+func TestRemoteDataPathWorkConservingBatchUsesCurrentCycleOnly(t *testing.T) {
+	c, toL1, toOutside := newPipelineTestComp(8, 0, 64,
+		RemoteDataPathConfig{
+			Enabled:            true,
+			DisableRequesterL2: true,
+			MaxBatchLines:      8,
+			MaxWaitNS:          999,
+			MaxBatches:         8,
+		})
+	l1 := &remoteTestPort{name: "L1"}
+	toL1.inbox = append(toL1.inbox,
+		remoteTestRead(l1, 0x1000),
+		remoteTestRead(l1, 0x1040),
+	)
+
+	if !c.Tick(1) {
+		t.Fatal("work-conserving RDMA made no progress")
+	}
+	if len(toOutside.sent) != 1 {
+		t.Fatalf("network packets = %d, want one same-cycle batch",
+			len(toOutside.sent))
+	}
+	req, ok := toOutside.sent[0].(*BitmapReadReq)
+	if !ok || req.LineBitmap != 0x3 {
+		t.Fatalf("same-cycle bitmap request = %#v, want lines 0 and 1", req)
+	}
+	stats := c.GetRemoteDataPathStats()
+	if stats.MaxWaitNS != 0 || stats.WorkConservingFlushes != 1 ||
+		stats.TimeoutFlushes != 0 || stats.LogicalRemoteReads != 2 {
+		t.Fatalf("unexpected work-conserving stats: %+v", stats)
+	}
+}
+
+func TestRemoteDataPathBatchEgressRespectsPipelineWidth(t *testing.T) {
+	c, toL1, toOutside := newPipelineTestComp(2, 0, 64,
+		RemoteDataPathConfig{
+			Enabled:            true,
+			DisableRequesterL2: true,
+			MaxBatchLines:      8,
+			MaxBatches:         8,
+		})
+	l1 := &remoteTestPort{name: "L1"}
+	for _, address := range []uint64{0x1000, 0x2000, 0x3000, 0x4000} {
+		toL1.inbox = append(toL1.inbox, remoteTestRead(l1, address))
+	}
+	c.processFromL1(1)
+	c.processFromL1(2)
+	for i := 0; i < 4; i++ {
+		if !c.processRemotePendingBatches(3) {
+			t.Fatal("request did not enter a collecting batch")
+		}
+	}
+
+	c.processRemoteBatches(3, false)
+	if len(toOutside.sent) != 2 || len(c.remoteBatchOrder) != 2 {
+		t.Fatalf("first egress cycle sent %d packets and left %d batches; want 2 and 2",
+			len(toOutside.sent), len(c.remoteBatchOrder))
+	}
+	c.processRemoteBatches(4, false)
+	if len(toOutside.sent) != 4 || len(c.remoteBatchOrder) != 0 {
+		t.Fatalf("second egress cycle sent %d packets and left %d batches; want 4 and 0",
+			len(toOutside.sent), len(c.remoteBatchOrder))
+	}
+}
+
 func TestRemoteDataPathMergesCollectingAndInflightReads(t *testing.T) {
 	c, toL1, toL2, toOutside, _ := newRemoteDataPathTestComp(t,
 		RemoteDataPathConfig{
 			Enabled:           true,
 			MaxBatchLines:     8,
-			MaxWaitNS:         10,
+			MaxWaitNS:         10, // Deprecated input must not delay issue.
 			MaxBatches:        8,
 			ReuseTableEntries: 32,
 		})
@@ -104,7 +169,7 @@ func TestRemoteDataPathMergesCollectingAndInflightReads(t *testing.T) {
 	if !c.processRemotePendingBatches(2) {
 		t.Fatal("pending line was not added to a batch")
 	}
-	if !c.processRemoteBatches(20, false) {
+	if !c.processRemoteBatches(2, false) {
 		t.Fatal("batch was not flushed")
 	}
 	if got := len(toOutside.sent); got != 1 {
@@ -272,14 +337,14 @@ func TestRemoteDataPathSendFailureKeepsBatch(t *testing.T) {
 	c.processFromL1(1)
 	c.processRemotePendingBatches(2)
 	toOutside.blocked = true
-	if c.flushRemoteBatch(3, c.remoteBatches[c.remoteBatchOrder[0]], flushReasonTimeout) {
+	if c.flushRemoteBatch(3, c.remoteBatches[c.remoteBatchOrder[0]], flushReasonIssue) {
 		t.Fatal("blocked send unexpectedly succeeded")
 	}
 	if len(c.remoteBatchOrder) != 1 || len(c.remoteSingleInflight) != 0 {
 		t.Fatal("failed send lost or committed the collecting batch")
 	}
 	toOutside.blocked = false
-	if !c.flushRemoteBatch(4, c.remoteBatches[c.remoteBatchOrder[0]], flushReasonTimeout) {
+	if !c.flushRemoteBatch(4, c.remoteBatches[c.remoteBatchOrder[0]], flushReasonIssue) {
 		t.Fatal("retry did not flush the preserved batch")
 	}
 	if len(c.remoteBatchOrder) != 0 || len(c.remoteSingleInflight) != 1 {

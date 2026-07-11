@@ -149,7 +149,7 @@ def build_remote_data_path_ablation_configs(args):
         f"-dram-batch-wait-ns={dram_wait_ns}",
         f"-dram-row-reorder-max-age={dram_row_max_age}",
         f"-remote-data-path-batch-lines={batch_lines}",
-        f"-remote-data-path-wait-ns={wait_ns}",
+        "-remote-data-path-wait-ns=0",
         f"-remote-data-path-batches={max_batches}",
         f"-remote-data-path-reuse-entries={reuse_entries}",
     ]

@@ -15,7 +15,7 @@ const (
 	bitmapReqTraffic    = 20
 	bitmapRspOverhead   = 4
 	flushReasonFull     = "full"
-	flushReasonTimeout  = "timeout"
+	flushReasonIssue    = "work-conserving"
 	flushReasonCapacity = "capacity"
 	flushReasonConflict = "conflict"
 	flushReasonDrain    = "drain"
@@ -48,6 +48,10 @@ func normalizeRemoteDataPathConfig(c RemoteDataPathConfig) RemoteDataPathConfig 
 	if c.ReuseTableEntries <= 0 {
 		c.ReuseTableEntries = 4096
 	}
+	// Remote batching is work-conserving. Keep MaxWaitNS in the public
+	// configuration for command-line compatibility, but never delay a ready
+	// batch in the hope that a future request will join it.
+	c.MaxWaitNS = 0
 	if c.DisableBatching || c.DisableRequesterL2 {
 		c.AUPrefetch = false
 	}
@@ -104,6 +108,7 @@ type RemoteDataPathStats struct {
 	LogicalReadLatencyTotalNS float64
 	LogicalReadLatencyMaxNS   float64
 	FullFlushes               uint64
+	WorkConservingFlushes     uint64
 	TimeoutFlushes            uint64
 	CapacityFlushes           uint64
 	ConflictFlushes           uint64

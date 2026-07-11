@@ -234,6 +234,7 @@ func (r *Runner) reportRemoteDataPathStats() {
 		r.metricsCollector.Collect(where, "remote_logical_read_latency_total_ns", stats.LogicalReadLatencyTotalNS)
 		r.metricsCollector.Collect(where, "remote_logical_read_latency_max_ns", stats.LogicalReadLatencyMaxNS)
 		r.metricsCollector.Collect(where, "remote_full_flushes", float64(stats.FullFlushes))
+		r.metricsCollector.Collect(where, "remote_work_conserving_flushes", float64(stats.WorkConservingFlushes))
 		r.metricsCollector.Collect(where, "remote_timeout_flushes", float64(stats.TimeoutFlushes))
 		r.metricsCollector.Collect(where, "remote_capacity_flushes", float64(stats.CapacityFlushes))
 		r.metricsCollector.Collect(where, "remote_conflict_flushes", float64(stats.ConflictFlushes))

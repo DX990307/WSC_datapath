@@ -125,8 +125,11 @@ def parse_args():
     parser.add_argument(
         "--remote-data-path-wait-ns",
         type=int,
-        default=50,
-        help="Maximum FIFO batching wait for --remote-ablation (default: 50 ns).",
+        default=0,
+        help=(
+            "Deprecated compatibility option; remote batching is "
+            "work-conserving and does not wait."
+        ),
     )
     parser.add_argument(
         "--remote-data-path-batches",

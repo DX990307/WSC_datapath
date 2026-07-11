@@ -42,11 +42,15 @@ from owner-side DRAM access-unit batching.
    a normal directory/bank lookup. A lookup miss never allocates an MSHR and
    never accesses requester-local DRAM.
 3. When requester L2 is disabled, or after a lookup-only miss, unique lines
-   enter a requester-RDMA FIFO batch keyed by `(owner, PID, 4KiB page)`.
-   A one-line batch uses a normal read packet; a multi-line batch uses one
-   bitmap request. The owner expands the bitmap and sends every line through
-   its normal L2 path. Confirmed owner-L2 read misses then enter the same 128B
-   DRAM batching mechanism described above.
+   enter a requester-RDMA batch keyed by `(owner, PID, 4KiB page)`. Batching
+   is work-conserving: requests admitted in the current RDMA scheduling cycle
+   are grouped, and ready batches issue immediately up to the RDMA pipeline
+   width. Output backpressure can naturally accumulate more matching lines,
+   but the requester never waits for a future request. A one-line batch uses
+   a normal read packet; a multi-line batch uses one bitmap request. The owner
+   expands the bitmap and sends every line through its normal L2 path.
+   Confirmed owner-L2 read misses then enter the same 128B DRAM batching
+   mechanism described above.
 4. Outstanding logical reads and owner-side unpacked lines are bounded; a full
    table applies backpressure instead of consuming more upstream requests.
 
@@ -90,7 +94,7 @@ issues a remote write permanently bypasses its local replica for that line.
 -remote-data-path-batching-enable=true
 -remote-data-path-l2-enable=true
 -remote-data-path-batch-lines=8
--remote-data-path-wait-ns=50
+-remote-data-path-wait-ns=0
 -remote-data-path-batches=64
 -remote-data-path-reuse-entries=4096
 -remote-data-path-prefetch=false
@@ -107,7 +111,7 @@ The metrics deliberately separate benefit from cost:
 - wire benefit: logical reads, exact dedup, demand/prefetch wire lines, packet
   size histogram, request/response bytes, and exact flit count for the chosen
   flit size;
-- latency cost: L2 probe latency, pure batch-queue residence, complete
+- latency cost: L2 probe latency, scheduler/backpressure queue residence, complete
   pre-network wait, and logical read latency observed when RDMA injects the
   response toward L1;
 - replica value: two-touch/prefetch fill attempts, installs, first-use count,
@@ -171,7 +175,7 @@ common simulator flags:
 2. `baseline_dram_batch_only`: only confirmed-miss `2x64B -> 1x128B` DRAM
    batching is enabled;
 3. `baseline_remote_request_only`: only exact same-line RDMA dedup, response
-   fanout, and FIFO 4KiB-page bitmap batching are enabled;
+   fanout, and work-conserving 4KiB-page bitmap batching are enabled;
 4. `baseline_remote_l2_only`: only per-slice Cuckoo lookup and two-touch
    requester-L2 replicas are enabled. Dedup and bitmap batching are explicitly
    disabled, and misses use ordinary one-line remote requests;
@@ -189,9 +193,10 @@ A negative interaction means that standalone benefits overlap; a positive
 interaction indicates synergy. Add `--remote-ablation-include-prefetch` for a
 sixth `baseline_all_three_prefetch` sensitivity run; prefetch is not one of
 the three core mechanisms. DRAM batch size, wait, and capacity can be changed
-with `--dram-batch-{lines,wait-ns,entries}`. Remote batch size, wait, capacity,
-and reuse-table size use
-`--remote-data-path-{batch-lines,wait-ns,batches,reuse-entries}`. The analyzer
+with `--dram-batch-{lines,wait-ns,entries}`. Remote batch size, capacity, and
+reuse-table size use `--remote-data-path-{batch-lines,batches,reuse-entries}`.
+`--remote-data-path-wait-ns` remains accepted for old scripts but is forced to
+zero and has no runtime effect. The analyzer
 automatically pairs all configs with the same-directory `baseline` file and
 reports every standalone/combined speedup versus that baseline.
 
@@ -208,7 +213,7 @@ python3 akkalat/runall2.py --configs baseline --benchmarks traditional \
 
 python3 akkalat/runall2.py --configs baseline --benchmarks traditional \
   --output-dir akkalat/results/remote_on \
-  --extra-benchmark-flags='-dram-batch-enable=true -dram-batch-entries=16 -dram-batch-lines=2 -dram-batch-wait-ns=0 -remote-data-path-enable=true -remote-data-path-dedup-enable=true -remote-data-path-batching-enable=true -remote-data-path-l2-enable=true -remote-data-path-prefetch=false -remote-data-path-batch-lines=8 -remote-data-path-wait-ns=50 -remote-data-path-batches=64 -remote-data-path-reuse-entries=4096'
+  --extra-benchmark-flags='-dram-batch-enable=true -dram-batch-entries=16 -dram-batch-lines=2 -dram-batch-wait-ns=0 -remote-data-path-enable=true -remote-data-path-dedup-enable=true -remote-data-path-batching-enable=true -remote-data-path-l2-enable=true -remote-data-path-prefetch=false -remote-data-path-batch-lines=8 -remote-data-path-wait-ns=0 -remote-data-path-batches=64 -remote-data-path-reuse-entries=4096'
 
 python3 akkalat/analyze_remote_data_path.py \
   akkalat/results/remote_on \
@@ -221,8 +226,8 @@ and flit savings compare the enabled run against one ordinary 64B remote
 transaction per logical read; those savings are allowed to be negative, which
 exposes an ineffective prefetch or batching policy.
 
-The most useful first sweep keeps prefetch off and varies only wait time and
-maximum batch lines at one batching point at a time. The confirmed-miss DRAM
+The most useful first sweep keeps prefetch off and varies remote maximum batch
+lines and RDMA outstanding capacity. The confirmed-miss DRAM
 mechanism now combines two adjacent demanded 64B misses into one 128B
 transaction; it falls back to 64B for a singleton. Enable AU prefetch only
 after the non-speculative mechanisms show a runtime or congestion benefit,

@@ -101,13 +101,20 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 			func() bool { return c.processRemoteOwnerPendingReqs(now) }) || madeProgress
 		madeProgress = c.runPipelineWidth(
 			func() bool { return c.processRemoteOwnerPendingRsps(now) }) || madeProgress
-		madeProgress = c.runPipelineWidth(
-			func() bool { return c.processRemotePendingBatches(now) }) || madeProgress
-		madeProgress = c.processRemoteBatches(now, false) || madeProgress
 	}
 	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
 	madeProgress = c.processFromOutside(now) || madeProgress
+	if c.remoteConfig.Enabled || len(c.remotePendingBatch) > 0 ||
+		len(c.remoteBatchOrder) > 0 {
+		// First collect all requests admitted by this cycle's RDMA input
+		// width, then immediately issue every ready batch allowed by the
+		// output width. This forms a scheduling-quantum micro-batch without
+		// waiting for requests that have not arrived yet.
+		madeProgress = c.runPipelineWidth(
+			func() bool { return c.processRemotePendingBatches(now) }) || madeProgress
+		madeProgress = c.processRemoteBatches(now, false) || madeProgress
+	}
 
 	return madeProgress
 }

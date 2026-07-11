@@ -75,6 +75,7 @@ SUM_METRICS = [
     "remote_logical_read_latency_samples",
     "remote_logical_read_latency_total_ns",
     "remote_full_flushes",
+    "remote_work_conserving_flushes",
     "remote_timeout_flushes",
     "remote_capacity_flushes",
     "remote_conflict_flushes",

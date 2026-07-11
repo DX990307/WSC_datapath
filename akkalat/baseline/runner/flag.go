@@ -114,8 +114,8 @@ var remoteDataPathPrefetchFlag = flag.Bool("remote-data-path-prefetch", false,
 	"Include the other 64B line in the same 128B access unit as a remote prefetch.")
 var remoteDataPathBatchLinesFlag = flag.Int("remote-data-path-batch-lines", 8,
 	"Maximum unique 64B lines in one remote bitmap request.")
-var remoteDataPathWaitNSFlag = flag.Uint64("remote-data-path-wait-ns", 50,
-	"Maximum requester RDMA batching wait in ns; 0 flushes on the next cycle.")
+var remoteDataPathWaitNSFlag = flag.Uint64("remote-data-path-wait-ns", 0,
+	"Deprecated compatibility flag; remote batching is work-conserving and never waits for future requests.")
 var remoteDataPathBatchesFlag = flag.Int("remote-data-path-batches", 64,
 	"Maximum collecting page batches per requester RDMA.")
 var remoteDataPathReuseEntriesFlag = flag.Int("remote-data-path-reuse-entries", 4096,

@@ -98,7 +98,6 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 		return true, false
 	}
 
-	c.RemoteDataPathStats.LogicalRemoteReads++
 	identity := c.remoteIdentity(read, dst)
 	key := remoteLineKey{
 		remoteLineIdentity: identity,
@@ -231,6 +230,7 @@ func (c *Comp) consumeRemoteRead(now sim.VTimeInSec, read *mem.ReadReq) {
 	)
 	c.ToL1.Retrieve(now)
 	c.forgetSeen(c.firstSeenFromL1Req, read.ID)
+	c.RemoteDataPathStats.LogicalRemoteReads++
 	c.remoteOutstandingReads++
 }
 
@@ -449,11 +449,14 @@ func (c *Comp) tryAddRemoteEntryToBatch(
 	batch := c.remoteBatches[key]
 	if batch != nil && batch.lineBitmap&(uint64(1)<<line) == 0 &&
 		batch.lineCount() >= c.remoteConfig.MaxBatchLines {
-		return false, c.flushRemoteBatch(now, batch, flushReasonFull)
+		// Let the width-bounded egress scheduler send the full batch before
+		// admitting another batch with the same key.
+		return false, false
 	}
 	if batch == nil && len(c.remoteBatchOrder) >= c.remoteConfig.MaxBatches {
-		oldest := c.remoteBatches[c.remoteBatchOrder[0]]
-		return false, c.flushRemoteBatch(now, oldest, flushReasonCapacity)
+		// Egress is work-conserving and will make room this cycle whenever
+		// the output port can accept a packet.
+		return false, false
 	}
 	if batch == nil {
 		oldest := now
@@ -478,9 +481,6 @@ func (c *Comp) tryAddRemoteEntryToBatch(
 	entry.batch = batch
 	entry.state = remoteLineCollecting
 	c.addAUPrefetchLine(batch, line)
-	if batch.lineCount() >= c.remoteConfig.MaxBatchLines {
-		_ = c.flushRemoteBatch(now, batch, flushReasonFull)
-	}
 	return true, true
 }
 
@@ -531,31 +531,34 @@ func (c *Comp) processRemoteBatches(
 	now sim.VTimeInSec,
 	force bool,
 ) bool {
-	if len(c.remoteBatchOrder) == 0 {
-		return false
-	}
-	key := c.remoteBatchOrder[0]
-	batch := c.remoteBatches[key]
-	if batch == nil {
-		c.remoteBatchOrder = c.remoteBatchOrder[1:]
-		return true
-	}
-
-	reason := ""
-	if force {
-		reason = flushReasonDrain
-	} else if batch.lineCount() >= c.remoteConfig.MaxBatchLines {
-		reason = flushReasonFull
-	} else {
-		maxWait := sim.VTimeInSec(float64(c.remoteConfig.MaxWaitNS) * 1e-9)
-		if c.remoteConfig.MaxWaitNS == 0 || now-batch.oldest >= maxWait {
-			reason = flushReasonTimeout
+	madeProgress := false
+	for issued := 0; issued < c.effectivePipelineWidth(); {
+		if len(c.remoteBatchOrder) == 0 {
+			break
 		}
+		key := c.remoteBatchOrder[0]
+		batch := c.remoteBatches[key]
+		if batch == nil {
+			c.remoteBatchOrder = c.remoteBatchOrder[1:]
+			madeProgress = true
+			continue
+		}
+
+		reason := flushReasonIssue
+		if force {
+			reason = flushReasonDrain
+		} else if batch.lineCount() >= c.remoteConfig.MaxBatchLines {
+			reason = flushReasonFull
+		}
+		if !c.flushRemoteBatch(now, batch, reason) {
+			// Keep ticking while a ready packet is held by output
+			// backpressure, but do not consume additional issue width.
+			return madeProgress || len(c.remoteBatchOrder) > 0
+		}
+		madeProgress = true
+		issued++
 	}
-	if reason == "" {
-		return true
-	}
-	return c.flushRemoteBatch(now, batch, reason) || len(c.remoteBatchOrder) > 0
+	return madeProgress || len(c.remoteBatchOrder) > 0
 }
 
 func (c *Comp) flushRemoteBatch(
@@ -703,7 +706,11 @@ func (c *Comp) countRemoteFlush(reason string) {
 	switch reason {
 	case flushReasonFull:
 		c.RemoteDataPathStats.FullFlushes++
-	case flushReasonTimeout:
+	case flushReasonIssue:
+		c.RemoteDataPathStats.WorkConservingFlushes++
+	case "timeout":
+		// Compatibility for tests or old callers that name the former
+		// timeout reason directly. Runtime batching never uses this path.
 		c.RemoteDataPathStats.TimeoutFlushes++
 	case flushReasonCapacity:
 		c.RemoteDataPathStats.CapacityFlushes++

@@ -135,3 +135,30 @@ func TestRDMADedupCanMergeWhenOutstandingTableIsFull(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteLogicalReadCounterExcludesOutstandingRetries(t *testing.T) {
+	c, toL1, _ := newPipelineTestComp(8, 0, 1,
+		RemoteDataPathConfig{
+			Enabled:            true,
+			DisableBatching:    true,
+			DisableRequesterL2: true,
+			MaxBatchLines:      8,
+			MaxBatches:         8,
+		})
+	l1 := &remoteTestPort{name: "L1"}
+	toL1.inbox = append(toL1.inbox,
+		remoteTestRead(l1, 0x1000),
+		remoteTestRead(l1, 0x2000),
+	)
+
+	c.processFromL1(1)
+	c.processFromL1(2)
+	c.processFromL1(3)
+	if c.RemoteDataPathStats.LogicalRemoteReads != 1 {
+		t.Fatalf("logical reads = %d, want one accepted request",
+			c.RemoteDataPathStats.LogicalRemoteReads)
+	}
+	if len(toL1.inbox) != 1 || c.requesterFullStalls == 0 {
+		t.Fatal("second request was not retained under outstanding backpressure")
+	}
+}
