@@ -428,10 +428,8 @@ func (c *Comp) sendRemoteEntryDirect(
 	line := remoteLineOffset(entry.key.lineAddr)
 	direct := &remoteBatch{
 		lineOrder: []uint64{line},
-		lines: map[uint64]*remoteLineEntry{
-			line: entry,
-		},
 	}
+	direct.lines[line] = entry
 	c.recordRemoteBatchSent(now, direct, req.ID)
 	return true
 }
@@ -466,7 +464,7 @@ func (c *Comp) tryAddRemoteEntryToBatch(
 		batch = &remoteBatch{
 			key:       key,
 			dst:       entry.owner,
-			lines:     make(map[uint64]*remoteLineEntry),
+			lineOrder: make([]uint64, 0, c.remoteConfig.MaxBatchLines),
 			oldest:    oldest,
 			createdAt: now,
 			info:      entry.info,
@@ -619,7 +617,8 @@ func (c *Comp) flushRemoteBatch(
 	}
 	c.recordRemoteBatchMetrics(now, batch, req.Meta().TrafficBytes)
 	c.removeRemoteBatch(batch)
-	for _, entry := range batch.lines {
+	for _, line := range batch.lineOrder {
+		entry := batch.lines[line]
 		entry.state = remoteLineInflight
 		entry.batch = nil
 		entry.fromRemote = true

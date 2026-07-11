@@ -42,6 +42,31 @@ var _ = Describe("GridBuilder", func() {
 			To(Equal(uint64(0x00000000ffffffff)))
 	})
 
+	It("should count filtered workgroups with a reusable descriptor", func() {
+		packet := &HsaKernelDispatchPacket{
+			WorkgroupSizeX: 1,
+			WorkgroupSizeY: 1,
+			WorkgroupSizeZ: 1,
+			GridSizeX:      4,
+			GridSizeY:      1,
+			GridSizeZ:      1,
+		}
+		visited := make([]int, 0, 4)
+		builder.SetKernel(KernelLaunchInfo{
+			CodeObject: new(insts.HsaCo),
+			Packet:     packet,
+			WGFilter: func(_ *HsaKernelDispatchPacket, wg *WorkGroup) bool {
+				visited = append(visited, wg.IDX)
+				Expect(wg.SizeX).To(Equal(0))
+				wg.SizeX = 99
+				return wg.IDX%2 == 0
+			},
+		})
+
+		Expect(visited).To(Equal([]int{0, 1, 2, 3}))
+		Expect(builder.NumWG()).To(Equal(2))
+	})
+
 	It("should build partial 2d wavefront", func() {
 		codeObject := new(insts.HsaCo)
 		packet := new(HsaKernelDispatchPacket)

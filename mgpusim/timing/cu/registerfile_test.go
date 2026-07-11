@@ -63,4 +63,19 @@ var _ = Describe("Simple Register File", func() {
 		Expect(insts.BytesToUint32(data)).To(Equal(uint32(15)))
 	})
 
+	It("should copy common and fallback register widths", func() {
+		for _, size := range []int{4, 8, 12, 16, 20} {
+			src := make([]byte, size)
+			for i := range src {
+				src[i] = byte(i + size)
+			}
+			dst := make([]byte, size)
+			copyRegisterBytes(dst, src, size)
+			Expect(dst).To(Equal(src))
+		}
+		short := make([]byte, 2)
+		copyRegisterBytes(short, []byte{1, 2, 3, 4}, 4)
+		Expect(short).To(Equal([]byte{1, 2}))
+	})
+
 })

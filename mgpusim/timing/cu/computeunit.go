@@ -81,6 +81,32 @@ type ComputeUnit struct {
 	inflightInst               map[string]int
 	wftime                     map[string]sim.VTimeInSec
 	setAllWfsPausedForSampling bool
+	instTaskWhat               [insts.ExeUnitSpecial + 1]string
+	instTaskWhere              [insts.ExeUnitSpecial + 1]string
+}
+
+// InstTaskDetail is the allocation-light detail attached to instruction
+// tracing tasks. It replaces a two-entry interface map in the instruction hot
+// path while keeping both objects available to CPI and ISA-debug hooks.
+type InstTaskDetail struct {
+	Inst *wavefront.Inst
+	Wf   *wavefront.Wavefront
+}
+
+func decodeInstTaskDetail(detail interface{}) InstTaskDetail {
+	switch detail := detail.(type) {
+	case InstTaskDetail:
+		return detail
+	case *InstTaskDetail:
+		return *detail
+	case map[string]interface{}:
+		return InstTaskDetail{
+			Inst: detail["inst"].(*wavefront.Inst),
+			Wf:   detail["wf"].(*wavefront.Wavefront),
+		}
+	default:
+		panic("unsupported instruction task detail")
+	}
 }
 
 // ControlPort returns the port that can receive controlling messages from the
@@ -1086,18 +1112,16 @@ func (cu *ComputeUnit) logInstTask(
 		profiler.Wffinalfeature.Collect(wf.UID, now, inst.Inst)
 	}
 
+	what := cu.instTaskWhat[inst.ExeUnit]
 	tracing.StartTaskWithSpecificLocation(
 		inst.ID,
 		wf.UID,
 		cu,
 		"inst",
-		cu.execUnitToString(inst.ExeUnit),
-		cu.Name()+"."+cu.execUnitToString(inst.ExeUnit),
+		what,
+		cu.instTaskWhere[inst.ExeUnit],
 		// inst.InstName,
-		map[string]interface{}{
-			"inst": inst,
-			"wf":   wf,
-		},
+		InstTaskDetail{Inst: inst, Wf: wf},
 	)
 }
 
@@ -1281,6 +1305,11 @@ func NewComputeUnit(
 	cu.ToCP = sim.NewLimitNumMsgPort(cu, 4, name+".ToCP")
 	cu.inflightInst = make(map[string]int)
 	cu.wftime = make(map[string]sim.VTimeInSec)
+	for unit := insts.ExeUnitVALU; unit <= insts.ExeUnitSpecial; unit++ {
+		what := cu.execUnitToString(unit)
+		cu.instTaskWhat[unit] = what
+		cu.instTaskWhere[unit] = name + "." + what
+	}
 
 	return cu
 }

@@ -196,10 +196,12 @@ type remoteBatch struct {
 	lineBitmap     uint64
 	prefetchBitmap uint64
 	lineOrder      []uint64
-	lines          map[uint64]*remoteLineEntry
-	oldest         sim.VTimeInSec
-	createdAt      sim.VTimeInSec
-	info           interface{}
+	// A page has exactly 64 cache lines. A fixed index avoids allocating and
+	// hashing a small map for every requester batch.
+	lines     [64]*remoteLineEntry
+	oldest    sim.VTimeInSec
+	createdAt sim.VTimeInSec
+	info      interface{}
 }
 
 func (b *remoteBatch) lineCount() int {
