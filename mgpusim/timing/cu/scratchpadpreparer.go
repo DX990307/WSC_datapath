@@ -693,9 +693,7 @@ func (p *ScratchpadPreparerImpl) writeReg(
 }
 
 func (p *ScratchpadPreparerImpl) clear(buf []byte) {
-	for i := 0; i < len(buf); i++ {
-		buf[i] = 0
-	}
+	clear(buf)
 }
 
 func laneMasked(Exec uint64, laneID uint) bool {

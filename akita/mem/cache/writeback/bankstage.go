@@ -241,17 +241,32 @@ func (s *bankStage) finalizeReadHit(
 
 	s.removeTransaction(now, trans)
 	s.inflightTransCount--
-	s.downwardInflightTransCount--
 	block.ReadCount--
 
-	dataReady := mem.DataReadyRspBuilder{}.
-		WithSendTime(now).
-		WithSrc(s.cache.topPort).
-		WithDst(read.Src).
-		WithRspTo(read.ID).
-		WithData(data).
-		Build()
-	s.cache.topSender.Send(dataReady)
+	if read.LookupOnly {
+		cachelineID, _ := getCacheLineID(
+			read.Address, s.cache.log2BlockSize)
+		s.cache.recordRemoteReplicaHit(block, read.PID, cachelineID)
+		lookupRsp := mem.CacheLookupRspBuilder{}.
+			WithSendTime(now).
+			WithSrc(s.cache.topPort).
+			WithDst(read.Src).
+			WithRspTo(read.ID).
+			WithHit(true).
+			WithData(data).
+			WithGeneration(s.cache.remoteReplicaGeneration).
+			Build()
+		s.cache.topSender.Send(lookupRsp)
+	} else {
+		dataReady := mem.DataReadyRspBuilder{}.
+			WithSendTime(now).
+			WithSrc(s.cache.topPort).
+			WithDst(read.Src).
+			WithRspTo(read.ID).
+			WithData(data).
+			Build()
+		s.cache.topSender.Send(dataReady)
+	}
 
 	memtrace.RecordMemoryPathCacheComplete(
 		s.cache.Name(),

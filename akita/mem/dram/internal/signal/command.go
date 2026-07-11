@@ -51,22 +51,24 @@ func (k CommandKind) String() string {
 // action.
 type Command struct {
 	addressmapping.Location
-	ID        string
-	Kind      CommandKind
-	Address   uint64
-	CycleLeft int
-	SubTrans  *SubTransaction
+	ID         string
+	Kind       CommandKind
+	Address    uint64
+	CycleLeft  int
+	EnqueuedAt sim.VTimeInSec
+	SubTrans   *SubTransaction
 }
 
 // Clone will create another command with the same content, but different ID.
 func (c *Command) Clone() *Command {
 	newCmd := &Command{
-		ID:        sim.GetIDGenerator().Generate(),
-		Location:  c.Location,
-		Kind:      c.Kind,
-		Address:   c.Address,
-		CycleLeft: c.CycleLeft,
-		SubTrans:  c.SubTrans,
+		ID:         sim.GetIDGenerator().Generate(),
+		Location:   c.Location,
+		Kind:       c.Kind,
+		Address:    c.Address,
+		CycleLeft:  c.CycleLeft,
+		EnqueuedAt: c.EnqueuedAt,
+		SubTrans:   c.SubTrans,
 	}
 	return newCmd
 }

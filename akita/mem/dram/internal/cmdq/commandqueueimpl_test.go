@@ -84,4 +84,70 @@ var _ = Describe("CommandQueueImpl", func() {
 
 		Expect(q.Queues[0]).To(ContainElement(cmd))
 	})
+
+	It("should prioritize a ready open-row column command", func() {
+		q.Queues = make([]Queue, 1)
+		q.RowAware = true
+		q.MaxAge = 100e-9
+		q.Freq = sim.GHz
+		needsActivate := &signal.Command{
+			ID:         "activate",
+			Kind:       signal.CmdKindRead,
+			EnqueuedAt: 1e-9,
+		}
+		rowHit := &signal.Command{
+			ID:         "row-hit",
+			Kind:       signal.CmdKindRead,
+			EnqueuedAt: 2e-9,
+		}
+		activate := needsActivate.Clone()
+		activate.Kind = signal.CmdKindActivate
+		q.Queues[0] = append(q.Queues[0], needsActivate, rowHit)
+		channel.EXPECT().
+			GetReadyCommand(sim.VTimeInSec(10e-9), needsActivate).
+			Return(activate)
+		channel.EXPECT().
+			GetReadyCommand(sim.VTimeInSec(10e-9), rowHit).
+			Return(rowHit)
+
+		ready := q.GetCommandToIssue(10e-9)
+
+		Expect(ready).To(BeIdenticalTo(rowHit))
+		Expect(q.Queues[0]).To(ConsistOf(needsActivate))
+		Expect(q.GetRowAwareStats().RowReuseHits).To(Equal(uint64(1)))
+	})
+
+	It("should prioritize an aged command to prevent starvation", func() {
+		q.Queues = make([]Queue, 1)
+		q.RowAware = true
+		q.MaxAge = 5e-9
+		q.Freq = sim.GHz
+		aged := &signal.Command{
+			ID:         "aged",
+			Kind:       signal.CmdKindRead,
+			EnqueuedAt: 1e-9,
+		}
+		rowHit := &signal.Command{
+			ID:         "row-hit",
+			Kind:       signal.CmdKindRead,
+			EnqueuedAt: 9e-9,
+		}
+		activate := aged.Clone()
+		activate.Kind = signal.CmdKindActivate
+		q.Queues[0] = append(q.Queues[0], aged, rowHit)
+		channel.EXPECT().
+			GetReadyCommand(sim.VTimeInSec(10e-9), aged).
+			Return(activate)
+		channel.EXPECT().
+			GetReadyCommand(sim.VTimeInSec(10e-9), rowHit).
+			Return(rowHit)
+
+		ready := q.GetCommandToIssue(10e-9)
+
+		Expect(ready.Kind).To(Equal(signal.CmdKindActivate))
+		Expect(q.Queues[0]).To(ConsistOf(aged, rowHit))
+		stats := q.GetRowAwareStats()
+		Expect(stats.AgedPriorityIssues).To(Equal(uint64(1)))
+		Expect(stats.ActivateCommands).To(Equal(uint64(1)))
+	})
 })

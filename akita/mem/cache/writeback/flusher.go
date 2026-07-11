@@ -113,6 +113,7 @@ func (f *flusher) startProcessingFlush(
 	now sim.VTimeInSec,
 	req *cache.FlushReq,
 ) bool {
+	f.cache.remoteReplicaGeneration++
 	f.processingFlush = req
 	if req.DiscardInflight {
 		f.cache.discardInflightTransactions(now)
@@ -175,6 +176,7 @@ func (f *flusher) finalizeFlushing(now sim.VTimeInSec) bool {
 
 	f.cache.mshr.Reset()
 	f.cache.directory.Reset()
+	f.cache.resetRemoteReplicas()
 
 	if f.processingFlush.PauseAfterFlushing {
 		f.cache.state = cacheStatePaused
@@ -207,9 +209,9 @@ func (f *flusher) flushCompleted() bool {
 
 	if len(f.cache.writeBuffer.inflightFetch) > 0 ||
 		len(f.cache.writeBuffer.inflightEviction) > 0 ||
-		len(f.cache.writeBuffer.pendingEvictions) > 0 {
+		len(f.cache.writeBuffer.pendingEvictions) > 0 ||
+		f.cache.dramBatchHasEntries() {
 		return false
 	}
-
 	return true
 }

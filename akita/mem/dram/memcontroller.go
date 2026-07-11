@@ -55,6 +55,14 @@ type MemController struct {
 	inflightTransactions []*signal.Transaction
 }
 
+// GetRowAwareStats returns row-aware DRAM scheduling counters.
+func (c *MemController) GetRowAwareStats() cmdq.RowAwareStats {
+	if queue, ok := c.cmdQueue.(*cmdq.CommandQueueImpl); ok {
+		return queue.GetRowAwareStats()
+	}
+	return cmdq.RowAwareStats{}
+}
+
 // Tick updates memory controller's internal state.
 func (c *MemController) Tick(now sim.VTimeInSec) (madeProgress bool) {
 	madeProgress = c.respond(now) || madeProgress

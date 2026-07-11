@@ -26,6 +26,8 @@ type Builder struct {
 	protocol             Protocol
 	transactionQueueSize int
 	commandQueueSize     int
+	rowReorderEnabled    bool
+	rowReorderMaxAge     int
 	busWidth             int
 	burstLength          int
 	deviceWidth          int
@@ -76,6 +78,7 @@ func MakeBuilder() Builder {
 		protocol:             DDR3,
 		transactionQueueSize: 32,
 		commandQueueSize:     8,
+		rowReorderMaxAge:     64,
 		busWidth:             64,
 		burstLength:          8,
 		deviceWidth:          16,
@@ -182,6 +185,19 @@ func (b Builder) WithTransactionQueueSize(n int) Builder {
 // can hold.
 func (b Builder) WithCommandQueueSize(n int) Builder {
 	b.commandQueueSize = n
+	return b
+}
+
+// WithRowAwareReorder enables open-page, row-hit-first DRAM scheduling. An
+// oldest-ready fallback takes priority after maxAgeCycles to avoid starvation.
+func (b Builder) WithRowAwareReorder(
+	enabled bool,
+	maxAgeCycles int,
+) Builder {
+	b.rowReorderEnabled = enabled
+	if maxAgeCycles > 0 {
+		b.rowReorderMaxAge = maxAgeCycles
+	}
 	return b
 }
 
@@ -420,13 +436,23 @@ func (b Builder) Build(name string) *MemController {
 		Queues:           make([]cmdq.Queue, b.numChannel*b.numRank),
 		CapacityPerQueue: b.commandQueueSize,
 		Channel:          m.channel,
+		RowAware:         b.rowReorderEnabled,
+		MaxAge: sim.VTimeInSec(
+			float64(b.rowReorderMaxAge) / float64(b.freq)),
+		Freq: b.freq,
+	}
+	cmdCreator := trans.CommandCreator(&trans.ClosePageCommandCreator{
+		AddrMapper: m.addrMapper,
+	})
+	if b.rowReorderEnabled {
+		cmdCreator = &trans.OpenPageCommandCreator{
+			AddrMapper: m.addrMapper,
+		}
 	}
 	m.subTransactionQueue = &trans.FCFSSubTransactionQueue{
-		Capacity: b.transactionQueueSize,
-		CmdQueue: m.cmdQueue,
-		CmdCreator: &trans.ClosePageCommandCreator{
-			AddrMapper: m.addrMapper,
-		},
+		Capacity:   b.transactionQueueSize,
+		CmdQueue:   m.cmdQueue,
+		CmdCreator: cmdCreator,
 	}
 
 	if b.useGlobalStorage {
@@ -468,7 +494,7 @@ func (b Builder) buildChannel(name string, m *MemController) {
 				bankName := fmt.Sprintf("%s.Bank[%d][%d][%d]",
 					name, i, j, k)
 				bank := org.NewBankImpl(bankName)
-				bank.CmdCycles = map[signal.CommandKind]int{
+				bank.CmdCycles = [signal.NumCmdKind]int{
 					signal.CmdKindRead:           b.readDelay,
 					signal.CmdKindReadPrecharge:  b.tRP,
 					signal.CmdKindWrite:          b.writeDelay,

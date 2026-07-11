@@ -48,6 +48,17 @@ type Cache struct {
 	log2BlockSize   uint64
 	numReqPerCycle  int
 
+	remoteReplicaFilter     *remoteReplicaFilter
+	remoteReplicaBlocks     map[*cache.Block]*remoteReplicaRecord
+	remoteReplicaStats      RemoteReplicaStats
+	remoteReplicaGeneration uint64
+
+	dramBatchConfig DRAMBatchConfig
+	dramBatchStats  DRAMBatchStats
+	dramBatches     map[dramBatchKey]*dramBatchEntry
+	dramBatchOrder  []dramBatchKey
+	dramAdapter     *dramPrefetchAdapter
+
 	state                cacheState
 	inFlightTransactions []*transaction
 	evictingList         map[uint64]bool
@@ -63,9 +74,14 @@ func (c *Cache) Tick(now sim.VTimeInSec) bool {
 	madeProgress := false
 
 	madeProgress = c.controlPortSender.Tick(now) || madeProgress
+	if c.state != cacheStateRunning {
+		madeProgress = c.topParser.processRemoteFillWhileStopped(now) || madeProgress
+	}
 
 	if c.state != cacheStatePaused {
 		madeProgress = c.runPipeline(now) || madeProgress
+	} else {
+		madeProgress = c.runStage(now, c.topSender) || madeProgress
 	}
 
 	madeProgress = c.flusher.Tick(now) || madeProgress
@@ -115,9 +131,8 @@ func (c *Cache) discardInflightTransactions(now sim.VTimeInSec) {
 	c.mshrStage.Reset(now)
 	c.writeBuffer.Reset(now)
 
-	clearPort(c.topPort, now)
-
 	c.topSender.Clear()
+	c.discardTopPort(now)
 
 	// for _, t := range c.inFlightTransactions {
 	// 	fmt.Printf("%.10f, %s, transaction %s discarded due to flushing\n",

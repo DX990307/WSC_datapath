@@ -41,6 +41,7 @@ func (q *FCFSSubTransactionQueue) Push(t *signal.Transaction) {
 func (q *FCFSSubTransactionQueue) Tick(now sim.VTimeInSec) bool {
 	for i, subTrans := range q.Queue {
 		cmd := q.CmdCreator.Create(subTrans)
+		cmd.EnqueuedAt = now
 
 		if q.CmdQueue.CanAccept(cmd) {
 			q.CmdQueue.Accept(cmd)

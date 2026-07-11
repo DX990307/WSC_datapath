@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/monitoring"
 	"github.com/sarchlab/akita/v3/sim"
@@ -23,6 +24,7 @@ import (
 	"github.com/sarchlab/mgpusim/v3/profiler"
 	"github.com/sarchlab/mgpusim/v3/samples/sampledrunner"
 	"github.com/sarchlab/mgpusim/v3/timing/cp"
+	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 	"github.com/tebeka/atexit"
 )
 
@@ -231,6 +233,17 @@ func (r *Runner) buildEmuPlatform() {
 }
 
 func (r *Runner) buildTimingPlatform() {
+	reorderPolicy := *l1vBottomReorderPolicyFlag
+	reorderWindow := *l1vBottomReorderWindowFlag
+	reorderMaxAge := *l1vBottomReorderMaxAgeNSFlag
+	if *remoteDataPathEnableFlag {
+		// The remote datapath owns its one bounded FIFO batching point. Do not
+		// stack the legacy per-L1 FIFO/HLQ in front of it.
+		reorderPolicy = "none"
+		reorderWindow = 0
+		reorderMaxAge = 0
+	}
+
 	b := MakeR9NanoBuilder().
 		WithLog2PageSize(configuredLog2PageSize()).
 		WithBandwidth(*bandwidthFlag).
@@ -239,15 +252,42 @@ func (r *Runner) buildTimingPlatform() {
 		WithNetworkFlitSize(*networkFlitSizeFlag).
 		WithEndpointChannels(*endpointChannelsFlag).
 		WithEndpointBufferSize(*endpointBufferSizeFlag).
+		WithRDMAPipeline(
+			*rdmaPipelineWidthFlag,
+			*rdmaPipelineLatencyFlag,
+			*rdmaMaxOutstandingFlag,
+		).
 		WithL1VRemoteMaxInflight(*l1vRemoteMaxInflightFlag).
 		WithL1VMSHREntries(*l1vMSHREntriesFlag).
 		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag).
 		WithL1VBottomReorder(
-			*l1vBottomReorderPolicyFlag,
-			*l1vBottomReorderWindowFlag,
-			*l1vBottomReorderMaxAgeNSFlag,
+			reorderPolicy,
+			reorderWindow,
+			reorderMaxAge,
 		).
-		WithForceLocalDataAccess(*forceLocalDataAccessFlag)
+		WithForceLocalDataAccess(*forceLocalDataAccessFlag).
+		WithDRAMBatch(writeback.DRAMBatchConfig{
+			Enabled:     *dramBatchEnableFlag,
+			MaxEntries:  *dramBatchEntriesFlag,
+			MaxLines:    *dramBatchLinesFlag,
+			MaxWaitNS:   *dramBatchWaitNSFlag,
+			WindowLines: 2,
+		}).
+		WithDRAMRowReorder(
+			*dramRowReorderEnableFlag,
+			*dramRowReorderMaxAgeFlag,
+		).
+		WithRemoteDataPath(rdma.RemoteDataPathConfig{
+			Enabled:            *remoteDataPathEnableFlag,
+			AUPrefetch:         *remoteDataPathPrefetchFlag,
+			DisableDedup:       !*remoteDataPathDedupEnableFlag,
+			DisableBatching:    !*remoteDataPathBatchingEnableFlag,
+			DisableRequesterL2: !*remoteDataPathL2EnableFlag,
+			MaxBatchLines:      *remoteDataPathBatchLinesFlag,
+			MaxWaitNS:          *remoteDataPathWaitNSFlag,
+			MaxBatches:         *remoteDataPathBatchesFlag,
+			ReuseTableEntries:  *remoteDataPathReuseEntriesFlag,
+		})
 
 	if *sharingTracing {
 		traceWriter, err := newPageSharingTraceWriter(

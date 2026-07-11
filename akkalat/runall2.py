@@ -91,11 +91,20 @@ def choose_max_workers(args, exp_count):
         raise ValueError("MAX_WORKERS must be greater than 0")
 
     max_workers = min(args.max_workers, exp_count)
-    if sampled_param_sweep_requested(args):
+    extra_flags = set(shlex.split(args.extra_benchmark_flags or ""))
+    sampled_run = sampled_param_sweep_requested(args) or bool(
+        extra_flags.intersection({
+            "-sampled",
+            "-branch-sampled",
+            "-kernel-sampled",
+            "-loop-sampled",
+        })
+    )
+    if sampled_run:
         cap = args.sampled_parallel_limit
         if cap > 0 and max_workers > cap:
             print(
-                "Sampled parameter sweep parallelism capped at "
+                "Sampled execution parallelism capped at "
                 f"max_workers={cap}. Use --sampled-parallel-limit=0 "
                 "to disable this cap."
             )

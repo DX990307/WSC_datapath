@@ -16,6 +16,23 @@ type CommandQueueImpl struct {
 	CapacityPerQueue int
 	nextQueueIndex   int
 	Channel          org.Channel
+	RowAware         bool
+	MaxAge           sim.VTimeInSec
+	Freq             sim.Freq
+	stats            RowAwareStats
+	activatedByCmd   map[string]bool
+}
+
+// RowAwareStats reports open-row scheduling behavior.
+type RowAwareStats struct {
+	Enabled            bool
+	CommandsIssued     uint64
+	ColumnCommands     uint64
+	RowReuseHits       uint64
+	ActivateCommands   uint64
+	PrechargeCommands  uint64
+	AgedPriorityIssues uint64
+	MaxQueueAgeCycles  uint64
 }
 
 // GetCommandToIssue returns the next command ready to issue. It returns nil
@@ -23,6 +40,10 @@ type CommandQueueImpl struct {
 func (q *CommandQueueImpl) GetCommandToIssue(
 	now sim.VTimeInSec,
 ) *signal.Command {
+	if q.RowAware {
+		return q.getRowAwareCommandToIssue(now)
+	}
+
 	for i := 0; i < len(q.Queues); i++ {
 		queueIndex, _ := q.getNextQueue()
 		readyCmd := q.getFirstReadyInQueue(now, queueIndex)
@@ -33,6 +54,117 @@ func (q *CommandQueueImpl) GetCommandToIssue(
 	}
 
 	return nil
+}
+
+type readyCandidate struct {
+	queueIndex int
+	cmdIndex   int
+	cmd        *signal.Command
+	ready      *signal.Command
+	age        sim.VTimeInSec
+	rowReady   bool
+	aged       bool
+}
+
+func (q *CommandQueueImpl) getRowAwareCommandToIssue(
+	now sim.VTimeInSec,
+) *signal.Command {
+	var firstReady, oldestRowReady, oldestAged *readyCandidate
+	for offset := 0; offset < len(q.Queues); offset++ {
+		queueIndex := (q.nextQueueIndex + offset) % len(q.Queues)
+		for cmdIndex, cmd := range q.Queues[queueIndex] {
+			ready := q.Channel.GetReadyCommand(now, cmd)
+			if ready == nil {
+				continue
+			}
+
+			age := now - cmd.EnqueuedAt
+			candidate := &readyCandidate{
+				queueIndex: queueIndex,
+				cmdIndex:   cmdIndex,
+				cmd:        cmd,
+				ready:      ready,
+				age:        age,
+				rowReady:   ready.Kind == cmd.Kind && cmd.IsReadOrWrite(),
+				aged:       q.MaxAge > 0 && age >= q.MaxAge,
+			}
+			if firstReady == nil {
+				firstReady = candidate
+			}
+			if candidate.rowReady && older(candidate, oldestRowReady) {
+				oldestRowReady = candidate
+			}
+			if candidate.aged && older(candidate, oldestAged) {
+				oldestAged = candidate
+			}
+		}
+	}
+
+	selected := oldestAged
+	agedPriority := selected != nil
+	if selected == nil {
+		selected = oldestRowReady
+	}
+	if selected == nil {
+		selected = firstReady
+	}
+	if selected == nil {
+		return nil
+	}
+
+	q.nextQueueIndex = (selected.queueIndex + 1) % len(q.Queues)
+	q.recordIssue(selected, agedPriority)
+	if selected.cmd.Kind == selected.ready.Kind {
+		queue := q.Queues[selected.queueIndex]
+		q.Queues[selected.queueIndex] = append(
+			queue[:selected.cmdIndex], queue[selected.cmdIndex+1:]...)
+		delete(q.activatedByCmd, selected.cmd.ID)
+	}
+	return selected.ready
+}
+
+func older(candidate, current *readyCandidate) bool {
+	return current == nil || candidate.cmd.EnqueuedAt < current.cmd.EnqueuedAt
+}
+
+func (q *CommandQueueImpl) recordIssue(
+	candidate *readyCandidate,
+	agedPriority bool,
+) {
+	if q.activatedByCmd == nil {
+		q.activatedByCmd = make(map[string]bool)
+	}
+	q.stats.Enabled = true
+	q.stats.CommandsIssued++
+	if agedPriority {
+		q.stats.AgedPriorityIssues++
+	}
+	if q.Freq > 0 {
+		ageCycles := q.Freq.Cycle(candidate.age)
+		if ageCycles > q.stats.MaxQueueAgeCycles {
+			q.stats.MaxQueueAgeCycles = ageCycles
+		}
+	}
+
+	switch candidate.ready.Kind {
+	case signal.CmdKindActivate:
+		q.stats.ActivateCommands++
+		q.activatedByCmd[candidate.cmd.ID] = true
+	case signal.CmdKindPrecharge:
+		q.stats.PrechargeCommands++
+	case signal.CmdKindRead, signal.CmdKindWrite:
+		q.stats.ColumnCommands++
+		if !q.activatedByCmd[candidate.cmd.ID] {
+			q.stats.RowReuseHits++
+		}
+	}
+}
+
+// GetRowAwareStats returns a copy of the row-aware scheduler counters.
+func (q *CommandQueueImpl) GetRowAwareStats() RowAwareStats {
+	stats := q.stats
+	stats.Enabled = q.RowAware
+	return stats
 }
 
 func (q *CommandQueueImpl) getNextQueue() (queueIndex int, queue Queue) {

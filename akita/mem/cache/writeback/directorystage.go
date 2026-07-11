@@ -110,6 +110,19 @@ func (ds *directoryStage) doRead(
 	cachelineID, _ := getCacheLineID(
 		trans.read.Address, ds.cache.log2BlockSize)
 
+	if trans.read.LookupOnly {
+		block := ds.cache.directory.Lookup(trans.read.PID, cachelineID)
+		if block == nil || block.IsLocked {
+			return ds.handleLookupOnlyMiss(now, trans, block)
+		}
+		if !ds.cache.remoteReplicaMatches(
+			block, trans.read.PID, cachelineID,
+		) {
+			ds.cache.remoteReplicaStats.FilterFalsePositives++
+		}
+		return ds.handleReadHit(now, trans, block)
+	}
+
 	mshrEntry := ds.cache.mshr.Query(trans.read.PID, cachelineID)
 	if mshrEntry != nil {
 		return ds.handleReadMSHRHit(now, trans, mshrEntry)
@@ -122,6 +135,48 @@ func (ds *directoryStage) doRead(
 	}
 
 	return ds.handleReadMiss(now, trans)
+}
+
+func (ds *directoryStage) handleLookupOnlyMiss(
+	now sim.VTimeInSec,
+	trans *transaction,
+	block *cache.Block,
+) bool {
+	if !ds.cache.topSender.CanSend(1) {
+		return false
+	}
+
+	rsp := mem.CacheLookupRspBuilder{}.
+		WithSendTime(now).
+		WithSrc(ds.cache.topPort).
+		WithDst(trans.read.Src).
+		WithRspTo(trans.read.ID).
+		WithHit(false).
+		WithGeneration(ds.cache.remoteReplicaGeneration).
+		Build()
+	ds.cache.topSender.Send(rsp)
+	ds.buf.Pop()
+	ds.cache.removeInflightTransaction(trans)
+	cachelineID, _ := getCacheLineID(
+		trans.read.Address, ds.cache.log2BlockSize)
+	if ds.cache.remoteReplicaMatches(block, trans.read.PID, cachelineID) {
+		ds.cache.remoteReplicaStats.FilterTruePositiveUnavailable++
+	} else {
+		ds.cache.remoteReplicaStats.FilterFalsePositives++
+	}
+	ds.recordMemoryPathCacheResult(now, trans, "lookup-only-miss")
+	memtrace.RecordMemoryPathCacheComplete(
+		ds.cache.Name(),
+		trans.read.ID,
+		accessReqInfo(trans.read),
+		trans.read.GetAddress(),
+		trans.read.GetByteSize(),
+		uint64(trans.read.GetPID()),
+		accessReqOp(trans.read),
+		now,
+	)
+	tracing.TraceReqComplete(trans.read, ds.cache)
+	return true
 }
 
 func (ds *directoryStage) handleReadMSHRHit(
@@ -427,6 +482,7 @@ func (ds *directoryStage) writeToBank(
 	addr := trans.write.Address
 	cachelineID, _ := getCacheLineID(addr, ds.cache.log2BlockSize)
 
+	ds.cache.untrackRemoteReplica(block)
 	ds.cache.directory.Visit(block)
 	block.IsLocked = true
 	block.Tag = cachelineID
@@ -484,6 +540,7 @@ func (ds *directoryStage) evict(
 }
 
 func (ds *directoryStage) updateVictimBlockMetaData(victim *cache.Block, cacheLineID uint64, pid vm.PID) {
+	ds.cache.untrackRemoteReplica(victim)
 	victim.Tag = cacheLineID
 	victim.PID = pid
 	victim.IsLocked = true
@@ -564,6 +621,7 @@ func (ds *directoryStage) fetch(
 	mshrEntry := ds.cache.mshr.Add(pid, cacheLineID)
 	trans.mshrEntry = mshrEntry
 	trans.block = block
+	ds.cache.untrackRemoteReplica(block)
 	block.IsLocked = true
 	block.Tag = cacheLineID
 	block.PID = pid

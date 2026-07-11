@@ -8,6 +8,7 @@ import (
 	memtraces "github.com/sarchlab/akita/v3/mem/trace"
 
 	"github.com/sarchlab/akita/v3/analysis"
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/mem/vm/addresstranslator"
@@ -22,6 +23,7 @@ import (
 	"github.com/sarchlab/mgpusim/v3/emu"
 	"github.com/sarchlab/mgpusim/v3/insts"
 	"github.com/sarchlab/mgpusim/v3/timing/cp"
+	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 )
 
 // R9NanoPlatformBuilder can build a platform that equips R9Nano GPU.
@@ -50,6 +52,13 @@ type R9NanoPlatformBuilder struct {
 	l1vBottomReorderWindow   int
 	l1vBottomReorderMaxAgeNS uint64
 	forceLocalDataAccess     bool
+	dramBatch                writeback.DRAMBatchConfig
+	dramRowReorderEnabled    bool
+	dramRowReorderMaxAge     int
+	remoteDataPath           rdma.RemoteDataPathConfig
+	rdmaPipelineWidth        int
+	rdmaPipelineLatency      int
+	rdmaMaxOutstanding       int
 
 	engine       sim.Engine
 	visTracer    tracing.Tracer
@@ -85,6 +94,16 @@ func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 		l1vMSHREntries:         160,
 		l1vMaxConcurrentTrans:  160,
 		l1vBottomReorderPolicy: "none",
+		rdmaPipelineWidth:      8,
+		rdmaPipelineLatency:    10,
+		rdmaMaxOutstanding:     64,
+		dramRowReorderMaxAge:   64,
+		remoteDataPath: rdma.RemoteDataPathConfig{
+			MaxBatchLines:     8,
+			MaxWaitNS:         50,
+			MaxBatches:        64,
+			ReuseTableEntries: 4096,
+		},
 	}
 	return b
 }
@@ -263,6 +282,45 @@ func (b R9NanoPlatformBuilder) WithForceLocalDataAccess(
 	enable bool,
 ) R9NanoPlatformBuilder {
 	b.forceLocalDataAccess = enable
+	return b
+}
+
+// WithDRAMBatch configures confirmed-L2-miss DRAM access-unit batching.
+func (b R9NanoPlatformBuilder) WithDRAMBatch(
+	config writeback.DRAMBatchConfig,
+) R9NanoPlatformBuilder {
+	b.dramBatch = config
+	return b
+}
+
+// WithDRAMRowReorder configures open-page, row-hit-first DRAM scheduling.
+func (b R9NanoPlatformBuilder) WithDRAMRowReorder(
+	enabled bool,
+	maxAgeCycles int,
+) R9NanoPlatformBuilder {
+	b.dramRowReorderEnabled = enabled
+	if maxAgeCycles > 0 {
+		b.dramRowReorderMaxAge = maxAgeCycles
+	}
+	return b
+}
+
+// WithRemoteDataPath configures the remote RDMA/L2 datapath mechanism.
+func (b R9NanoPlatformBuilder) WithRemoteDataPath(
+	config rdma.RemoteDataPathConfig,
+) R9NanoPlatformBuilder {
+	b.remoteDataPath = config
+	return b
+}
+
+// WithRDMAPipeline configures the RDMA width, fixed per-traversal latency, and
+// maximum number of distinct outstanding operations.
+func (b R9NanoPlatformBuilder) WithRDMAPipeline(
+	width, latency, maxOutstanding int,
+) R9NanoPlatformBuilder {
+	b.rdmaPipelineWidth = width
+	b.rdmaPipelineLatency = latency
+	b.rdmaMaxOutstanding = maxOutstanding
 	return b
 }
 
@@ -539,6 +597,17 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 			b.l1vBottomReorderMaxAgeNS,
 		).
 		WithForceLocalDataAccess(b.forceLocalDataAccess).
+		WithDRAMBatch(b.dramBatch).
+		WithDRAMRowReorder(
+			b.dramRowReorderEnabled,
+			b.dramRowReorderMaxAge,
+		).
+		WithRemoteDataPath(b.remoteDataPath).
+		WithRDMAPipeline(
+			b.rdmaPipelineWidth,
+			b.rdmaPipelineLatency,
+			b.rdmaMaxOutstanding,
+		).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).
 		WithGMMUPageTable(pageTable)

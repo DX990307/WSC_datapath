@@ -75,6 +75,9 @@ def replace_or_append_flag(flags, prefix, value):
 
 
 def build_ablation_configs(args):
+    if args.remote_ablation or args.remote_ablation_include_prefetch:
+        return build_remote_data_path_ablation_configs(args)
+
     selected_names = selected_config_names(args)
     sampled_param_grid = build_sampled_param_grid(args)
     selected = []
@@ -102,6 +105,103 @@ def build_ablation_configs(args):
             selected.append((f"{name}_w{warmup}_g{granularity}", swept_flags))
 
     return selected
+
+
+def build_remote_data_path_ablation_configs(args):
+    if args.configs:
+        raise ValueError("--remote-ablation cannot be combined with --configs")
+    if sampled_param_sweep_requested(args):
+        raise ValueError(
+            "--remote-ablation cannot be combined with sampled parameter sweeps"
+        )
+
+    batch_lines = args.remote_data_path_batch_lines
+    wait_ns = args.remote_data_path_wait_ns
+    max_batches = args.remote_data_path_batches
+    reuse_entries = args.remote_data_path_reuse_entries
+    dram_entries = args.dram_batch_entries
+    dram_lines = args.dram_batch_lines
+    dram_wait_ns = args.dram_batch_wait_ns
+    dram_row_max_age = args.dram_row_reorder_max_age
+    if batch_lines < 1 or batch_lines > 64:
+        raise ValueError("remote-data-path-batch-lines must be in [1, 64]")
+    if wait_ns < 0:
+        raise ValueError("remote-data-path-wait-ns must be non-negative")
+    if max_batches < 1:
+        raise ValueError("remote-data-path-batches must be positive")
+    if reuse_entries < 1:
+        raise ValueError("remote-data-path-reuse-entries must be positive")
+    if dram_entries < 1:
+        raise ValueError("dram-batch-entries must be positive")
+    if dram_lines < 1 or dram_lines > 2:
+        raise ValueError("dram-batch-lines must be in [1, 2]")
+    if dram_wait_ns < 0:
+        raise ValueError("dram-batch-wait-ns must be non-negative")
+    if dram_row_max_age < 1:
+        raise ValueError("dram-row-reorder-max-age must be positive")
+
+    fixed_flags = [
+        "-l1v-bottom-reorder-policy=none",
+        "-l1v-bottom-reorder-window=0",
+        "-l1v-bottom-reorder-max-age-ns=0",
+        f"-dram-batch-entries={dram_entries}",
+        f"-dram-batch-lines={dram_lines}",
+        f"-dram-batch-wait-ns={dram_wait_ns}",
+        f"-dram-row-reorder-max-age={dram_row_max_age}",
+        f"-remote-data-path-batch-lines={batch_lines}",
+        f"-remote-data-path-wait-ns={wait_ns}",
+        f"-remote-data-path-batches={max_batches}",
+        f"-remote-data-path-reuse-entries={reuse_entries}",
+    ]
+
+    def mechanism_flags(
+        local_optimization,
+        remote_enabled,
+        remote_dedup,
+        remote_batching,
+        requester_l2,
+        prefetch,
+    ):
+        return fixed_flags + [
+            f"-dram-batch-enable={str(local_optimization).lower()}",
+            f"-dram-row-reorder-enable={str(local_optimization).lower()}",
+            f"-remote-data-path-enable={str(remote_enabled).lower()}",
+            f"-remote-data-path-dedup-enable={str(remote_dedup).lower()}",
+            f"-remote-data-path-batching-enable={str(remote_batching).lower()}",
+            f"-remote-data-path-l2-enable={str(requester_l2).lower()}",
+            f"-remote-data-path-prefetch={str(prefetch).lower()}",
+        ]
+
+    configs = [
+        (
+            "baseline",
+            mechanism_flags(False, False, False, False, False, False),
+        ),
+        (
+            "baseline_local_optimization_only",
+            mechanism_flags(True, False, False, False, False, False),
+        ),
+        (
+            "baseline_remote_request_only",
+            mechanism_flags(False, True, True, True, False, False),
+        ),
+        (
+            "baseline_remote_l2_only",
+            mechanism_flags(False, True, False, False, True, False),
+        ),
+        (
+            "baseline_all_three",
+            mechanism_flags(True, True, True, True, True, False),
+        ),
+    ]
+    if args.remote_ablation_include_prefetch:
+        configs.append(
+            (
+                "baseline_all_three_prefetch",
+                mechanism_flags(True, True, True, True, True, True),
+            )
+        )
+    return configs
 
 
 def sampled_control_flags(args, config_flags):

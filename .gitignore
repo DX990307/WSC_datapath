@@ -34,3 +34,9 @@ tmp_run_photon_baseline_vs_l1v_network.sh
 **/.gocache/
 bin/
 dist/
+
+# Keep a minimal Akita monitoring page so //go:embed dist/* builds in a
+# source-only checkout. Generated frontend assets remain ignored.
+!akita/monitoring/web/dist/
+akita/monitoring/web/dist/*
+!akita/monitoring/web/dist/index.html

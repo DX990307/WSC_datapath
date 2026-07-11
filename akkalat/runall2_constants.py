@@ -7,7 +7,7 @@ TARGETS = [
 
 # These timing simulations are heavy. Keep parallelism conservative unless
 # you're sure the machine can handle more concurrent runs.
-MAX_WORKERS = 15
+MAX_WORKERS = 4
 
 DEFAULT_RUN_BENCHMARKS = [
     "bert",
@@ -46,18 +46,18 @@ TRADITIONAL_LITE_BENCHMARKS = [
 ]
 
 TRADITIONAL_BENCHMARKS = [
-    "aes",
+    # "aes",
     # "atax",
     # "bicg",
-    "bitonicsort",
+    # "bitonicsort",
     # "conv2d",
     # "maxpooling",
     # "avgpooling",
     # "fulllayer",
-    "fastwalshtransform",
-    "fir",
-    "fft",
-    "floydwarshall",
+    # "fastwalshtransform",
+    # "fir",
+    # "fft",
+    # "floydwarshall",
     "im2col",
     "kmeans",
     "matrixmultiplication",
@@ -131,9 +131,12 @@ DEFAULT_BENCHMARK_FLAGS = []
 
 BASE_COMMON_FLAGS = [
     "-timing",
-    "-num-memory-banks=16",
+    "-num-memory-banks=4",
     "-bandwidth=48",
-    "-switch-latency=1",
+    "-switch-latency=32",
+    "-rdma-pipeline-width=8",
+    "-rdma-pipeline-latency=10",
+    "-rdma-max-outstanding=64",
     "-magic-memory-copy",
     "-report-all",
 ]
@@ -150,7 +153,7 @@ DEFAULT_SAMPLED_SWEEP_GRANULARITIES = [
     4096,
     8192,
 ]
-DEFAULT_SAMPLED_PARALLEL_LIMIT = MAX_WORKERS
+DEFAULT_SAMPLED_PARALLEL_LIMIT = 4
 
 BALANCED_SAMPLED_SWEEP_WARMUPS = [128, 512, 1024]
 BALANCED_SAMPLED_SWEEP_GRANULARITIES = [512, 1024]
@@ -161,6 +164,44 @@ BALANCED_KERNEL_DISTANCE_THRESHOLD = 8
 
 CONFIGS = [
     ("baseline", []),
+    (
+        "dram_batch",
+        [
+            "-dram-batch-enable=true",
+            "-dram-batch-entries=16",
+            "-dram-batch-lines=2",
+            "-dram-batch-wait-ns=0",
+        ],
+    ),
+    (
+        "dram_row_reorder",
+        [
+            "-dram-row-reorder-enable=true",
+            "-dram-row-reorder-max-age=64",
+        ],
+    ),
+    (
+        "dram_batch_row_reorder",
+        [
+            "-dram-batch-enable=true",
+            "-dram-batch-entries=16",
+            "-dram-batch-lines=2",
+            "-dram-batch-wait-ns=0",
+            "-dram-row-reorder-enable=true",
+            "-dram-row-reorder-max-age=64",
+        ],
+    ),
+    (
+        "local_optimization",
+        [
+            "-dram-batch-enable=true",
+            "-dram-batch-entries=16",
+            "-dram-batch-lines=2",
+            "-dram-batch-wait-ns=0",
+            "-dram-row-reorder-enable=true",
+            "-dram-row-reorder-max-age=64",
+        ],
+    ),
     ("all_local", ["-force-local-data-access"]),
     ("sample_all", ["-sampled", "-branch-sampled", "-kernel-sampled"]),
     (

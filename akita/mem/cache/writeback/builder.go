@@ -31,6 +31,9 @@ type Builder struct {
 
 	dirLatency  int
 	bankLatency int
+
+	remoteReplicaFilter bool
+	dramBatchConfig     DRAMBatchConfig
 }
 
 // MakeBuilder creates a new builder with default configurations.
@@ -144,6 +147,20 @@ func (b Builder) WithBankLatency(n int) Builder {
 	return b
 }
 
+// WithRemoteReplicaFilter enables the per-slice Cuckoo Filter and the
+// requester-side clean remote-replica path. It is disabled by default.
+func (b Builder) WithRemoteReplicaFilter(enable bool) Builder {
+	b.remoteReplicaFilter = enable
+	return b
+}
+
+// WithDRAMBatchConfig configures batching of confirmed L2 read misses before
+// they are sent to the low module. Batching is disabled by default.
+func (b Builder) WithDRAMBatchConfig(config DRAMBatchConfig) Builder {
+	b.dramBatchConfig = config
+	return b
+}
+
 // Build creates a usable writeback cache.
 func (b Builder) Build(name string) *Cache {
 	cache := new(Cache)
@@ -185,6 +202,13 @@ func (b *Builder) configureCache(cacheModule *Cache) {
 	cacheModule.lowModuleFinder = b.lowModuleFinder
 	cacheModule.state = cacheStateRunning
 	cacheModule.evictingList = make(map[uint64]bool)
+	cacheModule.ConfigureDRAMBatch(b.dramBatchConfig)
+	if b.remoteReplicaFilter {
+		numBlocks := numSet * b.wayAssociativity
+		cacheModule.remoteReplicaFilter = newRemoteReplicaFilter(numBlocks)
+		cacheModule.remoteReplicaBlocks =
+			make(map[*cache.Block]*remoteReplicaRecord)
+	}
 }
 
 func (b *Builder) createPorts(cache *Cache) {
@@ -294,10 +318,15 @@ func (b *Builder) createInternalBuffers(cache *Cache) {
 		cache.Name()+".DirToBankBuffer",
 		cache.numReqPerCycle,
 	)
+	writeBufferToBankCapacity := cache.numReqPerCycle
+	if cache.dramBatchEnabled() &&
+		writeBufferToBankCapacity < cache.dramBatchConfig.MaxLines {
+		writeBufferToBankCapacity = cache.dramBatchConfig.MaxLines
+	}
 	cache.writeBufferToBankBuffers = make([]sim.Buffer, 1)
 	cache.writeBufferToBankBuffers[0] = sim.NewBuffer(
 		cache.Name()+".WriteBufferToBankBuffer",
-		cache.numReqPerCycle,
+		writeBufferToBankCapacity,
 	)
 	cache.mshrStageBuffer = sim.NewBuffer(
 		cache.Name()+".MSHRStageBuffer",

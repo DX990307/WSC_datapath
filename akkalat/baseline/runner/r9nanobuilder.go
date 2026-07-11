@@ -48,6 +48,13 @@ type R9NanoGPUBuilder struct {
 	l1vBottomReorderWindow         int
 	l1vBottomReorderMaxAgeNS       uint64
 	forceLocalDataAccess           bool
+	dramBatch                      writeback.DRAMBatchConfig
+	dramRowReorderEnabled          bool
+	dramRowReorderMaxAge           int
+	remoteDataPath                 rdma.RemoteDataPathConfig
+	rdmaPipelineWidth              int
+	rdmaPipelineLatency            int
+	rdmaMaxOutstanding             int
 
 	enableISADebugging bool
 	enableMemTracing   bool
@@ -115,6 +122,16 @@ func MakeR9NanoGPUBuilder() R9NanoGPUBuilder {
 		dramSize:                       8 * mem.GB,
 		l1vMSHREntries:                 160,
 		l1vMaxConcurrentTrans:          160,
+		rdmaPipelineWidth:              8,
+		rdmaPipelineLatency:            10,
+		rdmaMaxOutstanding:             64,
+		dramRowReorderMaxAge:           64,
+		remoteDataPath: rdma.RemoteDataPathConfig{
+			MaxBatchLines:     8,
+			MaxWaitNS:         50,
+			MaxBatches:        64,
+			ReuseTableEntries: 4096,
+		},
 	}
 	return b
 }
@@ -286,6 +303,46 @@ func (b R9NanoGPUBuilder) WithForceLocalDataAccess(enable bool) R9NanoGPUBuilder
 	return b
 }
 
+// WithDRAMBatch configures confirmed-L2-miss DRAM access-unit batching.
+func (b R9NanoGPUBuilder) WithDRAMBatch(
+	config writeback.DRAMBatchConfig,
+) R9NanoGPUBuilder {
+	b.dramBatch = config
+	return b
+}
+
+// WithDRAMRowReorder configures open-page, row-hit-first DRAM scheduling.
+func (b R9NanoGPUBuilder) WithDRAMRowReorder(
+	enabled bool,
+	maxAgeCycles int,
+) R9NanoGPUBuilder {
+	b.dramRowReorderEnabled = enabled
+	if maxAgeCycles > 0 {
+		b.dramRowReorderMaxAge = maxAgeCycles
+	}
+	return b
+}
+
+// WithRemoteDataPath configures requester RDMA batching, exact duplicate
+// merging, and requester-L2 remote replicas.
+func (b R9NanoGPUBuilder) WithRemoteDataPath(
+	config rdma.RemoteDataPathConfig,
+) R9NanoGPUBuilder {
+	b.remoteDataPath = config
+	return b
+}
+
+// WithRDMAPipeline configures the finite-width, fixed-latency RDMA pipeline
+// and its shared outstanding-operation capacity.
+func (b R9NanoGPUBuilder) WithRDMAPipeline(
+	width, latency, maxOutstanding int,
+) R9NanoGPUBuilder {
+	b.rdmaPipelineWidth = width
+	b.rdmaPipelineLatency = latency
+	b.rdmaMaxOutstanding = maxOutstanding
+	return b
+}
+
 // WithMonitor sets the monitor to use.
 func (b R9NanoGPUBuilder) WithMonitor(m *monitoring.Monitor) R9NanoGPUBuilder {
 	b.monitor = m
@@ -337,6 +394,11 @@ func (b R9NanoGPUBuilder) WithL2TLBTable(
 
 // Build creates a pre-configure GPU similar to the AMD R9 Nano GPU.
 func (b R9NanoGPUBuilder) Build(name string, id uint64) *GPU {
+	if b.remoteDataPath.Enabled {
+		b.l1vBottomReorderPolicy = "none"
+		b.l1vBottomReorderWindow = 0
+		b.l1vBottomReorderMaxAgeNS = 0
+	}
 	b.createGPU(name, id)
 	b.buildSAs()
 	b.buildL2Caches()
@@ -415,6 +477,8 @@ func (b *R9NanoGPUBuilder) connectCP() {
 func (b *R9NanoGPUBuilder) connectL1ToL2() {
 	lowModuleFinder := mem.NewInterleavedLowModuleFinder(
 		1 << b.log2MemoryBankInterleavingSize)
+	remoteCacheFinder := mem.NewInterleavedLowModuleFinder(
+		1 << b.log2MemoryBankInterleavingSize)
 	lowModuleFinder.ModuleForOtherAddresses = b.rdmaEngine.ToL1
 	lowModuleFinder.UseAddressSpaceLimitation = true
 	lowModuleFinder.LowAddress = b.memAddrOffset
@@ -433,8 +497,9 @@ func (b *R9NanoGPUBuilder) connectL1ToL2() {
 	l1ToL2Conn.PlugIn(b.rdmaEngine.ToL2, 1024)
 
 	for _, l2 := range b.l2Caches {
-		lowModuleFinder.LowModules = append(lowModuleFinder.LowModules,
-			l2.GetPortByName("Top"))
+		l2Top := l2.GetPortByName("Top")
+		lowModuleFinder.LowModules = append(lowModuleFinder.LowModules, l2Top)
+		remoteCacheFinder.LowModules = append(remoteCacheFinder.LowModules, l2Top)
 		if b.forceLocalDataAccess {
 			l1vLowModuleFinder.LowModules = append(
 				l1vLowModuleFinder.LowModules,
@@ -442,6 +507,7 @@ func (b *R9NanoGPUBuilder) connectL1ToL2() {
 		}
 		l1ToL2Conn.PlugIn(l2.GetPortByName("Top"), 64)
 	}
+	b.rdmaEngine.SetRemoteCacheModuleFinder(remoteCacheFinder)
 
 	for _, l1v := range b.l1vCaches {
 		l1v.SetLowModuleFinder(l1vLowModuleFinder)
@@ -658,7 +724,12 @@ func (b *R9NanoGPUBuilder) buildL2Caches() {
 		WithWayAssociativity(16).
 		WithByteSize(byteSize).
 		WithNumMSHREntry(64).
-		WithNumReqPerCycle(16)
+		WithNumReqPerCycle(16).
+		WithDirectoryLatency(10).
+		WithDRAMBatchConfig(b.dramBatch).
+		WithRemoteReplicaFilter(
+			b.remoteDataPath.Enabled &&
+				!b.remoteDataPath.DisableRequesterL2)
 
 	for i := 0; i < b.numMemoryBank; i++ {
 		cacheName := fmt.Sprintf("%s.L2[%d]", b.gpuName, i)
@@ -806,7 +877,7 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 
 	memCtrlBuilder := dram.MakeBuilder().
 		WithEngine(b.engine).
-		WithFreq(500 * sim.MHz).
+		WithFreq(500*sim.MHz).
 		WithProtocol(dram.HBM).
 		WithBurstLength(4).
 		WithDeviceWidth(dramDeviceWidth).
@@ -819,6 +890,10 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 		WithNumRow(dramRow).
 		WithCommandQueueSize(8).
 		WithTransactionQueueSize(32).
+		WithRowAwareReorder(
+			b.dramRowReorderEnabled,
+			b.dramRowReorderMaxAge,
+		).
 		WithTCL(7).
 		WithTCWL(2).
 		WithTRCDRD(7).
@@ -1006,8 +1081,12 @@ func (b *R9NanoGPUBuilder) buildRDMAEngine() {
 		WithEngine(b.engine).
 		WithBufferSize(1024).
 		WithFreq(b.freq).
+		WithPipelineWidth(b.rdmaPipelineWidth).
+		WithPipelineLatency(b.rdmaPipelineLatency).
+		WithMaxOutstanding(b.rdmaMaxOutstanding).
 		WithLocalModules(b.lowModuleFinderForL1).
 		WithRemoteModules(nil).
+		WithRemoteDataPath(b.remoteDataPath).
 		Build(name)
 	b.gpu.RDMAEngine = b.rdmaEngine
 	if b.monitor != nil {

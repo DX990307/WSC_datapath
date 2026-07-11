@@ -32,7 +32,10 @@ type ReadReq struct {
 	AccessByteSize     uint64
 	PID                vm.PID
 	CanWaitForCoalesce bool
-	Info               interface{}
+	// LookupOnly asks a cache to return either a cache hit or a cache miss
+	// without allocating an MSHR or accessing the lower memory module.
+	LookupOnly bool
+	Info       interface{}
 }
 
 // Meta returns the message meta.
@@ -62,6 +65,7 @@ type ReadReqBuilder struct {
 	pid                vm.PID
 	address, byteSize  uint64
 	canWaitForCoalesce bool
+	lookupOnly         bool
 	info               interface{}
 }
 
@@ -113,6 +117,13 @@ func (b ReadReqBuilder) CanWaitForCoalesce() ReadReqBuilder {
 	return b
 }
 
+// WithLookupOnly makes the request a cache-only lookup. A miss must not be
+// forwarded to the cache's lower module.
+func (b ReadReqBuilder) WithLookupOnly() ReadReqBuilder {
+	b.lookupOnly = true
+	return b
+}
+
 // Build creates a new ReadReq
 func (b ReadReqBuilder) Build() *ReadReq {
 	r := &ReadReq{}
@@ -126,6 +137,7 @@ func (b ReadReqBuilder) Build() *ReadReq {
 	r.Info = b.info
 	r.AccessByteSize = b.byteSize
 	r.CanWaitForCoalesce = b.canWaitForCoalesce
+	r.LookupOnly = b.lookupOnly
 	return r
 }
 
@@ -313,6 +325,276 @@ func (b DataReadyRspBuilder) Build() *DataReadyRsp {
 	r.TrafficBytes = len(b.data) + accessRspByteOverhead
 	r.RespondTo = b.rspTo
 	r.Data = b.data
+	return r
+}
+
+// CacheLookupRsp reports the result of a lookup-only cache request. A miss
+// carries no data and is never forwarded to lower memory.
+type CacheLookupRsp struct {
+	sim.MsgMeta
+
+	RespondTo  string
+	Hit        bool
+	Data       []byte
+	Generation uint64
+}
+
+// Meta returns the metadata attached to the response.
+func (r *CacheLookupRsp) Meta() *sim.MsgMeta {
+	return &r.MsgMeta
+}
+
+// GetRspTo returns the request ID that this response completes.
+func (r *CacheLookupRsp) GetRspTo() string {
+	return r.RespondTo
+}
+
+// CacheLookupRspBuilder builds lookup-only cache responses.
+type CacheLookupRspBuilder struct {
+	sendTime   sim.VTimeInSec
+	src, dst   sim.Port
+	rspTo      string
+	hit        bool
+	data       []byte
+	generation uint64
+}
+
+// WithSendTime sets the send time.
+func (b CacheLookupRspBuilder) WithSendTime(
+	t sim.VTimeInSec,
+) CacheLookupRspBuilder {
+	b.sendTime = t
+	return b
+}
+
+// WithSrc sets the source port.
+func (b CacheLookupRspBuilder) WithSrc(src sim.Port) CacheLookupRspBuilder {
+	b.src = src
+	return b
+}
+
+// WithDst sets the destination port.
+func (b CacheLookupRspBuilder) WithDst(dst sim.Port) CacheLookupRspBuilder {
+	b.dst = dst
+	return b
+}
+
+// WithRspTo sets the completed request ID.
+func (b CacheLookupRspBuilder) WithRspTo(id string) CacheLookupRspBuilder {
+	b.rspTo = id
+	return b
+}
+
+// WithHit sets the lookup result.
+func (b CacheLookupRspBuilder) WithHit(hit bool) CacheLookupRspBuilder {
+	b.hit = hit
+	return b
+}
+
+// WithData sets the returned cache-line data.
+func (b CacheLookupRspBuilder) WithData(data []byte) CacheLookupRspBuilder {
+	b.data = data
+	return b
+}
+
+// WithGeneration records the L2 remote-replica generation observed by the
+// lookup.
+func (b CacheLookupRspBuilder) WithGeneration(
+	generation uint64,
+) CacheLookupRspBuilder {
+	b.generation = generation
+	return b
+}
+
+// Build creates a CacheLookupRsp.
+func (b CacheLookupRspBuilder) Build() *CacheLookupRsp {
+	r := &CacheLookupRsp{}
+	r.ID = sim.GetIDGenerator().Generate()
+	r.Src = b.src
+	r.Dst = b.dst
+	r.SendTime = b.sendTime
+	r.TrafficBytes = len(b.data) + accessRspByteOverhead
+	r.RespondTo = b.rspTo
+	r.Hit = b.hit
+	r.Data = b.data
+	r.Generation = b.generation
+	return r
+}
+
+// RemoteDataFill is a best-effort clean fill of a line fetched from a remote
+// GPU. It is not a demand response and may be dropped by a busy cache.
+type RemoteDataFill struct {
+	sim.MsgMeta
+
+	Address    uint64
+	PID        vm.PID
+	Data       []byte
+	Info       interface{}
+	Generation uint64
+	Prefetch   bool
+}
+
+// Meta returns the metadata attached to the fill.
+func (r *RemoteDataFill) Meta() *sim.MsgMeta {
+	return &r.MsgMeta
+}
+
+// RemoteDataFillBuilder builds remote clean-fill messages.
+type RemoteDataFillBuilder struct {
+	sendTime   sim.VTimeInSec
+	src, dst   sim.Port
+	pid        vm.PID
+	address    uint64
+	data       []byte
+	info       interface{}
+	generation uint64
+	prefetch   bool
+}
+
+// WithSendTime sets the send time.
+func (b RemoteDataFillBuilder) WithSendTime(
+	t sim.VTimeInSec,
+) RemoteDataFillBuilder {
+	b.sendTime = t
+	return b
+}
+
+// WithSrc sets the source port.
+func (b RemoteDataFillBuilder) WithSrc(src sim.Port) RemoteDataFillBuilder {
+	b.src = src
+	return b
+}
+
+// WithDst sets the destination port.
+func (b RemoteDataFillBuilder) WithDst(dst sim.Port) RemoteDataFillBuilder {
+	b.dst = dst
+	return b
+}
+
+// WithPID sets the process ID.
+func (b RemoteDataFillBuilder) WithPID(pid vm.PID) RemoteDataFillBuilder {
+	b.pid = pid
+	return b
+}
+
+// WithAddress sets the aligned cache-line address.
+func (b RemoteDataFillBuilder) WithAddress(addr uint64) RemoteDataFillBuilder {
+	b.address = addr
+	return b
+}
+
+// WithData sets the cache-line data.
+func (b RemoteDataFillBuilder) WithData(data []byte) RemoteDataFillBuilder {
+	b.data = data
+	return b
+}
+
+// WithInfo sets optional tracing metadata.
+func (b RemoteDataFillBuilder) WithInfo(info interface{}) RemoteDataFillBuilder {
+	b.info = info
+	return b
+}
+
+// WithGeneration sets the L2 generation returned by the preceding lookup.
+func (b RemoteDataFillBuilder) WithGeneration(
+	generation uint64,
+) RemoteDataFillBuilder {
+	b.generation = generation
+	return b
+}
+
+// WithPrefetch marks a fill whose line was fetched speculatively as the
+// adjacent line of an RDMA access-unit batch.
+func (b RemoteDataFillBuilder) WithPrefetch(
+	prefetch bool,
+) RemoteDataFillBuilder {
+	b.prefetch = prefetch
+	return b
+}
+
+// Build creates a RemoteDataFill.
+func (b RemoteDataFillBuilder) Build() *RemoteDataFill {
+	r := &RemoteDataFill{}
+	r.ID = sim.GetIDGenerator().Generate()
+	r.Src = b.src
+	r.Dst = b.dst
+	r.SendTime = b.sendTime
+	r.TrafficBytes = len(b.data) + accessRspByteOverhead
+	r.Address = b.address
+	r.PID = b.pid
+	r.Data = b.data
+	r.Info = b.info
+	r.Generation = b.generation
+	r.Prefetch = b.prefetch
+	return r
+}
+
+// RemoteDataFillRsp acknowledges that a best-effort remote fill was consumed.
+// Installed is false when the cache safely dropped the fill.
+type RemoteDataFillRsp struct {
+	sim.MsgMeta
+	RespondTo string
+	Installed bool
+}
+
+// Meta returns the response metadata.
+func (r *RemoteDataFillRsp) Meta() *sim.MsgMeta { return &r.MsgMeta }
+
+// GetRspTo returns the completed fill ID.
+func (r *RemoteDataFillRsp) GetRspTo() string { return r.RespondTo }
+
+// RemoteDataFillRspBuilder builds fill acknowledgements.
+type RemoteDataFillRspBuilder struct {
+	sendTime  sim.VTimeInSec
+	src, dst  sim.Port
+	rspTo     string
+	installed bool
+}
+
+// WithSendTime sets the send time.
+func (b RemoteDataFillRspBuilder) WithSendTime(
+	t sim.VTimeInSec,
+) RemoteDataFillRspBuilder {
+	b.sendTime = t
+	return b
+}
+
+// WithSrc sets the source port.
+func (b RemoteDataFillRspBuilder) WithSrc(src sim.Port) RemoteDataFillRspBuilder {
+	b.src = src
+	return b
+}
+
+// WithDst sets the destination port.
+func (b RemoteDataFillRspBuilder) WithDst(dst sim.Port) RemoteDataFillRspBuilder {
+	b.dst = dst
+	return b
+}
+
+// WithRspTo sets the fill ID.
+func (b RemoteDataFillRspBuilder) WithRspTo(id string) RemoteDataFillRspBuilder {
+	b.rspTo = id
+	return b
+}
+
+// WithInstalled records whether the line was installed.
+func (b RemoteDataFillRspBuilder) WithInstalled(
+	installed bool,
+) RemoteDataFillRspBuilder {
+	b.installed = installed
+	return b
+}
+
+// Build creates a RemoteDataFillRsp.
+func (b RemoteDataFillRspBuilder) Build() *RemoteDataFillRsp {
+	r := &RemoteDataFillRsp{}
+	r.ID = sim.GetIDGenerator().Generate()
+	r.Src = b.src
+	r.Dst = b.dst
+	r.SendTime = b.sendTime
+	r.TrafficBytes = accessRspByteOverhead
+	r.RespondTo = b.rspTo
+	r.Installed = b.installed
 	return r
 }
 

@@ -25,7 +25,8 @@ func (wb *writeBufferStage) Tick(now sim.VTimeInSec) bool {
 
 	madeProgress = wb.write(now) || madeProgress
 	madeProgress = wb.processReturnRsp(now) || madeProgress
-	madeProgress = wb.processNewTransaction(now) || madeProgress
+	newTransactionProgress := wb.processNewTransaction(now)
+	madeProgress = newTransactionProgress || madeProgress
 
 	return madeProgress
 }
@@ -37,6 +38,11 @@ func (wb *writeBufferStage) processNewTransaction(now sim.VTimeInSec) bool {
 	}
 
 	trans := item.(*transaction)
+	if wb.cache.dramAdapter != nil &&
+		!wb.cache.dramBatchFetchBatchable(trans) {
+		wb.cache.dramAdapter.invalidateTransaction(wb.cache, trans)
+	}
+
 	switch trans.action {
 	case writeBufferFetch:
 		return wb.processWriteBufferFetch(now, trans)
@@ -118,6 +124,23 @@ func (wb *writeBufferStage) fetchFromBottom(
 	now sim.VTimeInSec,
 	trans *transaction,
 ) bool {
+	if wb.cache.dramBatchEnabled() &&
+		wb.cache.dramBatchFetchBatchable(trans) {
+		return wb.processAdaptiveDRAMFetch(now, trans)
+	}
+
+	if !wb.issueSingleFetch(now, trans, false) {
+		return false
+	}
+	wb.cache.writeBufferBuffer.Pop()
+	return true
+}
+
+func (wb *writeBufferStage) issueSingleFetch(
+	now sim.VTimeInSec,
+	trans *transaction,
+	countDRAMBatch bool,
+) bool {
 	if wb.tooManyInflightFetches() {
 		return false
 	}
@@ -136,21 +159,31 @@ func (wb *writeBufferStage) fetchFromBottom(
 		WithInfo(accessReqInfo(trans.accessReq())).
 		Build()
 	wb.cache.bottomSender.Send(read)
+	wb.recordDRAMReadSend(now, read, trans)
+
+	trans.fetchReadReq = read
+	wb.inflightFetch = append(wb.inflightFetch, trans)
+	if countDRAMBatch {
+		wb.cache.dramBatchStats.SingleLineReads++
+	}
+
+	tracing.TraceReqInitiate(read, wb.cache,
+		tracing.MsgIDAtReceiver(trans.req(), wb.cache))
+
+	return true
+}
+
+func (wb *writeBufferStage) recordDRAMReadSend(
+	now sim.VTimeInSec,
+	read *mem.ReadReq,
+	trans *transaction,
+) {
 	memtrace.RecordMemoryPathL2WriteBufferSend(
 		wb.cache.Name(),
 		accessReqInfo(trans.accessReq()),
 		read.Meta().ID,
 		now,
 	)
-
-	trans.fetchReadReq = read
-	wb.inflightFetch = append(wb.inflightFetch, trans)
-	wb.cache.writeBufferBuffer.Pop()
-
-	tracing.TraceReqInitiate(read, wb.cache,
-		tracing.MsgIDAtReceiver(trans.req(), wb.cache))
-
-	return true
 }
 
 func (wb *writeBufferStage) processWriteBufferEvictAndWrite(
@@ -292,21 +325,64 @@ func (wb *writeBufferStage) processDataReadyRsp(
 	now sim.VTimeInSec,
 	dataReady *mem.DataReadyRsp,
 ) bool {
-	trans := wb.findInflightFetchByFetchReadReqID(dataReady.RespondTo)
+	fetches := wb.findInflightFetchesByFetchReadReqID(dataReady.RespondTo)
+	if !wb.canPushFetchedDataToBanks(fetches) {
+		return false
+	}
+	if wb.cache.dramAdapter != nil {
+		wb.cache.dramAdapter.captureResponse(
+			wb.cache, dataReady, fetches[0].fetchReadReq)
+	}
+
+	for _, trans := range fetches {
+		wb.completeFetchedData(now, dataReady, trans)
+	}
+	wb.cache.bottomPort.Retrieve(now)
+	tracing.TraceReqFinalize(fetches[0].fetchReadReq, wb.cache)
+
+	return true
+}
+
+func (wb *writeBufferStage) canPushFetchedDataToBanks(
+	fetches []*transaction,
+) bool {
+	if len(fetches) == 1 {
+		return wb.bankBufferForFetch(fetches[0]).CanPush()
+	}
+
+	required := make(map[sim.Buffer]int)
+	for _, trans := range fetches {
+		required[wb.bankBufferForFetch(trans)]++
+	}
+	for bankBuffer, count := range required {
+		if bankBuffer.Capacity()-bankBuffer.Size() < count {
+			return false
+		}
+	}
+	return true
+}
+
+func (wb *writeBufferStage) bankBufferForFetch(
+	trans *transaction,
+) sim.Buffer {
 	bankIndex := bankID(
 		trans.block,
 		wb.cache.directory.WayAssociativity(),
 		len(wb.cache.dirToBankBuffers),
 	)
-	bankBuf := wb.cache.writeBufferToBankBuffers[bankIndex]
+	return wb.cache.writeBufferToBankBuffers[bankIndex]
+}
 
-	if !bankBuf.CanPush() {
-		return false
-	}
+func (wb *writeBufferStage) completeFetchedData(
+	now sim.VTimeInSec,
+	dataReady *mem.DataReadyRsp,
+	trans *transaction,
+) {
+	bankBuf := wb.bankBufferForFetch(trans)
 
-	trans.fetchedData = dataReady.Data
+	trans.fetchedData = wb.extractFetchedCacheLine(dataReady.Data, trans)
 	trans.action = bankWriteFetched
-	trans.mshrEntry.Data = dataReady.Data
+	trans.mshrEntry.Data = trans.fetchedData
 	memtrace.RecordMemoryPathL2DRAMResponse(
 		wb.cache.Name(),
 		accessReqInfo(trans.accessReq()),
@@ -320,7 +396,7 @@ func (wb *writeBufferStage) processDataReadyRsp(
 	wb.combineData(trans.mshrEntry)
 	memtrace.RecordL2LocalDRAMFill(
 		wb.cache.Name(),
-		uint64(len(dataReady.Data)),
+		uint64(len(trans.fetchedData)),
 		now-trans.fetchReadReq.SendTime,
 		now,
 		"read",
@@ -330,7 +406,7 @@ func (wb *writeBufferStage) processDataReadyRsp(
 		wb.cache.Name(),
 		accessReqInfo(req),
 		trans.fetchAddress,
-		uint64(len(dataReady.Data)),
+		uint64(len(trans.fetchedData)),
 		now-trans.fetchReadReq.SendTime,
 		now,
 		accessReqOp(req),
@@ -342,9 +418,6 @@ func (wb *writeBufferStage) processDataReadyRsp(
 	bankBuf.Push(trans)
 
 	wb.removeInflightFetch(trans)
-	wb.cache.bottomPort.Retrieve(now)
-
-	tracing.TraceReqFinalize(trans.fetchReadReq, wb.cache)
 
 	// log.Printf("%.10f, %s, wb data fetched from bottom, %s, %04X, %04X, (%d, %d), %v\n",
 	// 	now, wb.cache.Name(),
@@ -354,7 +427,29 @@ func (wb *writeBufferStage) processDataReadyRsp(
 	// 	trans.fetchedData,
 	// )
 
-	return true
+}
+
+func (wb *writeBufferStage) extractFetchedCacheLine(
+	data []byte,
+	trans *transaction,
+) []byte {
+	lineBytes := uint64(1) << wb.cache.log2BlockSize
+	read := trans.fetchReadReq
+	if read == nil || read.AccessByteSize <= lineBytes {
+		return data
+	}
+	if trans.fetchAddress < read.Address {
+		panic("invalid DRAM batch response")
+	}
+
+	offset := trans.fetchAddress - read.Address
+	if offset+lineBytes > uint64(len(data)) {
+		panic("DRAM response does not contain the requested cache line")
+	}
+
+	cacheLine := make([]byte, lineBytes)
+	copy(cacheLine, data[offset:offset+lineBytes])
+	return cacheLine
 }
 
 func (wb *writeBufferStage) combineData(mshrEntry *cache.MSHREntry) {
@@ -378,16 +473,20 @@ func (wb *writeBufferStage) combineData(mshrEntry *cache.MSHREntry) {
 	}
 }
 
-func (wb *writeBufferStage) findInflightFetchByFetchReadReqID(
+func (wb *writeBufferStage) findInflightFetchesByFetchReadReqID(
 	id string,
-) *transaction {
+) []*transaction {
+	fetches := make([]*transaction, 0, 2)
 	for _, t := range wb.inflightFetch {
 		if t.fetchReadReq.ID == id {
-			return t
+			fetches = append(fetches, t)
 		}
 	}
 
-	panic("inflight read not found")
+	if len(fetches) == 0 {
+		panic("inflight read not found")
+	}
+	return fetches
 }
 
 func (wb *writeBufferStage) removeInflightFetch(f *transaction) {
@@ -455,4 +554,5 @@ func (wb *writeBufferStage) tooManyInflightEvictions() bool {
 
 func (wb *writeBufferStage) Reset(now sim.VTimeInSec) {
 	wb.cache.writeBufferBuffer.Clear()
+	wb.cache.resetDRAMBatchState()
 }

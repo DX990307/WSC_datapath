@@ -67,6 +67,12 @@ var endpointChannelsFlag = flag.Int("endpoint-channels", 0,
 	"Override local device endpoint input/output flit channels per cycle; 0 uses network bandwidth.")
 var endpointBufferSizeFlag = flag.Int("endpoint-buffer-size", 0,
 	"Override local device endpoint buffer capacity; 0 uses endpoint channel count.")
+var rdmaPipelineWidthFlag = flag.Int("rdma-pipeline-width", 8,
+	"Maximum requests or responses processed by each RDMA input path per cycle.")
+var rdmaPipelineLatencyFlag = flag.Int("rdma-pipeline-latency", 10,
+	"Fixed RDMA processing latency in cycles paid on each endpoint traversal.")
+var rdmaMaxOutstandingFlag = flag.Int("rdma-max-outstanding", 64,
+	"Maximum distinct operations tracked independently by each RDMA requester and owner direction.")
 var networkFlitSizeFlag = flag.Int("network-flit-size", 16,
 	"NoC flit payload size in bytes. Larger values reduce response flit count.")
 var l1vRemoteMaxInflightFlag = flag.Int("l1v-remote-max-inflight", 0,
@@ -84,6 +90,36 @@ var l1vBottomReorderMaxAgeNSFlag = flag.Uint64("l1v-bottom-reorder-max-age-ns", 
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")
+var dramBatchEnableFlag = flag.Bool("dram-batch-enable", false,
+	"Enable adaptive immediate 128B DRAM prefetch after useful adjacent access patterns.")
+var dramBatchEntriesFlag = flag.Int("dram-batch-entries", 16,
+	"Maximum prefetched cache lines buffered by each L2-slice DRAM adapter.")
+var dramBatchLinesFlag = flag.Int("dram-batch-lines", 2,
+	"Maximum adjacent 64B cache lines per DRAM batch.")
+var dramBatchWaitNSFlag = flag.Uint64("dram-batch-wait-ns", 0,
+	"Deprecated compatibility flag; adaptive DRAM prefetch never waits.")
+var dramRowReorderEnableFlag = flag.Bool("dram-row-reorder-enable", false,
+	"Enable open-page, row-hit-first DRAM command scheduling.")
+var dramRowReorderMaxAgeFlag = flag.Int("dram-row-reorder-max-age", 64,
+	"Maximum DRAM command queue age in cycles before oldest-ready priority.")
+var remoteDataPathEnableFlag = flag.Bool("remote-data-path-enable", false,
+	"Enable requester RDMA exact dedup/batching and requester-L2 remote replicas.")
+var remoteDataPathDedupEnableFlag = flag.Bool("remote-data-path-dedup-enable", true,
+	"Enable requester RDMA exact same-line deduplication when the remote data path is enabled.")
+var remoteDataPathBatchingEnableFlag = flag.Bool("remote-data-path-batching-enable", true,
+	"Enable requester RDMA FIFO/bitmap batching when the remote data path is enabled.")
+var remoteDataPathL2EnableFlag = flag.Bool("remote-data-path-l2-enable", true,
+	"Enable requester-L2 Cuckoo probes and remote clean replicas when the remote data path is enabled.")
+var remoteDataPathPrefetchFlag = flag.Bool("remote-data-path-prefetch", false,
+	"Include the other 64B line in the same 128B access unit as a remote prefetch.")
+var remoteDataPathBatchLinesFlag = flag.Int("remote-data-path-batch-lines", 8,
+	"Maximum unique 64B lines in one remote bitmap request.")
+var remoteDataPathWaitNSFlag = flag.Uint64("remote-data-path-wait-ns", 50,
+	"Maximum requester RDMA batching wait in ns; 0 flushes on the next cycle.")
+var remoteDataPathBatchesFlag = flag.Int("remote-data-path-batches", 64,
+	"Maximum collecting page batches per requester RDMA.")
+var remoteDataPathReuseEntriesFlag = flag.Int("remote-data-path-reuse-entries", 4096,
+	"Entries in the requester RDMA two-touch admission history.")
 var maxNumHopsFlag = flag.Int("max-num-hops", -1,
 	"The maximum number of hops in the network")
 var numMemBankFlag = flag.Int("num-memory-banks", 16,

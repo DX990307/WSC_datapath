@@ -12,6 +12,10 @@ type Builder struct {
 	localModules           mem.LowModuleFinder
 	RemoteRDMAAddressTable mem.LowModuleFinder
 	bufferSize             int
+	remoteDataPath         RemoteDataPathConfig
+	pipelineWidth          int
+	pipelineLatency        int
+	maxOutstanding         int
 }
 
 // MakeBuilder creates a new builder with default configuration values.
@@ -40,6 +44,29 @@ func (b Builder) WithBufferSize(n int) Builder {
 	return b
 }
 
+// WithPipelineWidth sets the maximum number of messages that each RDMA input
+// path can process in one cycle. A non-positive value keeps the legacy
+// unlimited-width behavior.
+func (b Builder) WithPipelineWidth(n int) Builder {
+	b.pipelineWidth = n
+	return b
+}
+
+// WithPipelineLatency sets the fixed number of RDMA processing cycles paid by
+// every request or response when it enters an RDMA endpoint.
+func (b Builder) WithPipelineLatency(n int) Builder {
+	b.pipelineLatency = n
+	return b
+}
+
+// WithMaxOutstanding sets the maximum number of distinct operations tracked
+// independently by the requester and owner directions of one RDMA endpoint.
+// A non-positive value keeps the legacy unlimited behavior.
+func (b Builder) WithMaxOutstanding(n int) Builder {
+	b.maxOutstanding = n
+	return b
+}
+
 // WithLocalModules sets the local modules.
 func (b Builder) WithLocalModules(m mem.LowModuleFinder) Builder {
 	b.localModules = m
@@ -52,6 +79,13 @@ func (b Builder) WithRemoteModules(m mem.LowModuleFinder) Builder {
 	return b
 }
 
+// WithRemoteDataPath configures requester-side exact deduplication, FIFO page
+// batching, optional access-unit prefetch, and requester-L2 admission.
+func (b Builder) WithRemoteDataPath(c RemoteDataPathConfig) Builder {
+	b.remoteDataPath = normalizeRemoteDataPathConfig(c)
+	return b
+}
+
 // Build creates a RDMA with the given parameters.
 func (b Builder) Build(name string) *Comp {
 	rdma := &Comp{}
@@ -60,6 +94,10 @@ func (b Builder) Build(name string) *Comp {
 
 	rdma.localModules = b.localModules
 	rdma.RemoteRDMAAddressTable = b.RemoteRDMAAddressTable
+	rdma.pipelineWidth = b.pipelineWidth
+	rdma.pipelineLatency = b.pipelineLatency
+	rdma.maxOutstanding = b.maxOutstanding
+	rdma.ConfigureRemoteDataPath(b.remoteDataPath)
 	// rdma.SetFreq(b.freq)
 
 	rdma.ToL1 = sim.NewLimitNumMsgPort(rdma, b.bufferSize, name+".ToL1")

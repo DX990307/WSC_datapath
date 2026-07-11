@@ -25,17 +25,15 @@ type BankImpl struct {
 	state                BankState
 	currentCmd           *signal.Command
 	openRow              uint64
-	CmdCycles            map[signal.CommandKind]int
-	cyclesToCmdAvailable map[signal.CommandKind]int
+	CmdCycles            [signal.NumCmdKind]int
+	cyclesToCmdAvailable [signal.NumCmdKind]int
 }
 
 // NewBankImpl creates a new BankImpl.
 func NewBankImpl(name string) *BankImpl {
 	b := &BankImpl{
-		BankName:             name,
-		state:                BankStateClosed,
-		cyclesToCmdAvailable: make(map[signal.CommandKind]int),
-		CmdCycles:            make(map[signal.CommandKind]int),
+		BankName: name,
+		state:    BankStateClosed,
 	}
 
 	return b
@@ -55,7 +53,7 @@ func (b *BankImpl) Tick(now sim.VTimeInSec) (madeProgress bool) {
 }
 
 func (b *BankImpl) countDownTiming() (madeProgress bool) {
-	for i := range b.cyclesToCmdAvailable {
+	for i := signal.CommandKind(0); i < signal.NumCmdKind; i++ {
 		if b.cyclesToCmdAvailable[i] > 0 {
 			b.cyclesToCmdAvailable[i]--
 			madeProgress = true
@@ -99,6 +97,9 @@ func (b *BankImpl) GetReadyCommand(
 	now sim.VTimeInSec,
 	cmd *signal.Command,
 ) *signal.Command {
+	if b.currentCmd != nil {
+		return nil
+	}
 	requiredKind := b.getRequiredCommandKind(cmd)
 	if requiredKind == signal.NumCmdKind {
 		panic("never")

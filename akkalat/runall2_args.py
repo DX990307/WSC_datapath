@@ -49,7 +49,7 @@ def parse_args():
         "--switch-latency",
         dest="switch_latency",
         type=int,
-        default=0,
+        default=32,
         help=(
             "Override -switch-latency in the benchmark command. "
             "0 keeps runall2_constants.py default."
@@ -74,6 +74,71 @@ def parse_args():
             + ",".join(name for name, _ in CONFIGS)
             + ". Use all for every config."
         ),
+    )
+    parser.add_argument(
+        "--remote-ablation",
+        action="store_true",
+        help=(
+            "Run baseline, each of DRAM batching / remote request / remote "
+            "L2 alone, and one all-three combined configuration. "
+            "Cannot be combined with --configs."
+        ),
+    )
+    parser.add_argument(
+        "--remote-ablation-include-prefetch",
+        action="store_true",
+        help=(
+            "Append a sixth all-three configuration with AU prefetch to the "
+            "remote ablation; implies --remote-ablation."
+        ),
+    )
+    parser.add_argument(
+        "--dram-batch-entries",
+        type=int,
+        default=16,
+        help="Maximum active 128B DRAM batch windows per L2 slice (default: 16).",
+    )
+    parser.add_argument(
+        "--dram-batch-lines",
+        type=int,
+        default=2,
+        help="Maximum adjacent 64B lines per DRAM batch (default: 2).",
+    )
+    parser.add_argument(
+        "--dram-batch-wait-ns",
+        type=int,
+        default=0,
+        help="Deprecated compatibility option; adaptive DRAM prefetch does not wait.",
+    )
+    parser.add_argument(
+        "--dram-row-reorder-max-age",
+        type=int,
+        default=64,
+        help="Oldest-ready threshold for local DRAM row reorder (default: 64 cycles).",
+    )
+    parser.add_argument(
+        "--remote-data-path-batch-lines",
+        type=int,
+        default=8,
+        help="Maximum bitmap batch lines for --remote-ablation (default: 8).",
+    )
+    parser.add_argument(
+        "--remote-data-path-wait-ns",
+        type=int,
+        default=50,
+        help="Maximum FIFO batching wait for --remote-ablation (default: 50 ns).",
+    )
+    parser.add_argument(
+        "--remote-data-path-batches",
+        type=int,
+        default=64,
+        help="Maximum collecting page batches for --remote-ablation (default: 64).",
+    )
+    parser.add_argument(
+        "--remote-data-path-reuse-entries",
+        type=int,
+        default=4096,
+        help="Two-touch history entries for --remote-ablation (default: 4096).",
     )
     parser.add_argument(
         "--extra-benchmark-flags",
