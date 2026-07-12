@@ -53,6 +53,11 @@ type MemController struct {
 	channel             org.Channel
 
 	inflightTransactions []*signal.Transaction
+
+	physicalObserver         PhysicalDRAMObserver
+	physicalIdentity         physicalDRAMIdentity
+	physicalAccessBytes      uint64
+	physicalQueuedCommandIDs map[string]string
 }
 
 // GetRowAwareStats returns row-aware DRAM scheduling counters.
@@ -98,6 +103,16 @@ func (c *MemController) parseTop(now sim.VTimeInSec) (madeProgress bool) {
 	c.subTransactionQueue.Push(trans)
 	c.inflightTransactions = append(c.inflightTransactions, trans)
 	c.topPort.Retrieve(now)
+
+	if c.physicalObserver != nil {
+		for _, st := range trans.SubTransactions {
+			e := c.makePhysicalDRAMEvent(
+				PhysicalDRAMSubtransactionArrive, now, st)
+			e.SubtransactionQueueDepth =
+				c.physicalSubtransactionQueueDepth()
+			c.emitPhysicalDRAM(e)
+		}
+	}
 
 	tracing.TraceReqReceive(msg, c)
 	if req, ok := msg.(mem.AccessReq); ok {
@@ -145,6 +160,7 @@ func (c *MemController) issue(now sim.VTimeInSec) (madeProgress bool) {
 		return false
 	}
 
+	c.observePhysicalCommandIssue(now, cmd)
 	c.channel.StartCommand(now, cmd)
 	c.channel.UpdateTiming(now, cmd)
 
@@ -202,6 +218,7 @@ func (c *MemController) finalizeWriteTrans(
 		Build()
 	sendErr := c.topPort.Send(writeDone)
 	if sendErr == nil {
+		c.observePhysicalTransactionComplete(now, t)
 		memtrace.RecordMemoryPathDRAMResponse(
 			c.Name(),
 			dramAccessReqInfo(t.Write),
@@ -240,6 +257,7 @@ func (c *MemController) finalizeReadTrans(
 		Build()
 	sendErr := c.topPort.Send(dataReady)
 	if sendErr == nil {
+		c.observePhysicalTransactionComplete(now, t)
 		memtrace.RecordMemoryPathDRAMResponse(
 			c.Name(),
 			dramAccessReqInfo(t.Read),

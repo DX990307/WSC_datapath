@@ -149,6 +149,41 @@ def experiment_command(exp):
         ])
         if exp.get("trace_memory_path_exit_on_complete"):
             cmd.append("-trace-memory-path-exit-on-complete")
+    if exp.get("trace_observation"):
+        cmd.extend([
+            "-trace-observation",
+            f"-trace-observation-file={file_stem}_observation",
+            (
+                "-trace-observation-warmup-accesses="
+                f'{exp["trace_observation_warmup_accesses"]}'
+            ),
+            (
+                "-trace-observation-max-records="
+                f'{exp["trace_observation_max_records"]}'
+            ),
+            (
+                "-trace-observation-dram-warmup-accesses="
+                f'{exp["trace_observation_dram_warmup_accesses"]}'
+            ),
+            (
+                "-trace-observation-dram-max-records="
+                f'{exp["trace_observation_dram_max_records"]}'
+            ),
+            (
+                "-trace-observation-remote-warmup-requests="
+                f'{exp["trace_observation_remote_warmup_requests"]}'
+            ),
+            (
+                "-trace-observation-remote-max-records="
+                f'{exp["trace_observation_remote_max_records"]}'
+            ),
+            (
+                "-trace-observation-l2-sample-max="
+                f'{exp["trace_observation_l2_sample_max"]}'
+            ),
+        ])
+        if exp.get("trace_observation_exit_on_complete"):
+            cmd.append("-trace-observation-exit-on-complete")
     return cmd
 
 

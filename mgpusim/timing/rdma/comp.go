@@ -409,11 +409,31 @@ func (c *Comp) processReqFromL1(
 	now sim.VTimeInSec,
 	req mem.AccessReq,
 ) bool {
+	_, previouslySeen := c.firstSeenFromL1Req[req.Meta().ID]
 	firstSeen := c.firstSeen(&c.firstSeenFromL1Req, req.Meta().ID, now)
 	dst := c.RemoteRDMAAddressTable.Find(req.GetAddress())
 
 	if dst == c.ToOutside {
 		panic("RDMA loop back detected")
+	}
+	if !previouslySeen && memtrace.ObservationRemoteTraceEnabled() {
+		// Admission is recorded on the first processing attempt rather than
+		// after a successful output send. Output backpressure can therefore
+		// reorder/delay issue without corrupting arrival-time overlap counts.
+		ownerName := ""
+		if dst != nil {
+			ownerName = dst.Name()
+		}
+		memtrace.StartRemoteRequest(memtrace.ObservationRemoteRequestStart{
+			LogicalRequestID: req.Meta().ID,
+			PID:              uint64(req.GetPID()),
+			Operation:        remoteObservationOperation(req),
+			Address:          req.GetAddress(),
+			ByteSize:         req.GetByteSize(),
+			RequesterName:    c.Name(),
+			OwnerName:        ownerName,
+			ArrivalTime:      req.Meta().RecvTime,
+		})
 	}
 
 	if c.remoteConfig.Enabled {
@@ -435,6 +455,21 @@ func (c *Comp) processReqFromL1(
 
 	err := c.ToOutside.Send(cloned)
 	if err == nil {
+		memtrace.IssueRemoteRequest(memtrace.ObservationRemoteRequestIssue{
+			LogicalRequestID:    req.Meta().ID,
+			IssueTime:           now,
+			ForwardWireID:       cloned.Meta().ID,
+			ForwardTrafficBytes: uint64(cloned.Meta().TrafficBytes),
+		})
+		memtrace.MarkObservationRemote(req.Meta().ID)
+		memtrace.ObservationTransitionByRequest(
+			req.Meta().ID, "requester_rdma_receive",
+			"requester_rdma", req.Meta().RecvTime)
+		memtrace.LinkObservationRequestFromRequest(
+			req.Meta().ID, cloned.Meta().ID, "remote_forward_request")
+		memtrace.ObservationTransitionByRequest(
+			req.Meta().ID, "requester_rdma_send",
+			"remote_request_network", now)
 		memtrace.RegisterMemoryPathNetworkMessage(
 			rdmaAccessReqInfo(req),
 			req.Meta().ID,
@@ -498,6 +533,13 @@ func (c *Comp) processReqFromOutside(
 
 	err := c.ToL2.Send(cloned)
 	if err == nil {
+		memtrace.ObservationTransitionByRequest(
+			req.Meta().ID, "owner_rdma_receive",
+			"owner_rdma_request", req.Meta().RecvTime)
+		memtrace.LinkObservationRequestFromRequest(
+			req.Meta().ID, cloned.Meta().ID, "owner_l2_request")
+		memtrace.ObservationTransitionByRequest(
+			req.Meta().ID, "owner_rdma_l2_send", "owner_l2_link", now)
 		memtrace.RecordMemoryPathRDMALocalToRemoteRequest(
 			c.Name(),
 			rdmaAccessReqInfo(req),
@@ -550,6 +592,15 @@ func (c *Comp) processRspFromL2(
 
 	err := c.ToOutside.Send(rspToOutside)
 	if err == nil {
+		memtrace.ObservationTransitionByRequest(
+			trans.toInside.Meta().ID, "owner_rdma_response_receive",
+			"owner_rdma_response", rsp.Meta().RecvTime)
+		memtrace.LinkObservationRequestFromRequest(
+			trans.toInside.Meta().ID, rspToOutside.Meta().ID,
+			"remote_return_response")
+		memtrace.ObservationTransitionByRequest(
+			trans.toInside.Meta().ID, "owner_rdma_response_send",
+			"remote_response_network", now)
 		memtrace.RegisterMemoryPathNetworkMessage(
 			rdmaAccessReqInfo(trans.fromOutside),
 			trans.fromOutside.Meta().ID,
@@ -609,6 +660,19 @@ func (c *Comp) processRspFromOutside(
 
 	err := c.ToL1.Send(rspToInside)
 	if err == nil {
+		memtrace.CompleteRemoteRequest(
+			memtrace.ObservationRemoteRequestCompletion{
+				LogicalRequestID:   trans.fromInside.Meta().ID,
+				CompletionTime:     now,
+				ReturnWireID:       rsp.Meta().ID,
+				ReturnTrafficBytes: uint64(rsp.Meta().TrafficBytes),
+			})
+		memtrace.ObservationTransitionByRequest(
+			rsp.Meta().ID, "requester_rdma_response_receive",
+			"requester_rdma_response", rsp.Meta().RecvTime)
+		memtrace.ObservationTransitionByRequest(
+			trans.fromInside.Meta().ID, "requester_rdma_l1_send",
+			"requester_l1_link", now)
 		memtrace.RecordMemoryPathRDMARemoteToLocalResponse(
 			c.Name(),
 			rdmaAccessReqInfo(trans.fromInside),
@@ -704,6 +768,17 @@ func rdmaAccessReqInfo(req sim.Msg) interface{} {
 		return req.Info
 	default:
 		return nil
+	}
+}
+
+func remoteObservationOperation(req mem.AccessReq) string {
+	switch req.(type) {
+	case *mem.ReadReq:
+		return "read"
+	case *mem.WriteReq:
+		return "write"
+	default:
+		return "unknown"
 	}
 }
 

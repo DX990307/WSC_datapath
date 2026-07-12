@@ -13,6 +13,10 @@ type FCFSSubTransactionQueue struct {
 	Queue      []*signal.SubTransaction
 	CmdCreator CommandCreator
 	CmdQueue   cmdq.CommandQueue
+
+	// CommandEnqueued is an optional passive observation hook. It is invoked
+	// after a command has been accepted and must not mutate the command.
+	CommandEnqueued func(now sim.VTimeInSec, cmd *signal.Command)
 }
 
 // CanPush returns true if there are enough slots to hold n subtransactions.
@@ -45,6 +49,9 @@ func (q *FCFSSubTransactionQueue) Tick(now sim.VTimeInSec) bool {
 
 		if q.CmdQueue.CanAccept(cmd) {
 			q.CmdQueue.Accept(cmd)
+			if q.CommandEnqueued != nil {
+				q.CommandEnqueued(now, cmd)
+			}
 			q.Queue = append(q.Queue[:i], q.Queue[i+1:]...)
 
 			// fmt.Printf("Command Pushed: %#v\n", cmd)

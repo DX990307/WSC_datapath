@@ -75,6 +75,67 @@ def replace_or_append_flag(flags, prefix, value):
 
 
 def build_ablation_configs(args):
+    if args.trace_observation:
+        if args.trace_memory_path:
+            raise ValueError(
+                "--trace-observation cannot be combined with the legacy "
+                "--trace-memory-path"
+            )
+        if args.remote_ablation or args.remote_ablation_include_prefetch:
+            raise ValueError(
+                "--trace-observation is a baseline characterization run and "
+                "cannot be combined with an ablation sweep"
+            )
+        if sampled_param_sweep_requested(args):
+            raise ValueError(
+                "--trace-observation cannot be combined with sampled parameter "
+                "sweeps; observation timing must come from full simulation"
+            )
+        sampled_execution_flags = {
+            "-sampled",
+            "-branch-sampled",
+            "-kernel-sampled",
+            "-loop-sampled",
+        }
+        extra_flags = shlex.split(args.extra_benchmark_flags or "")
+        enabled_sampled_flags = sorted(
+            flag_name
+            for flag_name in sampled_execution_flags
+            if any(
+                token == flag_name or token.startswith(flag_name + "=")
+                for token in extra_flags
+            )
+        )
+        if enabled_sampled_flags:
+            raise ValueError(
+                "--trace-observation rejects sampled execution flags in "
+                "--extra-benchmark-flags: " + ", ".join(enabled_sampled_flags)
+            )
+        if args.configs and parse_csv(args.configs) != ["baseline"]:
+            raise ValueError(
+                "--trace-observation only supports --configs=baseline"
+            )
+        if (
+            args.trace_observation_exit_on_complete
+            and args.trace_observation_max_records == 0
+        ):
+            raise ValueError(
+                "--trace-observation-exit-on-complete requires "
+                "--trace-observation-max-records to be greater than zero"
+            )
+        for name in (
+            "trace_observation_warmup_accesses",
+            "trace_observation_max_records",
+            "trace_observation_dram_warmup_accesses",
+            "trace_observation_dram_max_records",
+            "trace_observation_remote_warmup_requests",
+            "trace_observation_remote_max_records",
+            "trace_observation_l2_sample_max",
+        ):
+            if getattr(args, name) < 0:
+                raise ValueError(name.replace("_", "-") + " must be non-negative")
+        return [("baseline", [])]
+
     if args.remote_ablation or args.remote_ablation_include_prefetch:
         return build_remote_data_path_ablation_configs(args)
 

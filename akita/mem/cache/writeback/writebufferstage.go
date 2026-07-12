@@ -159,6 +159,11 @@ func (wb *writeBufferStage) issueSingleFetch(
 		WithInfo(accessReqInfo(trans.accessReq())).
 		Build()
 	wb.cache.bottomSender.Send(read)
+	memtrace.LinkObservationRequestFromRequest(
+		trans.accessReq().Meta().ID, read.Meta().ID, "l2_dram_read")
+	memtrace.ObservationTransitionByRequest(
+		trans.accessReq().Meta().ID,
+		"l2_dram_request_issued", "l2_to_dram", now)
 	wb.recordDRAMReadSend(now, read, trans)
 
 	trans.fetchReadReq = read
@@ -383,6 +388,11 @@ func (wb *writeBufferStage) completeFetchedData(
 	trans.fetchedData = wb.extractFetchedCacheLine(dataReady.Data, trans)
 	trans.action = bankWriteFetched
 	trans.mshrEntry.Data = trans.fetchedData
+	memtrace.ObservationTransitionByRequest(
+		trans.fetchReadReq.Meta().ID,
+		"l2_dram_response_received", "l2_fill_response", now)
+	memtrace.MarkObservationSource(
+		trans.fetchReadReq.Meta().ID, "dram", wb.cache.Name())
 	memtrace.RecordMemoryPathL2DRAMResponse(
 		wb.cache.Name(),
 		accessReqInfo(trans.accessReq()),

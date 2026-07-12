@@ -36,6 +36,8 @@ func (d *directory) Tick(now sim.VTimeInSec) (madeProgress bool) {
 		}
 
 		trans := item.(*transaction)
+		memtrace.ObservationTransition(
+			trans.id, "l1_directory_start", "l1_lookup", now)
 		memtrace.RecordMemoryPathL1VDirStart(
 			d.cache.Name(), trans.id, now)
 		d.pipeline.Accept(now, dirPipelineItem{trans})
@@ -90,6 +92,12 @@ func (d *directory) processMSHRHit(
 	trans *transaction,
 	mshrEntry *cache.MSHREntry,
 ) bool {
+	leaderPathID := ""
+	if len(mshrEntry.Requests) > 0 {
+		if leader, ok := mshrEntry.Requests[0].(*transaction); ok {
+			leaderPathID = leader.id
+		}
+	}
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
 
 	if trans.read != nil {
@@ -99,6 +107,8 @@ func (d *directory) processMSHRHit(
 		tracing.AddTaskStep(trans.id, d.cache, "write-mshr-hit")
 		d.recordMemoryPathCacheResult(now, trans, "write-mshr-hit")
 	}
+	memtrace.MarkObservationL1MSHRFollower(
+		trans.id, leaderPathID, now)
 
 	d.buf.Pop()
 
@@ -231,6 +241,8 @@ func (d *directory) writeBottom(now sim.VTimeInSec, trans *transaction) bool {
 	}
 
 	trans.writeToBottom = writeToBottom
+	memtrace.LinkObservationRequest(
+		trans.id, writeToBottom.Meta().ID, "l1_bottom_write")
 	d.cache.trackBottomTransaction(trans, bottomModule)
 
 	tracing.TraceReqInitiate(writeToBottom, d.cache, trans.id)
@@ -260,6 +272,8 @@ func (d *directory) enqueueWriteBottom(
 		Build()
 
 	trans.writeToBottom = writeToBottom
+	memtrace.LinkObservationRequest(
+		trans.id, writeToBottom.Meta().ID, "l1_bottom_write")
 	d.cache.enqueueBottomReorder(
 		now, trans, writeToBottom, bottomModule, write.Address)
 
@@ -342,6 +356,8 @@ func (d *directory) fetchFromBottom(
 
 	tracing.TraceReqInitiate(readToBottom, d.cache, trans.id)
 	trans.readToBottom = readToBottom
+	memtrace.LinkObservationRequest(
+		trans.id, readToBottom.Meta().ID, "l1_bottom_read")
 	trans.block = victim
 	d.cache.trackBottomTransaction(trans, bottomModule)
 
@@ -383,6 +399,8 @@ func (d *directory) enqueueReadBottom(
 		Build()
 
 	trans.readToBottom = readToBottom
+	memtrace.LinkObservationRequest(
+		trans.id, readToBottom.Meta().ID, "l1_bottom_read")
 	trans.block = victim
 
 	mshrEntry := d.cache.mshr.Add(pid, cacheLineID)
@@ -436,4 +454,13 @@ func (d *directory) recordMemoryPathCacheResult(
 		result,
 		now,
 	)
+	memtrace.MarkObservationL1Result(trans.id, result)
+	switch result {
+	case "read-hit":
+		memtrace.ObservationTransition(
+			trans.id, "l1_lookup_result", "l1_bank", now)
+	case "write-hit", "read-miss", "write-miss":
+		memtrace.ObservationTransition(
+			trans.id, "l1_lookup_result", "l1_downstream", now)
+	}
 }

@@ -244,6 +244,70 @@ def parse_args():
         help="Stop each benchmark process after the memory-path raw window reaches max records.",
     )
     parser.add_argument(
+        "--trace-observation",
+        dest="trace_observation",
+        action="store_true",
+        help=(
+            "Emit the new baseline-only exclusive memory-path trace and "
+            "physical DRAM locality trace."
+        ),
+    )
+    parser.add_argument(
+        "--trace-observation-warmup-accesses",
+        dest="trace_observation_warmup_accesses",
+        type=int,
+        default=100000,
+        help="Post-coalescing L1 demand reads to skip before the O1/O2 window.",
+    )
+    parser.add_argument(
+        "--trace-observation-max-records",
+        dest="trace_observation_max_records",
+        type=int,
+        default=100000,
+        help="Maximum O1/O2 demand-read paths per experiment; 0 means unlimited.",
+    )
+    parser.add_argument(
+        "--trace-observation-exit-on-complete",
+        dest="trace_observation_exit_on_complete",
+        action="store_true",
+        help="Stop after all selected O1/O2 paths complete.",
+    )
+    parser.add_argument(
+        "--trace-observation-dram-warmup-accesses",
+        dest="trace_observation_dram_warmup_accesses",
+        type=int,
+        default=100000,
+        help="Physical DRAM reads to skip before the O3 locality window.",
+    )
+    parser.add_argument(
+        "--trace-observation-dram-max-records",
+        dest="trace_observation_dram_max_records",
+        type=int,
+        default=100000,
+        help="Maximum physical DRAM reads in the O3 window; 0 means unlimited.",
+    )
+    parser.add_argument(
+        "--trace-observation-remote-warmup-requests",
+        dest="trace_observation_remote_warmup_requests",
+        type=int,
+        default=0,
+        help="Remote requests to skip before the O4/O5/O6 window.",
+    )
+    parser.add_argument(
+        "--trace-observation-remote-max-records",
+        dest="trace_observation_remote_max_records",
+        type=int,
+        default=100000,
+        help="Maximum remote requests in the O4/O5/O6 window.",
+    )
+    parser.add_argument(
+        "--trace-observation-l2-sample-max",
+        dest="trace_observation_l2_sample_max",
+        type=int,
+        default=100000,
+        help="Maximum periodic L2 utilization samples for O6.",
+    )
+    parser.add_argument(
         "--l1v-remote-max-inflight",
         dest="l1v_remote_max_inflight",
         type=int,

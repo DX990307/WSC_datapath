@@ -11,6 +11,11 @@ import (
 )
 
 func (r *Runner) reportStats() {
+	if r.observationDRAM != nil {
+		if err := r.observationDRAM.Close(); err != nil {
+			panic(err)
+		}
+	}
 	r.reportExecutionTime()
 	r.reportInstCount()
 	r.reportWGCount()
@@ -34,6 +39,12 @@ func (r *Runner) reportStats() {
 	r.reportDRAMRowReorderStats()
 	r.reportRemoteDataPathStats()
 	if err := memtrace.DumpMemoryPathTrace(); err != nil {
+		panic(err)
+	}
+	if err := memtrace.DumpObservationTrace(); err != nil {
+		panic(err)
+	}
+	if err := memtrace.DumpObservationRemoteTrace(); err != nil {
 		panic(err)
 	}
 	if err := memtrace.DumpL2SourceStats(); err != nil {

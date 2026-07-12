@@ -27,11 +27,12 @@ type directoryStage struct {
 }
 
 func (ds *directoryStage) Tick(now sim.VTimeInSec) (madeProgress bool) {
-	madeProgress = ds.acceptNewTransaction(now) || madeProgress
-
+	// Advance requests that were already resident at the start of this cycle.
+	// Accepting after the Tick prevents a newly accepted request from consuming
+	// its first directory-latency stage at the same timestamp.
 	madeProgress = ds.pipeline.Tick(now) || madeProgress
-
 	madeProgress = ds.processTransaction(now) || madeProgress
+	madeProgress = ds.acceptNewTransaction(now) || madeProgress
 
 	return madeProgress
 }
@@ -81,6 +82,8 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 
 		trans := item.(*transaction)
 		if req := trans.accessReq(); req != nil {
+			memtrace.ObservationTransitionByRequest(
+				req.Meta().ID, "l2_directory_start", "l2_lookup", now)
 			memtrace.RecordMemoryPathL2DirStart(
 				ds.cache.Name(),
 				req.Meta().ID,
@@ -184,6 +187,13 @@ func (ds *directoryStage) handleReadMSHRHit(
 	trans *transaction,
 	mshrEntry *cache.MSHREntry,
 ) bool {
+	leaderRequestID := ""
+	if len(mshrEntry.Requests) > 0 {
+		if leader, ok := mshrEntry.Requests[0].(*transaction); ok &&
+			leader.accessReq() != nil {
+			leaderRequestID = leader.accessReq().Meta().ID
+		}
+	}
 	trans.mshrEntry = mshrEntry
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
 	ds.buf.Pop()
@@ -194,6 +204,8 @@ func (ds *directoryStage) handleReadMSHRHit(
 		"read-mshr-hit",
 	)
 	ds.recordMemoryPathCacheResult(now, trans, "read-mshr-hit")
+	memtrace.MarkObservationL2MSHRFollower(
+		trans.read.Meta().ID, leaderRequestID, now)
 	ds.recordL2AccessSource(now, trans, "l2_mshr")
 
 	return true
@@ -213,8 +225,6 @@ func (ds *directoryStage) handleReadHit(
 		ds.cache,
 		"read-hit",
 	)
-	ds.recordMemoryPathCacheResult(now, trans, "read-hit")
-
 	// fmt.Printf("%.10f, %s, dir read hit, %s, %04X, %04X, (%d, %d), %v\n",
 	// 	now, ds.cache.Name(),
 	// 	trans.read.ID,
@@ -226,6 +236,9 @@ func (ds *directoryStage) handleReadHit(
 
 	ok := ds.readFromBank(trans, block)
 	if ok {
+		ds.recordMemoryPathCacheResult(now, trans, "read-hit")
+		memtrace.ObservationTransitionByRequest(
+			trans.read.Meta().ID, "l2_lookup_result", "l2_bank", now)
 		ds.recordL2AccessSource(now, trans, "l2_cache")
 	}
 	return ok
@@ -256,6 +269,8 @@ func (ds *directoryStage) handleReadMiss(
 				"read-miss",
 			)
 			ds.recordMemoryPathCacheResult(now, trans, "read-miss")
+			memtrace.ObservationTransitionByRequest(
+				trans.read.Meta().ID, "l2_lookup_result", "l2_write_buffer", now)
 
 			// fmt.Printf("%.10f, %s, dir read miss, %s, %04X, %04X, (%d, %d), %v\n",
 			// 	now, ds.cache.Name(),
@@ -278,6 +293,8 @@ func (ds *directoryStage) handleReadMiss(
 			"read-miss",
 		)
 		ds.recordMemoryPathCacheResult(now, trans, "read-miss")
+		memtrace.ObservationTransitionByRequest(
+			trans.read.Meta().ID, "l2_lookup_result", "l2_write_buffer", now)
 
 		// fmt.Printf("%.10f, %s, dir read miss, %s, %04X, %04X, (%d, %d), %v\n",
 		// 	now, ds.cache.Name(),
@@ -309,6 +326,15 @@ func (ds *directoryStage) doWrite(
 		)
 		if ok {
 			ds.recordMemoryPathCacheResult(now, trans, "write-mshr-hit")
+			leaderRequestID := ""
+			if len(mshrEntry.Requests) > 1 {
+				if leader, ok := mshrEntry.Requests[0].(*transaction); ok &&
+					leader.accessReq() != nil {
+					leaderRequestID = leader.accessReq().Meta().ID
+				}
+			}
+			memtrace.MarkObservationL2MSHRFollower(
+				trans.write.Meta().ID, leaderRequestID, now)
 			ds.recordL2AccessSource(now, trans, "l2_mshr")
 		}
 
@@ -325,6 +351,8 @@ func (ds *directoryStage) doWrite(
 				"write-hit",
 			)
 			ds.recordMemoryPathCacheResult(now, trans, "write-hit")
+			memtrace.ObservationTransitionByRequest(
+				trans.write.Meta().ID, "l2_lookup_result", "l2_bank", now)
 			ds.recordL2AccessSource(now, trans, "l2_cache")
 		}
 
@@ -339,6 +367,8 @@ func (ds *directoryStage) doWrite(
 			"write-miss",
 		)
 		ds.recordMemoryPathCacheResult(now, trans, "write-miss")
+		memtrace.ObservationTransitionByRequest(
+			trans.write.Meta().ID, "l2_lookup_result", "l2_write_buffer", now)
 	}
 
 	return ok
@@ -710,6 +740,8 @@ func (ds *directoryStage) recordMemoryPathCacheResult(
 		result,
 		now,
 	)
+	memtrace.MarkObservationL2Result(
+		req.Meta().ID, ds.cache.Name(), result)
 }
 
 func accessReqInfo(req mem.AccessReq) interface{} {

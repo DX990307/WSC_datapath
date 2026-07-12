@@ -64,6 +64,32 @@ type ChannelImpl struct {
 	Timing Timing
 }
 
+// ObservationBankState returns the current open-row state of a physical bank.
+// It is a read-only helper for DRAM profiling.
+func (cs *ChannelImpl) ObservationBankState(
+	rank, bankGroup, bank uint64,
+) (open bool, row uint64) {
+	b, ok := cs.Banks.GetBank(rank, bankGroup, bank).(*BankImpl)
+	if !ok {
+		return false, 0
+	}
+	return b.ObservationState()
+}
+
+// ObservationColumnReady checks row-hit readiness without invoking
+// GetReadyCommand, which would allocate a clone and consume a simulator ID.
+func (cs *ChannelImpl) ObservationColumnReady(cmd *signal.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	b, ok := cs.Banks.
+		GetBank(cmd.Rank, cmd.BankGroup, cmd.Bank).(*BankImpl)
+	if !ok {
+		return false
+	}
+	return b.ObservationColumnReady(cmd)
+}
+
 // Tick updates the internal states of the channel.
 func (cs *ChannelImpl) Tick(now sim.VTimeInSec) (madeProgress bool) {
 	for i := 0; i < len(cs.Banks); i++ {

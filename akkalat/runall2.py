@@ -128,6 +128,31 @@ def prepare_exps(args, exps, common_flags):
         exp["trace_memory_path_exit_on_complete"] = (
             args.trace_memory_path_exit_on_complete
         )
+        exp["trace_observation"] = args.trace_observation
+        exp["trace_observation_warmup_accesses"] = (
+            args.trace_observation_warmup_accesses
+        )
+        exp["trace_observation_max_records"] = (
+            args.trace_observation_max_records
+        )
+        exp["trace_observation_exit_on_complete"] = (
+            args.trace_observation_exit_on_complete
+        )
+        exp["trace_observation_dram_warmup_accesses"] = (
+            args.trace_observation_dram_warmup_accesses
+        )
+        exp["trace_observation_dram_max_records"] = (
+            args.trace_observation_dram_max_records
+        )
+        exp["trace_observation_remote_warmup_requests"] = (
+            args.trace_observation_remote_warmup_requests
+        )
+        exp["trace_observation_remote_max_records"] = (
+            args.trace_observation_remote_max_records
+        )
+        exp["trace_observation_l2_sample_max"] = (
+            args.trace_observation_l2_sample_max
+        )
 
 
 def print_launch_summary(args, common_flags, exps, max_workers):

@@ -48,8 +48,10 @@ type Cache struct {
 	log2BlockSize   uint64
 	numReqPerCycle  int
 
-	remoteReplicaFilter     *remoteReplicaFilter
-	remoteReplicaBlocks     map[*cache.Block]*remoteReplicaRecord
+	remoteReplicaFilter *remoteReplicaFilter
+	remoteReplicaBlocks map[*cache.Block]*remoteReplicaRecord
+
+	observationL2Accesses   uint64
 	remoteReplicaStats      RemoteReplicaStats
 	remoteReplicaGeneration uint64
 
@@ -101,7 +103,11 @@ func (c *Cache) runPipeline(now sim.VTimeInSec) bool {
 	}
 
 	madeProgress = c.runStage(now, c.writeBuffer) || madeProgress
-	madeProgress = c.runStage(now, c.dirStage) || madeProgress
+	// directoryStage already accepts and retires up to numReqPerCycle requests
+	// per Tick and its pipeline has the same width. Calling it through
+	// runStage advanced every pipeline stage numReqPerCycle times at the same
+	// simulation timestamp, collapsing a configured 10-cycle lookup to zero.
+	madeProgress = c.dirStage.Tick(now) || madeProgress
 	madeProgress = c.runStage(now, c.topParser) || madeProgress
 
 	return madeProgress

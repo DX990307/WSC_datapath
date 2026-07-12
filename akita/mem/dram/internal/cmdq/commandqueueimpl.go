@@ -35,6 +35,54 @@ type RowAwareStats struct {
 	MaxQueueAgeCycles  uint64
 }
 
+// ObservationDepth reports the occupancy of the queue that owns cmd and the
+// total command-queue occupancy. It is read-only and is used by the physical
+// DRAM observer rather than by scheduling policy.
+func (q *CommandQueueImpl) ObservationDepth(
+	cmd *signal.Command,
+) (queueDepth, totalDepth int) {
+	if cmd != nil && len(q.Queues) > 0 {
+		queueIndex := q.getQueueIndex(cmd)
+		if queueIndex >= 0 && queueIndex < len(q.Queues) {
+			queueDepth = len(q.Queues[queueIndex])
+		}
+	}
+	for _, queue := range q.Queues {
+		totalDepth += len(queue)
+	}
+	return queueDepth, totalDepth
+}
+
+// ObservationReadySameOpenRow counts queued column commands that can issue
+// without changing the currently open row in the selected physical bank.
+// The method has no scheduling side effects and does not generate command IDs.
+func (q *CommandQueueImpl) ObservationReadySameOpenRow(
+	channelID, rank, bankGroup, bank, openRow uint64,
+) int {
+	channel, ok := q.Channel.(*org.ChannelImpl)
+	if !ok {
+		return 0
+	}
+
+	ready := 0
+	for _, queue := range q.Queues {
+		for _, candidate := range queue {
+			if candidate == nil || !candidate.IsReadOrWrite() ||
+				candidate.Channel != channelID ||
+				candidate.Rank != rank ||
+				candidate.BankGroup != bankGroup ||
+				candidate.Bank != bank ||
+				candidate.Row != openRow {
+				continue
+			}
+			if channel.ObservationColumnReady(candidate) {
+				ready++
+			}
+		}
+	}
+	return ready
+}
+
 // GetCommandToIssue returns the next command ready to issue. It returns nil
 // if there if no command ready.
 func (q *CommandQueueImpl) GetCommandToIssue(

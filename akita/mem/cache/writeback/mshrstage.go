@@ -82,6 +82,8 @@ func (s *mshrStage) respondRead(
 		WithData(data[offset : offset+read.AccessByteSize]).
 		Build()
 	s.cache.topSender.Send(dataReady)
+	memtrace.ObservationTransitionByRequest(
+		read.Meta().ID, "l2_response_ready", "l2_response_link", now)
 
 	memtrace.RecordMemoryPathCacheComplete(
 		s.cache.Name(),
@@ -107,6 +109,8 @@ func (s *mshrStage) respondWrite(
 		WithRspTo(write.ID).
 		Build()
 	s.cache.topSender.Send(writeDoneRsp)
+	memtrace.ObservationTransitionByRequest(
+		write.Meta().ID, "l2_response_ready", "l2_response_link", now)
 
 	memtrace.RecordMemoryPathCacheComplete(
 		s.cache.Name(),

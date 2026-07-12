@@ -267,6 +267,8 @@ func (s *bankStage) finalizeReadHit(
 			Build()
 		s.cache.topSender.Send(dataReady)
 	}
+	memtrace.ObservationTransitionByRequest(
+		read.Meta().ID, "l2_response_ready", "l2_response_link", now)
 
 	memtrace.RecordMemoryPathCacheComplete(
 		s.cache.Name(),
@@ -322,6 +324,8 @@ func (s *bankStage) finalizeWriteHit(
 		WithRspTo(write.ID).
 		Build()
 	s.cache.topSender.Send(done)
+	memtrace.ObservationTransitionByRequest(
+		write.Meta().ID, "l2_response_ready", "l2_response_link", now)
 
 	memtrace.RecordMemoryPathCacheComplete(
 		s.cache.Name(),

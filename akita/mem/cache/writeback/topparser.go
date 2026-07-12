@@ -70,6 +70,9 @@ func (p *topParser) acceptTransaction(
 	p.cache.inFlightTransactions = append(p.cache.inFlightTransactions, trans)
 
 	if accessReq := trans.accessReq(); accessReq != nil {
+		p.cache.recordObservationL2Utilization(now)
+		memtrace.ObservationTransitionByRequest(
+			accessReq.Meta().ID, "l2_top_receive", "l2_queue", now)
 		memtrace.RecordMemoryPathL2TopReceive(
 			p.cache.Name(),
 			accessReq.Meta().ID,

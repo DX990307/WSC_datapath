@@ -27,6 +27,7 @@ type BankImpl struct {
 	openRow              uint64
 	CmdCycles            [signal.NumCmdKind]int
 	cyclesToCmdAvailable [signal.NumCmdKind]int
+	commandCompleted     func(now sim.VTimeInSec, cmd *signal.Command)
 }
 
 // NewBankImpl creates a new BankImpl.
@@ -86,10 +87,39 @@ func (b *BankImpl) completeCurrentCmd(now sim.VTimeInSec) {
 		tracing.EndTask(b.currentCmd.SubTrans.ID, b)
 	}
 
+	if b.commandCompleted != nil {
+		b.commandCompleted(now, b.currentCmd)
+	}
+
 	// fmt.Printf("%.10f, %s, cmd completed, %s\n",
 	// 	now, b.Name(), b.currentCmd.Kind.String())
 
 	b.currentCmd = nil
+}
+
+// SetCommandCompletedObserver installs a passive command-completion hook.
+func (b *BankImpl) SetCommandCompletedObserver(
+	observer func(now sim.VTimeInSec, cmd *signal.Command),
+) {
+	b.commandCompleted = observer
+}
+
+// ObservationState returns the bank state without exposing mutable bank
+// internals to the observer.
+func (b *BankImpl) ObservationState() (open bool, row uint64) {
+	return b.state == BankStateOpen, b.openRow
+}
+
+// ObservationColumnReady checks whether cmd is a ready row-hit column command
+// without cloning it or changing timing state.
+func (b *BankImpl) ObservationColumnReady(cmd *signal.Command) bool {
+	if cmd == nil || !cmd.IsReadOrWrite() || b.currentCmd != nil {
+		return false
+	}
+	if b.state != BankStateOpen || b.openRow != cmd.Row {
+		return false
+	}
+	return b.cyclesToCmdAvailable[cmd.Kind] == 0
 }
 
 // GetReadyCommand returns the next command is ready to be issued.

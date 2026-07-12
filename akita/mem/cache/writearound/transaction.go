@@ -36,6 +36,10 @@ type transaction struct {
 	done          bool
 	startTime     sim.VTimeInSec
 	remoteBottom  bool
+
+	// observationPathID links each pre-coalesced parent response back to the
+	// immutable post-coalescing L1 observation path.
+	observationPathID string
 }
 
 func (t *transaction) Address() uint64 {

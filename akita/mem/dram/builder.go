@@ -431,6 +431,7 @@ func (b Builder) Build(name string) *MemController {
 		Build()
 
 	numAccessUnitBit, _ := log2(uint64(b.busWidth / 8 * b.burstLength))
+	m.physicalAccessBytes = uint64(b.busWidth / 8 * b.burstLength)
 	m.subTransSplitter = trans.NewSubTransSplitter(numAccessUnitBit)
 	m.cmdQueue = &cmdq.CommandQueueImpl{
 		Queues:           make([]cmdq.Queue, b.numChannel*b.numRank),

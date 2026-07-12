@@ -66,6 +66,7 @@ type Runner struct {
 	simdBusyTimeTracers []simdBusyTimeTracer
 	cuCPITraces         []cuCPIStackTracer
 	sharingTraceWriter  *pageSharingTraceWriter
+	observationDRAM     *windowedPhysicalDRAMObserver
 
 	Timing                     bool
 	Verify                     bool
@@ -113,6 +114,7 @@ func (r *Runner) Init() *Runner {
 	r.ParseFlag()
 	r.configureL2SourceStats()
 	r.configureMemoryPathTrace()
+	r.configureObservationTrace()
 
 	if !r.DisableServers {
 		go r.startProfilingServer()
@@ -136,6 +138,7 @@ func (r *Runner) Init() *Runner {
 	} else {
 		r.buildEmuPlatform()
 	}
+	r.attachObservationDRAMObserver()
 
 	sampledrunner.ClearGPUSampledEngines()
 	for _, gpu := range r.platform.GPUs {
@@ -187,6 +190,10 @@ func (r *Runner) configureMemoryPathTrace() {
 		doneCallback = func() {
 			log.Printf(
 				"memory-path trace reached max records; flushing metrics and exiting")
+			// The callback runs outside the engine event handler. Pause waits
+			// until the current event finishes, making component metrics safe to
+			// iterate while the early-exit report is generated.
+			r.platform.Engine.Pause()
 			r.flushMetrics()
 			atexit.Exit(0)
 		}
@@ -199,6 +206,73 @@ func (r *Runner) configureMemoryPathTrace() {
 		*l2SourceTileWidthFlag,
 		*memoryPathTraceExitOnComplete,
 		doneCallback,
+	); err != nil {
+		panic(err)
+	}
+}
+
+func (r *Runner) configureObservationTrace() {
+	memtrace.DisableObservationTrace()
+	memtrace.DisableObservationRemoteTrace()
+	if !*observationTracing {
+		return
+	}
+	if !r.Timing {
+		panic("-trace-observation requires -timing")
+	}
+	if *memoryPathTracing {
+		panic("-trace-observation and legacy -trace-memory-path are mutually exclusive")
+	}
+	if *sampledrunner.SampledRunnerFlag ||
+		*sampledrunner.IPCSampledRunnerFlag ||
+		*sampledrunner.BranchSampledFlag ||
+		*sampledrunner.KernelSampledFlag ||
+		*sampledrunner.LoopSampledFlag {
+		panic("-trace-observation requires full timing simulation; disable sampled execution")
+	}
+	if *observationTraceExitOnComplete && *observationTraceMaxRecords == 0 {
+		panic("-trace-observation-exit-on-complete requires a nonzero path-record limit")
+	}
+	if *dramBatchEnableFlag || *dramRowReorderEnableFlag ||
+		*remoteDataPathEnableFlag || *forceLocalDataAccessFlag ||
+		*l1vBottomReorderPolicyFlag != "none" {
+		panic("-trace-observation requires the unmodified baseline data path; disable local/remote mechanisms")
+	}
+
+	prefix := *observationTraceFile
+	if prefix == "" {
+		prefix = *filenameFlag + "_observation"
+	}
+	var doneCallback func()
+	if *observationTraceExitOnComplete {
+		doneCallback = func() {
+			log.Printf(
+				"observation trace reached max records; draining admitted remote requests")
+			<-memtrace.FreezeObservationRemoteTrace()
+			log.Printf(
+				"observation remote tail drained; flushing metrics and exiting")
+			r.platform.Engine.Pause()
+			r.flushMetrics()
+			atexit.Exit(0)
+		}
+	}
+	if err := memtrace.EnableObservationTrace(
+		prefix,
+		*observationTraceWarmupAccesses,
+		*observationTraceMaxRecords,
+		*observationTraceExitOnComplete,
+		doneCallback,
+	); err != nil {
+		panic(err)
+	}
+	if err := memtrace.EnableObservationRemoteTrace(
+		memtrace.ObservationRemoteConfig{
+			Prefix:         prefix,
+			WarmupRequests: *observationRemoteWarmupRequests,
+			MaxRequests:    *observationRemoteMaxRecords,
+			L2SampleMax:    *observationL2SampleMax,
+			TileWidth:      *l2SourceTileWidthFlag,
+		},
 	); err != nil {
 		panic(err)
 	}

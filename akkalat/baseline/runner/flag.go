@@ -38,6 +38,26 @@ var memoryPathTraceMaxRecords = flag.Uint64("trace-memory-path-max-records", 100
 	"Maximum stable-window memory-path raw records to write; 0 means unlimited after warmup.")
 var memoryPathTraceExitOnComplete = flag.Bool("trace-memory-path-exit-on-complete", false,
 	"Exit the benchmark process after the memory-path raw trace window reaches max records.")
+var observationTracing = flag.Bool("trace-observation", false,
+	"Generate the new exclusive-stage observation trace (independent of the legacy memory-path tracer).")
+var observationTraceFile = flag.String("trace-observation-file", "",
+	"Output prefix for observation files. Defaults to <metric-file-name>_observation.")
+var observationTraceWarmupAccesses = flag.Uint64("trace-observation-warmup-accesses", 100000,
+	"Post-coalescing L1 demand-read transactions to skip before collecting the observation window.")
+var observationTraceMaxRecords = flag.Uint64("trace-observation-max-records", 100000,
+	"Maximum post-warmup demand-read observation paths; 0 means unlimited.")
+var observationTraceExitOnComplete = flag.Bool("trace-observation-exit-on-complete", false,
+	"Flush metrics and exit after the bounded observation window completes.")
+var observationDRAMWarmupAccesses = flag.Uint64("trace-observation-dram-warmup-accesses", 100000,
+	"Physical DRAM read subtransactions to skip before the O3 locality window.")
+var observationDRAMMaxRecords = flag.Uint64("trace-observation-dram-max-records", 100000,
+	"Maximum physical DRAM read subtransactions in the O3 window; 0 means unlimited.")
+var observationRemoteWarmupRequests = flag.Uint64("trace-observation-remote-warmup-requests", 0,
+	"Remote requests to skip before the O4/O5/O6 window.")
+var observationRemoteMaxRecords = flag.Uint64("trace-observation-remote-max-records", 100000,
+	"Maximum logical remote requests in the O4/O5/O6 window; 0 uses a safe finite default.")
+var observationL2SampleMax = flag.Uint64("trace-observation-l2-sample-max", 100000,
+	"Maximum periodic L2 utilization samples for O6; 0 uses a safe finite default.")
 var instCountReportFlag = flag.Bool("report-inst-count", false,
 	"Report the number of instructions executed in each compute unit.")
 var cacheLatencyReportFlag = flag.Bool("report-cache-latency", false,
