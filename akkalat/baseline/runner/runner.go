@@ -139,6 +139,7 @@ func (r *Runner) Init() *Runner {
 		r.buildEmuPlatform()
 	}
 	r.attachObservationDRAMObserver()
+	r.configureAllocationProfile()
 
 	sampledrunner.ClearGPUSampledEngines()
 	for _, gpu := range r.platform.GPUs {
@@ -160,6 +161,25 @@ func (r *Runner) Init() *Runner {
 	r.defineMetrics()
 
 	return r
+}
+
+func (r *Runner) configureAllocationProfile() {
+	if !*allocationProfile {
+		return
+	}
+	r.platform.Driver.SetBeforeFirstKernelLaunchHook(
+		func(stats driver.AllocationStatsSnapshot) {
+			log.Printf(
+				"allocation profile: page_size=%d workload_pages=%d workload_bytes=%d",
+				stats.PageSize,
+				stats.Workload.AllocatedPages,
+				stats.Workload.RequestedBytes,
+			)
+			r.reportDriverAllocationStats()
+			r.dumpMetrics()
+			atexit.Exit(0)
+		},
+	)
 }
 
 func (r *Runner) configureL2SourceStats() {

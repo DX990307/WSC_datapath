@@ -58,6 +58,8 @@ var observationRemoteMaxRecords = flag.Uint64("trace-observation-remote-max-reco
 	"Maximum logical remote requests in the O4/O5/O6 window; 0 uses a safe finite default.")
 var observationL2SampleMax = flag.Uint64("trace-observation-l2-sample-max", 100000,
 	"Maximum periodic L2 utilization samples for O6; 0 uses a safe finite default.")
+var allocationProfile = flag.Bool("allocation-profile", false,
+	"Write allocation metrics and exit immediately before the first kernel launch.")
 var instCountReportFlag = flag.Bool("report-inst-count", false,
 	"Report the number of instructions executed in each compute unit.")
 var cacheLatencyReportFlag = flag.Bool("report-cache-latency", false,

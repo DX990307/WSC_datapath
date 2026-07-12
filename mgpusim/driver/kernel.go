@@ -18,6 +18,7 @@ func (d *Driver) EnqueueLaunchKernel(
 	wgSize [3]uint16,
 	kernelArgs interface{},
 ) {
+	d.notifyBeforeFirstKernelLaunch()
 	dev := d.devices[queue.GPUID]
 
 	if dev.Type == internal.DeviceTypeUnifiedGPU {
@@ -40,11 +41,11 @@ func (d *Driver) allocateGPUMemory(
 	ctx *Context,
 	co *insts.HsaCo,
 ) (dCoData, dKernArgData, dPacket Ptr) {
-	dCoData = d.AllocateMemory(ctx, uint64(len(co.Data)))
-	dKernArgData = d.AllocateMemory(ctx, co.KernargSegmentByteSize)
+	dCoData = d.allocateMemory(ctx, uint64(len(co.Data)), AllocationClassRuntime, false)
+	dKernArgData = d.allocateMemory(ctx, co.KernargSegmentByteSize, AllocationClassRuntime, false)
 
 	packet := kernels.HsaKernelDispatchPacket{}
-	dPacket = d.AllocateMemory(ctx, uint64(binary.Size(packet)))
+	dPacket = d.allocateMemory(ctx, uint64(binary.Size(packet)), AllocationClassRuntime, false)
 
 	return dCoData, dKernArgData, dPacket
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/dram"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
+	"github.com/sarchlab/mgpusim/v3/driver"
 	"github.com/sarchlab/mgpusim/v3/timing/cu"
 )
 
@@ -17,6 +18,7 @@ func (r *Runner) reportStats() {
 		}
 	}
 	r.reportExecutionTime()
+	r.reportDriverAllocationStats()
 	r.reportInstCount()
 	r.reportWGCount()
 	r.reportCPIStack()
@@ -53,6 +55,30 @@ func (r *Runner) reportStats() {
 	// r.reportGMMUCounts()
 	// r.reportL2TLBCounts()
 	r.dumpMetrics()
+}
+
+func (r *Runner) reportDriverAllocationStats() {
+	stats := r.platform.Driver.AllocationStatsSnapshot()
+	where := r.platform.Driver.Name()
+	r.metricsCollector.Collect(where, "allocation_page_size", float64(stats.PageSize))
+
+	groups := []struct {
+		name  string
+		stats driver.AllocationStats
+	}{
+		{"overall", stats.Overall},
+		{"workload", stats.Workload},
+		{"runtime", stats.Runtime},
+	}
+	for _, group := range groups {
+		prefix := "allocation_" + group.name + "_"
+		r.metricsCollector.Collect(where, prefix+"calls", float64(group.stats.AllocationCalls))
+		r.metricsCollector.Collect(where, prefix+"requested_bytes", float64(group.stats.RequestedBytes))
+		r.metricsCollector.Collect(where, prefix+"allocated_pages", float64(group.stats.AllocatedPages))
+		r.metricsCollector.Collect(where, prefix+"rounded_bytes", float64(group.stats.RoundedBytes))
+		r.metricsCollector.Collect(where, prefix+"normal_calls", float64(group.stats.NormalCalls))
+		r.metricsCollector.Collect(where, prefix+"unified_calls", float64(group.stats.UnifiedCalls))
+	}
 }
 
 func (r *Runner) reportDRAMRowReorderStats() {

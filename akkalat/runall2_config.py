@@ -55,6 +55,8 @@ def build_common_flags(args):
             f"{args.l1v_bottom_reorder_max_age_ns}")
     if args.force_local_data_access:
         common_flags.append("-force-local-data-access")
+    if args.allocation_profile:
+        common_flags.append("-allocation-profile")
     if args.max_wg > 0:
         common_flags.append(f"-max-wg={args.max_wg}")
     return common_flags
@@ -75,6 +77,25 @@ def replace_or_append_flag(flags, prefix, value):
 
 
 def build_ablation_configs(args):
+    if args.allocation_profile:
+        if args.trace_observation or args.trace_memory_path or args.trace_sharing:
+            raise ValueError(
+                "--allocation-profile cannot be combined with tracing modes"
+            )
+        if args.remote_ablation or args.remote_ablation_include_prefetch:
+            raise ValueError(
+                "--allocation-profile cannot be combined with ablation sweeps"
+            )
+        if sampled_param_sweep_requested(args):
+            raise ValueError(
+                "--allocation-profile cannot be combined with sampled sweeps"
+            )
+        if args.configs and parse_csv(args.configs) != ["baseline"]:
+            raise ValueError(
+                "--allocation-profile only supports --configs=baseline"
+            )
+        return [("baseline", [])]
+
     if args.trace_observation:
         if args.trace_memory_path:
             raise ValueError(

@@ -239,10 +239,14 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = im2col
 	case "kmeans":
 		kmeans := kmeans.NewBenchmark(driver)
-		kmeans.NumPoints = 1 << 22
+		// Keep the 32-feature, 8-cluster access pattern and a second iteration
+		// for reuse, but avoid the previous 4M-point timing-simulation workload.
+		// 393216 is divisible by both 48 GPUs and the 64-thread workgroup size:
+		// each GPU launches 128 workgroups per kernel (6144 wafer-wide).
+		kmeans.NumPoints = 3 * (1 << 17)
 		kmeans.NumClusters = 8
 		kmeans.NumFeatures = 32
-		kmeans.MaxIter = 3
+		kmeans.MaxIter = 2
 		benchmark = kmeans
 	case "kvcache":
 		kvcache := kvcache.NewBenchmark(driver)

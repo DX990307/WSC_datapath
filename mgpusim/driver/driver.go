@@ -46,7 +46,11 @@ type Driver struct {
 	engineRunningMutex sync.Mutex
 	simulationID       string
 
-	Log2PageSize uint64
+	Log2PageSize      uint64
+	allocationStatsMu sync.RWMutex
+	allocationStats   AllocationStatsSnapshot
+	firstKernelOnce   sync.Once
+	firstKernelHook   func(AllocationStatsSnapshot)
 
 	currentPageMigrationReq         *vm.PageMigrationReqToDriver
 	toSendToMMU                     *vm.PageMigrationRspFromDriver

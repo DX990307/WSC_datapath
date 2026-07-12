@@ -224,6 +224,15 @@ def parse_args():
         help="Emit request-level memory-path trace and joint TLB/cache miss summaries.",
     )
     parser.add_argument(
+        "--allocation-profile",
+        dest="allocation_profile",
+        action="store_true",
+        help=(
+            "Record workload allocation pages and exit immediately before "
+            "the first kernel launch; runs baseline only."
+        ),
+    )
+    parser.add_argument(
         "--trace-memory-path-warmup-accesses",
         dest="trace_memory_path_warmup_accesses",
         type=int,
