@@ -248,8 +248,9 @@ def parse_args():
         dest="trace_observation",
         action="store_true",
         help=(
-            "Emit the new baseline-only exclusive memory-path trace and "
-            "physical DRAM locality trace."
+            "Emit the new exclusive memory-path and physical-DRAM traces. "
+            "In a multi-config ablation launch, only the mechanisms-off "
+            "baseline experiment is traced."
         ),
     )
     parser.add_argument(

@@ -6,10 +6,10 @@ bank/row locations from addresses.
 
 ## Collect the 14-benchmark baseline
 
-`--trace-observation` intentionally runs only the mechanisms-off baseline. The
-runner rejects local batching/reorder, remote data-path mechanisms, forced
-local routing, and the legacy memory-path tracer so characterization data
-cannot silently mix configurations.
+`--trace-observation` intentionally traces only the mechanisms-off baseline.
+The runner rejects local batching/reorder, remote data-path mechanisms, forced
+local routing, and the legacy memory-path tracer for that traced experiment so
+characterization data cannot silently mix configurations.
 
 ```bash
 python3 akkalat/runall2.py \
@@ -26,12 +26,28 @@ python3 akkalat/runall2.py \
   --trace-observation-l2-sample-max=100000
 ```
 
-The observation mode automatically selects `baseline`; `--configs=baseline`
-is optional. Do not add sampled-execution flags for paper characterization:
-they alter request timing and short-window locality. The formal collection
-command deliberately runs each full benchmark without early exit because the
-O1/O2 demand-read, O3 physical-DRAM, and O4--O6 remote/L2 windows have
-independent warmups and limits.
+Used alone, observation mode automatically selects `baseline`;
+`--configs=baseline` is optional. It can also be combined with
+`--remote-ablation` in one command. The normal five configurations are then
+launched for every benchmark, while observation flags and files are generated
+only for the exact `baseline` configuration:
+
+```bash
+python3 akkalat/runall2.py \
+  --remote-ablation \
+  --trace-observation \
+  --benchmarks=traditional \
+  --max-workers=8 \
+  --disable-servers
+```
+
+Do not add sampled-execution flags for paper characterization: they alter
+request timing and short-window locality. The formal collection commands run
+each full benchmark without early exit because the O1/O2 demand-read, O3
+physical-DRAM, and O4--O6 remote/L2 windows have independent warmups and
+limits. Combined ablation/observation mode rejects observation early exit so
+the baseline performance metric covers the same workload as the mechanisms-on
+configurations.
 
 For a quick instrumentation check only, `--trace-observation-exit-on-complete`
 may be added with a nonzero `--trace-observation-max-records`. Completion of

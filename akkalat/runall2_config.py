@@ -81,11 +81,6 @@ def build_ablation_configs(args):
                 "--trace-observation cannot be combined with the legacy "
                 "--trace-memory-path"
             )
-        if args.remote_ablation or args.remote_ablation_include_prefetch:
-            raise ValueError(
-                "--trace-observation is a baseline characterization run and "
-                "cannot be combined with an ablation sweep"
-            )
         if sampled_param_sweep_requested(args):
             raise ValueError(
                 "--trace-observation cannot be combined with sampled parameter "
@@ -134,6 +129,16 @@ def build_ablation_configs(args):
         ):
             if getattr(args, name) < 0:
                 raise ValueError(name.replace("_", "-") + " must be non-negative")
+
+        if args.remote_ablation or args.remote_ablation_include_prefetch:
+            if args.trace_observation_exit_on_complete:
+                raise ValueError(
+                    "--trace-observation-exit-on-complete cannot be used with "
+                    "--remote-ablation because the traced baseline would stop "
+                    "before the other ablation configurations"
+                )
+            return build_remote_data_path_ablation_configs(args)
+
         return [("baseline", [])]
 
     if args.remote_ablation or args.remote_ablation_include_prefetch:

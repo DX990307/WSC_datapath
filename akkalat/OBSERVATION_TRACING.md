@@ -22,11 +22,34 @@ python3 akkalat/runall2.py \
   --trace-observation-l2-sample-max=100000
 ```
 
-`--trace-observation` automatically selects the single `baseline`
-configuration. `--trace-observation-warmup-accesses` counts post-coalescing L1
-**demand reads**, not all memory operations. It delays recording until a later
-dynamic window; the simulator still executes the prefix so that cache, MSHR,
-DRAM-row, and network state are correct.
+When used alone, `--trace-observation` automatically selects the single
+`baseline` configuration. `--trace-observation-warmup-accesses` counts
+post-coalescing L1 **demand reads**, not all memory operations. It delays
+recording until a later dynamic window; the simulator still executes the
+prefix so that cache, MSHR, DRAM-row, and network state are correct.
+
+## Collect baseline observations with the ablation sweep
+
+The tracer can share one launch with the remote ablation study:
+
+```bash
+python3 akkalat/runall2.py \
+  --remote-ablation \
+  --trace-observation \
+  --benchmarks=traditional \
+  --max-workers=8 \
+  --disable-servers
+```
+
+For every benchmark this launches the normal five ablation configurations,
+but injects the observation flags only into the exact mechanisms-off
+`baseline`. The four mechanisms-on experiments produce performance metrics
+without observation files. The existing ablation baseline is reused, so no
+duplicate baseline or output-name collision is created.
+
+Do not combine this mode with `--trace-observation-exit-on-complete`: an early
+baseline exit would make its performance metric incomparable with the other
+ablation configurations, so the runner rejects that combination.
 
 The formal command above intentionally has no early exit: the O1/O2
 demand-read window, O3 physical-DRAM window, and O4--O6 remote/L2 windows have

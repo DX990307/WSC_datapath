@@ -128,7 +128,13 @@ def prepare_exps(args, exps, common_flags):
         exp["trace_memory_path_exit_on_complete"] = (
             args.trace_memory_path_exit_on_complete
         )
-        exp["trace_observation"] = args.trace_observation
+        # An ablation sweep can share one launch with observation collection,
+        # but only the exact mechanisms-off baseline is allowed to carry the
+        # tracer. Names such as baseline_remote_request_only are mechanisms-on
+        # configurations and must not match here.
+        exp["trace_observation"] = (
+            args.trace_observation and exp["config_name"] == "baseline"
+        )
         exp["trace_observation_warmup_accesses"] = (
             args.trace_observation_warmup_accesses
         )
@@ -157,6 +163,12 @@ def prepare_exps(args, exps, common_flags):
 
 def print_launch_summary(args, common_flags, exps, max_workers):
     print(f"Using common flags: {shlex.join(common_flags)}")
+    if args.trace_observation:
+        traced = sum(exp.get("trace_observation", False) for exp in exps)
+        print(
+            "Observation tracing enabled for mechanisms-off baseline only "
+            f"({traced} of {len(exps)} experiments)."
+        )
     if args.timeout_minutes > 0:
         print(f"Experiment timeout: {args.timeout_minutes} minutes")
     print(f"Launching {len(exps)} experiments with max_workers={max_workers}")
