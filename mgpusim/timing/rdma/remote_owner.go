@@ -15,19 +15,32 @@ func (c *Comp) processBitmapReqFromOutside(
 	}
 	c.ensureRemoteDataPathState()
 	lines := bitmapLines(req.LineBitmap)
-	lineCount := len(lines)
-	if c.maxOutstanding > 0 {
-		if !c.canAcceptOwnerOutstanding(lineCount) {
-			return false
-		}
-	} else if c.remoteOwnerOccupancy()+lineCount >
-		c.remoteOwnerOutstandingCapacity() {
+	if len(lines) > c.remoteConfig.MaxBatchLines {
+		panic("RDMA bitmap request exceeds the configured batch-line limit")
+	}
+	if c.remoteOwnerOccupancy()+1 > c.remoteConfig.MaxBatches {
+		c.ownerFullStalls++
 		return false
 	}
-	batch := &remoteOwnerBatch{
-		req:      req,
-		lineData: make(map[uint64][]byte),
+	if len(c.remoteOwnerSubReqs)+len(lines) >
+		c.remoteOwnerChildLineCapacity() {
+		c.RemoteDataPathStats.OwnerChildLineFullStalls++
+		return false
 	}
+	if c.maxOutstanding > 0 {
+		// A bitmap is one RDMA transaction descriptor. Its line bitmap and
+		// bounded child array carry the internal L2 fanout state; charging one
+		// outstanding slot per child would erase the tracking benefit of
+		// batching and require all child slots to become free atomically.
+		if !c.canAcceptOwnerOutstanding(1) {
+			return false
+		}
+	}
+	batch := &remoteOwnerBatch{
+		req:       req,
+		readyData: make(map[uint64][]byte),
+	}
+	c.remoteOwnerBatches[req.ID] = batch
 	for _, line := range lines {
 		address := req.PagePAddr + line*remoteLineBytes
 		read := mem.ReadReqBuilder{}.
@@ -44,17 +57,18 @@ func (c *Comp) processBitmapReqFromOutside(
 		c.remoteOwnerPendingReq = append(c.remoteOwnerPendingReq, sub)
 		c.remoteOwnerSubReqs[read.ID] = sub
 	}
+	if uint64(len(c.remoteOwnerSubReqs)) >
+		c.RemoteDataPathStats.OwnerPeakChildLines {
+		c.RemoteDataPathStats.OwnerPeakChildLines =
+			uint64(len(c.remoteOwnerSubReqs))
+	}
 	c.recordOwnerOutstandingPeak()
 	c.ToOutside.Retrieve(now)
 	return true
 }
 
 func (c *Comp) remoteOwnerOccupancy() int {
-	occupancy := len(c.remoteOwnerSubReqs)
-	for _, rsp := range c.remoteOwnerPendingRsp {
-		occupancy += len(rsp.LineData)
-	}
-	return occupancy
+	return len(c.remoteOwnerBatches)
 }
 
 func (c *Comp) processRemoteOwnerPendingReqs(now sim.VTimeInSec) bool {
@@ -86,25 +100,14 @@ func (c *Comp) processRemoteOwnerSubRsp(
 	if len(dataRsp.Data) != int(remoteLineBytes) {
 		panic("bitmap owner received an invalid cache line")
 	}
-	sub.batch.lineData[sub.line] = append([]byte(nil), dataRsp.Data...)
+	sub.batch.readyData[sub.line] = append([]byte(nil), dataRsp.Data...)
 	sub.batch.remaining--
 	delete(c.remoteOwnerSubReqs, rsp.GetRspTo())
 	c.ToL2.Retrieve(now)
-	if sub.batch.remaining == 0 {
-		trafficBytes := bitmapRspOverhead +
-			len(sub.batch.lineData)*int(remoteLineBytes)
-		response := &BitmapReadRsp{
-			MsgMeta: sim.MsgMeta{
-				ID:           sim.GetIDGenerator().Generate(),
-				Src:          c.ToOutside,
-				Dst:          sub.batch.req.Src,
-				SendTime:     now,
-				TrafficBytes: trafficBytes,
-			},
-			RespondTo: sub.batch.req.ID,
-			LineData:  sub.batch.lineData,
-		}
-		c.remoteOwnerPendingRsp = append(c.remoteOwnerPendingRsp, response)
+	if !sub.batch.readyQueued {
+		sub.batch.readyQueued = true
+		c.remoteOwnerPendingRsp = append(
+			c.remoteOwnerPendingRsp, sub.batch)
 	}
 	return true
 }
@@ -113,13 +116,36 @@ func (c *Comp) processRemoteOwnerPendingRsps(now sim.VTimeInSec) bool {
 	if len(c.remoteOwnerPendingRsp) == 0 {
 		return false
 	}
-	rsp := c.remoteOwnerPendingRsp[0]
+	batch := c.remoteOwnerPendingRsp[0]
+	trafficBytes := bitmapRspOverhead +
+		len(batch.readyData)*int(remoteLineBytes)
+	rsp := &BitmapReadRsp{
+		MsgMeta: sim.MsgMeta{
+			ID:           sim.GetIDGenerator().Generate(),
+			Src:          c.ToOutside,
+			Dst:          batch.req.Src,
+			SendTime:     now,
+			TrafficBytes: trafficBytes,
+		},
+		RespondTo: batch.req.ID,
+		LineData:  batch.readyData,
+	}
 	rsp.SendTime = now
 	if err := c.ToOutside.Send(rsp); err != nil {
 		return false
 	}
 	memtrace.RegisterMemoryPathNetworkMessage(
 		nil, rsp.RespondTo, rsp.ID, "return")
+	c.RemoteDataPathStats.BitmapResponsePackets++
+	c.RemoteDataPathStats.BitmapResponseLines += uint64(len(batch.readyData))
+	if batch.remaining > 0 {
+		c.RemoteDataPathStats.EarlyBitmapResponses++
+	}
 	c.remoteOwnerPendingRsp = c.remoteOwnerPendingRsp[1:]
+	batch.readyData = make(map[uint64][]byte)
+	batch.readyQueued = false
+	if batch.remaining == 0 {
+		delete(c.remoteOwnerBatches, batch.req.ID)
+	}
 	return true
 }

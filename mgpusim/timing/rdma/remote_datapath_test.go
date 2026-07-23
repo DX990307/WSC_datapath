@@ -3,9 +3,134 @@ package rdma
 import (
 	"testing"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
+	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 )
+
+func attachTestRequestFilter(c *Comp) {
+	filter := writeback.NewTypedCuckooFilter(writeback.TypedFilterConfig{
+		Capacity:            4096,
+		CriticalReserve:     2048,
+		Mode:                writeback.TypedFilterCuckoo,
+		LookupLatencyCycles: 0,
+		LookupWidth:         64,
+		UpdateLatencyCycles: 0,
+		UpdateWidth:         64,
+		Freq:                1 * sim.GHz,
+	})
+	c.SetRequestFilters([]*writeback.TypedCuckooFilter{filter}, 128)
+}
+
+func TestRemoteDataPathDefaultOffKeepsBaselineStateUnallocated(t *testing.T) {
+	c := MakeBuilder().
+		WithEngine(sim.NewSerialEngine()).
+		Build("RDMA")
+
+	if c.RemoteDataPathStats.Enabled || c.remoteConfig.Enabled ||
+		c.remoteBatches != nil || c.remoteLines != nil ||
+		c.remoteFilterLookups != nil || c.remoteHintResults != nil ||
+		c.remotePrefetcher != nil || c.remotePrefetchCandidates != nil ||
+		c.remotePatternFilters != nil || c.remoteProbes != nil ||
+		c.remoteSingleInflight != nil || c.remoteBitmapInflight != nil ||
+		c.remoteFillInflight != nil || c.remoteEpochs != nil ||
+		c.remoteOwnerSubReqs != nil || c.remoteOwnerBatches != nil {
+		t.Fatal("default-off RDMA allocated remote mechanism state")
+	}
+}
+
+func TestRemoteMetadataInterfaceModelsLatencyAndSharedPortWidth(t *testing.T) {
+	c, _, _, _, remoteGPU := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{Enabled: true, MaxBatchLines: 8, MaxBatches: 8})
+	filter := writeback.NewTypedCuckooFilter(writeback.TypedFilterConfig{
+		Capacity:            64,
+		CriticalReserve:     32,
+		Mode:                writeback.TypedFilterCuckoo,
+		LookupLatencyCycles: 1,
+		LookupWidth:         1,
+		UpdateLatencyCycles: 1,
+		UpdateWidth:         1,
+		Freq:                1 * sim.GHz,
+	})
+	c.SetRequestFilters([]*writeback.TypedCuckooFilter{filter}, 128)
+	a := remoteLineIdentity{
+		ownerName: remoteGPU.Name(), pid: 1, lineAddr: 0x1000,
+	}
+	b := remoteLineIdentity{
+		ownerName: remoteGPU.Name(), pid: 1, lineAddr: 0x1080,
+	}
+
+	if _, ready, progress := c.remotePendingMayContain(0, "lookup-a", a); ready || !progress {
+		t.Fatal("first lookup did not reserve the modeled one-cycle port")
+	}
+	if _, ready, progress := c.remotePendingMayContain(0, "lookup-b", b); ready || progress {
+		t.Fatal("second same-cycle lookup bypassed the width-one port")
+	}
+	if stats := filter.Stats(); stats.LookupPortStalls != 1 {
+		t.Fatalf("lookup port stalls = %d, want 1", stats.LookupPortStalls)
+	}
+	if possible, ready, _ := c.remotePendingMayContain(
+		1e-9, "lookup-a", a); !ready || possible {
+		t.Fatal("first negative lookup did not complete after one cycle")
+	}
+	if _, ready, progress := c.remotePendingMayContain(
+		1e-9, "lookup-b", b); ready || !progress {
+		t.Fatal("blocked lookup did not reserve the next-cycle port")
+	}
+	if possible, ready, _ := c.remotePendingMayContain(
+		2e-9, "lookup-b", b); !ready || possible {
+		t.Fatal("second negative lookup did not complete after retry")
+	}
+
+	if ready, progress := c.remotePendingInsertReady(3e-9, "update-a", a); !ready || !progress {
+		t.Fatal("first asynchronous update was not accepted")
+	}
+	if ready, progress := c.remotePendingInsertReady(3e-9, "update-b", b); !ready || !progress {
+		t.Fatal("second asynchronous update was not queued")
+	}
+	if stats := filter.Stats(); stats.UpdatePortStalls != 1 {
+		t.Fatalf("update port stalls = %d, want 1", stats.UpdatePortStalls)
+	}
+	if !filter.ExactContains(remoteTypedFilterKey(a, writeback.FilterPending)) ||
+		!filter.ExactContains(remoteTypedFilterKey(b, writeback.FilterPending)) {
+		t.Fatal("modeled updates did not commit exact PENDING metadata")
+	}
+}
+
+func TestRemoteParallelHintsMakeProgressWithWidthOne(t *testing.T) {
+	c, toL1, _, _, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled:         true,
+			DisableDedup:    true,
+			DisableBatching: true,
+			MaxBatchLines:   1,
+			MaxBatches:      8,
+		})
+	filter := writeback.NewTypedCuckooFilter(writeback.TypedFilterConfig{
+		Capacity: 64, Mode: writeback.TypedFilterCuckoo,
+		LookupLatencyCycles: 0, LookupWidth: 1,
+		UpdateLatencyCycles: 1, UpdateWidth: 1,
+		Freq: 1 * sim.GHz,
+	})
+	c.SetRequestFilters([]*writeback.TypedCuckooFilter{filter}, 128)
+	c.SetRemoteCacheModuleFinder(&mem.SingleLowModuleFinder{
+		LowModule: &remoteTestPort{name: "Requester.L2.Top"},
+	})
+	toL1.inbox = append(toL1.inbox,
+		remoteTestRead(&remoteTestPort{name: "L1"}, 0x1800))
+
+	for cycle := 0; cycle < 4 && len(toL1.inbox) > 0; cycle++ {
+		c.processFromL1(sim.VTimeInSec(cycle) * 1e-9)
+	}
+	if len(toL1.inbox) != 0 || len(c.remoteLines) != 1 {
+		t.Fatal("serialized SEEN/RESIDENT hints livelocked the head request")
+	}
+	stats := c.GetRemoteDataPathStats()
+	if stats.SeenQueries != 1 || stats.ResidentQueries != 1 {
+		t.Fatalf("hint results were re-queried: %+v", stats)
+	}
+}
 
 type remoteTestPort struct {
 	sim.HookableBase
@@ -58,6 +183,7 @@ func newRemoteDataPathTestComp(
 		WithRemoteModules(remoteFinder).
 		WithRemoteDataPath(config).
 		Build("Requester.RDMA")
+	attachTestRequestFilter(c)
 	toL1 := &remoteTestPort{name: "Requester.ToL1"}
 	toL2 := &remoteTestPort{name: "Requester.ToL2"}
 	toOutside := &remoteTestPort{name: "Requester.ToOutside"}
@@ -75,13 +201,20 @@ func remoteTestRead(src sim.Port, address uint64) *mem.ReadReq {
 		Build()
 }
 
+func remoteTestWrite(src sim.Port, address uint64) *mem.WriteReq {
+	return mem.WriteReqBuilder{}.
+		WithSrc(src).
+		WithAddress(address).
+		WithData(make([]byte, remoteLineBytes)).
+		Build()
+}
+
 func TestRemoteDataPathWorkConservingBatchUsesCurrentCycleOnly(t *testing.T) {
 	c, toL1, toOutside := newPipelineTestComp(8, 0, 64,
 		RemoteDataPathConfig{
 			Enabled:            true,
 			DisableRequesterL2: true,
 			MaxBatchLines:      8,
-			MaxWaitNS:          999,
 			MaxBatches:         8,
 		})
 	l1 := &remoteTestPort{name: "L1"}
@@ -102,9 +235,170 @@ func TestRemoteDataPathWorkConservingBatchUsesCurrentCycleOnly(t *testing.T) {
 		t.Fatalf("same-cycle bitmap request = %#v, want lines 0 and 1", req)
 	}
 	stats := c.GetRemoteDataPathStats()
-	if stats.MaxWaitNS != 0 || stats.WorkConservingFlushes != 1 ||
-		stats.TimeoutFlushes != 0 || stats.LogicalRemoteReads != 2 {
+	if stats.WorkConservingFlushes != 1 || stats.LogicalRemoteReads != 2 {
 		t.Fatalf("unexpected work-conserving stats: %+v", stats)
+	}
+}
+
+func TestRemoteFilterPrefetchPiggybacksDemandBatchOnly(t *testing.T) {
+	c, toL1, _, toOutside, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled: true, DisableRequesterL2: true,
+			EnableFilterPrefetch: true,
+			PrefetchEntries:      17,
+			MaxBatchLines:        8, MaxBatches: 8,
+		})
+	if capacity := c.GetRemoteDataPathStats().PrefetchPredictor.Capacity; capacity != 17 {
+		t.Fatalf("remote predictor capacity = %d, want 17", capacity)
+	}
+	l1 := &remoteTestPort{name: "L1"}
+	for _, address := range []uint64{0x1000, 0x1040, 0x1080, 0x10c0} {
+		toL1.inbox = append(toL1.inbox, remoteTestRead(l1, address))
+	}
+	if !c.Tick(1) {
+		t.Fatal("remote demand stream made no progress")
+	}
+	if len(toOutside.sent) != 1 {
+		t.Fatalf("packets = %d, want one piggybacked bitmap", len(toOutside.sent))
+	}
+	req, ok := toOutside.sent[0].(*BitmapReadReq)
+	if !ok || req.LineBitmap != 0x1f {
+		t.Fatalf("bitmap = %#v, want four demands plus one predicted line", req)
+	}
+	stats := c.GetRemoteDataPathStats()
+	if stats.PrefetchPiggybackLines != 1 || stats.PrefetchWireLines != 1 ||
+		stats.DemandWireLines != 4 || stats.LogicalRemoteReads != 4 {
+		t.Fatalf("incorrect demand/speculation accounting: %+v", stats)
+	}
+}
+
+func TestRemotePiggybackedPrefetchMergesLaterDemandWithoutSecondPacket(
+	t *testing.T,
+) {
+	c, toL1, _, toOutside, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled: true, DisableRequesterL2: true,
+			EnableFilterPrefetch: true,
+			MaxBatchLines:        8, MaxBatches: 8,
+		})
+	l1 := &remoteTestPort{name: "L1"}
+	for _, address := range []uint64{0x1000, 0x1040, 0x1080, 0x10c0} {
+		toL1.inbox = append(toL1.inbox, remoteTestRead(l1, address))
+	}
+	if !c.Tick(1) || len(toOutside.sent) != 1 {
+		t.Fatal("demand batch with predicted line was not sent")
+	}
+
+	toL1.inbox = append(toL1.inbox, remoteTestRead(l1, 0x1100))
+	if !c.Tick(2) {
+		t.Fatal("later demand did not merge into the predicted line")
+	}
+	if len(toOutside.sent) != 1 {
+		t.Fatalf("packets = %d, want no second packet", len(toOutside.sent))
+	}
+	stats := c.GetRemoteDataPathStats()
+	if stats.PrefetchPiggybackLines != 1 || stats.PrefetchUseful != 1 {
+		t.Fatalf("piggyback/useful accounting = %+v", stats)
+	}
+	if stats.CollectingMerges+stats.InflightMerges+stats.ReadyMerges != 1 {
+		t.Fatalf("exact demand merges = %d/%d/%d, want one",
+			stats.CollectingMerges, stats.InflightMerges, stats.ReadyMerges)
+	}
+}
+
+func TestRemoteFilterPrefetchNeverCreatesStandaloneBatch(t *testing.T) {
+	c, _, _, _, remoteGPU := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled: true, EnableFilterPrefetch: true,
+			MaxBatchLines: 8, MaxBatches: 8,
+		})
+	identity := remoteLineIdentity{
+		ownerName: remoteGPU.Name(), pid: 1, lineAddr: 0x1400,
+	}
+	entry := c.newRemoteDemandEntry(
+		remoteLineKey{remoteLineIdentity: identity}, remoteGPU, nil)
+	entry.speculative = true
+	entry.state = remoteLinePendingBatch
+	c.insertRemoteLine(entry.key, entry)
+	added, progress := c.tryAddRemoteEntryToBatch(1, entry)
+	if !added || !progress || len(c.remoteBatchOrder) != 0 ||
+		c.remoteLines[entry.key] != nil {
+		t.Fatal("standalone speculative line was not dropped immediately")
+	}
+	if c.GetRemoteDataPathStats().PrefetchStandalonePrevented != 1 {
+		t.Fatal("standalone prevention was not accounted")
+	}
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if filter.ExactContains(remoteTypedFilterKey(
+		identity, writeback.FilterSeen)) {
+		t.Fatal("speculative-only access incorrectly established SEEN")
+	}
+}
+
+func TestRemoteDemandTakesOverUnsentPrefetchWithoutLosingWaiter(t *testing.T) {
+	c, _, _, _, remoteGPU := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled: true, EnableFilterPrefetch: true,
+			MaxBatchLines: 8, MaxBatches: 8,
+		})
+	identity := remoteLineIdentity{
+		ownerName: remoteGPU.Name(), pid: 1, lineAddr: 0x1400,
+	}
+	entry := c.newRemoteDemandEntry(
+		remoteLineKey{remoteLineIdentity: identity}, remoteGPU, nil)
+	entry.speculative = true
+	entry.state = remoteLinePendingBatch
+	c.insertRemoteLine(entry.key, entry)
+
+	read := remoteTestRead(&remoteTestPort{name: "L1"}, identity.lineAddr)
+	c.addRemoteWaiter(entry, read, 1, 1, 0)
+	if entry.speculative || !entry.speculativeUseful || !entry.admit {
+		t.Fatalf("demand did not take ownership of prediction: %#v", entry)
+	}
+	if len(entry.waiters) != 1 || entry.waiters[0].req != read {
+		t.Fatal("demand waiter was not retained by the promoted entry")
+	}
+
+	added, progress := c.tryAddRemoteEntryToBatch(1, entry)
+	if !added || !progress || len(c.remoteBatchOrder) != 1 ||
+		c.remoteLines[entry.key] != entry || entry.batch == nil {
+		t.Fatal("promoted demand was discarded instead of entering a demand batch")
+	}
+	stats := c.GetRemoteDataPathStats()
+	if stats.PrefetchUseful != 1 || stats.PrefetchStandalonePrevented != 0 {
+		t.Fatalf("incorrect takeover accounting: %+v", stats)
+	}
+}
+
+func TestRemoteFirstTouchPrefetchFillRequiresInvalidVictim(t *testing.T) {
+	c, _, toL2, _, remoteGPU := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled: true, EnableFilterPrefetch: true,
+			MaxBatchLines: 8, MaxBatches: 8,
+		})
+	c.SetRemoteCacheModuleFinder(&mem.SingleLowModuleFinder{
+		LowModule: &remoteTestPort{name: "Requester.L2.Top"},
+	})
+	identity := remoteLineIdentity{
+		ownerName: remoteGPU.Name(), pid: 1, lineAddr: 0x1800,
+	}
+	entry := c.newRemoteDemandEntry(
+		remoteLineKey{remoteLineIdentity: identity}, remoteGPU, nil)
+	entry.speculative = true
+	entry.admit = true
+	entry.fromRemote = true
+	entry.data = make([]byte, remoteLineBytes)
+	entry.patternKey = writeback.TypedFilterKey{
+		PID: 1, Owner: 7, Address: 9, Type: writeback.FilterPattern,
+	}
+	c.insertRemoteLine(entry.key, entry)
+	c.queueRemoteReady(entry)
+	if !c.processRemoteReady(1) || len(toL2.sent) != 1 {
+		t.Fatal("first-touch prefetch response did not attempt requester-L2 fill")
+	}
+	fill := toL2.sent[0].(*mem.RemoteDataFill)
+	if !fill.HasPattern || !fill.RequireInvalidVictim {
+		t.Fatalf("first-touch fill policy = %#v", fill)
 	}
 }
 
@@ -141,14 +435,15 @@ func TestRemoteDataPathBatchEgressRespectsPipelineWidth(t *testing.T) {
 }
 
 func TestRemoteDataPathMergesCollectingAndInflightReads(t *testing.T) {
-	c, toL1, toL2, toOutside, _ := newRemoteDataPathTestComp(t,
+	c, toL1, toL2, toOutside, remoteGPU := newRemoteDataPathTestComp(t,
 		RemoteDataPathConfig{
-			Enabled:           true,
-			MaxBatchLines:     8,
-			MaxWaitNS:         10, // Deprecated input must not delay issue.
-			MaxBatches:        8,
-			ReuseTableEntries: 32,
+			Enabled:       true,
+			MaxBatchLines: 8,
+			MaxBatches:    8,
 		})
+	c.SetRemoteCacheModuleFinder(&mem.SingleLowModuleFinder{
+		LowModule: &remoteTestPort{name: "Requester.L2.Top"},
+	})
 	l1A := &remoteTestPort{name: "L1.A"}
 	l1B := &remoteTestPort{name: "L1.B"}
 	first := remoteTestRead(l1A, 0x2000)
@@ -162,8 +457,11 @@ func TestRemoteDataPathMergesCollectingAndInflightReads(t *testing.T) {
 		t.Fatalf("remote line entries = %d, want 1", got)
 	}
 	for _, entry := range c.remoteLines {
-		if len(entry.waiters) != 2 || !entry.admit {
-			t.Fatalf("collecting entry has %d waiters, admit=%v", len(entry.waiters), entry.admit)
+		if len(entry.waiters) != 2 || !entry.admit ||
+			!entry.multipleDemandAdmission {
+			t.Fatalf("collecting entry has %d waiters, admit=%v, multi=%v",
+				len(entry.waiters), entry.admit,
+				entry.multipleDemandAdmission)
 		}
 	}
 	if !c.processRemotePendingBatches(2) {
@@ -185,6 +483,14 @@ func TestRemoteDataPathMergesCollectingAndInflightReads(t *testing.T) {
 	}
 	if c.RemoteDataPathStats.InflightMerges != 1 {
 		t.Fatalf("inflight merges = %d, want 1", c.RemoteDataPathStats.InflightMerges)
+	}
+	filterStats := c.GetRemoteDataPathStats()
+	if filterStats.InflightFilterQueries != 3 ||
+		filterStats.InflightFilterNegatives != 1 ||
+		filterStats.InflightFilterPositives != 2 ||
+		filterStats.ExactTableLookupsAvoided != 1 ||
+		filterStats.ExactTableLookups != 2 {
+		t.Fatalf("unexpected inflight-filter stats: %+v", filterStats)
 	}
 
 	data := make([]byte, remoteLineBytes)
@@ -212,26 +518,171 @@ func TestRemoteDataPathMergesCollectingAndInflightReads(t *testing.T) {
 		t.Fatal("fanout responses share a mutable data slice")
 	}
 
-	l2Top := &remoteTestPort{name: "Requester.L2[0].Top"}
-	c.SetRemoteCacheModuleFinder(&mem.SingleLowModuleFinder{LowModule: l2Top})
 	if !c.processRemoteReady(40) {
-		t.Fatal("two-touch clean fill was not issued")
+		t.Fatal("completed coalesced line did not issue a clean fill")
 	}
 	if got := len(toL2.sent); got != 1 {
-		t.Fatalf("clean fills = %d, want 1", got)
+		t.Fatalf("same-epoch duplicates issued %d clean fills, want 1", got)
 	}
 	fill := toL2.sent[0].(*mem.RemoteDataFill)
-	if fill.Address != 0x2000 {
-		t.Fatalf("fill address = %#x, want %#x", fill.Address, uint64(0x2000))
-	}
-	fillRsp := mem.RemoteDataFillRspBuilder{}.
+	toL2.inbox = append(toL2.inbox, mem.RemoteDataFillRspBuilder{}.
 		WithRspTo(fill.ID).
 		WithInstalled(true).
-		Build()
-	toL2.inbox = append(toL2.inbox, fillRsp)
-	c.processFromL2(41)
+		Build())
+	if !c.processFromL2(41) {
+		t.Fatal("clean-fill response was not consumed")
+	}
 	if len(c.remoteLines) != 0 {
-		t.Fatal("line entry was not retired after fill")
+		t.Fatal("line entry was not retired after the clean fill")
+	}
+	if c.RemoteDataPathStats.TwoTouchCandidates != 1 ||
+		c.RemoteDataPathStats.MultipleDemandAdmissions != 1 {
+		t.Fatalf("same-epoch duplicates created invalid admission counters: %+v",
+			c.RemoteDataPathStats)
+	}
+	identity := c.remoteIdentity(first, remoteGPU)
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if filter.ExactContains(remoteTypedFilterKey(identity, writeback.FilterSeen)) ||
+		filter.ExactContains(remoteTypedFilterKey(identity, writeback.FilterPending)) {
+		t.Fatal("installed requester-L2 fill left stale SEEN or PENDING metadata")
+	}
+}
+
+func TestRemoteInflightFilterInsertFailureFallsBackToExactTable(t *testing.T) {
+	c, toL1, _, _, remoteGPU := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled:            true,
+			DisableRequesterL2: true,
+			MaxBatchLines:      1,
+			MaxBatches:         1,
+		})
+	// Force a tiny approximate structure, then populate exact line state until
+	// a bounded kick fails. insertRemoteLine must keep the exact entry and make
+	// every later query fail open to that table.
+	tiny := writeback.NewTypedCuckooFilter(writeback.TypedFilterConfig{
+		Capacity: 1, Mode: writeback.TypedFilterCuckoo,
+		LookupWidth: 64, UpdateWidth: 64, Freq: 1 * sim.GHz,
+	})
+	c.SetRequestFilters([]*writeback.TypedCuckooFilter{tiny}, 128)
+	var failedEntry *remoteLineEntry
+	for i := 0; i < 10000 && failedEntry == nil; i++ {
+		identity := remoteLineIdentity{
+			ownerName: remoteGPU.Name(),
+			pid:       vm.PID(i%7 + 1),
+			lineAddr:  uint64(i+1) * remoteLineBytes,
+		}
+		key := remoteLineKey{remoteLineIdentity: identity}
+		entry := c.newRemoteDemandEntry(key, remoteGPU, nil)
+		c.insertRemoteLine(key, entry)
+		if c.RemoteDataPathStats.InflightFilterInsertFailures > 0 {
+			failedEntry = entry
+		}
+	}
+	if failedEntry == nil ||
+		c.RemoteDataPathStats.InflightFilterInsertFailures != 1 {
+		t.Fatal("could not force an inflight-filter insertion failure")
+	}
+
+	l1 := &remoteTestPort{name: "L1"}
+	read := mem.ReadReqBuilder{}.
+		WithSrc(l1).
+		WithPID(failedEntry.key.pid).
+		WithAddress(failedEntry.key.lineAddr).
+		WithByteSize(remoteLineBytes).
+		Build()
+	toL1.inbox = append(toL1.inbox, read)
+	handled, progress := c.tryProcessRemoteReqFromL1(
+		1, read, remoteGPU, 1,
+	)
+	if !handled || !progress || len(toL1.inbox) != 0 {
+		t.Fatal("fail-open exact lookup did not consume matching remote read")
+	}
+	if len(failedEntry.waiters) != 1 ||
+		c.RemoteDataPathStats.DuplicateReads != 1 ||
+		c.RemoteDataPathStats.ExactTableLookups != 1 {
+		t.Fatalf("fail-open exact merge stats are invalid: %+v",
+			c.RemoteDataPathStats)
+	}
+}
+
+func TestRemoteDataPathSecondCompletedTransactionAdmitsFill(t *testing.T) {
+	c, toL1, toL2, toOutside, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled:         true,
+			DisableBatching: true,
+			MaxBatchLines:   8,
+			MaxBatches:      8,
+		})
+	l2Top := &remoteTestPort{name: "Requester.L2[0].Top"}
+	c.SetRemoteCacheModuleFinder(
+		&mem.SingleLowModuleFinder{LowModule: l2Top})
+	l1 := &remoteTestPort{name: "L1"}
+
+	first := remoteTestRead(l1, 0x2400)
+	toL1.inbox = append(toL1.inbox, first)
+	c.processFromL1(1)
+	c.processRemotePendingBatches(2)
+	firstWire := toOutside.sent[0].(*mem.ReadReq)
+	toOutside.inbox = append(toOutside.inbox, mem.DataReadyRspBuilder{}.
+		WithRspTo(firstWire.ID).
+		WithData(make([]byte, remoteLineBytes)).
+		Build())
+	c.processFromOutside(3)
+	c.processRemoteReady(4)
+	c.processRemoteReady(5)
+	if len(toL2.sent) != 0 || len(c.remoteLines) != 0 {
+		t.Fatal("first completed transaction unexpectedly filled requester L2")
+	}
+	identity := c.remoteIdentity(first, firstWire.Dst)
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if !filter.ExactContains(remoteTypedFilterKey(identity, writeback.FilterSeen)) {
+		t.Fatal("first completed remote transaction did not set SEEN")
+	}
+
+	second := remoteTestRead(l1, 0x2400)
+	toL1.inbox = append(toL1.inbox, second)
+	c.processFromL1(6)
+	if len(toL2.sent) != 1 {
+		t.Fatalf("second transaction probes = %d, want 1", len(toL2.sent))
+	}
+	probe := toL2.sent[0].(*mem.ReadReq)
+	toL2.inbox = append(toL2.inbox, mem.CacheLookupRspBuilder{}.
+		WithRspTo(probe.ID).
+		WithHit(false).
+		Build())
+	c.processFromL2(7)
+	c.processRemotePendingBatches(8)
+	secondWire := toOutside.sent[1].(*mem.ReadReq)
+	toOutside.inbox = append(toOutside.inbox, mem.DataReadyRspBuilder{}.
+		WithRspTo(secondWire.ID).
+		WithData(make([]byte, remoteLineBytes)).
+		Build())
+	c.processFromOutside(9)
+	c.processRemoteReady(10)
+	c.processRemoteReady(11)
+	if len(toL2.sent) != 2 {
+		t.Fatalf("second transaction L2 messages = %d, want probe + fill",
+			len(toL2.sent))
+	}
+	fill := toL2.sent[1].(*mem.RemoteDataFill)
+	toL2.inbox = append(toL2.inbox, mem.RemoteDataFillRspBuilder{}.
+		WithRspTo(fill.ID).
+		WithInstalled(true).
+		Build())
+	c.processFromL2(12)
+	if len(c.remoteLines) != 0 {
+		t.Fatal("temporal line entry was not retired after fill")
+	}
+	stats := c.GetRemoteDataPathStats()
+	if stats.TwoTouchCandidates != 1 ||
+		stats.TwoTouchFillAttempts != 1 ||
+		stats.TwoTouchInstalledFills != 1 ||
+		stats.FirstTouchRemoteLines != 1 ||
+		stats.SecondTouchAdmissions != 1 {
+		t.Fatalf("unexpected SEEN admission stats: %+v", stats)
+	}
+	if filter.ExactContains(remoteTypedFilterKey(identity, writeback.FilterSeen)) {
+		t.Fatal("successful second-touch fill left stale SEEN metadata")
 	}
 }
 
@@ -276,6 +727,74 @@ func TestRemoteDataPathDedupOnlySendsImmediatelyWithoutBatchingOrL2(t *testing.T
 	}
 }
 
+func TestRemoteSeenPositiveStillRequiresExactL2Lookup(t *testing.T) {
+	c, toL1, toL2, toOutside, remoteGPU := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled:         true,
+			DisableBatching: true,
+			MaxBatchLines:   8,
+			MaxBatches:      8,
+		})
+	l2Top := &remoteTestPort{name: "Requester.L2.Top"}
+	c.SetRemoteCacheModuleFinder(&mem.SingleLowModuleFinder{LowModule: l2Top})
+	l1 := &remoteTestPort{name: "L1"}
+	read := remoteTestRead(l1, 0x3c80)
+	identity := c.remoteIdentity(read, remoteGPU)
+	c.markRemoteSeen(identity)
+	toL1.inbox = append(toL1.inbox, read)
+
+	c.processFromL1(1)
+	if len(toL2.sent) != 1 || len(toOutside.sent) != 0 {
+		t.Fatal("SEEN positive did not perform exact requester-L2 lookup first")
+	}
+	probe := toL2.sent[0].(*mem.ReadReq)
+	toL2.inbox = append(toL2.inbox, mem.CacheLookupRspBuilder{}.
+		WithRspTo(probe.ID).
+		WithHit(false).
+		Build())
+	c.processFromL2(2)
+	c.processRemotePendingBatches(3)
+	if len(toOutside.sent) != 1 {
+		t.Fatal("exact requester-L2 miss did not fall back to remote memory")
+	}
+}
+
+func TestRemoteDisabledFilterFailsOpenToExactRequesterL2Probe(t *testing.T) {
+	c, toL1, toL2, toOutside, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled:         true,
+			DisableBatching: true,
+			MaxBatchLines:   8,
+			MaxBatches:      8,
+		})
+	disabled := writeback.NewTypedCuckooFilter(writeback.TypedFilterConfig{
+		Capacity: 64, Mode: writeback.TypedFilterDisabled,
+	})
+	c.SetRequestFilters([]*writeback.TypedCuckooFilter{disabled}, 128)
+	l2Top := &remoteTestPort{name: "Requester.L2.Top"}
+	c.SetRemoteCacheModuleFinder(&mem.SingleLowModuleFinder{LowModule: l2Top})
+	toL1.inbox = append(toL1.inbox,
+		remoteTestRead(&remoteTestPort{name: "L1"}, 0x3d00))
+
+	c.processFromL1(1)
+	if len(toL2.sent) != 1 || len(toOutside.sent) != 0 {
+		t.Fatal("disabled Filter did not fail open to an exact requester-L2 probe")
+	}
+	probe := toL2.sent[0].(*mem.ReadReq)
+	toL2.inbox = append(toL2.inbox, mem.CacheLookupRspBuilder{}.
+		WithRspTo(probe.ID).
+		WithHit(false).
+		Build())
+	c.processFromL2(2)
+	c.processRemotePendingBatches(3)
+	if len(toOutside.sent) != 1 {
+		t.Fatal("fail-open requester-L2 miss did not continue to remote memory")
+	}
+	if got := c.GetRemoteDataPathStats().L2OneTouchProbeBypasses; got != 0 {
+		t.Fatalf("disabled Filter bypassed %d exact requester-L2 probes", got)
+	}
+}
+
 func TestRemoteDataPathRequesterL2OnlyDoesNotDedupOrBatch(t *testing.T) {
 	c, toL1, toL2, toOutside, _ := newRemoteDataPathTestComp(t,
 		RemoteDataPathConfig{
@@ -285,7 +804,6 @@ func TestRemoteDataPathRequesterL2OnlyDoesNotDedupOrBatch(t *testing.T) {
 			DisableRequesterL2: false,
 			MaxBatchLines:      8,
 			MaxBatches:         8,
-			ReuseTableEntries:  32,
 		})
 	l2Top := &remoteTestPort{name: "Requester.L2.Top"}
 	c.SetRemoteCacheModuleFinder(
@@ -302,19 +820,12 @@ func TestRemoteDataPathRequesterL2OnlyDoesNotDedupOrBatch(t *testing.T) {
 		t.Fatalf("L2-only mode merged requests: entries=%d duplicates=%d",
 			len(c.remoteLines), c.RemoteDataPathStats.DuplicateReads)
 	}
-	if len(toL2.sent) != 2 {
-		t.Fatalf("requester L2 probes = %d, want 2", len(toL2.sent))
+	if len(toL2.sent) != 0 {
+		t.Fatalf("concurrent first transactions probed requester L2 %d times",
+			len(toL2.sent))
 	}
-	for _, message := range toL2.sent {
-		probe := message.(*mem.ReadReq)
-		toL2.inbox = append(toL2.inbox, mem.CacheLookupRspBuilder{}.
-			WithRspTo(probe.ID).
-			WithHit(false).
-			Build())
-	}
-	c.processFromL2(2)
+	c.processRemotePendingBatches(2)
 	c.processRemotePendingBatches(3)
-	c.processRemotePendingBatches(4)
 	if len(toOutside.sent) != 2 {
 		t.Fatalf("direct remote requests = %d, want 2", len(toOutside.sent))
 	}
@@ -326,6 +837,10 @@ func TestRemoteDataPathRequesterL2OnlyDoesNotDedupOrBatch(t *testing.T) {
 	if stats.SingleReadPackets != 2 || stats.BitmapPackets != 0 {
 		t.Fatalf("L2-only packets = single %d, bitmap %d",
 			stats.SingleReadPackets, stats.BitmapPackets)
+	}
+	if stats.L2OneTouchProbeBypasses != 2 {
+		t.Fatalf("pre-admission probe bypasses = %d, want 2",
+			stats.L2OneTouchProbeBypasses)
 	}
 }
 
@@ -360,98 +875,6 @@ func TestRemoteDataPathSendFailureKeepsBatch(t *testing.T) {
 	}
 }
 
-func TestRemoteDataPathPrefetchFillsOnlyThePrefetchedMate(t *testing.T) {
-	c, toL1, toL2, toOutside, _ := newRemoteDataPathTestComp(t,
-		RemoteDataPathConfig{
-			Enabled:       true,
-			AUPrefetch:    true,
-			MaxBatchLines: 8,
-			MaxBatches:    8,
-		})
-	l2Top := &remoteTestPort{name: "Requester.L2.Top"}
-	c.SetRemoteCacheModuleFinder(nil)
-	toL1.inbox = append(toL1.inbox, remoteTestRead(
-		&remoteTestPort{name: "L1"}, 0x4000))
-	c.processFromL1(1)
-	c.processRemotePendingBatches(2)
-	if !c.processRemoteBatches(3, true) {
-		t.Fatal("prefetch batch did not flush")
-	}
-	if len(toOutside.sent) != 1 {
-		t.Fatalf("bitmap packets = %d, want 1", len(toOutside.sent))
-	}
-	request := toOutside.sent[0].(*BitmapReadReq)
-	if request.LineBitmap != 0x3 {
-		t.Fatalf("line bitmap = %#x, want 0x3", request.LineBitmap)
-	}
-	response := &BitmapReadRsp{
-		RespondTo: request.ID,
-		LineData: map[uint64][]byte{
-			0: make([]byte, remoteLineBytes),
-			1: make([]byte, remoteLineBytes),
-		},
-	}
-	toOutside.inbox = append(toOutside.inbox, response)
-	c.processFromOutside(4)
-	c.SetRemoteCacheModuleFinder(&mem.SingleLowModuleFinder{LowModule: l2Top})
-	for c.processRemoteReady(5) {
-	}
-	if len(toL1.sent) != 1 {
-		t.Fatalf("demand responses = %d, want 1", len(toL1.sent))
-	}
-	if len(toL2.sent) != 1 {
-		t.Fatalf("prefetch fills = %d, want 1", len(toL2.sent))
-	}
-	fill := toL2.sent[0].(*mem.RemoteDataFill)
-	if fill.Address != 0x4040 {
-		t.Fatalf("prefetch fill address = %#x, want 0x4040", fill.Address)
-	}
-	if !fill.Prefetch {
-		t.Fatal("AU-prefetched line lost its fill origin")
-	}
-	if c.RemoteDataPathStats.WireLines != 2 ||
-		c.RemoteDataPathStats.DemandWireLines != 1 ||
-		c.RemoteDataPathStats.PrefetchWireLines != 1 {
-		t.Fatalf("wire line split = (%d, %d, %d), want (2, 1, 1)",
-			c.RemoteDataPathStats.WireLines,
-			c.RemoteDataPathStats.DemandWireLines,
-			c.RemoteDataPathStats.PrefetchWireLines)
-	}
-	fillRsp := mem.RemoteDataFillRspBuilder{}.
-		WithRspTo(fill.ID).
-		WithInstalled(true).
-		Build()
-	toL2.inbox = append(toL2.inbox, fillRsp)
-	c.processFromL2(6)
-}
-
-func TestRemoteDataPathConvertsUnsentPrefetchToDemand(t *testing.T) {
-	c, toL1, _, _, _ := newRemoteDataPathTestComp(t,
-		RemoteDataPathConfig{
-			Enabled:       true,
-			AUPrefetch:    true,
-			MaxBatchLines: 8,
-			MaxBatches:    8,
-		})
-	l1 := &remoteTestPort{name: "L1"}
-	toL1.inbox = append(toL1.inbox, remoteTestRead(l1, 0x9000))
-	c.processFromL1(1)
-	c.processRemotePendingBatches(2)
-
-	toL1.inbox = append(toL1.inbox, remoteTestRead(l1, 0x9040))
-	c.processFromL1(3)
-	if !c.processRemoteBatches(4, true) {
-		t.Fatal("converted demand batch did not flush")
-	}
-	stats := c.GetRemoteDataPathStats()
-	if stats.AUPrefetchConvertedDemand != 1 ||
-		stats.PrefetchWireLines != 0 || stats.DemandWireLines != 2 {
-		t.Fatalf("converted prefetch stats = converted %d, prefetch wire %d, demand wire %d",
-			stats.AUPrefetchConvertedDemand,
-			stats.PrefetchWireLines, stats.DemandWireLines)
-	}
-}
-
 func TestRemoteDataPathWriteStartsANewReadEpoch(t *testing.T) {
 	c, toL1, _, toOutside, _ := newRemoteDataPathTestComp(t,
 		RemoteDataPathConfig{Enabled: true, MaxBatchLines: 8, MaxBatches: 8})
@@ -473,9 +896,16 @@ func TestRemoteDataPathWriteStartsANewReadEpoch(t *testing.T) {
 	if len(toOutside.sent) != 1 {
 		t.Fatal("pre-write read was not sent first")
 	}
+	identity := c.remoteIdentity(readBefore, toOutside.sent[0].Meta().Dst)
+	c.markRemoteSeen(identity)
 	c.processFromL1(4)
 	if len(toOutside.sent) != 2 {
 		t.Fatal("write was not sent after the older read")
+	}
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if !c.remoteUncacheable[identity] ||
+		filter.ExactContains(remoteTypedFilterKey(identity, writeback.FilterSeen)) {
+		t.Fatal("remote write did not invalidate requester-L2 eligibility and SEEN")
 	}
 
 	readAfter := remoteTestRead(l1, 0x5000)
@@ -484,9 +914,38 @@ func TestRemoteDataPathWriteStartsANewReadEpoch(t *testing.T) {
 	if len(c.remoteLines) != 2 {
 		t.Fatal("post-write read merged into the pre-write inflight read")
 	}
-	identity := c.remoteIdentity(readAfter, toOutside.sent[0].Meta().Dst)
 	if c.remoteEpochs[identity] != 1 {
 		t.Fatalf("read epoch = %d, want 1", c.remoteEpochs[identity])
+	}
+}
+
+func TestWriteUncacheableLineDoesNotPolluteRemoteReuseHistory(t *testing.T) {
+	c, _, _, _, remoteGPU := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled:       true,
+			MaxBatchLines: 8,
+			MaxBatches:    8,
+		})
+	read := remoteTestRead(&remoteTestPort{name: "L1"}, 0x5800)
+	identity := c.remoteIdentity(read, remoteGPU)
+	c.remoteUncacheable[identity] = true
+	entry := c.newRemoteDemandEntry(remoteLineKey{
+		remoteLineIdentity: identity,
+		epoch:              1,
+	}, remoteGPU, read.Info)
+	c.insertRemoteLine(entry.key, entry)
+
+	c.removeRemoteLine(entry)
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if filter.ExactContains(remoteTypedFilterKey(identity, writeback.FilterSeen)) {
+		t.Fatal("write-uncacheable line created SEEN history")
+	}
+	if c.RemoteDataPathStats.ReuseWriteUncacheableSkips != 1 {
+		t.Fatal("write-uncacheable reuse-history skip was not recorded")
+	}
+	if len(c.remoteLines) != 0 ||
+		c.remoteInflightMayContain(identity) {
+		t.Fatal("retired write-uncacheable line remained in inflight state")
 	}
 }
 
@@ -530,6 +989,168 @@ func TestBitmapOwnerDoesNotLetYoungerWritePassQueuedReads(t *testing.T) {
 	}
 }
 
+func TestBitmapOwnerReturnsReadyLinesWithoutWaitingForStraggler(t *testing.T) {
+	c, _, toL2, toOutside, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{Enabled: true, MaxBatchLines: 8, MaxBatches: 8})
+	l2Top := &remoteTestPort{name: "Owner.L2.Top"}
+	c.localModules = &mem.SingleLowModuleFinder{LowModule: l2Top}
+	requester := &remoteTestPort{name: "Requester.RDMA"}
+	bitmap := &BitmapReadReq{
+		MsgMeta:    sim.MsgMeta{Src: requester, Dst: toOutside},
+		PagePAddr:  0x6000,
+		LineBitmap: 0x3,
+	}
+	toOutside.inbox = append(toOutside.inbox, bitmap)
+	c.processFromOutside(1)
+	c.processRemoteOwnerPendingReqs(2)
+	c.processRemoteOwnerPendingReqs(3)
+
+	firstRead := toL2.sent[0].(*mem.ReadReq)
+	firstData := make([]byte, remoteLineBytes)
+	firstData[0] = 1
+	firstRsp := mem.DataReadyRspBuilder{}.
+		WithRspTo(firstRead.ID).
+		WithData(firstData).
+		Build()
+	toL2.inbox = append(toL2.inbox, firstRsp)
+	if !c.processRemoteOwnerSubRsp(4, firstRsp) ||
+		!c.processRemoteOwnerPendingRsps(5) {
+		t.Fatal("first ready line was not returned")
+	}
+	if len(toOutside.sent) != 1 {
+		t.Fatalf("partial responses = %d, want 1", len(toOutside.sent))
+	}
+	partial := toOutside.sent[0].(*BitmapReadRsp)
+	if len(partial.LineData) != 1 || partial.LineData[0][0] != 1 {
+		t.Fatalf("first partial response is invalid: %#v", partial.LineData)
+	}
+	if len(c.remoteOwnerSubReqs) != 1 {
+		t.Fatal("first response incorrectly waited for or removed the straggler")
+	}
+	if c.RemoteDataPathStats.EarlyBitmapResponses != 1 {
+		t.Fatal("early response was not recorded")
+	}
+
+	secondRead := toL2.sent[1].(*mem.ReadReq)
+	secondData := make([]byte, remoteLineBytes)
+	secondData[0] = 2
+	secondRsp := mem.DataReadyRspBuilder{}.
+		WithRspTo(secondRead.ID).
+		WithData(secondData).
+		Build()
+	toL2.inbox = append(toL2.inbox, secondRsp)
+	c.processRemoteOwnerSubRsp(6, secondRsp)
+	c.processRemoteOwnerPendingRsps(7)
+	if len(toOutside.sent) != 2 ||
+		toOutside.sent[1].(*BitmapReadRsp).LineData[1][0] != 2 {
+		t.Fatal("straggler line was not returned in the later response")
+	}
+	if len(c.remoteOwnerBatches) != 0 {
+		t.Fatal("completed bitmap retained its RDMA outstanding descriptor")
+	}
+}
+
+func TestBitmapOwnerRetainsDescriptorAcrossResponseBackpressure(t *testing.T) {
+	c, _, toL2, toOutside, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{Enabled: true, MaxBatchLines: 8, MaxBatches: 8})
+	c.localModules = &mem.SingleLowModuleFinder{
+		LowModule: &remoteTestPort{name: "Owner.L2.Top"},
+	}
+	requester := &remoteTestPort{name: "Requester.RDMA"}
+	bitmap := &BitmapReadReq{
+		MsgMeta:    sim.MsgMeta{Src: requester, Dst: toOutside},
+		PagePAddr:  0x6800,
+		LineBitmap: 0x3,
+	}
+	toOutside.inbox = append(toOutside.inbox, bitmap)
+	c.processFromOutside(1)
+	c.processRemoteOwnerPendingReqs(2)
+	c.processRemoteOwnerPendingReqs(3)
+
+	for _, msg := range toL2.sent {
+		read := msg.(*mem.ReadReq)
+		rsp := mem.DataReadyRspBuilder{}.
+			WithRspTo(read.ID).
+			WithData(make([]byte, remoteLineBytes)).
+			Build()
+		toL2.inbox = append(toL2.inbox, rsp)
+		c.processRemoteOwnerSubRsp(4, rsp)
+	}
+	if len(c.remoteOwnerPendingRsp) != 1 ||
+		len(c.remoteOwnerBatches) != 1 ||
+		len(c.remoteOwnerSubReqs) != 0 {
+		t.Fatal("completed children did not retain exactly one pending packet")
+	}
+
+	toOutside.blocked = true
+	if c.processRemoteOwnerPendingRsps(5) {
+		t.Fatal("blocked response unexpectedly made progress")
+	}
+	if len(c.remoteOwnerPendingRsp) != 1 ||
+		len(c.remoteOwnerBatches) != 1 ||
+		c.ownerOutstandingCount() != 1 {
+		t.Fatal("response backpressure released the owner descriptor early")
+	}
+
+	toOutside.blocked = false
+	if !c.processRemoteOwnerPendingRsps(6) {
+		t.Fatal("unblocked final response did not make progress")
+	}
+	if len(c.remoteOwnerPendingRsp) != 0 ||
+		len(c.remoteOwnerBatches) != 0 ||
+		c.ownerOutstandingCount() != 0 {
+		t.Fatal("successful final response retained the owner descriptor")
+	}
+}
+
+func TestBitmapRequesterAcceptsPartialResponses(t *testing.T) {
+	c, toL1, _, toOutside, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled:            true,
+			DisableRequesterL2: true,
+			MaxBatchLines:      8,
+			MaxBatches:         8,
+		})
+	l1 := &remoteTestPort{name: "L1"}
+	toL1.inbox = append(toL1.inbox,
+		remoteTestRead(l1, 0x6000), remoteTestRead(l1, 0x6040))
+	c.processFromL1(1)
+	c.processRemotePendingBatches(2)
+	c.processRemotePendingBatches(2)
+	c.processRemoteBatches(2, false)
+	req := toOutside.sent[0].(*BitmapReadReq)
+
+	first := &BitmapReadRsp{
+		MsgMeta:   sim.MsgMeta{Dst: toOutside},
+		RespondTo: req.ID,
+		LineData:  map[uint64][]byte{0: make([]byte, remoteLineBytes)},
+	}
+	toOutside.inbox = append(toOutside.inbox, first)
+	if !c.processBitmapRspFromOutside(3, first) {
+		t.Fatal("first partial response was rejected")
+	}
+	if c.remoteBitmapInflight[req.ID] == nil || len(c.remoteReady) != 1 {
+		t.Fatal("requester retired the bitmap before all lines returned")
+	}
+	if c.requesterOutstandingCount() != 1 {
+		t.Fatal("partial bitmap response freed its RDMA descriptor too early")
+	}
+
+	second := &BitmapReadRsp{
+		MsgMeta:   sim.MsgMeta{Dst: toOutside},
+		RespondTo: req.ID,
+		LineData:  map[uint64][]byte{1: make([]byte, remoteLineBytes)},
+	}
+	toOutside.inbox = append(toOutside.inbox, second)
+	c.processBitmapRspFromOutside(4, second)
+	if c.remoteBitmapInflight[req.ID] != nil || len(c.remoteReady) != 2 {
+		t.Fatal("requester did not retire the fully returned bitmap")
+	}
+	if c.requesterOutstandingCount() != 0 {
+		t.Fatal("complete bitmap response retained its RDMA descriptor")
+	}
+}
+
 func TestRemoteDataPathAppliesBackpressureAtOutstandingLimit(t *testing.T) {
 	c, toL1, _, _, _ := newRemoteDataPathTestComp(t,
 		RemoteDataPathConfig{Enabled: true, MaxBatchLines: 1, MaxBatches: 1})
@@ -546,26 +1167,105 @@ func TestRemoteDataPathAppliesBackpressureAtOutstandingLimit(t *testing.T) {
 	if len(toL1.inbox) != 1 {
 		t.Fatalf("upstream requests left = %d, want 1", len(toL1.inbox))
 	}
+	if c.RemoteDataPathStats.LineEntryFullStalls != 1 {
+		t.Fatalf("line-entry full stalls = %d, want 1",
+			c.RemoteDataPathStats.LineEntryFullStalls)
+	}
+	queries := c.RemoteDataPathStats.InflightFilterQueries
+	if c.processFromL1(2) {
+		t.Fatal("capacity-blocked retry unexpectedly made progress")
+	}
+	if c.RemoteDataPathStats.InflightFilterQueries != queries {
+		t.Fatalf("blocked-head retry repeated inflight-filter query: %d -> %d",
+			queries, c.RemoteDataPathStats.InflightFilterQueries)
+	}
+	if c.RemoteDataPathStats.LineEntryFullStalls != 2 {
+		t.Fatalf("line-entry full stalls after retry = %d, want 2",
+			c.RemoteDataPathStats.LineEntryFullStalls)
+	}
+}
+
+func TestRemoteDataPathBoundsDuplicateWaiters(t *testing.T) {
+	c, toL1, _, _, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{Enabled: true, MaxBatchLines: 1, MaxBatches: 1})
+	l1 := &remoteTestPort{name: "L1"}
+	toL1.inbox = append(toL1.inbox,
+		remoteTestRead(l1, 0x7800),
+		remoteTestRead(l1, 0x7800),
+		remoteTestRead(l1, 0x7800),
+	)
+	c.processFromL1(1)
+	if c.remoteOutstandingReads != 2 || len(c.remoteLines) != 1 {
+		t.Fatalf("bounded duplicate state = waiters %d, lines %d; want 2, 1",
+			c.remoteOutstandingReads, len(c.remoteLines))
+	}
+	if len(toL1.inbox) != 1 {
+		t.Fatalf("upstream duplicate requests left = %d, want 1",
+			len(toL1.inbox))
+	}
+	stats := c.RemoteDataPathStats
+	if stats.DuplicateReads != 1 || stats.WaiterEntryFullStalls != 1 ||
+		stats.LineEntryFullStalls != 0 || stats.PeakWaiterEntries != 2 ||
+		stats.WaiterEntryCapacity != 2 {
+		t.Fatalf("duplicate waiter accounting = %+v", stats)
+	}
 }
 
 func TestBitmapOwnerRejectsPacketBeyondOutstandingLimit(t *testing.T) {
 	c, _, _, toOutside, _ := newRemoteDataPathTestComp(t,
 		RemoteDataPathConfig{Enabled: true, MaxBatchLines: 1, MaxBatches: 1})
-	for i := 0; i < c.remoteOwnerOutstandingCapacity(); i++ {
-		c.remoteOwnerSubReqs[string(rune(i+1))] = &remoteOwnerSubReq{}
+	for i := 0; i < c.remoteConfig.MaxBatches; i++ {
+		c.remoteOwnerBatches[string(rune(i+1))] = &remoteOwnerBatch{}
 	}
 	request := &BitmapReadReq{
 		MsgMeta:    sim.MsgMeta{Src: &remoteTestPort{name: "Requester"}},
 		PagePAddr:  0x8000,
-		LineBitmap: 0x7,
+		LineBitmap: 0x1,
 	}
 	toOutside.inbox = append(toOutside.inbox, request)
 	if c.processFromOutside(1) {
 		t.Fatal("oversized owner packet unexpectedly made progress")
 	}
 	if len(toOutside.inbox) != 1 ||
-		len(c.remoteOwnerSubReqs) != c.remoteOwnerOutstandingCapacity() {
+		len(c.remoteOwnerBatches) != c.remoteConfig.MaxBatches {
 		t.Fatal("owner consumed a packet that exceeded its bounded capacity")
+	}
+}
+
+func TestBitmapOwnerRejectsOversizedPacket(t *testing.T) {
+	c, _, _, _, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{Enabled: true, MaxBatchLines: 1, MaxBatches: 1})
+	request := &BitmapReadReq{
+		MsgMeta:    sim.MsgMeta{Src: &remoteTestPort{name: "Requester"}},
+		PagePAddr:  0x8000,
+		LineBitmap: 0x3,
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("owner accepted a bitmap larger than the protocol limit")
+		}
+	}()
+	c.processBitmapReqFromOutside(1, request)
+}
+
+func TestBitmapOwnerBoundsExpandedChildLines(t *testing.T) {
+	c, _, _, toOutside, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{Enabled: true, MaxBatchLines: 1, MaxBatches: 1})
+	c.remoteOwnerSubReqs["occupied"] = &remoteOwnerSubReq{}
+	request := &BitmapReadReq{
+		MsgMeta:    sim.MsgMeta{Src: &remoteTestPort{name: "Requester"}},
+		PagePAddr:  0x8000,
+		LineBitmap: 0x1,
+	}
+	toOutside.inbox = append(toOutside.inbox, request)
+	if c.processFromOutside(1) {
+		t.Fatal("owner consumed a packet without child-line capacity")
+	}
+	stats := c.RemoteDataPathStats
+	if len(toOutside.inbox) != 1 || len(c.remoteOwnerBatches) != 0 ||
+		stats.OwnerChildLineCapacity != 1 ||
+		stats.OwnerChildLineFullStalls != 1 {
+		t.Fatalf("owner child-line backpressure accounting = %+v", stats)
 	}
 }
 

@@ -1,0 +1,85 @@
+\section{Background}
+\label{sec:background}
+
+\subsection{Cuckoo Filters}
+\label{sec:background-cuckoo}
+
+A Cuckoo Filter is an array of buckets, where each bucket contains several
+slots that are read together \cite{fan2014cuckoo}.  Each occupied slot stores a
+short fingerprint rather than a complete key.  Hashing a key produces its
+fingerprint and two possible bucket locations.  A lookup checks both buckets,
+while an insertion places the fingerprint in an empty slot or relocates an
+existing fingerprint when both buckets are full.  The structure also supports
+deletion.  A negative lookup proves absence, while a positive lookup remains a
+possible match and must be checked against exact state.
+
+For example, suppose the address of a cacheline produces fingerprint $f$ and
+maps to buckets 3 and 11.  When the cacheline is filled into L2, the filter
+stores $f$ in one of the four slots in either bucket.  A later L2 data request
+recomputes the same fingerprint and bucket locations.  If neither bucket
+contains $f$, the cacheline is not resident and the request can skip the L2 tag
+and data array lookup before continuing along the miss path.  If either bucket
+contains $f$, the request checks the exact L2 tag.  A tag hit reads the data
+array, while a false positive simply follows the normal cache miss path.  The
+fingerprint is deleted when the cacheline is evicted.  If an insertion fails,
+the filter conservatively sends later requests to the exact L2 lookup.  The
+filter therefore avoids unnecessary cache probes without changing correctness
+\cite{moshovos2001jetty}.  It stores only metadata and has finite lookup and
+update bandwidth.
+
+\subsection{RDMA Request Processing}
+\label{sec:background-rdma}
+
+RDMA moves data between GPMs without involving a host processor in each
+transfer \cite{kalia2016design,wei2018deconstructing,mittal2018revisiting}.
+Each GPM's RDMA endpoint connects both the private L1 caches and the shared L2
+to the wafer mesh.  The L1 facing path contains a request table and a pair of
+TX and RX interfaces.  The request table retains every remote memory
+transaction issued by local L1 caches until its response returns.  TX sends
+these requests to remote GPMs, while RX returns incoming responses to the
+corresponding L1 requests.  The L2 facing path provides another pair of TX and
+RX interfaces.  RX forwards incoming remote requests to the local L2, and TX
+sends the resulting data responses back to their requesting GPMs.  A bounded
+request table limits the number of requester transactions in flight and
+propagates backpressure to L1 when no entry is available.
+
+Figure~\ref{fig:baseline-overview} follows a baseline remote request from the
+requesting GPM's L1 to the owner GPM's L2.  At \ding{192}, address translation
+identifies a remote page, and the L1 miss allocates a request table entry before
+reaching TX.  At \ding{193}, requester TX injects the request packet into the
+wafer mesh.  At \ding{194}, the owner L2 facing RX accepts the packet.  At
+\ding{195}, RX forwards the recovered cacheline request to the owner L2.  An
+owner L2 hit supplies the data directly, while an L2 miss accesses owner HBM.
+The response returns through owner TX, the wafer mesh, and requester RX.  The
+request table then completes the stored transaction and delivers the data to
+the original L1 request.  In the baseline, same line misses from different
+private L1 caches allocate separate entries and network packets before the
+owner L2 can observe and merge them.
+
+\subsection{HBM Organization and Row Locality}
+\label{sec:background-hbm}
+
+HBM provides high bandwidth through a wide interface and many independently
+operated banks \cite{li2016exploring,wang2022shuhai,micron_hbm2e}, but each
+bank still follows the conventional DRAM row buffer model
+\cite{rixner2000memory,ding2013reshaping}.  A physical address is decomposed
+into channel, rank, bank group, bank,
+row, and column fields.  An activate command copies one row into the bank row
+buffer.  A following column read to that open row can transfer data without
+another activation.  A request to a different row must first precharge the
+bank and then activate the new row.  Serving several nearby columns while a row
+remains open can therefore avoid repeated precharge and activation latency
+\cite{rixner2000memory}.  HBM address mapping and the order in which requests
+reach the controller determine whether this locality is visible
+\cite{li2016exploring,wang2022shuhai,wang2019mac}.  The simulator models these
+effects explicitly with transaction and command queues, bank state, burst
+timing, and separate activate, column, and precharge commands.  Its ordinary
+close page path attaches an automatic precharge to a completed access.  When
+two linked adjacent requests are simultaneously ready and map to the same
+physical bank and row, the controller changes the first operation into a read
+without automatic precharge, keeps the row open, and issues the adjacent column
+next.  The row is not retained when the second request is unavailable, maps to
+a different row, or would bypass an older conflicting request.  Adjacent line
+selection is therefore useful because it creates a bounded opportunity for
+row reuse, while the controller remains responsible for validating the actual
+HBM mapping and timing constraints.

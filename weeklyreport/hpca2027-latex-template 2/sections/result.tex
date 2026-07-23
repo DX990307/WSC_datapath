@@ -1,0 +1,145 @@
+\section{Results}
+\label{sec:results}
+
+\subsection{Overall Performance}
+
+Figure~\ref{fig:cupath-performance} compares CuPath with Baseline using the
+formal 14-workload campaign.  Every pair uses the same frozen binary,
+benchmark input, architectural parameters, workgroup-completion rule, and
+completed workgroup count; only the CuPath mechanisms differ.  CuPath achieves
+a 1.465$\times$ geometric-mean speedup and improves 13 of the 14 workloads.
+MM, FWS, and KM obtain the largest gains at 6.171$\times$,
+4.155$\times$, and 2.511$\times$, respectively.  BT and FWT improve by
+1.491$\times$ and 1.578$\times$, while I2C and RELU improve by
+1.214$\times$ and 1.117$\times$.  The remaining workloads stay close to
+Baseline, with SPMV at 0.999$\times$.  The result shows that CuPath provides
+large gains when requests expose eliminable or aggregatable work, while its
+work-conserving fallback keeps workloads with few opportunities near
+Baseline.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-22-baseline-complete-observation/cupath_baseline_complete_speedup.png}
+  \caption{Normalized performance of CuPath relative to Baseline.  Baseline
+  is normalized to 1.0 for every workload, and GM is the geometric mean across
+  all 14 workloads.}
+  \label{fig:cupath-performance}
+\end{figure}
+
+\subsection{Removing Work Along the Path}
+
+Figure~\ref{fig:cupath-work} explains the speedup in terms of work that no
+longer reaches a downstream component.  Weighted across the fourteen
+workloads, Complete removes 22.6\% of L2 tag lookups, 4.6\% of unique remote
+reads, 48.2\% of wire packets, and 30.8\% of repeated wafer traversals.  The
+different columns peak on different applications: L2 filtering is strongest
+for SPMV and MT, packet aggregation for AES, RELU, and KMeans, and requesting-GPM
+L2 reuse for MM, FIR, SC, and I2C.  This separation supports the path-oriented
+design: no single boundary exposes all four reductions.
+
+CuPath does not obtain these gains by increasing aggregate memory traffic.
+Complete reduces physical DRAM reads from 39.25 to 38.71 million (1.38\%) and
+writes from 20.83 to 20.68 million (0.71\%).  The sample-weighted local
+L2-miss-to-DRAM-issue latency falls from 38.12~ns in Baseline to 20.34~ns over
+the ordinary and Filter-negative Complete issue populations.  We report these
+populations separately in the machine-readable results; the comparison is not
+an assumption that every miss takes the fast path.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-17-filter-prefetch-v5-formal14/cupath_work_reduction.png}
+  \caption{Percentage of baseline work removed at successive boundaries.
+  The bottom row is weighted by the corresponding baseline work count.}
+  \label{fig:cupath-work}
+\end{figure}
+
+\subsection{M1: Cuckoo-Filter-Guided Local Pairing}
+
+M1 is a supporting transformation rather than the dominant source of
+speedup.  It issues 261,615 local candidates over the full suite: 252,850
+reach the DRAM-issue point and 8,765 lose a race to an ordinary demand;
+176,447 are eventually useful.  Although these issued candidates are
+additional logical accesses, exact MSHR merging and demand timing leave total
+physical reads 0.35\% lower than Baseline and increase L2 MSHR-full cycles by
+only 0.22\%.  FIR is the exception: M1 alone is 0.898$\times$ and increases
+physical reads and writes, so we do not claim that local prediction is
+universally beneficial.
+
+The coupling experiment isolates why the Filter is still useful for mostly
+local workloads.  Filter-only definite-miss elimination provides
+1.0145$\times$ geometric mean, while ungated prediction provides only
+1.0059$\times$.  Coupling the same predictor to \textsc{Pattern},
+\textsc{Resident}, and \textsc{Pending} reaches 1.0188$\times$.  It removes
+34.7\% of issued candidates while retaining 96.7\% of useful candidates,
+raising useful-per-issued accuracy from 24.0\% to 35.5\%.  Additional DRAM
+reads fall from 6,206 to 5,578 and demand-delay exposure events from 145,466
+to 33,066.  Predictor-only records candidates but is exactly 1.0000$\times$,
+confirming that observation itself is not counted as timing benefit.
+
+Replacing Cuckoo membership with exact metadata changes the same screen only
+from 1.0188$\times$ to 1.0192$\times$.  The Cuckoo design observes four false
+positives in 273,146 queries (0.0015\%).  Thus the Filter does not move data or
+create prediction benefit by itself; it compactly rejects avoidable work and
+tracks the request lifecycle with little loss relative to exact metadata.
+
+\subsection{M2: Cuckoo-Filter-Guided Remote Aggregation}
+
+M2 is the largest standalone contributor.  Complete records 4.24 million
+real demands merged by exact RDMA line state and 2.52 million predicted lines
+piggybacked into existing home-GPM/page packets.  Because a real demand can take
+over a candidate before batch insertion, the aggregate counters do not expose
+the intersection of these two populations; we therefore do not relabel every
+useful prediction as an avoided packet.  The exact merge and wire-packet
+counters independently establish the reductions.
+
+\subsection{M3: Cuckoo-Filter-Guided Remote Reuse}
+
+M3 bypasses 23.41 million exact requesting-GPM L2 probes when \textsc{Resident}
+and \textsc{Seen} reliably prove absence, 42.6\% of eligible unique-request
+probe opportunities.  The remaining probes produce 27.23 million physical
+L2 hits and satisfy 28.21 million logical responses through exact waiter
+fanout.  M3 installs 7.06 million remote-clean lines in the existing L2;
+0.996 million are observed to retire unused, a 14.1\% lower bound because
+lines still resident at termination are unclassified.  Invalid ways absorb
+5.35 million fills and older remote-clean lines absorb the remaining 1.71
+million; no ordinary local-clean line is displaced.  The largest
+workload-level sum of per-slice peaks occupies 37.5\% of wafer L2 lines, a
+conservative non-simultaneous upper bound rather than an average footprint.
+Of the unused retirements, 160,257 carry candidate provenance and remove the
+associated \textsc{Pattern}.  A useful patterned hit instead keeps
+\textsc{Pattern} eligible; the aggregate counter does not isolate that subset
+from all requesting-GPM L2 hits.
+
+\subsection{Sensitivity and Limitations}
+
+Figure~\ref{fig:cupath-sensitivity} varies only the parameters needed to audit
+the selected point.  Across four workloads, all tested points span
+1.2713$\times$--1.2817$\times$, compared with 1.2757$\times$ for the
+32K-slot, 13-bit, 64-entry, one-cycle point.  Reducing the Filter to 16K slots
+raises insertion failures from 27 to 156,726, whereas 64K slots, 16
+fingerprint bits, or a 256-entry predictor changes geometric mean by less
+than 0.5\%.  A zero-cycle lookup reaches 1.2791$\times$, only 0.27\% above the
+selected point; the result therefore does not depend on a free Filter lookup.
+
+The long runs expose a limitation hidden by the short screen.  Across the
+fourteen Complete runs, correctness-critical \textsc{Resident} and
+\textsc{Pending} have zero insertion failures, but capacity pressure causes
+9.42 million \textsc{Pattern} and 5.81 million \textsc{Seen} attempts to fail
+closed.  These failures suppress optional prediction or reuse and cannot
+change demand correctness, but they bound coverage.  The modest
+1.187$\times$ Remote-group speedup and M1's FIR regression likewise show that
+CuPath is constrained by available aggregation and safe idle opportunities,
+not by an unlimited speculative upper bound.
+
+A controlled simulator-runtime screen uses seven representative workloads,
+all five configurations, 192 drained workgroups, one host worker, and the
+same binary.  Normalized by simulated GPU time, Complete costs
+1.190$\times$ Baseline; this is simulator overhead, not hardware performance.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-17-filter-prefetch-v5-sensitivity/cupath_sensitivity.png}
+  \caption{Four-workload sensitivity.  Orange marks the selected point and
+  blue marks alternatives; all use the same frozen binary.}
+  \label{fig:cupath-sensitivity}
+\end{figure}

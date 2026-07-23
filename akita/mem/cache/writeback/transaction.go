@@ -25,22 +25,38 @@ const (
 
 type transaction struct {
 	action
-	id                string
-	read              *mem.ReadReq
-	write             *mem.WriteReq
-	flush             *cache.FlushReq
-	block             *cache.Block
-	victim            *cache.Block
-	fetchPID          vm.PID
-	fetchAddress      uint64
-	fetchedData       []byte
-	fetchReadReq      *mem.ReadReq
-	evictingPID       vm.PID
-	evictingAddr      uint64
-	evictingData      []byte
-	evictingDirtyMask []bool
-	evictionWriteReq  *mem.WriteReq
-	mshrEntry         *cache.MSHREntry
+	id                     string
+	read                   *mem.ReadReq
+	write                  *mem.WriteReq
+	flush                  *cache.FlushReq
+	block                  *cache.Block
+	victim                 *cache.Block
+	fetchPID               vm.PID
+	fetchAddress           uint64
+	fetchedData            []byte
+	fetchReadReq           *mem.ReadReq
+	evictingPID            vm.PID
+	evictingAddr           uint64
+	evictingData           []byte
+	evictingDirtyMask      []bool
+	evictionWriteReq       *mem.WriteReq
+	mshrEntry              *cache.MSHREntry
+	residentFilterPositive bool
+	residentFilterNegative bool
+	residentFilterChecked  bool
+	residentFilterLookup   *TypedFilterLookup
+	residentFastMiss       bool
+	residentParallelMSHR   bool
+	fillResponsesForwarded bool
+	l2Arrival              sim.VTimeInSec
+	dramIssueRecorded      bool
+	prefetch               bool
+	granularitySibling     bool
+	granularityCandidate   *granularityCandidate
+	adaptivePairLookups    [2]TypedFilterLookup
+	adaptivePairLookupSet  [2]bool
+	writeBufferReady       bool
+	pairedDemandQueueEntry bool
 }
 
 func (t transaction) accessReq() mem.AccessReq {

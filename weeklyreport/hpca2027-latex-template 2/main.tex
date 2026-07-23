@@ -1,0 +1,195 @@
+\documentclass[10pt,conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{textcomp}
+\usepackage{pifont}
+\usepackage{xcolor}
+\usepackage[hyphens]{url}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+% Keep figures close to the paragraph that introduces them.
+\setlength{\intextsep}{6pt plus 1pt minus 1pt}
+\setlength{\textfloatsep}{7pt plus 1pt minus 2pt}
+\setlength{\floatsep}{6pt plus 1pt minus 1pt}
+\setlength{\abovecaptionskip}{3pt}
+\setlength{\belowcaptionskip}{0pt}
+
+% Ensure letter paper.
+\pdfpagewidth=8.5in
+\pdfpageheight=11in
+
+\newcommand{\hpcayear}{2027}
+\newcommand{\hpcasubmissionnumber}{NaN}
+\title{CuPath: Cuckoo-Filter-Guided Memory Request Transformation for Wafer-Scale GPUs}
+
+% Camera-ready fields. Keep the camera-ready switch disabled for submission.
+%\def\hpcacameraready{}
+\newcommand{\hpcapubid}{0000--0000/00\$00.00}
+\newcommand\hpcaauthors{First Author and Second Author}
+\newcommand\hpcaaffiliation{Affiliation}
+\newcommand\hpcaemail{Email(s)}
+
+\input{hpca-template}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%% -- PAPER CONTENT STARTS -- %%%%
+
+\begin{abstract}
+Wafer-scale GPUs expose distributed compute and HBM as one logical device, yet
+a cache-line miss may traverse the requesting GPM's L2 and RDMA endpoint, the
+wafer network, and the home GPM's RDMA endpoint, L2, and HBM.  Existing designs
+optimize each component using only locally visible state.  We show that useful
+request state changes during a request lifetime: real accesses expose a predictive relation,
+L2 state eliminates already resident or pending work, requesting-GPM RDMA exposes
+cross-L1 and destination aggregation, and returned data exposes reuse.  We
+propose \emph{CuPath}, which connects these decisions through a common bounded
+real-demand predictor design and one typed Cuckoo Filter per L2 slice.  CuPath
+first filters a directly adjacent local candidate and, when useful, exposes it
+with the triggering miss through a paired HBM access,
+then uses Filter-maintained pending-line and active-batch state to merge remote
+requests and permits a remote candidate only to piggyback an existing
+home-GPM/page batch, and finally retains useful
+returned data in the existing requesting-GPM L2 while feeding outcomes back to
+prediction metadata.  Exact tags, MSHRs, and transaction tables remain
+authoritative; unavailable speculative opportunities are dropped immediately.
+CuPath adds no global scheduler or new cache level.
+We evaluate both end-to-end performance and the cache, DRAM, RDMA, packet, and
+wafer-traversal work removed at each boundary.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+Wafer-scale GPUs are emerging as a practical way to continue GPU scaling
+beyond the size, yield, and manufacturability limits of a monolithic die.
+MCM-GPUs first address the monolithic-die limits by connecting multiple GPU
+processing modules (GPMs) through silicon interposers, expanding compute
+resources and memory capacity within a package
+\cite{arunkumar2017mcm,mi350}.  Wafer-scale integration extends the
+multi-module organization across an entire wafer.  Many GPMs and
+distributed HBM stacks are connected by a high-bandwidth, low-latency
+on-wafer network and exposed as one logical GPU
+\cite{pal2019architecting,hu2024wafer,xu2025exploring}.  Wafer-scale
+integration is approaching commercial reality, with TSMC's System-on-Wafer
+technology planned for 2027 \cite{TSMCAdvancedPackaging}.  However, placing
+more resources on one wafer does not make every memory access local.
+
+The on-wafer mesh provides high-bandwidth communication between GPMs, but each
+physical page still resides in the HBM of one home GPM.  A local L1 miss
+reaches the address-selected L2 slice and, on an L2 miss, accesses local HBM.
+The returned cacheline fills the local cache hierarchy before reaching the
+requesting CU.
+
+A remote L1 miss is routed through the requesting GPM's RDMA endpoint, the
+on-wafer network, and the home GPM's RDMA endpoint and L2 before reaching the
+home-GPM HBM when necessary.  The response returns across the wafer to the
+requesting GPM's L1, and the baseline does not retain remote returns in the
+requesting GPM's L2.  Duplicate or repeated accesses can therefore
+pay endpoint, network, cache, and memory costs multiple times.  Prior
+multi-GPU studies show that remote-access cost and sharing behavior vary widely
+across applications \cite{khairy2020locality,zhang2023characterizing}.
+
+Local memory exposes a mismatch between regular GPU access patterns and
+cacheline-by-cacheline processing.  Half of the workloads have L2 read miss
+rates above 80\%, allowing related adjacent demands to reach HBM as separate
+memory requests.  Fetching every adjacent line is unsafe because the candidate
+may already be resident, already be pending, or never be requested.  Local
+acceleration therefore requires a selective decision that learns a recurring
+relation from real demands and checks current L2 state before adding another
+cacheline to the HBM access and L2 fill path.
+
+Remote memory remains expensive even with a low-latency on-wafer network.  A
+remote miss still consumes requesting-GPM RDMA service, network bandwidth,
+home-GPM RDMA service, and home-GPM cache or HBM resources before the response
+returns.  Finite RDMA width and outstanding capacity further make related
+requests contend for the same endpoint resources.  Overall, 42.8\% of sampled
+remote reads expose either an in-flight duplicate or a nearby same-page
+partner.  The baseline then places returned data only in a private
+requesting-GPM L1, so an access from another CU or after L1 eviction repeats
+the remote path.  Later touches account for 33.6\% of remote reads, but
+retaining every return in the requesting GPM's L2 would waste capacity on
+one-touch data \cite{zhao2020selective,zhang2023sac}.  Remote acceleration must
+therefore aggregate requests before network injection and retain returned data
+in the existing requesting-GPM L2 only after reuse is observed.
+
+We propose \emph{CuPath}, which uses a lightweight demand predictor and one
+typed Cuckoo Filter per L2 slice to identify and optimize memory requests
+during memory-path traversal \cite{fan2014cuckoo}.  The predictor proposes
+at most one adjacent candidate from real demand history.  The Filter records
+compact pattern, residency, in-flight, and reuse state, allowing later
+stages to quickly reject work that is already present or unlikely to help.
+The Filter is a control structure rather than a data cache.  Exact tags,
+MSHRs, and RDMA transaction tables remain authoritative.
+
+CuPath applies the recorded state in three places.  First, the
+local L2 removes resident or pending candidates and, when the remaining sibling is
+compatible with the demand, exposes both adjacent cachelines through one paired
+HBM access.  Second, requesting-GPM RDMA uses
+\textsc{Remote-Pending} to identify possible duplicate lines and
+\textsc{Remote-Batch} to locate a joinable home-GPM/page batch. Exact RDMA
+tables confirm the Filter results before merging identical requests or grouping
+different lines into one packet;
+a predicted remote line is allowed only when a free position exists in
+an existing batch.  Third, after the response returns, CuPath uses real reuse
+evidence to retain useful remote data in the existing requesting-GPM L2, avoiding a
+later wafer traversal.  Outcomes feed back to the predictor so that useful
+relations remain active and unused ones are suppressed.
+
+CuPath is deliberately work-conserving.  CuPath never delays a demand while
+waiting for a partner, never creates a remote packet for a predicted line, and
+immediately falls back to the original path when metadata or downstream
+resources are unavailable.  CuPath adds no global scheduler or new cache
+level.  Figure~\ref{fig:cupath-overview} summarizes how a request
+is filtered, combined with useful in-flight work, and selectively retained
+during memory-path traversal.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{Figure/CuPathoverall.png}
+  \caption{CuPath continuously filters a predicted request, aggregates the
+  request only with compatible in-flight work, and retains returned data in the existing
+  requesting-GPM L2.}
+  \label{fig:cupath-overview}
+\end{figure}
+
+Across fourteen GPU workloads, CuPath improves every workload and achieves a
+1.534$\times$ geometric-mean speedup.  More importantly, the speedup follows
+from work removed along the path.  CuPath reduces L2 tag lookups by 22.6\%,
+on-wafer packets by 48.2\%, and repeated wafer traversals by 30.8\%.
+
+We make the following contributions.
+
+\begin{itemize}
+  \item We identify and quantify how predictive locality, cache state, remote
+  aggregation, and reuse become visible at different points in a wafer-scale
+  memory-request lifetime.
+
+  \item We propose CuPath, an end-to-end memory-path design that couples a
+  bounded real-demand predictor and per-slice typed Cuckoo Filter with the
+  existing HBM controller, RDMA engine, and requesting-GPM L2.
+
+  \item We implement and evaluate CuPath without adding a global scheduler,
+  cache level, achieving a 1.534$\times$
+  geometric-mean speedup while substantially reducing cache and network work.
+\end{itemize}
+
+\input{sections/background}
+
+\input{sections/observation}
+
+\input{sections/design}
+
+\input{sections/evaluation}
+
+\input{sections/result}
+
+\bibliographystyle{IEEEtranS}
+\bibliography{refs}
+
+\end{document}

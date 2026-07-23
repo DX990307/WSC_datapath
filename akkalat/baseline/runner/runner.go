@@ -115,6 +115,7 @@ func (r *Runner) Init() *Runner {
 	r.configureL2SourceStats()
 	r.configureMemoryPathTrace()
 	r.configureObservationTrace()
+	r.configureRemoteOriginTrace()
 
 	if !r.DisableServers {
 		go r.startProfilingServer()
@@ -253,9 +254,10 @@ func (r *Runner) configureObservationTrace() {
 	if *observationTraceExitOnComplete && *observationTraceMaxRecords == 0 {
 		panic("-trace-observation-exit-on-complete requires a nonzero path-record limit")
 	}
-	if *dramBatchEnableFlag || *dramRowReorderEnableFlag ||
+	if *dramRowContinuationEnableFlag ||
+		*l2FillForwardingEnableFlag ||
 		*remoteDataPathEnableFlag || *forceLocalDataAccessFlag ||
-		*l1vBottomReorderPolicyFlag != "none" {
+		*l2ResidentFilterEnableFlag {
 		panic("-trace-observation requires the unmodified baseline data path; disable local/remote mechanisms")
 	}
 
@@ -298,6 +300,19 @@ func (r *Runner) configureObservationTrace() {
 	}
 }
 
+func (r *Runner) configureRemoteOriginTrace() {
+	memtrace.DisableRemoteOriginTrace()
+	if !*remoteOriginTracing {
+		return
+	}
+	prefix := *remoteOriginTraceFile
+	if prefix == "" {
+		prefix = *filenameFlag + "_remote_origin"
+	}
+	memtrace.EnableRemoteOriginTrace(
+		prefix, *remoteOriginTraceMaxRecords, uint64(1)<<configuredLog2PageSize())
+}
+
 func (r *Runner) buildEmuPlatform() {
 	b := MakeEmuBuilder().
 		WithNumGPU(r.GPUIDs[len(r.GPUIDs)-1]).
@@ -326,18 +341,44 @@ func (r *Runner) buildEmuPlatform() {
 	r.platform = b.Build()
 }
 
-func (r *Runner) buildTimingPlatform() {
-	reorderPolicy := *l1vBottomReorderPolicyFlag
-	reorderWindow := *l1vBottomReorderWindowFlag
-	reorderMaxAge := *l1vBottomReorderMaxAgeNSFlag
-	if *remoteDataPathEnableFlag {
-		// The remote datapath owns its one bounded FIFO batching point. Do not
-		// stack the legacy per-L1 FIFO/HLQ in front of it.
-		reorderPolicy = "none"
-		reorderWindow = 0
-		reorderMaxAge = 0
+func configuredTypedFilterMode() writeback.TypedFilterMode {
+	switch strings.ToLower(strings.TrimSpace(*typedFilterModeFlag)) {
+	case "disabled", "none", "off":
+		return writeback.TypedFilterDisabled
+	case "cuckoo", "approximate":
+		return writeback.TypedFilterCuckoo
+	case "exact", "ideal":
+		return writeback.TypedFilterExact
+	default:
+		panic(fmt.Sprintf("invalid -typed-filter-mode=%q; want disabled, cuckoo, or exact",
+			*typedFilterModeFlag))
 	}
+}
 
+func (r *Runner) buildTimingPlatform() {
+	prefetchModes := 0
+	for _, enabled := range []bool{
+		*l2FilterPrefetchEnableFlag,
+		*l2PrefetchPredictorOnlyFlag,
+		*l2PrefetchUngatedFlag,
+		*l2GranularityAdaptationEnableFlag,
+		*l2GranularityWithoutFilterFlag,
+		*l2GranularityAlwaysExpandFlag,
+		*l2GranularityPredictorOnlyFlag,
+		*l2AdaptivePairEnableFlag,
+	} {
+		if enabled {
+			prefetchModes++
+		}
+	}
+	if prefetchModes > 1 {
+		panic("choose only one L2 speculative/granularity mode")
+	}
+	fmt.Printf(
+		"[Config] L1V MSHR entries=%d max-concurrent-transactions=%d\n",
+		*l1vMSHREntriesFlag,
+		*l1vMaxConcurrentTransFlag,
+	)
 	b := MakeR9NanoBuilder().
 		WithLog2PageSize(configuredLog2PageSize()).
 		WithBandwidth(*bandwidthFlag).
@@ -354,33 +395,44 @@ func (r *Runner) buildTimingPlatform() {
 		WithL1VRemoteMaxInflight(*l1vRemoteMaxInflightFlag).
 		WithL1VMSHREntries(*l1vMSHREntriesFlag).
 		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag).
-		WithL1VBottomReorder(
-			reorderPolicy,
-			reorderWindow,
-			reorderMaxAge,
-		).
 		WithForceLocalDataAccess(*forceLocalDataAccessFlag).
-		WithDRAMBatch(writeback.DRAMBatchConfig{
-			Enabled:     *dramBatchEnableFlag,
-			MaxEntries:  *dramBatchEntriesFlag,
-			MaxLines:    *dramBatchLinesFlag,
-			MaxWaitNS:   *dramBatchWaitNSFlag,
-			WindowLines: 2,
+		WithL2ResidentFilter(*l2ResidentFilterEnableFlag).
+		WithL2FilterPrefetch(
+			*l2FilterPrefetchEnableFlag || *l2PrefetchPredictorOnlyFlag ||
+				*l2PrefetchUngatedFlag).
+		WithL2PrefetchDiagnostics(
+			*l2PrefetchPredictorOnlyFlag, *l2PrefetchUngatedFlag).
+		WithL2GranularityAdaptation(
+			*l2GranularityAdaptationEnableFlag ||
+				*l2GranularityWithoutFilterFlag ||
+				*l2GranularityAlwaysExpandFlag ||
+				*l2GranularityPredictorOnlyFlag,
+			*l2GranularityWithoutFilterFlag,
+			*l2GranularityAlwaysExpandFlag,
+			*l2GranularityPredictorOnlyFlag).
+		WithL2AdaptivePair(*l2AdaptivePairEnableFlag).
+		WithPrefetchPredictorEntries(*prefetchPredictorEntriesFlag).
+		WithL2FillForwarding(*l2FillForwardingEnableFlag).
+		WithTypedFilterConfig(writeback.TypedFilterConfig{
+			Mode:                configuredTypedFilterMode(),
+			Capacity:            *typedFilterCapacityFlag,
+			SlotsPerBucket:      *typedFilterSlotsPerBucketFlag,
+			FingerprintBits:     *typedFilterFingerprintBitsFlag,
+			LookupLatencyCycles: *typedFilterLookupLatencyFlag,
+			LookupWidth:         *typedFilterLookupWidthFlag,
+			UpdateLatencyCycles: *typedFilterUpdateLatencyFlag,
+			UpdateWidth:         *typedFilterUpdateWidthFlag,
 		}).
-		WithDRAMRowReorder(
-			*dramRowReorderEnableFlag,
-			*dramRowReorderMaxAgeFlag,
-		).
+		WithDRAMRowContinuation(*dramRowContinuationEnableFlag).
 		WithRemoteDataPath(rdma.RemoteDataPathConfig{
-			Enabled:            *remoteDataPathEnableFlag,
-			AUPrefetch:         *remoteDataPathPrefetchFlag,
-			DisableDedup:       !*remoteDataPathDedupEnableFlag,
-			DisableBatching:    !*remoteDataPathBatchingEnableFlag,
-			DisableRequesterL2: !*remoteDataPathL2EnableFlag,
-			MaxBatchLines:      *remoteDataPathBatchLinesFlag,
-			MaxWaitNS:          *remoteDataPathWaitNSFlag,
-			MaxBatches:         *remoteDataPathBatchesFlag,
-			ReuseTableEntries:  *remoteDataPathReuseEntriesFlag,
+			Enabled:              *remoteDataPathEnableFlag,
+			DisableDedup:         !*remoteDataPathDedupEnableFlag,
+			DisableBatching:      !*remoteDataPathBatchingEnableFlag,
+			DisableRequesterL2:   !*remoteDataPathL2EnableFlag,
+			EnableFilterPrefetch: *remoteFilterPrefetchEnableFlag,
+			PrefetchEntries:      *prefetchPredictorEntriesFlag,
+			MaxBatchLines:        *remoteDataPathBatchLinesFlag,
+			MaxBatches:           *remoteDataPathBatchesFlag,
 		})
 
 	if *sharingTracing {

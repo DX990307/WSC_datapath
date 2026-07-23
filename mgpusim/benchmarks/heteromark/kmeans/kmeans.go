@@ -68,6 +68,7 @@ type Benchmark struct {
 	gpuRMSE float64
 
 	useUnifiedMemory bool
+	preloadTranspose bool
 }
 
 // NewBenchmark makes a new benchmark
@@ -105,6 +106,13 @@ func (b *Benchmark) SelectGPU(gpuIDs []int) {
 // SetUnifiedMemory uses Unified Memory
 func (b *Benchmark) SetUnifiedMemory() {
 	b.useUnifiedMemory = true
+}
+
+// PreloadTransposedFeatures uses setup-time copies to initialize the matrix
+// consumed by the membership kernels. It is intended for phase-targeted
+// simulator diagnostics that do not measure the transpose kernel.
+func (b *Benchmark) PreloadTransposedFeatures() {
+	b.preloadTranspose = true
 }
 
 // Run runs
@@ -161,12 +169,33 @@ func (b *Benchmark) initMem() {
 	}
 
 	b.driver.MemCopyH2D(b.context, b.dFeatures, b.hFeatures)
+	if b.preloadTranspose {
+		transposed := transposeFeaturesCPU(
+			b.hFeatures, b.NumPoints, b.NumFeatures)
+		b.driver.MemCopyH2D(b.context, b.dFeaturesSwap, transposed)
+	}
 }
 
 func (b *Benchmark) exec() {
-	b.transposeFeatures()
+	if !b.preloadTranspose {
+		b.transposeFeatures()
+	}
 	b.kmeansClustering()
 	b.gpuRMSE = b.calculateRMSE()
+}
+
+func transposeFeaturesCPU(
+	features []float32,
+	numPoints, numFeatures int,
+) []float32 {
+	transposed := make([]float32, len(features))
+	for point := 0; point < numPoints; point++ {
+		for feature := 0; feature < numFeatures; feature++ {
+			transposed[feature*numPoints+point] =
+				features[point*numFeatures+feature]
+		}
+	}
+	return transposed
 }
 
 func (b *Benchmark) transposeFeatures() {

@@ -115,6 +115,9 @@ type observationRemoteRequest struct {
 
 	forwardWireID       string
 	forwardTrafficBytes uint64
+	ownerL2Result       string
+	ownerHBMAccess      bool
+	linkedRequestIDs    map[string]struct{}
 	timeRegression      bool
 }
 
@@ -130,6 +133,10 @@ type observationRemoteSummary struct {
 	forwardTrafficBytes  uint64
 	returnTrafficBytes   uint64
 	sameLineInflightHits uint64
+	ownerL2ReadHits      uint64
+	ownerL2ReadMisses    uint64
+	ownerL2MSHRHits      uint64
+	ownerHBMAccesses     uint64
 	validHopCount        uint64
 	hopSum               uint64
 	latencyCount         uint64
@@ -164,6 +171,8 @@ type observationRemoteValidation struct {
 	l2SampleCalls              uint64
 	l2SamplesDropped           uint64
 	l2InvalidSamples           uint64
+	missingOwnerL2ReadResults  uint64
+	ownerL2ResultConflicts     uint64
 	writerErrors               uint64
 }
 
@@ -191,15 +200,16 @@ type observationRemoteStats struct {
 	maxRecords    uint64
 	l2SampleMax   uint64
 
-	observed       uint64
-	l2Observed     uint64
-	l2Written      uint64
-	maxSeenPS      uint64
-	active         map[string]*observationRemoteRequest
-	completedIDs   map[string]struct{}
-	inflightByLine map[observationRemoteInflightKey]uint64
-	writeEpoch     map[observationRemoteLineKey]uint64
-	uniqueLines    map[observationRemoteLineKey]struct{}
+	observed         uint64
+	l2Observed       uint64
+	l2Written        uint64
+	maxSeenPS        uint64
+	active           map[string]*observationRemoteRequest
+	completedIDs     map[string]struct{}
+	logicalByRequest map[string]map[string]struct{}
+	inflightByLine   map[observationRemoteInflightKey]uint64
+	writeEpoch       map[observationRemoteLineKey]uint64
+	uniqueLines      map[observationRemoteLineKey]struct{}
 
 	remoteFile *os.File
 	remoteGZIP *gzip.Writer
@@ -235,6 +245,7 @@ func (s *observationRemoteStats) resetStateLocked() {
 	s.maxSeenPS = 0
 	s.active = make(map[string]*observationRemoteRequest)
 	s.completedIDs = make(map[string]struct{})
+	s.logicalByRequest = make(map[string]map[string]struct{})
 	s.inflightByLine = make(map[observationRemoteInflightKey]uint64)
 	s.writeEpoch = make(map[observationRemoteLineKey]uint64)
 	s.uniqueLines = make(map[observationRemoteLineKey]struct{})
@@ -452,8 +463,10 @@ func StartRemoteRequest(start ObservationRemoteRequestStart) {
 		writeEpoch: epoch, sameLineInflightAtArrival: inflight,
 		lineKey: lineKey, inflightKey: inflightKey,
 		tracksReadInflight: tracksReadInflight,
+		linkedRequestIDs:   make(map[string]struct{}),
 	}
 	s.active[req.id] = req
+	s.linkLogicalRequestLocked(req.id, req.id)
 	if uint64(len(s.active)) > s.validation.maxActiveRequests {
 		s.validation.maxActiveRequests = uint64(len(s.active))
 	}
@@ -522,6 +535,7 @@ func IssueRemoteRequest(issue ObservationRemoteRequestIssue) {
 	req.issuePS = observationRemotePS(issue.IssueTime)
 	req.forwardWireID = issue.ForwardWireID
 	req.forwardTrafficBytes = issue.ForwardTrafficBytes
+	s.linkLogicalRequestLocked(req.id, issue.ForwardWireID)
 	s.seeTimeLocked(req.issuePS)
 	if req.issuePS < req.arrivalPS {
 		req.timeRegression = true
@@ -581,12 +595,14 @@ func CompleteRemoteRequest(completion ObservationRemoteRequestCompletion) {
 		req.timeRegression = true
 	}
 	s.completedIDs[req.id] = struct{}{}
+	s.releaseLogicalLinksLocked(req)
 	if !req.selected {
 		return
 	}
 
 	s.summary.completed++
 	s.summary.returnTrafficBytes += completion.ReturnTrafficBytes
+	s.accountOwnerPathLocked(req)
 	if !req.timeRegression {
 		s.summary.latencyCount++
 		s.summary.queueWaitSumPS += req.issuePS - req.arrivalPS
@@ -595,6 +611,118 @@ func CompleteRemoteRequest(completion ObservationRemoteRequestCompletion) {
 	}
 	s.writeRemoteRowLocked(req, "complete", true, completionPS,
 		completion.ReturnWireID, completion.ReturnTrafficBytes)
+}
+
+// linkObservationRemoteRequest propagates the logical requester-side remote
+// operation through cloned wire, owner-RDMA, owner-L2, and DRAM messages.  The
+// mapping is observation-only and supports one physical request serving more
+// than one logical request after coalescing.
+func linkObservationRemoteRequest(parentID, requestID string) {
+	if !observationRemoteActive.Load() || parentID == "" || requestID == "" {
+		return
+	}
+	s := globalObservationRemoteStats
+	s.Lock()
+	defer s.Unlock()
+	if !s.enabled {
+		return
+	}
+	logicalIDs := s.logicalByRequest[parentID]
+	for logicalID := range logicalIDs {
+		s.linkLogicalRequestLocked(logicalID, requestID)
+	}
+}
+
+func (s *observationRemoteStats) linkLogicalRequestLocked(
+	logicalID, requestID string,
+) {
+	if logicalID == "" || requestID == "" {
+		return
+	}
+	req := s.active[logicalID]
+	if req == nil {
+		return
+	}
+	logicalIDs := s.logicalByRequest[requestID]
+	if logicalIDs == nil {
+		logicalIDs = make(map[string]struct{})
+		s.logicalByRequest[requestID] = logicalIDs
+	}
+	logicalIDs[logicalID] = struct{}{}
+	req.linkedRequestIDs[requestID] = struct{}{}
+}
+
+func (s *observationRemoteStats) releaseLogicalLinksLocked(
+	req *observationRemoteRequest,
+) {
+	if req == nil {
+		return
+	}
+	for requestID := range req.linkedRequestIDs {
+		logicalIDs := s.logicalByRequest[requestID]
+		delete(logicalIDs, req.id)
+		if len(logicalIDs) == 0 {
+			delete(s.logicalByRequest, requestID)
+		}
+	}
+}
+
+func markObservationRemoteL2Result(requestID, result string) {
+	if !observationRemoteActive.Load() || requestID == "" || result == "" {
+		return
+	}
+	s := globalObservationRemoteStats
+	s.Lock()
+	defer s.Unlock()
+	for logicalID := range s.logicalByRequest[requestID] {
+		req := s.active[logicalID]
+		if req == nil {
+			continue
+		}
+		if req.ownerL2Result != "" && req.ownerL2Result != result {
+			if req.selected {
+				s.validation.ownerL2ResultConflicts++
+			}
+			continue
+		}
+		req.ownerL2Result = result
+	}
+}
+
+func markObservationRemoteHBMAccess(requestID string) {
+	if !observationRemoteActive.Load() || requestID == "" {
+		return
+	}
+	s := globalObservationRemoteStats
+	s.Lock()
+	defer s.Unlock()
+	for logicalID := range s.logicalByRequest[requestID] {
+		if req := s.active[logicalID]; req != nil {
+			req.ownerHBMAccess = true
+		}
+	}
+}
+
+func (s *observationRemoteStats) accountOwnerPathLocked(
+	req *observationRemoteRequest,
+) {
+	if req == nil || !observationRemoteIsRead(req.op) ||
+		observationRemoteIsWrite(req.op) {
+		return
+	}
+	switch req.ownerL2Result {
+	case "read-hit":
+		s.summary.ownerL2ReadHits++
+	case "read-miss":
+		s.summary.ownerL2ReadMisses++
+	case "read-mshr-hit":
+		s.summary.ownerL2MSHRHits++
+	default:
+		s.validation.missingOwnerL2ReadResults++
+	}
+	if req.ownerHBMAccess {
+		s.summary.ownerHBMAccesses++
+	}
 }
 
 // RecordObservationL2Sample streams one instantaneous L2 utilization sample.
@@ -700,6 +828,7 @@ func DumpObservationRemoteTrace() error {
 		}
 	}
 	s.active = make(map[string]*observationRemoteRequest)
+	s.logicalByRequest = make(map[string]map[string]struct{})
 
 	rawErr := s.closeRawLocked()
 	summaryErr := s.writeSummaryLocked()
@@ -708,6 +837,7 @@ func DumpObservationRemoteTrace() error {
 	s.enabled = false
 	s.active = make(map[string]*observationRemoteRequest)
 	s.completedIDs = make(map[string]struct{})
+	s.logicalByRequest = make(map[string]map[string]struct{})
 	s.inflightByLine = make(map[observationRemoteInflightKey]uint64)
 	s.writeEpoch = make(map[observationRemoteLineKey]uint64)
 	s.uniqueLines = make(map[observationRemoteLineKey]struct{})
@@ -762,6 +892,8 @@ func (s *observationRemoteStats) writeRemoteRowLocked(
 		strconv.FormatUint(returnTrafficBytes, 10),
 		strconv.FormatUint(req.forwardTrafficBytes+returnTrafficBytes, 10),
 		strconv.FormatBool(req.timeRegression),
+		req.ownerL2Result,
+		strconv.FormatBool(req.ownerHBMAccess),
 	}
 	if err := s.remoteCSV.Write(row); err != nil {
 		s.recordWriterErrorLocked(err)
@@ -834,6 +966,10 @@ func (s *observationRemoteStats) writeSummaryLocked() error {
 	add("total_traffic_bytes",
 		s.summary.forwardTrafficBytes+s.summary.returnTrafficBytes)
 	add("same_line_inflight_arrivals", s.summary.sameLineInflightHits)
+	add("owner_l2_read_hits", s.summary.ownerL2ReadHits)
+	add("owner_l2_read_misses", s.summary.ownerL2ReadMisses)
+	add("owner_l2_mshr_hits", s.summary.ownerL2MSHRHits)
+	add("owner_hbm_accesses", s.summary.ownerHBMAccesses)
 	add("valid_hop_requests", s.summary.validHopCount)
 	add("hop_sum", s.summary.hopSum)
 	add("latency_samples", s.summary.latencyCount)
@@ -883,6 +1019,8 @@ func (s *observationRemoteStats) writeValidationLocked() error {
 		{"l2_sample_calls", s.validation.l2SampleCalls, false},
 		{"l2_samples_dropped", s.validation.l2SamplesDropped, false},
 		{"l2_invalid_samples", s.validation.l2InvalidSamples, true},
+		{"missing_owner_l2_read_results", s.validation.missingOwnerL2ReadResults, true},
+		{"owner_l2_result_conflicts", s.validation.ownerL2ResultConflicts, true},
 		{"writer_errors", s.validation.writerErrors, true},
 	}
 	rows := [][]string{{"metric", "value", "status"}}
@@ -908,7 +1046,8 @@ func observationRemoteHeader() []string {
 			"manhattan_hops,arrival_ps,issue_ps,completion_ps,queue_wait_ps,"+
 			"service_ps,total_ps,write_epoch,same_line_inflight_at_arrival,"+
 			"forward_wire_id,forward_traffic_bytes,return_wire_id,"+
-			"return_traffic_bytes,total_traffic_bytes,time_regression", ",")
+			"return_traffic_bytes,total_traffic_bytes,time_regression,"+
+			"owner_l2_result,owner_hbm_access", ",")
 }
 
 func observationL2Header() []string {

@@ -5,6 +5,7 @@ import (
 	"log"
 	"reflect"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
@@ -37,6 +38,8 @@ type Comp struct {
 	localModules             mem.LowModuleFinder
 	RemoteRDMAAddressTable   mem.LowModuleFinder
 	remoteCacheModules       mem.LowModuleFinder
+	requestFilters           []*writeback.TypedCuckooFilter
+	requestFilterInterleave  uint64
 	pipelineWidth            int
 	pipelineLatency          int
 	maxOutstanding           int
@@ -49,24 +52,35 @@ type Comp struct {
 	transactionsFromOutside []transaction
 	transactionsFromInside  []transaction
 
-	remoteConfig           RemoteDataPathConfig
-	remoteBatches          map[remoteBatchKey]*remoteBatch
-	remoteBatchOrder       []remoteBatchKey
-	remoteLines            map[remoteLineKey]*remoteLineEntry
-	remoteProbes           map[string]*remoteProbe
-	remotePendingBatch     []*remoteLineEntry
-	remoteSingleInflight   map[string]*remoteLineEntry
-	remoteBitmapInflight   map[string]*remoteBatch
-	remoteFillInflight     map[string]*remoteLineEntry
-	remoteReady            []*remoteLineEntry
-	remoteEpochs           map[remoteLineIdentity]uint64
-	remoteUncacheable      map[remoteLineIdentity]bool
-	remoteReuse            *remoteReuseTable
-	remoteOutstandingReads int
-	remoteOwnerPendingReq  []*remoteOwnerSubReq
-	remoteOwnerSubReqs     map[string]*remoteOwnerSubReq
-	remoteOwnerPendingRsp  []*BitmapReadRsp
-	RemoteDataPathStats    RemoteDataPathStats
+	remoteConfig             RemoteDataPathConfig
+	remoteBatches            map[remoteBatchKey]*remoteBatch
+	remoteBatchOrder         []remoteBatchKey
+	remoteLines              map[remoteLineKey]*remoteLineEntry
+	remoteFilterLookups      map[string]writeback.TypedFilterLookup
+	remoteHintResults        map[string]bool
+	remotePrefetcher         *writeback.DemandStridePredictor
+	remotePrefetchCandidates map[string]*remotePrefetchCandidate
+	remotePrefetchObserved   map[string]bool
+	remotePatternFilters     map[writeback.TypedFilterKey]*writeback.TypedCuckooFilter
+	// A capacity-blocked ToL1 head cannot be overtaken on the same port.
+	// Cache its negative filter result across retries to avoid repeating
+	// simulator-only hash work without changing modeled admission or timing.
+	remoteBlockedNegativeReqID string
+	remoteBlockedNegativeKey   remoteLineKey
+	remoteProbes               map[string]*remoteProbe
+	remotePendingBatch         []*remoteLineEntry
+	remoteSingleInflight       map[string]*remoteLineEntry
+	remoteBitmapInflight       map[string]*remoteBatch
+	remoteFillInflight         map[string]*remoteLineEntry
+	remoteReady                []*remoteLineEntry
+	remoteEpochs               map[remoteLineIdentity]uint64
+	remoteUncacheable          map[remoteLineIdentity]bool
+	remoteOutstandingReads     int
+	remoteOwnerPendingReq      []*remoteOwnerSubReq
+	remoteOwnerSubReqs         map[string]*remoteOwnerSubReq
+	remoteOwnerPendingRsp      []*remoteOwnerBatch
+	remoteOwnerBatches         map[string]*remoteOwnerBatch
+	RemoteDataPathStats        RemoteDataPathStats
 
 	firstSeenFromL1Req      map[string]sim.VTimeInSec
 	firstSeenFromOutsideReq map[string]sim.VTimeInSec
@@ -85,6 +99,16 @@ func (c *Comp) SetRemoteCacheModuleFinder(lmf mem.LowModuleFinder) {
 	c.remoteCacheModules = lmf
 }
 
+// SetRequestFilters connects RDMA metadata accesses to the existing
+// requester-L2 slices. It does not allocate a per-RDMA filter.
+func (c *Comp) SetRequestFilters(
+	filters []*writeback.TypedCuckooFilter,
+	interleaving uint64,
+) {
+	c.requestFilters = filters
+	c.requestFilterInterleave = interleaving
+}
+
 // Tick checks if make progress
 func (c *Comp) Tick(now sim.VTimeInSec) bool {
 	madeProgress := false
@@ -95,12 +119,44 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 	}
 	if c.remoteConfig.Enabled || len(c.remoteOwnerPendingReq) > 0 ||
 		len(c.remoteOwnerPendingRsp) > 0 {
+		readyProgress := 0
 		madeProgress = c.runPipelineWidth(
-			func() bool { return c.processRemoteReady(now) }) || madeProgress
+			func() bool {
+				progress := c.processRemoteReady(now)
+				if progress {
+					readyProgress++
+				}
+				return progress
+			}) || madeProgress
+		if readyProgress >= c.effectivePipelineWidth() && len(c.remoteReady) > 0 {
+			c.RemoteDataPathStats.ResponseFanoutWidthStalls++
+		}
+		ownerReqProgress := 0
 		madeProgress = c.runPipelineWidth(
-			func() bool { return c.processRemoteOwnerPendingReqs(now) }) || madeProgress
+			func() bool {
+				progress := c.processRemoteOwnerPendingReqs(now)
+				if progress {
+					ownerReqProgress++
+				}
+				return progress
+			}) || madeProgress
+		if ownerReqProgress >= c.effectivePipelineWidth() &&
+			len(c.remoteOwnerPendingReq) > 0 {
+			c.RemoteDataPathStats.OwnerIssueWidthStalls++
+		}
+		ownerRspProgress := 0
 		madeProgress = c.runPipelineWidth(
-			func() bool { return c.processRemoteOwnerPendingRsps(now) }) || madeProgress
+			func() bool {
+				progress := c.processRemoteOwnerPendingRsps(now)
+				if progress {
+					ownerRspProgress++
+				}
+				return progress
+			}) || madeProgress
+		if ownerRspProgress >= c.effectivePipelineWidth() &&
+			len(c.remoteOwnerPendingRsp) > 0 {
+			c.RemoteDataPathStats.OwnerResponseWidthStalls++
+		}
 	}
 	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
@@ -150,7 +206,18 @@ func (c *Comp) pipelineReady(now sim.VTimeInSec, msg sim.Msg) bool {
 }
 
 func (c *Comp) requesterOutstandingCount() int {
-	return len(c.transactionsFromInside) + len(c.remoteLines)
+	// A bitmap packet is one RDMA transaction descriptor even though the
+	// bounded coalescing table retains line-level dedup/fanout state. Keeping
+	// those resources separate lets batching reduce network tracking pressure
+	// without discarding per-line correctness state.
+	if c.remoteConfig.Enabled && c.remoteConfig.DisableBatching {
+		// Without M2 batching, preserve the original one-line/one-outstanding
+		// semantics across probe, network, response, and fanout states. This
+		// prevents M3-only from inheriting M2's packet compression.
+		return len(c.transactionsFromInside) + len(c.remoteLines)
+	}
+	return len(c.transactionsFromInside) +
+		len(c.remoteSingleInflight) + len(c.remoteBitmapInflight)
 }
 
 func (c *Comp) ownerOutstandingCount() int {
@@ -292,6 +359,12 @@ func (c *Comp) processFromL1(now sim.VTimeInSec) bool {
 		if req == nil {
 			return madeProgress
 		}
+		// The typed metadata lookup is part of the fixed requester-RDMA
+		// pipeline, not an extra serial stage after it. Starting tickets while
+		// the head request traverses that pipeline preserves the configured
+		// lookup latency and shared per-slice port contention without charging
+		// an artificial extra cycle when the pipeline already hides it.
+		c.primeRemoteMetadata(now, req)
 		if !c.pipelineReady(now, req) {
 			// Keep ticking until the head request completes its fixed-latency
 			// RDMA pipeline traversal.
@@ -416,6 +489,14 @@ func (c *Comp) processReqFromL1(
 	if dst == c.ToOutside {
 		panic("RDMA loop back detected")
 	}
+	if !previouslySeen {
+		switch req.(type) {
+		case *mem.ReadReq:
+			c.RemoteDataPathStats.ObservedRemoteReads++
+		case *mem.WriteReq:
+			c.RemoteDataPathStats.ObservedRemoteWrites++
+		}
+	}
 	if !previouslySeen && memtrace.ObservationRemoteTraceEnabled() {
 		// Admission is recorded on the first processing attempt rather than
 		// after a successful output send. Output backpressure can therefore
@@ -530,7 +611,6 @@ func (c *Comp) processReqFromOutside(
 	cloned.Meta().Src = c.ToL2
 	cloned.Meta().Dst = dst
 	cloned.Meta().SendTime = now
-
 	err := c.ToL2.Send(cloned)
 	if err == nil {
 		memtrace.ObservationTransitionByRequest(
@@ -810,6 +890,7 @@ func (c *Comp) cloneReq(origin mem.AccessReq) mem.AccessReq {
 			WithAddress(origin.Address).
 			WithByteSize(origin.AccessByteSize).
 			WithPID(origin.PID).
+			WithStreamID(origin.StreamID).
 			WithInfo(origin.Info).
 			Build()
 		read.CanWaitForCoalesce = origin.CanWaitForCoalesce

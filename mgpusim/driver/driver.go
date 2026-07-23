@@ -469,7 +469,6 @@ func (d *Driver) distributeWGToGPUs(
 		panic("not all wg allocated")
 	}
 
-	// fmt.Sprintln("total WG: %d WG Per CU %d\n", totalWGCount, wgPerCU)
 	fmt.Printf("total WG: %d WG Per CU %d\n", totalWGCount, wgPerCU)
 	fmt.Printf(
 		"total WF: %d WF Per WG %d WG Size %d WF Per CU %.2f WF Per GPU %.2f Active GPUs %d\n",

@@ -50,6 +50,11 @@ var _ = Describe("MemController", func() {
 	})
 
 	Context("parse top", func() {
+		It("should expose paired-read queue admission without mutating state", func() {
+			subTransactionQueue.EXPECT().CanPush(2).Return(true)
+			Expect(memCtrl.CanAcceptPhysicalAccesses(2)).To(BeTrue())
+		})
+
 		It("should do nothing if no message", func() {
 			topPort.EXPECT().Peek().Return(nil)
 
@@ -102,6 +107,107 @@ var _ = Describe("MemController", func() {
 
 			Expect(madeProgress).To(BeTrue())
 			Expect(memCtrl.inflightTransactions).To(HaveLen(1))
+			stats := memCtrl.GetPhysicalAccessStats()
+			Expect(stats.ReadAccesses).To(Equal(uint64(3)))
+			Expect(stats.WriteAccesses).To(BeZero())
+			Expect(stats.FrontEndReadRequests).To(Equal(uint64(1)))
+			Expect(stats.FrontEndReadBytes).To(Equal(read.AccessByteSize))
+		})
+
+		It("should keep two 64-byte reads as independent transactions", func() {
+			first := mem.ReadReqBuilder{}.
+				WithAddress(0x1000).
+				WithByteSize(64).
+				Build()
+			second := mem.ReadReqBuilder{}.
+				WithAddress(0x1040).
+				WithByteSize(64).
+				Build()
+
+			topPort.EXPECT().Peek().Return(first)
+			topPort.EXPECT().Retrieve(gomock.Any()).Return(first)
+			addrConverter.EXPECT().ConvertExternalToInternal(uint64(0x1000)).
+				Return(uint64(0x100))
+			subTransSplitter.EXPECT().Split(gomock.Any()).Do(
+				func(t *signal.Transaction) {
+					t.SubTransactions = []*signal.SubTransaction{{
+						ID: "first-read", Transaction: t, Address: 0x1000,
+					}}
+				},
+			)
+			subTransactionQueue.EXPECT().CanPush(1).Return(true)
+			subTransactionQueue.EXPECT().Push(gomock.Any())
+			Expect(memCtrl.parseTop(10)).To(BeTrue())
+
+			topPort.EXPECT().Peek().Return(second)
+			topPort.EXPECT().Retrieve(gomock.Any()).Return(second)
+			addrConverter.EXPECT().ConvertExternalToInternal(uint64(0x1040)).
+				Return(uint64(0x140))
+			subTransSplitter.EXPECT().Split(gomock.Any()).Do(
+				func(t *signal.Transaction) {
+					t.SubTransactions = []*signal.SubTransaction{{
+						ID: "second-read", Transaction: t, Address: 0x1000,
+					}}
+				},
+			)
+			subTransactionQueue.EXPECT().CanPush(1).Return(true)
+			subTransactionQueue.EXPECT().Push(gomock.Any())
+			Expect(memCtrl.parseTop(11)).To(BeTrue())
+
+			Expect(memCtrl.inflightTransactions).To(HaveLen(2))
+			Expect(memCtrl.GetPhysicalAccessStats().ReadAccesses).
+				To(Equal(uint64(2)))
+			stats := memCtrl.GetPhysicalAccessStats()
+			Expect(stats.FrontEndReadRequests).To(Equal(uint64(2)))
+			Expect(stats.FrontEndReadBytes).To(Equal(uint64(128)))
+		})
+
+		It("should count one paired descriptor as two independent 64-byte reads", func() {
+			demand := mem.ReadReqBuilder{}.
+				WithAddress(0x1000).
+				WithByteSize(64).
+				WithPairedRead("pair-1", mem.PairedReadDemand).
+				Build()
+			sibling := mem.ReadReqBuilder{}.
+				WithAddress(0x1040).
+				WithByteSize(64).
+				WithPairedRead("pair-1", mem.PairedReadSibling).
+				Build()
+			descriptor := mem.PairedReadReqBuilder{}.
+				WithReads(demand, sibling).
+				Build()
+			topPort.EXPECT().Peek().Return(descriptor)
+			topPort.EXPECT().Retrieve(gomock.Any()).Return(descriptor)
+			addrConverter.EXPECT().ConvertExternalToInternal(uint64(0x1000)).
+				Return(uint64(0x100))
+			subTransSplitter.EXPECT().Split(gomock.Any()).Do(
+				func(t *signal.Transaction) {
+					t.SubTransactions = []*signal.SubTransaction{{
+						ID: "paired-demand", Transaction: t, Address: 0x1000,
+					}}
+				},
+			)
+			addrConverter.EXPECT().ConvertExternalToInternal(uint64(0x1040)).
+				Return(uint64(0x140))
+			subTransSplitter.EXPECT().Split(gomock.Any()).Do(
+				func(t *signal.Transaction) {
+					t.SubTransactions = []*signal.SubTransaction{{
+						ID: "paired-sibling", Transaction: t, Address: 0x1040,
+					}}
+				},
+			)
+			subTransactionQueue.EXPECT().CanPush(2).Return(true)
+			subTransactionQueue.EXPECT().Push(gomock.Any()).Times(2)
+			Expect(memCtrl.parseTop(10)).To(BeTrue())
+
+			stats := memCtrl.GetPhysicalAccessStats()
+			Expect(stats.FrontEndReadRequests).To(Equal(uint64(2)))
+			Expect(stats.FrontEndReadBytes).To(Equal(uint64(128)))
+			Expect(stats.ReadAccesses).To(Equal(uint64(2)))
+			Expect(stats.PairedReadDescriptors).To(Equal(uint64(1)))
+			Expect(stats.PairedReadMembers).To(Equal(uint64(2)))
+			Expect(stats.PairedDemandMembers).To(Equal(uint64(1)))
+			Expect(stats.PairedSiblingMembers).To(Equal(uint64(1)))
 		})
 
 	})
@@ -210,6 +316,42 @@ var _ = Describe("MemController", func() {
 
 			Expect(madeProgress).To(BeTrue())
 			Expect(memCtrl.inflightTransactions).NotTo(ContainElement(trans))
+		})
+
+		It("should return a completed paired demand without waiting for sibling", func() {
+			storage.Write(0x40, []byte{1, 2, 3, 4})
+			demand := mem.ReadReqBuilder{}.
+				WithAddress(0x40).
+				WithByteSize(4).
+				WithPairedRead("pair", mem.PairedReadDemand).
+				Build()
+			sibling := mem.ReadReqBuilder{}.
+				WithAddress(0x80).
+				WithByteSize(4).
+				WithPairedRead("pair", mem.PairedReadSibling).
+				Build()
+			demandTrans := &signal.Transaction{
+				InternalAddress: 0x40, Read: demand,
+			}
+			demandTrans.SubTransactions = []*signal.SubTransaction{{
+				Transaction: demandTrans, Completed: true,
+			}}
+			siblingTrans := &signal.Transaction{
+				InternalAddress: 0x80, Read: sibling,
+			}
+			siblingTrans.SubTransactions = []*signal.SubTransaction{{
+				Transaction: siblingTrans, Completed: false,
+			}}
+			memCtrl.inflightTransactions = []*signal.Transaction{
+				demandTrans, siblingTrans,
+			}
+
+			topPort.EXPECT().Send(gomock.Any()).Do(func(rsp *mem.DataReadyRsp) {
+				Expect(rsp.RespondTo).To(Equal(demand.ID))
+			}).Return(nil)
+
+			Expect(memCtrl.respond(10)).To(BeTrue())
+			Expect(memCtrl.inflightTransactions).To(ConsistOf(siblingTrans))
 		})
 	})
 })

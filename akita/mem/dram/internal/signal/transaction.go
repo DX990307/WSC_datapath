@@ -50,3 +50,15 @@ func (t *Transaction) IsCompleted() bool {
 
 	return true
 }
+
+// ArePairedReadPeers reports whether two independent transactions are the
+// demand and sibling members of the same non-empty logical pair.
+func ArePairedReadPeers(a, b *Transaction) bool {
+	if a == nil || b == nil || a.Read == nil || b.Read == nil ||
+		a.Read.PairedReadID == "" ||
+		a.Read.PairedReadID != b.Read.PairedReadID ||
+		a.Read.PairedReadPart == b.Read.PairedReadPart {
+		return false
+	}
+	return a.Read.AccessByteSize == 64 && b.Read.AccessByteSize == 64
+}

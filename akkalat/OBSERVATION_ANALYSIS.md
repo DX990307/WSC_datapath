@@ -15,6 +15,7 @@ characterization data cannot silently mix configurations.
 python3 akkalat/runall2.py \
   --trace-observation \
   --benchmarks=traditional \
+  --max-wg=78600 \
   --max-workers=8 \
   --disable-servers \
   --trace-observation-warmup-accesses=100000 \
@@ -37,6 +38,7 @@ python3 akkalat/runall2.py \
   --remote-ablation \
   --trace-observation \
   --benchmarks=traditional \
+  --max-wg=78600 \
   --max-workers=8 \
   --disable-servers
 ```
@@ -63,7 +65,7 @@ Each experiment emits:
 - `*_observation_dram_physical.csv.gz`: bounded real DRAM lifecycle events;
 - `*_observation_dram_locality.csv`: online O3 locality CDFs;
 - `*_observation_remote_requests.csv.gz`: baseline logical remote requests;
-- `*_observation_l2_utilization.csv.gz`: bounded access-weighted L2 snapshots;
+- `*_observation_l2_utilization.csv.gz`: bounded timestamped L2 snapshots;
 - `*_observation_validation.csv` and
   `*_observation_remote_validation.csv`: emitter/instrumentation invariants;
 - path/remote summary CSVs.
@@ -74,9 +76,9 @@ transitions, so every completed row must satisfy
 MSHR followers point to their leader and own only their wait interval; they do
 not duplicate the leader's DRAM or network work.
 
-The L2 snapshots are sampled on the first accepted request in each slice and
-every 256 accepted requests thereafter. Therefore O6 must describe them as
-*access-weighted headroom*, not uniform-time occupancy.
+The L2 snapshots are sampled on the first accepted request in each L2
+partition and every 256 accepted requests thereafter. The analyzer reports
+both the raw sample distribution and a timestamp-weighted step-hold estimate.
 
 ## Analyze results
 
@@ -122,6 +124,11 @@ The generated files are:
   benchmark, route, source, and path class, with exact mean/p50/p95 values and
   each stage's fraction of group latency. Its analysis unit is one
   post-coalescing L1 cache-line transaction (shown explicitly in the CSV).
+- `o1_component_latency_breakdown.csv`: the coarse L1, L2, HBM, requester
+  RDMA, owner RDMA, and remote-communication breakdown used by O1. MSHR wait
+  is explicitly excluded.
+- `o1_l2_demand_read_miss_rate.csv`: local- or owner-L2 read hits, tag misses,
+  and MSHR hits for completed leader demand reads.
 - `o1_validation.csv`: accounting and event-integrity checks. The default mode
   stops if `total_ps != accounted_ps`, `residual_ps != 0`, stage sums differ,
   a demand read is incomplete, or duplicate/regressing events exist.
@@ -129,6 +136,9 @@ The generated files are:
   half of the same aligned 128-B access unit, within the same requester L1.
   Only local, DRAM-bound L2 read misses are included by default. Identical
   `(requester, line, event time)` records are removed.
+- `o2_adjacent_line_window_heatmap.csv` and its long-form companion: disjoint
+  timing buckets designed to show all fourteen workloads without overlaying
+  fourteen CDF curves.
 - `o2_validation.csv`: selection counts, missing timing boundaries, and exact
   duplicates removed.
 - `o3_physical_locality_cdf.csv`: merged physical-DRAM relation CDFs using the
@@ -137,6 +147,9 @@ The generated files are:
   relation-by-window heatmap.
 - `o4_remote_amplification.csv`: logical bytes versus forward/return network
   bytes, Manhattan hops, byte-hops, and remote latency percentiles.
+- `o4_remote_work_before_owner_mshr.csv`: requester-side duplicate opportunity,
+  network requests, owner-L2 results, owner MSHR merges, and owner-HBM accesses.
+  This separates work already paid before an owner MSHR can merge a request.
 - `o5_exact_inflight_dedup.csv`: requester-local reads that arrived while a
   matching same-line read from the current write epoch was already active;
   this count is captured at RDMA admission, independently of later issue
@@ -147,8 +160,8 @@ The generated files are:
 - `o6_remote_reuse_summary.csv`, `o6_remote_reuse_frequency.csv`, and
   `o6_remote_reuse_heavy_hitters.csv`: reuse after separating PID, requester,
   owner, cacheline, and write epoch.
-- `o6_l2_headroom.csv`: access-weighted occupancy/free-space and MSHR
-  mean/p50/p95 plus the fraction of samples below 50% occupancy.
+- `o6_l2_headroom.csv`: sample and time-weighted occupancy/free-space, MSHR
+  mean/p50/p95, and the fraction below 50% occupancy.
 - `o4_o5_o6_validation.csv`: remote timestamp/byte accounting and L2 snapshot
   checks.
 - `emitter_instrumentation_validation.csv`: every invariant/status reported by

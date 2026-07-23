@@ -145,9 +145,74 @@ func TestObservationRemoteTraceStreamsLogicalRequests(t *testing.T) {
 	}
 
 	if len(globalObservationRemoteStats.active) != 0 ||
+		len(globalObservationRemoteStats.logicalByRequest) != 0 ||
 		len(globalObservationRemoteStats.inflightByLine) != 0 ||
 		len(globalObservationRemoteStats.writeEpoch) != 0 {
 		t.Fatal("dump did not release observation state")
+	}
+}
+
+func TestObservationRemoteTraceAttributesOwnerL2AndHBM(t *testing.T) {
+	prefix := filepath.Join(t.TempDir(), "owner-path")
+	if err := EnableObservationRemoteTrace(ObservationRemoteConfig{
+		Prefix: prefix, MaxRequests: 2, L2SampleMax: 1, TileWidth: 4,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for index, result := range []string{"read-miss", "read-mshr-hit"} {
+		logicalID := []string{"logical-miss", "logical-mshr"}[index]
+		wireID := []string{"wire-miss", "wire-mshr"}[index]
+		ownerID := []string{"owner-miss", "owner-mshr"}[index]
+		StartRemoteRequest(ObservationRemoteRequestStart{
+			LogicalRequestID: logicalID, PID: 3, Operation: "read",
+			Address: uint64(0x8000 + index*0x40), ByteSize: 64,
+			RequesterName: "GPU[0].RDMA", OwnerName: "GPU[1].RDMA",
+			ArrivalTime: remoteTestNS(float64(index + 1)),
+		})
+		IssueRemoteRequest(ObservationRemoteRequestIssue{
+			LogicalRequestID: logicalID,
+			IssueTime:        remoteTestNS(float64(index + 2)),
+			ForwardWireID:    wireID,
+		})
+		LinkObservationRequestFromRequest(wireID, ownerID, "owner_l2_request")
+		MarkObservationL2Result(ownerID, "GPU[1].L2", result)
+		if result == "read-miss" {
+			dramID := "dram-miss"
+			LinkObservationRequestFromRequest(ownerID, dramID, "l2_dram_read")
+			MarkObservationSource(dramID, "dram", "GPU[1].DRAM")
+		}
+		CompleteRemoteRequest(ObservationRemoteRequestCompletion{
+			LogicalRequestID: logicalID,
+			CompletionTime:   remoteTestNS(float64(index + 10)),
+		})
+	}
+
+	if err := DumpObservationRemoteTrace(); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRemoteGZIP(t, prefix+"_remote_requests.csv.gz")
+	byID := make(map[string]map[string]string)
+	for _, values := range rows[1:] {
+		row := remoteCSVMap(rows[0], values)
+		byID[row["logical_request_id"]] = row
+	}
+	if byID["logical-miss"]["owner_l2_result"] != "read-miss" ||
+		byID["logical-miss"]["owner_hbm_access"] != "true" ||
+		byID["logical-mshr"]["owner_l2_result"] != "read-mshr-hit" ||
+		byID["logical-mshr"]["owner_hbm_access"] != "false" {
+		t.Fatalf("owner-path attribution is incomplete: %#v", byID)
+	}
+	summary := remoteMetricFile(t, prefix+"_remote_summary.csv")
+	if summary["owner_l2_read_misses"] != "1" ||
+		summary["owner_l2_mshr_hits"] != "1" ||
+		summary["owner_hbm_accesses"] != "1" {
+		t.Fatalf("owner-path summary is wrong: %#v", summary)
+	}
+	validation := remoteMetricFile(t, prefix+"_remote_validation.csv")
+	if validation["missing_owner_l2_read_results"] != "0" ||
+		validation["owner_l2_result_conflicts"] != "0" {
+		t.Fatalf("owner-path validation failed: %#v", validation)
 	}
 }
 

@@ -186,6 +186,10 @@ var _ = Describe("Directory", func() {
 				WithAddress(0x104).
 				WithPID(1).
 				WithByteSize(4).
+				WithStreamID(0x111).
+				WithLocalStreamID(0x222).
+				WithLocalPairHint(true).
+				CanWaitForCoalesce().
 				Build()
 			trans = &transaction{
 				read: read,
@@ -208,6 +212,10 @@ var _ = Describe("Directory", func() {
 				Expect(read.Address).To(Equal(uint64(0x100)))
 				Expect(read.AccessByteSize).To(Equal(uint64(64)))
 				Expect(read.PID).To(Equal(vm.PID(1)))
+				Expect(read.StreamID).To(Equal(uint64(0x111)))
+				Expect(read.LocalStreamID).To(Equal(uint64(0x222)))
+				Expect(read.LocalPairHint).To(BeTrue())
+				Expect(read.CanWaitForCoalesce).To(BeFalse())
 			})
 			mshr.EXPECT().IsFull().Return(false)
 			mshr.EXPECT().Add(vm.PID(1), uint64(0x100)).Return(mshrEntry)

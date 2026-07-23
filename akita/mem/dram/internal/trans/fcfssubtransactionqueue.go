@@ -46,6 +46,24 @@ func (q *FCFSSubTransactionQueue) Tick(now sim.VTimeInSec) bool {
 	for i, subTrans := range q.Queue {
 		cmd := q.CmdCreator.Create(subTrans)
 		cmd.EnqueuedAt = now
+		if i+1 < len(q.Queue) &&
+			signal.ArePairedReadPeers(
+				subTrans.Transaction, q.Queue[i+1].Transaction) {
+			peerCmd := q.CmdCreator.Create(q.Queue[i+1])
+			peerCmd.EnqueuedAt = now
+			if batch, ok := q.CmdQueue.(interface {
+				CanAcceptAll([]*signal.Command) bool
+				AcceptAll([]*signal.Command)
+			}); ok && batch.CanAcceptAll([]*signal.Command{cmd, peerCmd}) {
+				batch.AcceptAll([]*signal.Command{cmd, peerCmd})
+				if q.CommandEnqueued != nil {
+					q.CommandEnqueued(now, cmd)
+					q.CommandEnqueued(now, peerCmd)
+				}
+				q.Queue = append(q.Queue[:i], q.Queue[i+2:]...)
+				return true
+			}
+		}
 
 		if q.CmdQueue.CanAccept(cmd) {
 			q.CmdQueue.Accept(cmd)

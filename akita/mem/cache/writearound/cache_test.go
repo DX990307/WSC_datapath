@@ -51,7 +51,7 @@ var _ = Describe("Cache", func() {
 		mockCtrl.Finish()
 	})
 
-	FIt("should do read miss", func() {
+	It("should do read miss", func() {
 		dram.Storage.Write(0x100, []byte{1, 2, 3, 4})
 		read := mem.ReadReqBuilder{}.
 			WithSendTime(1).

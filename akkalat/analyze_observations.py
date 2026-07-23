@@ -32,7 +32,7 @@ import struct
 import sys
 import tempfile
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, Iterator, List, Mapping, MutableMapping, Optional
 from typing import Sequence, Tuple
@@ -62,6 +62,7 @@ NON_STAGE_PS_COLUMNS = {
 }
 
 DEFAULT_O2_WINDOWS_CYCLES = (0, 1, 2, 4, 8, 16, 32, 64)
+O2_ADAPTER_CAPACITIES = (4, 8, 16, 32, 64)
 
 # Filename parsing is unambiguous for observation runs because the simulator
 # only permits the baseline data path.  The longer names make the fallback
@@ -105,6 +106,11 @@ class O1Validation:
     completed_rows: int = 0
     demand_reads: int = 0
     incomplete_demand_reads: int = 0
+    full_path_reads: int = 0
+    mshr_follower_reads: int = 0
+    full_path_missing_source: int = 0
+    full_remote_missing_network: int = 0
+    full_local_owned_network: int = 0
     accounting_errors: int = 0
     stage_sum_errors: int = 0
     duplicate_event_rows: int = 0
@@ -119,7 +125,23 @@ class O1Validation:
             or self.stage_sum_errors
             or self.duplicate_event_rows
             or self.time_regression_rows
+            or self.full_path_missing_source
+            or self.full_remote_missing_network
+            or self.full_local_owned_network
         )
+
+
+@dataclass
+class O1L2ReadResult:
+    identity: TraceIdentity
+    route: str
+    source: str
+    demand_read_paths: int = 0
+    read_hits: int = 0
+    read_misses: int = 0
+    read_mshr_hits: int = 0
+    missing_results: int = 0
+    other_results: int = 0
 
 
 @dataclass(frozen=True)
@@ -131,12 +153,13 @@ class EmitterValidation:
     value: int
     emitter_status: str
     passed: bool
+    strict_scope_value: Optional[int] = None
 
 
 @dataclass(frozen=True)
 class O2Access:
     identity: TraceIdentity
-    requester: str
+    l2_scope: str
     line64: int
     event_ps: int
     route: str
@@ -147,10 +170,23 @@ class O2Distribution:
     identity: TraceIdentity
     total: int
     distance_counts_ps: Dict[int, int]
+    adapter_capacity: Dict[int, "O2AdapterCapacity"] = field(
+        default_factory=dict
+    )
 
     @property
     def matched_any_prior(self) -> int:
         return sum(self.distance_counts_ps.values())
+
+
+@dataclass
+class O2AdapterCapacity:
+    demands: int = 0
+    predictions: int = 0
+    hits: int = 0
+    evictions: int = 0
+    pending: int = 0
+    redundant_avoided: int = 0
 
 
 @dataclass
@@ -160,6 +196,7 @@ class O2Diagnostics:
     demand_reads: int = 0
     local_l2_miss_reads: int = 0
     missing_event: int = 0
+    missing_l2_slice: int = 0
     exact_duplicate_events_filtered: int = 0
 
 
@@ -238,6 +275,19 @@ def bool_field(row: Mapping[str, str], name: str) -> bool:
 def is_demand_read(row: Mapping[str, str]) -> bool:
     op = row.get("operation", "").strip().lower()
     return op == "read" or op.startswith("read_") or op == "load"
+
+
+def is_mshr_follower(row: Mapping[str, str]) -> bool:
+    """Return whether the logical request owns no complete lower path."""
+    return (
+        row.get("l1_role", "leader") == "mshr_follower"
+        or row.get("l2_role", "") == "mshr_follower"
+    )
+
+
+def is_full_physical_path(row: Mapping[str, str]) -> bool:
+    """Select requests used by the paper-facing O1 full-path analysis."""
+    return is_demand_read(row) and not is_mshr_follower(row)
 
 
 def parse_trace_identity(path: Path) -> TraceIdentity:
@@ -421,6 +471,8 @@ def classify_explicit_observation_file(path: Path) -> Optional[str]:
                 "accounted_ps",
                 "residual_ps",
                 "events",
+                "pid",
+                "component_path",
                 "duplicate_events",
                 "time_regressions",
             }
@@ -628,6 +680,7 @@ def write_emitter_validations(
                 "source_file",
                 "check",
                 "value",
+                "strict_scope_value",
                 "emitter_status",
                 "strict_pass",
             ]
@@ -648,6 +701,9 @@ def write_emitter_validations(
                     item.source_file,
                     item.check,
                     item.value,
+                    item.value
+                    if item.strict_scope_value is None
+                    else item.strict_scope_value,
                     item.emitter_status,
                     str(item.passed).lower(),
                 ]
@@ -664,6 +720,91 @@ def enforce_emitter_validations(rows: Sequence[EmitterValidation]) -> None:
         for item in failed
     )
     raise AnalysisError("emitter/instrumentation validation failed: " + details)
+
+
+def adjudicate_legacy_follower_checks(
+    rows: Sequence[EmitterValidation], path_files: Sequence[Path]
+) -> List[EmitterValidation]:
+    """Scope two legacy emitter counters to selected physical paths.
+
+    The first observation binary counted warmup rows and legitimate L1/L2
+    MSHR followers in ``missing_read_source``. It also let a local L2 follower
+    inherit a remote leader's route, causing ``remote_path_missing_network``.
+    Neither kind of follower owns a full lower-memory path, and the paper's O1
+    analysis explicitly excludes them. Preserve the raw emitter value, but
+    independently count violations among the selected, emitted physical paths
+    and use that count for strict acceptance. Every other emitter counter
+    remains authoritative without adjudication.
+    """
+    scoped_checks = {"missing_read_source", "remote_path_missing_network"}
+    needed_identities = {
+        item.identity
+        for item in rows
+        if item.emitter == "path"
+        and item.check in scoped_checks
+        and not item.passed
+    }
+    if not needed_identities:
+        return list(rows)
+
+    strict_counts: Dict[Tuple[TraceIdentity, str], int] = defaultdict(int)
+    for path in path_files:
+        identity = parse_trace_identity(path)
+        if identity not in needed_identities:
+            continue
+        with open_csv(path) as stream:
+            reader = csv.DictReader(stream)
+            required = {
+                "operation",
+                "status",
+                "l1_role",
+                "l2_role",
+                "source",
+                "remote",
+                "remote_request_network_ps",
+                "remote_response_network_ps",
+            }
+            missing = required - set(reader.fieldnames or [])
+            if missing:
+                raise AnalysisError(
+                    f"{path}: cannot adjudicate follower checks; missing "
+                    f"columns {sorted(missing)}"
+                )
+            for line_number, row in enumerate(reader, start=2):
+                if row.get("status") != "complete" or not is_full_physical_path(row):
+                    continue
+                if not row.get("source", "").strip():
+                    strict_counts[(identity, "missing_read_source")] += 1
+                try:
+                    is_remote = bool_field(row, "remote")
+                    request_ps = int_field(row, "remote_request_network_ps")
+                    response_ps = int_field(row, "remote_response_network_ps")
+                except AnalysisError as error:
+                    raise AnalysisError(f"{path}:{line_number}: {error}") from error
+                if is_remote and (request_ps == 0 or response_ps == 0):
+                    strict_counts[(identity, "remote_path_missing_network")] += 1
+
+    adjudicated: List[EmitterValidation] = []
+    for item in rows:
+        if item.emitter != "path" or item.check not in scoped_checks:
+            adjudicated.append(item)
+            continue
+        effective = strict_counts[(item.identity, item.check)]
+        status = item.emitter_status
+        if item.value != effective:
+            status = (
+                f"{status};raw-includes-warmup-or-mshr-followers;"
+                "selected-full-path-recount"
+            )
+        adjudicated.append(
+            replace(
+                item,
+                emitter_status=status,
+                passed=effective == 0,
+                strict_scope_value=effective,
+            )
+        )
+    return adjudicated
 
 
 def add_missing_emitter_validation_checks(
@@ -757,6 +898,8 @@ def analyze_paths(
     strict: bool,
 ) -> Tuple[
     MutableMapping[Tuple[TraceIdentity, str, str, str, str], NumericSeries],
+    MutableMapping[Tuple[TraceIdentity, str, str, str], NumericSeries],
+    MutableMapping[Tuple[TraceIdentity, str, str], O1L2ReadResult],
     List[O1Validation],
     List[O2Distribution],
     List[O2Diagnostics],
@@ -764,6 +907,12 @@ def analyze_paths(
     o1: MutableMapping[
         Tuple[TraceIdentity, str, str, str, str], NumericSeries
     ] = defaultdict(lambda: NumericSeries({}))
+    o1_components: MutableMapping[
+        Tuple[TraceIdentity, str, str, str], NumericSeries
+    ] = defaultdict(lambda: NumericSeries({}))
+    o1_l2_results: MutableMapping[
+        Tuple[TraceIdentity, str, str], O1L2ReadResult
+    ] = {}
     validations: List[O1Validation] = []
     o2_distributions: List[O2Distribution] = []
     o2_diagnostics: List[O2Diagnostics] = []
@@ -783,6 +932,7 @@ def analyze_paths(
                 "schema_version",
                 "operation",
                 "address",
+                "pid",
                 "l1_cache",
                 "l1_role",
                 "l1_result",
@@ -796,6 +946,7 @@ def analyze_paths(
                 "route",
                 "remote",
                 "source",
+                "component_path",
                 "events",
                 "duplicate_events",
                 "time_regressions",
@@ -851,6 +1002,25 @@ def analyze_paths(
                     validation.incomplete_demand_reads += 1
                     continue
 
+                full_path = is_full_physical_path(row)
+                if full_path:
+                    validation.full_path_reads += 1
+                    if not row.get("source", "").strip():
+                        validation.full_path_missing_source += 1
+                    request_network = int(
+                        row.get("remote_request_network_ps", "0") or 0
+                    )
+                    response_network = int(
+                        row.get("remote_response_network_ps", "0") or 0
+                    )
+                    if bool_field(row, "remote"):
+                        if request_network == 0 or response_network == 0:
+                            validation.full_remote_missing_network += 1
+                    elif request_network != 0 or response_network != 0:
+                        validation.full_local_owned_network += 1
+                else:
+                    validation.mshr_follower_reads += 1
+
                 route = row.get("route", "unknown") or "unknown"
                 source = row.get("source", "unknown") or "unknown"
                 path_class = demand_read_path_class(row)
@@ -859,16 +1029,55 @@ def analyze_paths(
                     value = int_field(row, stage_column)
                     o1[(identity, route, source, path_class, stage)].add(value)
 
+                # O1's paper-facing view is intentionally coarser than the
+                # raw exclusive-stage trace. Communication into a local
+                # component is charged to that component, while only the two
+                # cross-wafer transfers remain a separate communication bar.
+                # MSHR wait/follower time is not part of component execution
+                # latency and is therefore excluded from this view.
+                if full_path:
+                    component_totals: Dict[str, int] = defaultdict(int)
+                    for stage_column in stage_columns:
+                        stage = stage_column[: -len("_ps")]
+                        component = o1_component_for_stage(stage, route)
+                        if component:
+                            component_totals[component] += int_field(
+                                row, stage_column
+                            )
+                    for component in O1_COMPONENT_ORDER:
+                        o1_components[(identity, route, source, component)].add(
+                            component_totals.get(component, 0)
+                        )
+
+                    if route in {"local", "remote"}:
+                        l2_key = (identity, route, source)
+                        l2_result = o1_l2_results.get(l2_key)
+                        if l2_result is None:
+                            l2_result = O1L2ReadResult(identity, route, source)
+                            o1_l2_results[l2_key] = l2_result
+                        l2_result.demand_read_paths += 1
+                        result = row.get("l2_result", "")
+                        if result == "read-hit":
+                            l2_result.read_hits += 1
+                        elif result == "read-miss":
+                            l2_result.read_misses += 1
+                        elif result == "read-mshr-hit":
+                            l2_result.read_mshr_hits += 1
+                        elif not result:
+                            l2_result.missing_results += 1
+                        else:
+                            l2_result.other_results += 1
+
                 # O2 intentionally studies the local L2-miss stream that can
                 # feed the 64B-to-128B batching mechanism.  MSHR followers do
                 # not issue a physical L2 miss and therefore are not samples.
-                if row.get("l1_role", "leader") != "leader":
+                if not full_path:
                     continue
                 if not o2_include_remote and bool_field(row, "remote"):
                     continue
-                if "miss" not in row.get("l1_result", "").lower():
+                if row.get("l1_result", "").lower() != "read-miss":
                     continue
-                if "miss" not in row.get("l2_result", "").lower():
+                if row.get("l2_result", "").lower() != "read-miss":
                     continue
                 if not o2_include_remote and source != "dram":
                     continue
@@ -880,14 +1089,22 @@ def analyze_paths(
                     continue
                 address = int_field(row, "address")
                 line64 = address >> 6
-                requester = row.get("l1_cache", "")
-                exact_key = (requester, line64, event_ps)
+                l2_slices = {
+                    component.strip()
+                    for component in row.get("component_path", "").split(";")
+                    if ".L2[" in component
+                }
+                if len(l2_slices) != 1:
+                    diagnostic.missing_l2_slice += 1
+                    continue
+                l2_scope = f"pid={int_field(row, 'pid')}|{next(iter(l2_slices))}"
+                exact_key = (l2_scope, line64, event_ps)
                 if exact_key in seen_o2_events:
                     diagnostic.exact_duplicate_events_filtered += 1
                     continue
                 seen_o2_events.add(exact_key)
                 file_o2_accesses.append(
-                    O2Access(identity, requester, line64, event_ps, route)
+                    O2Access(identity, l2_scope, line64, event_ps, route)
                 )
 
         validations.append(validation)
@@ -897,27 +1114,108 @@ def analyze_paths(
     if strict:
         failed = [item for item in validations if not item.passed]
         missing_events = sum(item.missing_event for item in o2_diagnostics)
-        if failed or missing_events:
+        missing_l2_slices = sum(
+            item.missing_l2_slice for item in o2_diagnostics
+        )
+        if failed or missing_events or missing_l2_slices:
             details = []
             for item in failed:
                 details.append(
                     f"{Path(item.source_file).name}: incomplete={item.incomplete_demand_reads}, "
                     f"accounting={item.accounting_errors}, stage_sum={item.stage_sum_errors}, "
                     f"duplicates={item.duplicate_event_rows}, "
-                    f"regressions={item.time_regression_rows}"
+                    f"regressions={item.time_regression_rows}, "
+                    f"full_path_missing_source={item.full_path_missing_source}, "
+                    f"full_remote_missing_network={item.full_remote_missing_network}, "
+                    f"full_local_owned_network={item.full_local_owned_network}"
                 )
             if missing_events:
                 details.append(
                     f"{missing_events} selected O2 L2-miss paths lack event {o2_event!r}"
                 )
+            if missing_l2_slices:
+                details.append(
+                    f"{missing_l2_slices} selected O2 L2-miss paths lack one L2 slice"
+                )
             raise AnalysisError("strict observation validation failed: " + "; ".join(details))
 
-    return o1, validations, o2_distributions, o2_diagnostics
+    return (
+        o1,
+        o1_components,
+        o1_l2_results,
+        validations,
+        o2_distributions,
+        o2_diagnostics,
+    )
+
+
+O1_COMPONENT_ORDER = (
+    "L1 Cache",
+    "L2 Cache",
+    "HBM",
+    "Requester RDMA",
+    "Owner RDMA",
+    "Remote Communication",
+)
+
+O1_L1_STAGES = {
+    "l1_coalesce",
+    "l1_directory_queue",
+    "l1_lookup",
+    "l1_bank",
+    "requester_l1_link",
+    "l2_to_l1",
+    "l1_fill_response",
+    "l1_response_fanout",
+}
+O1_L2_STAGES = {
+    "owner_l2_link",
+    "l2_queue",
+    "l2_lookup",
+    "l2_bank",
+    "l2_write_buffer",
+    "dram_to_l2",
+    "l2_fill_response",
+    "l2_response_link",
+}
+O1_HBM_STAGES = {"l2_to_dram", "dram_queue_service"}
+O1_REQUESTER_RDMA_STAGES = {"requester_rdma", "requester_rdma_response"}
+O1_OWNER_RDMA_STAGES = {"owner_rdma_request", "owner_rdma_response"}
+O1_REMOTE_COMMUNICATION_STAGES = {
+    "remote_request_network",
+    "remote_response_network",
+}
+
+
+def o1_component_for_stage(stage: str, route: str) -> Optional[str]:
+    if stage in {"l1_mshr_wait", "l2_mshr_wait", "unattributed"}:
+        return None
+    if stage == "l1_downstream":
+        return "Requester RDMA" if route == "remote" else "L2 Cache"
+    if stage in O1_L1_STAGES:
+        return "L1 Cache"
+    if stage in O1_L2_STAGES:
+        return "L2 Cache"
+    if stage in O1_HBM_STAGES:
+        return "HBM"
+    if stage in O1_REQUESTER_RDMA_STAGES:
+        return "Requester RDMA"
+    if stage in O1_OWNER_RDMA_STAGES:
+        return "Owner RDMA"
+    if stage in O1_REMOTE_COMMUNICATION_STAGES:
+        return "Remote Communication"
+    raise AnalysisError(f"O1 component mapping is missing stage {stage!r}")
 
 
 def write_o1(
     output_dir: Path,
     aggregates: Mapping[Tuple[TraceIdentity, str, str, str, str], NumericSeries],
+    component_aggregates: Mapping[
+        Tuple[TraceIdentity, str, str, str], NumericSeries
+    ],
+    l2_results: Mapping[
+        Tuple[TraceIdentity, str, str], O1L2ReadResult
+    ],
     validations: Sequence[O1Validation],
 ) -> None:
     output = output_dir / "o1_exclusive_stage_breakdown.csv"
@@ -991,6 +1289,174 @@ def write_o1(
                 ]
             )
 
+    with (output_dir / "o1_component_latency_breakdown.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            IDENTITY_HEADER
+            + [
+                "route",
+                "source",
+                "analysis_unit",
+                "component",
+                "demand_read_paths",
+                "nonzero_paths",
+                "mean_ps",
+                "p50_ps",
+                "p95_ps",
+                "sum_ps",
+                "fraction_of_component_latency",
+                "mean_ns",
+                "p50_ns",
+                "p95_ns",
+                "excluded_wait_policy",
+                "no_access_in_trace_window",
+            ]
+        )
+        group_totals: Dict[Tuple[TraceIdentity, str, str], int] = defaultdict(int)
+        for (identity, route, source, _component), series in (
+            component_aggregates.items()
+        ):
+            group_totals[(identity, route, source)] += series.total_sum
+        for key, series in sorted(component_aggregates.items(), key=lambda item: item[0]):
+            identity, route, source, component = key
+            denominator = group_totals[(identity, route, source)]
+            mean = series.total_sum / series.count if series.count else 0.0
+            p50 = series.percentile(0.50) if series.count else 0.0
+            p95 = series.percentile(0.95) if series.count else 0.0
+            writer.writerow(
+                _identity_fields(identity)
+                + [
+                    route,
+                    source,
+                    "completed_leader_demand_read",
+                    component,
+                    series.count,
+                    series.nonzero,
+                    format(mean, ".9g"),
+                    format(p50, ".9g"),
+                    format(p95, ".9g"),
+                    series.total_sum,
+                    format(series.total_sum / denominator if denominator else 0, ".12g"),
+                    format(mean / 1000.0, ".9g"),
+                    format(p50 / 1000.0, ".9g"),
+                    format(p95 / 1000.0, ".9g"),
+                    "exclude_l1_and_l2_mshr_wait",
+                    "false",
+                ]
+            )
+        identities = sorted({key[0] for key in component_aggregates})
+        present_routes = {
+            (identity, route)
+            for identity, route, _source, _component in component_aggregates
+        }
+        for identity in identities:
+            for route in ("local", "remote"):
+                if (identity, route) in present_routes:
+                    continue
+                for component in O1_COMPONENT_ORDER:
+                    writer.writerow(
+                        _identity_fields(identity)
+                        + [
+                            route,
+                            "none",
+                            "completed_leader_demand_read",
+                            component,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            "exclude_l1_and_l2_mshr_wait",
+                            "true",
+                        ]
+                    )
+
+    with (output_dir / "o1_l2_demand_read_miss_rate.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            IDENTITY_HEADER
+            + [
+                "route",
+                "l2_role",
+                "source",
+                "demand_read_paths",
+                "l2_read_hits",
+                "l2_read_misses",
+                "l2_read_mshr_hits",
+                "missing_results",
+                "other_results",
+                "tag_lookup_samples",
+                "tag_read_miss_rate",
+                "no_l2_data_hit_fraction",
+                "owner_mshr_merge_fraction",
+            ]
+        )
+        for item in sorted(l2_results.values(), key=lambda value: (
+            value.identity, value.route, value.source
+        )):
+            tag_samples = item.read_hits + item.read_misses
+            classified = tag_samples + item.read_mshr_hits
+            writer.writerow(
+                _identity_fields(item.identity)
+                + [
+                    item.route,
+                    "owner" if item.route == "remote" else "local",
+                    item.source,
+                    item.demand_read_paths,
+                    item.read_hits,
+                    item.read_misses,
+                    item.read_mshr_hits,
+                    item.missing_results,
+                    item.other_results,
+                    tag_samples,
+                    format(item.read_misses / tag_samples if tag_samples else 0, ".12g"),
+                    format(
+                        (item.read_misses + item.read_mshr_hits) / classified
+                        if classified else 0,
+                        ".12g",
+                    ),
+                    format(
+                        item.read_mshr_hits / classified if classified else 0,
+                        ".12g",
+                    ),
+                ]
+            )
+        identities = sorted({key[0] for key in component_aggregates})
+        present_routes = {
+            (item.identity, item.route) for item in l2_results.values()
+        }
+        for identity in identities:
+            for route in ("local", "remote"):
+                if (identity, route) in present_routes:
+                    continue
+                writer.writerow(
+                    _identity_fields(identity)
+                    + [
+                        route,
+                        "owner" if route == "remote" else "local",
+                        "none",
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                    ]
+                )
+
     with (output_dir / "o1_validation.csv").open("w", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(
@@ -1001,6 +1467,11 @@ def write_o1(
                 "completed_rows",
                 "demand_reads",
                 "incomplete_demand_reads",
+                "full_path_reads",
+                "mshr_follower_reads",
+                "full_path_missing_source",
+                "full_remote_missing_network",
+                "full_local_owned_network",
                 "accounting_errors",
                 "stage_sum_errors",
                 "duplicate_event_rows",
@@ -1018,6 +1489,11 @@ def write_o1(
                     item.completed_rows,
                     item.demand_reads,
                     item.incomplete_demand_reads,
+                    item.full_path_reads,
+                    item.mshr_follower_reads,
+                    item.full_path_missing_source,
+                    item.full_remote_missing_network,
+                    item.full_local_owned_network,
                     item.accounting_errors,
                     item.stage_sum_errors,
                     item.duplicate_event_rows,
@@ -1041,21 +1517,213 @@ def parse_cycle_windows(value: str) -> Tuple[int, ...]:
 def build_o2_distribution(
     identity: TraceIdentity, accesses: List[O2Access]
 ) -> O2Distribution:
-    accesses.sort(key=lambda value: (value.event_ps, value.requester, value.line64))
-    last_by_requester_line: Dict[Tuple[str, int], int] = {}
+    accesses.sort(key=lambda value: (value.event_ps, value.l2_scope, value.line64))
+    last_by_l2_scope_line: Dict[Tuple[str, int], int] = {}
     distances: Dict[int, int] = {}
     for sample in accesses:
         # XOR selects the other 64-B half of the same aligned 128-B DRAM
         # access unit.  It excludes exact-line reuse by construction.
         sibling_line = sample.line64 ^ 1
-        previous = last_by_requester_line.get((sample.requester, sibling_line))
+        previous = last_by_l2_scope_line.get((sample.l2_scope, sibling_line))
         if previous is not None:
             distance = sample.event_ps - previous
             if distance < 0:
                 raise AnalysisError("O2 event order regression after sorting")
             distances[distance] = distances.get(distance, 0) + 1
-        last_by_requester_line[(sample.requester, sample.line64)] = sample.event_ps
-    return O2Distribution(identity, len(accesses), distances)
+        last_by_l2_scope_line[(sample.l2_scope, sample.line64)] = sample.event_ps
+    return O2Distribution(
+        identity,
+        len(accesses),
+        distances,
+        simulate_o2_adapter_capacities(accesses),
+    )
+
+
+def simulate_o2_adapter_capacities(
+    accesses: Sequence[O2Access],
+) -> Dict[int, O2AdapterCapacity]:
+    """Screen FIFO sibling-buffer capacity with an always-predict upper bound.
+
+    The model uses the real per-(PID,L2-slice) arrival stream. A miss inserts
+    its aligned sibling, while a later sibling consumes the entry without
+    issuing a reverse prediction. DRAM response latency and confidence
+    training are deliberately omitted, so the result is a capacity upper
+    bound rather than a simulated speedup.
+    """
+    results: Dict[int, O2AdapterCapacity] = {}
+    for capacity in O2_ADAPTER_CAPACITIES:
+        buffers: MutableMapping[str, Dict[int, None]] = defaultdict(dict)
+        result = O2AdapterCapacity(demands=len(accesses))
+        for sample in accesses:
+            buffer = buffers[sample.l2_scope]
+            if sample.line64 in buffer:
+                del buffer[sample.line64]
+                result.hits += 1
+                continue
+            sibling = sample.line64 ^ 1
+            if sibling in buffer:
+                result.redundant_avoided += 1
+                continue
+            result.predictions += 1
+            if len(buffer) >= capacity:
+                del buffer[next(iter(buffer))]
+                result.evictions += 1
+            buffer[sibling] = None
+        result.pending = sum(len(buffer) for buffer in buffers.values())
+        if result.predictions != result.hits + result.evictions + result.pending:
+            raise AnalysisError("O2 adapter prediction accounting is unbalanced")
+        results[capacity] = result
+    return results
+
+
+def write_o2_adapter_capacity(
+    output_dir: Path,
+    distributions: Sequence[O2Distribution],
+) -> None:
+    with (output_dir / "o2_adapter_capacity_screen.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            IDENTITY_HEADER
+            + [
+                "scope",
+                "model",
+                "capacity_lines_per_l2_slice",
+                "demands",
+                "predictions",
+                "buffer_hits",
+                "capacity_evictions",
+                "pending_predictions",
+                "redundant_predictions_avoided",
+                "demand_access_reduction_upper_bound",
+                "useful_prediction_fraction",
+            ]
+        )
+        for distribution in sorted(
+            distributions, key=lambda value: value.identity
+        ):
+            for capacity, result in sorted(
+                distribution.adapter_capacity.items()
+            ):
+                writer.writerow(
+                    _identity_fields(distribution.identity)
+                    + [
+                        "pid+l2_slice",
+                        "always_predict_immediate_response_fifo_upper_bound",
+                        capacity,
+                        result.demands,
+                        result.predictions,
+                        result.hits,
+                        result.evictions,
+                        result.pending,
+                        result.redundant_avoided,
+                        format(
+                            result.hits / result.demands
+                            if result.demands
+                            else 0.0,
+                            ".12g",
+                        ),
+                        format(
+                            result.hits / result.predictions
+                            if result.predictions
+                            else 0.0,
+                            ".12g",
+                        ),
+                    ]
+                )
+
+
+def write_o2_window_heatmap(
+    output_dir: Path,
+    distributions: Sequence[O2Distribution],
+    cycle_ps: int,
+) -> None:
+    """Write disjoint short-window bins that remain readable for 14 workloads."""
+    buckets = (
+        ("same_cycle", -1, 0),
+        ("1_to_2_cycles", 0, 2),
+        ("3_to_4_cycles", 2, 4),
+        ("5_to_8_cycles", 4, 8),
+        ("9_to_16_cycles", 8, 16),
+        ("17_to_32_cycles", 16, 32),
+        ("33_to_64_cycles", 32, 64),
+    )
+    long_rows: List[List[object]] = []
+    wide_rows: List[List[object]] = []
+    for distribution in sorted(distributions, key=lambda value: value.identity):
+        counts: Dict[str, int] = {}
+        for label, lower, upper in buckets:
+            counts[label] = sum(
+                count
+                for distance, count in distribution.distance_counts_ps.items()
+                if distance > lower * cycle_ps and distance <= upper * cycle_ps
+            )
+        counts["over_64_cycles"] = sum(
+            count
+            for distance, count in distribution.distance_counts_ps.items()
+            if distance > 64 * cycle_ps
+        )
+        counts["no_prior_adjacent_line"] = (
+            distribution.total - distribution.matched_any_prior
+        )
+        labels = [label for label, _lower, _upper in buckets] + [
+            "over_64_cycles",
+            "no_prior_adjacent_line",
+        ]
+        for order, label in enumerate(labels):
+            count = counts[label]
+            long_rows.append(
+                _identity_fields(distribution.identity)
+                + [
+                    "aligned_adjacent_cacheline",
+                    order,
+                    label,
+                    count,
+                    distribution.total,
+                    format(count / distribution.total if distribution.total else 0, ".12g"),
+                ]
+            )
+        wide_rows.append(
+            _identity_fields(distribution.identity)
+            + [distribution.total]
+            + [
+                format(
+                    counts[label] / distribution.total
+                    if distribution.total else 0,
+                    ".12g",
+                )
+                for label in labels
+            ]
+        )
+
+    with (output_dir / "o2_adjacent_line_window_heatmap_long.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            IDENTITY_HEADER
+            + [
+                "relation",
+                "bucket_order",
+                "distance_bucket",
+                "count",
+                "total_l2_miss_reads",
+                "fraction",
+            ]
+        )
+        writer.writerows(long_rows)
+
+    with (output_dir / "o2_adjacent_line_window_heatmap.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.writer(stream)
+        labels = [label for label, _lower, _upper in buckets] + [
+            "over_64_cycles",
+            "no_prior_adjacent_line",
+        ]
+        writer.writerow(IDENTITY_HEADER + ["total_l2_miss_reads"] + labels)
+        writer.writerows(wide_rows)
 
 
 def compute_o2(
@@ -1086,7 +1754,7 @@ def compute_o2(
             output.append(
                 _identity_fields(identity)
                 + [
-                    "same_requester_same_128B_sibling",
+                    "same_pid_same_l2_slice_same_128B_sibling",
                     "nearest_prior",
                     window_cycles,
                     window_ps,
@@ -1140,6 +1808,7 @@ def write_o2(
                 "demand_reads",
                 "local_l2_miss_reads",
                 "missing_event",
+                "missing_l2_slice",
                 "exact_duplicate_events_filtered",
             ]
         )
@@ -1152,6 +1821,7 @@ def write_o2(
                     item.demand_reads,
                     item.local_l2_miss_reads,
                     item.missing_event,
+                    item.missing_l2_slice,
                     item.exact_duplicate_events_filtered,
                 ]
             )
@@ -1442,12 +2112,22 @@ class O4Aggregate:
     forward_byte_hops: int = 0
     return_byte_hops: int = 0
     total_byte_hops: int = 0
+    network_read_requests: int = 0
+    owner_l2_read_hits: int = 0
+    owner_l2_read_misses: int = 0
+    owner_l2_mshr_hits: int = 0
+    owner_hbm_accesses: int = 0
+    missing_owner_l2_results: int = 0
+    requester_read_keys: set = None
+    owner_read_keys: set = None
     hops: NumericSeries = None
     queue_wait: NumericSeries = None
     service: NumericSeries = None
     latency: NumericSeries = None
 
     def __post_init__(self) -> None:
+        self.requester_read_keys = set()
+        self.owner_read_keys = set()
         self.hops = NumericSeries({})
         self.queue_wait = NumericSeries({})
         self.service = NumericSeries({})
@@ -1482,6 +2162,21 @@ class O6ReuseResult:
 
 
 @dataclass
+class O6WriteSafetyResult:
+    identity: TraceIdentity
+    remote_accesses: int = 0
+    read_requests: int = 0
+    write_requests: int = 0
+    unique_lines: int = 0
+    read_lines: int = 0
+    write_lines: int = 0
+    read_write_lines: int = 0
+    reads_after_same_requester_write: int = 0
+    reads_after_other_requester_write: int = 0
+    cross_requester_hazard_lines: int = 0
+
+
+@dataclass
 class L2Validation:
     identity: TraceIdentity
     source_file: str
@@ -1500,6 +2195,11 @@ class O6L2Aggregate:
     identity: TraceIdentity
     samples: int = 0
     under50: int = 0
+    partitions_sampled: int = 0
+    time_weighted_span_ps: int = 0
+    time_weighted_occupancy_ppm_ps: int = 0
+    time_weighted_free_ppm_ps: int = 0
+    time_weighted_under50_ps: int = 0
     occupancy_ppm: NumericSeries = None
     free_ppm: NumericSeries = None
     free_blocks: NumericSeries = None
@@ -1538,6 +2238,9 @@ REMOTE_REQUIRED_COLUMNS = {
     "return_traffic_bytes",
     "total_traffic_bytes",
     "time_regression",
+    "forward_wire_id",
+    "owner_l2_result",
+    "owner_hbm_access",
 }
 
 
@@ -1561,13 +2264,17 @@ def analyze_remote_files(
     List[O4Aggregate],
     List[O5ExactAggregate],
     List[O2Distribution],
+    List[O2Distribution],
     List[O6ReuseResult],
+    List[O6WriteSafetyResult],
     List[RemoteValidation],
 ]:
     o4_results: List[O4Aggregate] = []
     exact_results: List[O5ExactAggregate] = []
     spatial_results: List[O2Distribution] = []
+    sibling_results: List[O2Distribution] = []
     reuse_results: List[O6ReuseResult] = []
+    write_safety_results: List[O6WriteSafetyResult] = []
     validations: List[RemoteValidation] = []
 
     for path in remote_files:
@@ -1577,8 +2284,13 @@ def analyze_remote_files(
         exact = O5ExactAggregate(identity)
         requester_names = NameInterner()
         owner_names = NameInterner()
-        spatial_sorter = ExternalTupleSorter(7, "remote-spatial")
+        spatial_sorter = ExternalTupleSorter(8, "remote-spatial")
         reuse_sorter = ExternalTupleSorter(5, "remote-reuse")
+        # key=(pid, owner, line), then arrival/sequence, requester, op.
+        # Sorting makes the safety audit independent of completion-order CSV
+        # emission and keeps memory bounded for full traces.
+        write_safety_sorter = ExternalTupleSorter(7, "remote-write-safety")
+        seen_sequences = set()
         try:
             with open_csv(path) as stream:
                 reader = csv.DictReader(stream)
@@ -1606,6 +2318,7 @@ def analyze_remote_files(
                         returned = int_field(row, "return_traffic_bytes")
                         network = int_field(row, "total_traffic_bytes")
                         regression = bool_field(row, "time_regression")
+                        owner_hbm_access = bool_field(row, "owner_hbm_access")
                     except AnalysisError as error:
                         validation.malformed_rows += 1
                         if strict:
@@ -1616,6 +2329,10 @@ def analyze_remote_files(
                         validation.incomplete += 1
                         continue
                     validation.completed += 1
+                    if sequence <= 0 or sequence in seen_sequences:
+                        validation.sequence_regressions += 1
+                    else:
+                        seen_sequences.add(sequence)
                     try:
                         completion = int_field(row, "completion_ps")
                         queue_wait = int_field(row, "queue_wait_ps")
@@ -1656,11 +2373,46 @@ def analyze_remote_files(
                         continue
 
                     operation = row.get("operation", "")
+                    requester_id = requester_names.intern(row["requester_name"])
+                    owner_id = owner_names.intern(row["owner_name"])
                     o4.requests += 1
                     if remote_is_read(operation):
                         o4.reads += 1
+                        if row.get("forward_wire_id"):
+                            o4.network_read_requests += 1
+                        o4.requester_read_keys.add(
+                            (
+                                pid,
+                                requester_id,
+                                owner_id,
+                                line_address,
+                                epoch,
+                            )
+                        )
+                        o4.owner_read_keys.add(
+                            (pid, owner_id, line_address, epoch)
+                        )
+                        owner_l2_result = row.get("owner_l2_result", "")
+                        if owner_l2_result == "read-hit":
+                            o4.owner_l2_read_hits += 1
+                        elif owner_l2_result == "read-miss":
+                            o4.owner_l2_read_misses += 1
+                        elif owner_l2_result == "read-mshr-hit":
+                            o4.owner_l2_mshr_hits += 1
+                        else:
+                            o4.missing_owner_l2_results += 1
+                        if owner_hbm_access:
+                            o4.owner_hbm_accesses += 1
+                        write_safety_sorter.add(
+                            (pid, owner_id, line_address, arrival, sequence,
+                             requester_id, 0)
+                        )
                     elif remote_is_write(operation):
                         o4.writes += 1
+                        write_safety_sorter.add(
+                            (pid, owner_id, line_address, arrival, sequence,
+                             requester_id, 1)
+                        )
                     else:
                         o4.other_ops += 1
                     o4.logical_bytes += byte_size
@@ -1686,8 +2438,6 @@ def analyze_remote_files(
                         exact.exact_network_bytes += network
                         exact.inflight_predecessors += inflight
 
-                    requester_id = requester_names.intern(row["requester_name"])
-                    owner_id = owner_names.intern(row["owner_name"])
                     reuse_sorter.add(
                         (pid, requester_id, owner_id, line_address, epoch)
                     )
@@ -1696,18 +2446,21 @@ def analyze_remote_files(
                     if inflight == 0:
                         spatial_sorter.add(
                             (
-                                sequence,
                                 arrival,
+                                sequence,
                                 pid,
                                 requester_id,
                                 owner_id,
+                                epoch,
                                 line_address >> 12,
                                 line_address >> 6,
                             )
                         )
 
-            spatial, sequence_regressions = build_remote_spatial_distribution(
-                identity, spatial_sorter.merged(), remote_cycle_ps
+            spatial, sibling, sequence_regressions = (
+                build_remote_spatial_distributions(
+                    identity, spatial_sorter.merged(), remote_cycle_ps
+                )
             )
             validation.sequence_regressions += sequence_regressions
             reuse = build_remote_reuse_result(
@@ -1717,14 +2470,20 @@ def analyze_remote_files(
                 owner_names.names,
                 heavy_hitters,
             )
+            write_safety = build_remote_write_safety_result(
+                identity, write_safety_sorter.merged()
+            )
         finally:
             spatial_sorter.close()
             reuse_sorter.close()
+            write_safety_sorter.close()
 
         o4_results.append(o4)
         exact_results.append(exact)
         spatial_results.append(spatial)
+        sibling_results.append(sibling)
         reuse_results.append(reuse)
+        write_safety_results.append(write_safety)
         validations.append(validation)
 
     if strict:
@@ -1740,24 +2499,46 @@ def analyze_remote_files(
                     for item in failed
                 )
             )
-    return o4_results, exact_results, spatial_results, reuse_results, validations
+    return (
+        o4_results,
+        exact_results,
+        spatial_results,
+        sibling_results,
+        reuse_results,
+        write_safety_results,
+        validations,
+    )
 
 
-def build_remote_spatial_distribution(
+def build_remote_spatial_distributions(
     identity: TraceIdentity,
     ordered: Iterator[Tuple[int, ...]],
     cycle_ps: int,
-) -> Tuple[O2Distribution, int]:
+) -> Tuple[O2Distribution, O2Distribution, int]:
     max_distance = max(DEFAULT_O2_WINDOWS_CYCLES) * cycle_ps
     # group -> [latest_line, latest_time, other_line, other_time, version]
-    states: Dict[Tuple[int, int, int, int], List[int]] = {}
-    expiry: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
+    states: Dict[Tuple[int, int, int, int, int], List[int]] = {}
+    expiry: List[Tuple[int, int, Tuple[int, int, int, int, int]]] = []
+    sibling_states: Dict[Tuple[int, int, int, int, int], List[int]] = {}
+    sibling_expiry: List[
+        Tuple[int, int, Tuple[int, int, int, int, int]]
+    ] = []
     distance_counts: Dict[int, int] = {}
+    sibling_distance_counts: Dict[int, int] = {}
     total = 0
     previous_arrival = -1
     regressions = 0
 
-    for _sequence, arrival, pid, requester, owner, page, line in ordered:
+    for (
+        arrival,
+        _sequence,
+        pid,
+        requester,
+        owner,
+        epoch,
+        page,
+        line,
+    ) in ordered:
         total += 1
         if arrival < previous_arrival:
             regressions += 1
@@ -1768,7 +2549,7 @@ def build_remote_spatial_distribution(
             if state is not None and state[4] == version:
                 del states[group]
 
-        group = (pid, requester, owner, page)
+        group = (pid, requester, owner, epoch, page)
         state = states.get(group)
         previous = None
         if state is not None:
@@ -1794,7 +2575,88 @@ def build_remote_spatial_distribution(
             else:
                 state[:] = [line, arrival, latest_line, latest_time, version]
         heapq.heappush(expiry, (arrival + max_distance, version, group))
-    return O2Distribution(identity, total, distance_counts), regressions
+
+        # A 128B-aligned sibling is more restrictive than arbitrary same-page
+        # spatial locality and directly measures what a two-line remote
+        # prefetch could add beyond demand batching. Keep write epochs in the
+        # identity so a write cannot manufacture a false read-pair match.
+        while sibling_expiry and sibling_expiry[0][0] < arrival:
+            _expires, sibling_version, sibling_group = heapq.heappop(
+                sibling_expiry
+            )
+            sibling_state = sibling_states.get(sibling_group)
+            if (
+                sibling_state is not None
+                and sibling_state[4] == sibling_version
+            ):
+                del sibling_states[sibling_group]
+
+        sibling_group = (pid, requester, owner, epoch, line >> 1)
+        sibling_state = sibling_states.get(sibling_group)
+        sibling_previous = None
+        if sibling_state is not None:
+            (
+                latest_line,
+                latest_time,
+                other_line,
+                other_time,
+                sibling_version,
+            ) = sibling_state
+            if arrival - latest_time > max_distance:
+                sibling_state = None
+            elif latest_line != line:
+                sibling_previous = latest_time
+            elif other_line != line and arrival - other_time <= max_distance:
+                sibling_previous = other_time
+        if sibling_previous is not None:
+            distance = arrival - sibling_previous
+            sibling_distance_counts[distance] = (
+                sibling_distance_counts.get(distance, 0) + 1
+            )
+
+        if sibling_state is None:
+            sibling_version = 1
+            sibling_states[sibling_group] = [
+                line,
+                arrival,
+                line,
+                arrival,
+                sibling_version,
+            ]
+        else:
+            (
+                latest_line,
+                latest_time,
+                other_line,
+                other_time,
+                sibling_version,
+            ) = sibling_state
+            sibling_version += 1
+            if latest_line == line:
+                sibling_state[:] = [
+                    line,
+                    arrival,
+                    other_line,
+                    other_time,
+                    sibling_version,
+                ]
+            else:
+                sibling_state[:] = [
+                    line,
+                    arrival,
+                    latest_line,
+                    latest_time,
+                    sibling_version,
+                ]
+        heapq.heappush(
+            sibling_expiry,
+            (arrival + max_distance, sibling_version, sibling_group),
+        )
+    return (
+        O2Distribution(identity, total, distance_counts),
+        O2Distribution(identity, total, sibling_distance_counts),
+        regressions,
+    )
 
 
 def build_remote_reuse_result(
@@ -1871,6 +2733,66 @@ def build_remote_reuse_result(
     )
 
 
+def build_remote_write_safety_result(
+    identity: TraceIdentity,
+    ordered: Iterator[Tuple[int, ...]],
+) -> O6WriteSafetyResult:
+    """Find reads that follow a write by another remote requester.
+
+    The requester-local uncacheable guard handles a requester's own writes.
+    A read after another requester writes the same owner line is the sampled
+    pattern that would require coherence/invalidation before Remote-L2 reuse.
+    Owner-local writes are not present in the RDMA trace, so a zero result is
+    evidence for the sampled remote stream, not a general coherence proof.
+    """
+    result = O6WriteSafetyResult(identity)
+    current_key: Optional[Tuple[int, int, int]] = None
+    last_writer = -1
+    line_has_read = False
+    line_has_write = False
+    line_has_cross_hazard = False
+
+    def finish_line() -> None:
+        if current_key is None:
+            return
+        result.unique_lines += 1
+        result.read_lines += int(line_has_read)
+        result.write_lines += int(line_has_write)
+        result.read_write_lines += int(line_has_read and line_has_write)
+        result.cross_requester_hazard_lines += int(line_has_cross_hazard)
+
+    for values in ordered:
+        pid, owner, line, _arrival, _sequence, requester, operation = values
+        key = (pid, owner, line)
+        if key != current_key:
+            finish_line()
+            current_key = key
+            last_writer = -1
+            line_has_read = False
+            line_has_write = False
+            line_has_cross_hazard = False
+
+        result.remote_accesses += 1
+        if operation == 1:
+            result.write_requests += 1
+            line_has_write = True
+            last_writer = requester
+            continue
+
+        result.read_requests += 1
+        line_has_read = True
+        if last_writer < 0:
+            continue
+        if last_writer == requester:
+            result.reads_after_same_requester_write += 1
+        else:
+            result.reads_after_other_requester_write += 1
+            line_has_cross_hazard = True
+
+    finish_line()
+    return result
+
+
 def top_key_access_share(frequency: Mapping[int, int], fraction: float) -> float:
     unique = sum(frequency.values())
     total = sum(accesses * keys for accesses, keys in frequency.items())
@@ -1910,6 +2832,9 @@ def analyze_l2_utilization(
         identity = parse_trace_identity(path)
         aggregate = O6L2Aggregate(identity)
         validation = L2Validation(identity, str(path))
+        samples_by_cache: MutableMapping[
+            str, List[Tuple[int, int]]
+        ] = defaultdict(list)
         with open_csv(path) as stream:
             reader = csv.DictReader(stream)
             missing = required - set(reader.fieldnames or [])
@@ -1928,6 +2853,7 @@ def analyze_l2_utilization(
                     dirty = int_field(row, "dirty_blocks")
                     locked = int_field(row, "locked_blocks")
                     mshr = int_field(row, "mshr_entries")
+                    time_ps = int_field(row, "time_ps")
                 except AnalysisError as error:
                     raise AnalysisError(f"{path}:{line_number}: {error}") from error
                 expected_occupancy = valid * 1_000_000 // total if total > 0 else -1
@@ -1953,6 +2879,27 @@ def analyze_l2_utilization(
                 aggregate.free_ppm.add(1_000_000 - occupancy)
                 aggregate.free_blocks.add(free)
                 aggregate.mshr_entries.add(mshr)
+                samples_by_cache[row["cache_name"]].append(
+                    (time_ps, occupancy)
+                )
+        aggregate.partitions_sampled = len(samples_by_cache)
+        for samples in samples_by_cache.values():
+            samples.sort()
+            for (start, occupancy), (end, _next_occupancy) in zip(
+                samples, samples[1:]
+            ):
+                duration = end - start
+                if duration <= 0:
+                    continue
+                aggregate.time_weighted_span_ps += duration
+                aggregate.time_weighted_occupancy_ppm_ps += (
+                    occupancy * duration
+                )
+                aggregate.time_weighted_free_ppm_ps += (
+                    (1_000_000 - occupancy) * duration
+                )
+                if occupancy < 500_000:
+                    aggregate.time_weighted_under50_ps += duration
         results.append(aggregate)
         validations.append(validation)
 
@@ -1979,7 +2926,9 @@ def write_o4_o5_o6(
     o4: Sequence[O4Aggregate],
     exact: Sequence[O5ExactAggregate],
     spatial: Sequence[O2Distribution],
+    sibling: Sequence[O2Distribution],
     reuse: Sequence[O6ReuseResult],
+    write_safety: Sequence[O6WriteSafetyResult],
     remote_validation: Sequence[RemoteValidation],
     l2: Sequence[O6L2Aggregate],
     l2_validation: Sequence[L2Validation],
@@ -2027,6 +2976,73 @@ def write_o4_o5_o6(
                 ]
             )
 
+    exact_by_identity = {item.identity: item for item in exact}
+    with (output_dir / "o4_remote_work_before_owner_mshr.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            IDENTITY_HEADER
+            + [
+                "analysis_scope",
+                "remote_read_requests",
+                "unique_requester_line_epochs",
+                "unique_owner_line_epochs",
+                "requester_inflight_duplicates",
+                "requester_dedup_opportunity_fraction",
+                "network_read_requests",
+                "owner_l2_read_accesses",
+                "owner_l2_read_hits",
+                "owner_l2_read_misses",
+                "owner_l2_mshr_hits",
+                "owner_mshr_merge_fraction",
+                "owner_hbm_accesses",
+                "hbm_accesses_per_remote_read",
+                "missing_owner_l2_results",
+                "interpretation",
+            ]
+        )
+        for item in sorted(o4, key=lambda value: value.identity):
+            exact_item = exact_by_identity[item.identity]
+            owner_l2_accesses = (
+                item.owner_l2_read_hits
+                + item.owner_l2_read_misses
+                + item.owner_l2_mshr_hits
+            )
+            writer.writerow(
+                _identity_fields(item.identity)
+                + [
+                    "completed_baseline_remote_reads",
+                    item.reads,
+                    len(item.requester_read_keys),
+                    len(item.owner_read_keys),
+                    exact_item.exact_requests,
+                    format(
+                        exact_item.exact_requests / item.reads
+                        if item.reads else 0,
+                        ".12g",
+                    ),
+                    item.network_read_requests,
+                    owner_l2_accesses,
+                    item.owner_l2_read_hits,
+                    item.owner_l2_read_misses,
+                    item.owner_l2_mshr_hits,
+                    format(
+                        item.owner_l2_mshr_hits / owner_l2_accesses
+                        if owner_l2_accesses else 0,
+                        ".12g",
+                    ),
+                    item.owner_hbm_accesses,
+                    format(
+                        item.owner_hbm_accesses / item.reads
+                        if item.reads else 0,
+                        ".12g",
+                    ),
+                    item.missing_owner_l2_results,
+                    "owner_mshr_can_merge_hbm_work_only_after_requester_rdma_and_network",
+                ]
+            )
+
     with (output_dir / "o5_exact_inflight_dedup.csv").open("w", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(
@@ -2065,6 +3081,27 @@ def write_o4_o5_o6(
         for row in spatial_rows:
             row = list(row)
             row[5] = "same_requester_owner_4KB_page_different_64B_line"
+            writer.writerow(row[:12] + [row[13], row[14], row[15]])
+
+    sibling_rows = compute_o2(
+        sibling, DEFAULT_O2_WINDOWS_CYCLES, remote_cycle_ps
+    )
+    with (output_dir / "o5_remote_aligned_sibling_cdf.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            IDENTITY_HEADER
+            + [
+                "relation", "direction", "window_remote_cycles", "window_ps",
+                "window_ns", "count", "total_non_exact_read_requests",
+                "matched_sibling_prior_within_max_window",
+                "cdf_fraction_all_requests", "cdf_fraction_conditional_on_match",
+            ]
+        )
+        for row in sibling_rows:
+            row = list(row)
+            row[5] = "same_128B_aligned_pair_other_64B_line"
             writer.writerow(row[:12] + [row[13], row[14], row[15]])
 
     with (output_dir / "o6_remote_reuse_summary.csv").open("w", newline="") as stream:
@@ -2137,6 +3174,49 @@ def write_o4_o5_o6(
                     ]
                 )
 
+    with (output_dir / "o6_remote_write_safety.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            IDENTITY_HEADER
+            + [
+                "analysis_scope", "remote_accesses", "read_requests",
+                "write_requests", "unique_lines", "read_lines",
+                "write_lines", "read_write_lines",
+                "reads_after_same_requester_write",
+                "reads_after_other_requester_write",
+                "cross_requester_hazard_lines",
+                "cross_requester_hazard_read_fraction",
+                "sampled_cross_requester_hazard_free",
+                "owner_local_writes_observed",
+            ]
+        )
+        for item in sorted(write_safety, key=lambda value: value.identity):
+            writer.writerow(
+                _identity_fields(item.identity)
+                + [
+                    "completed_remote_requests_only",
+                    item.remote_accesses,
+                    item.read_requests,
+                    item.write_requests,
+                    item.unique_lines,
+                    item.read_lines,
+                    item.write_lines,
+                    item.read_write_lines,
+                    item.reads_after_same_requester_write,
+                    item.reads_after_other_requester_write,
+                    item.cross_requester_hazard_lines,
+                    format(
+                        item.reads_after_other_requester_write /
+                        item.read_requests if item.read_requests else 0,
+                        ".12g",
+                    ),
+                    str(item.reads_after_other_requester_write == 0).lower(),
+                    "false",
+                ]
+            )
+
     with (output_dir / "o6_l2_headroom.csv").open("w", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(
@@ -2146,7 +3226,11 @@ def write_o4_o5_o6(
                 "free_fraction_mean", "free_fraction_p50", "free_fraction_p95",
                 "free_blocks_mean", "free_blocks_p50", "free_blocks_p95",
                 "under_50pct_samples", "under_50pct_fraction", "mshr_mean",
-                "mshr_p50", "mshr_p95",
+                "mshr_p50", "mshr_p95", "partitions_sampled",
+                "time_weighted_span_ps", "time_weighted_occupancy_mean",
+                "time_weighted_free_fraction_mean",
+                "time_weighted_under_50pct_fraction",
+                "time_weighting_method",
             ]
         )
         for item in sorted(l2, key=lambda value: value.identity):
@@ -2169,6 +3253,27 @@ def write_o4_o5_o6(
                     format(item.mshr_entries.total_sum / samples if samples else 0, ".12g"),
                     format(series_stat(item.mshr_entries, 0.50), ".12g"),
                     format(series_stat(item.mshr_entries, 0.95), ".12g"),
+                    item.partitions_sampled,
+                    item.time_weighted_span_ps,
+                    format(
+                        item.time_weighted_occupancy_ppm_ps /
+                        item.time_weighted_span_ps / 1e6
+                        if item.time_weighted_span_ps else 0,
+                        ".12g",
+                    ),
+                    format(
+                        item.time_weighted_free_ppm_ps /
+                        item.time_weighted_span_ps / 1e6
+                        if item.time_weighted_span_ps else 0,
+                        ".12g",
+                    ),
+                    format(
+                        item.time_weighted_under50_ps /
+                        item.time_weighted_span_ps
+                        if item.time_weighted_span_ps else 0,
+                        ".12g",
+                    ),
+                    "per_partition_previous_sample_step_hold",
                 ]
             )
 
@@ -2241,24 +3346,44 @@ def analyze(
         path_validation_files,
         remote_validation_files,
     )
+    emitter_validations = adjudicate_legacy_follower_checks(
+        emitter_validations, path_files
+    )
     write_emitter_validations(output_dir, emitter_validations)
     if strict:
         enforce_emitter_validations(emitter_validations)
 
-    o1, validations, distributions, diagnostics = analyze_paths(
+    (
+        o1,
+        o1_components,
+        o1_l2_results,
+        validations,
+        distributions,
+        diagnostics,
+    ) = analyze_paths(
         path_files,
         o2_event=o2_event,
         o2_include_remote=o2_include_remote,
         strict=strict,
-    ) if path_files else ({}, [], [], [])
-    write_o1(output_dir, o1, validations)
+    ) if path_files else ({}, {}, {}, [], [], [])
+    write_o1(output_dir, o1, o1_components, o1_l2_results, validations)
     o2_rows = compute_o2(distributions, o2_windows_cycles, o2_cycle_ps)
     write_o2(output_dir, o2_rows, diagnostics, o2_event)
+    write_o2_adapter_capacity(output_dir, distributions)
+    write_o2_window_heatmap(output_dir, distributions, o2_cycle_ps)
 
     o3_rows = analyze_o3(dram_files)
     write_o3(output_dir, o3_rows)
 
-    o4, exact, spatial, reuse, remote_validation = analyze_remote_files(
+    (
+        o4,
+        exact,
+        spatial,
+        sibling,
+        reuse,
+        write_safety,
+        remote_validation,
+    ) = analyze_remote_files(
         remote_files,
         strict=strict,
         remote_cycle_ps=remote_cycle_ps,
@@ -2270,7 +3395,9 @@ def analyze(
         o4,
         exact,
         spatial,
+        sibling,
         reuse,
+        write_safety,
         remote_validation,
         l2,
         l2_validation,
@@ -2298,6 +3425,7 @@ def _write_self_test_path(path: Path) -> None:
         "path_id",
         "l1_role",
         "l1_cache",
+        "pid",
         "address",
         "operation",
         "status",
@@ -2311,6 +3439,7 @@ def _write_self_test_path(path: Path) -> None:
         "source",
         "l1_result",
         "l2_result",
+        "component_path",
         "events",
         "duplicate_events",
         "time_regressions",
@@ -2326,6 +3455,7 @@ def _write_self_test_path(path: Path) -> None:
                 f"path-{index}",
                 "leader",
                 "GPU[0].L1V[0]",
+                "0",
                 str(address),
                 "read",
                 "complete",
@@ -2339,6 +3469,7 @@ def _write_self_test_path(path: Path) -> None:
                 "dram",
                 "read-miss",
                 "read-miss",
+                "GPU[0].L2[0];GPU[0].DRAM[0];GPU[0].L2[0]",
                 f"path_start@0;l2_lookup_result@{event_ps};path_complete@10000",
                 "0",
                 "0",
@@ -2393,7 +3524,8 @@ def _write_self_test_remote(path: Path) -> None:
         "issue_ps", "completion_ps", "queue_wait_ps", "service_ps", "total_ps",
         "write_epoch", "same_line_inflight_at_arrival", "forward_wire_id",
         "forward_traffic_bytes", "return_wire_id", "return_traffic_bytes",
-        "total_traffic_bytes", "time_regression",
+        "total_traffic_bytes", "time_regression", "owner_l2_result",
+        "owner_hbm_access",
     ]
 
     def row(sequence: int, line: int, arrival: int, inflight: int) -> List[object]:
@@ -2404,6 +3536,8 @@ def _write_self_test_remote(path: Path) -> None:
             "GPU[0].RDMA", "GPU[1].RDMA", 0, 1, 1, arrival, issue, completion,
             1000, 8000, 9000, 0, inflight, f"forward-{sequence}", 16,
             f"return-{sequence}", 80, 96, "false",
+            "read-mshr-hit" if inflight else "read-miss",
+            "false" if inflight else "true",
         ]
 
     # Completion-order output is intentionally not arrival-order output.
@@ -2485,6 +3619,33 @@ def self_test() -> None:
             row for row in o1_rows if row["route"] == "all" and row["stage"] == "total"
         ]
         assert len(total_rows) == 1 and total_rows[0]["mean_ps"] == "10000", total_rows
+        with (output / "o1_component_latency_breakdown.csv").open(
+            newline=""
+        ) as stream:
+            component_rows = list(csv.DictReader(stream))
+        hbm_rows = [
+            row for row in component_rows
+            if row["component"] == "HBM"
+            and row["no_access_in_trace_window"] == "false"
+        ]
+        assert len(hbm_rows) == 1 and hbm_rows[0]["mean_ps"] == "8000", hbm_rows
+        empty_remote = [
+            row for row in component_rows
+            if row["route"] == "remote"
+            and row["no_access_in_trace_window"] == "true"
+        ]
+        assert len(empty_remote) == len(O1_COMPONENT_ORDER), empty_remote
+        with (output / "o1_l2_demand_read_miss_rate.csv").open(
+            newline=""
+        ) as stream:
+            l2_miss_rows = list(csv.DictReader(stream))
+        measured_l2_miss_rows = [
+            row for row in l2_miss_rows if row["demand_read_paths"] != "0"
+        ]
+        assert len(measured_l2_miss_rows) == 1, l2_miss_rows
+        assert measured_l2_miss_rows[0]["tag_read_miss_rate"] == "1", (
+            measured_l2_miss_rows
+        )
 
         with (output / "o2_adjacent_line_short_window_cdf.csv").open(
             newline=""
@@ -2493,6 +3654,27 @@ def self_test() -> None:
         at_two = [row for row in o2_rows if row["window_l1_cycles"] == "2"]
         assert len(at_two) == 1 and at_two[0]["count"] == "1", at_two
         assert at_two[0]["total_l2_miss_reads"] == "2", at_two
+        with (output / "o2_adjacent_line_window_heatmap.csv").open(
+            newline=""
+        ) as stream:
+            o2_heatmap_rows = list(csv.DictReader(stream))
+        assert len(o2_heatmap_rows) == 1, o2_heatmap_rows
+        assert o2_heatmap_rows[0]["1_to_2_cycles"] == "0.5", o2_heatmap_rows
+        with (output / "o2_adapter_capacity_screen.csv").open(
+            newline=""
+        ) as stream:
+            capacity_rows = list(csv.DictReader(stream))
+        at_sixteen = [
+            row
+            for row in capacity_rows
+            if row["capacity_lines_per_l2_slice"] == "16"
+        ]
+        assert len(at_sixteen) == 1, at_sixteen
+        assert at_sixteen[0]["predictions"] == "1", at_sixteen
+        assert at_sixteen[0]["buffer_hits"] == "1", at_sixteen
+        assert at_sixteen[0]["demand_access_reduction_upper_bound"] == "0.5", (
+            at_sixteen
+        )
 
         with (output / "o3_physical_locality_cdf.csv").open(newline="") as stream:
             o3_rows = list(csv.DictReader(stream))
@@ -2513,6 +3695,13 @@ def self_test() -> None:
         assert o4_rows[0]["total_network_bytes"] == "384", o4_rows[0]
         assert o4_rows[0]["network_bytes_per_logical_byte"] == "1.5", o4_rows[0]
         assert o4_rows[0]["latency_mean_ps"] == "9000", o4_rows[0]
+        with (output / "o4_remote_work_before_owner_mshr.csv").open(
+            newline=""
+        ) as stream:
+            owner_rows = list(csv.DictReader(stream))
+        assert owner_rows[0]["requester_inflight_duplicates"] == "1", owner_rows
+        assert owner_rows[0]["owner_l2_mshr_hits"] == "1", owner_rows
+        assert owner_rows[0]["owner_hbm_accesses"] == "3", owner_rows
 
         with (output / "o5_exact_inflight_dedup.csv").open(newline="") as stream:
             exact_rows = list(csv.DictReader(stream))
@@ -2527,6 +3716,18 @@ def self_test() -> None:
         assert spatial_at_two[0]["total_non_exact_read_requests"] == "3", (
             spatial_at_two[0]
         )
+        with (output / "o5_remote_aligned_sibling_cdf.csv").open(
+            newline=""
+        ) as stream:
+            sibling_rows = list(csv.DictReader(stream))
+        sibling_at_two = [
+            row for row in sibling_rows if row["window_remote_cycles"] == "2"
+        ]
+        assert len(sibling_at_two) == 1, sibling_at_two
+        assert sibling_at_two[0]["count"] == "2", sibling_at_two[0]
+        assert sibling_at_two[0]["total_non_exact_read_requests"] == "3", (
+            sibling_at_two[0]
+        )
 
         with (output / "o6_remote_reuse_summary.csv").open(newline="") as stream:
             reuse_rows = list(csv.DictReader(stream))
@@ -2538,10 +3739,41 @@ def self_test() -> None:
         ) as stream:
             heavy_rows = list(csv.DictReader(stream))
         assert heavy_rows[0]["read_accesses"] == "3", heavy_rows
+        with (output / "o6_remote_write_safety.csv").open(
+            newline=""
+        ) as stream:
+            safety_rows = list(csv.DictReader(stream))
+        assert len(safety_rows) == 1, safety_rows
+        assert safety_rows[0]["remote_accesses"] == "4", safety_rows[0]
+        assert safety_rows[0]["sampled_cross_requester_hazard_free"] == "true", (
+            safety_rows[0]
+        )
+        synthetic_safety = build_remote_write_safety_result(
+            TraceIdentity("self", "baseline", "synthetic", "baseline", "synthetic"),
+            iter(
+                [
+                    (7, 1, 0x4000, 1000, 1, 0, 0),
+                    (7, 1, 0x4000, 2000, 2, 1, 1),
+                    (7, 1, 0x4000, 3000, 3, 0, 0),
+                    (7, 1, 0x4040, 4000, 4, 0, 1),
+                    (7, 1, 0x4040, 5000, 5, 0, 0),
+                ]
+            ),
+        )
+        assert synthetic_safety.reads_after_other_requester_write == 1, (
+            synthetic_safety
+        )
+        assert synthetic_safety.reads_after_same_requester_write == 1, (
+            synthetic_safety
+        )
+        assert synthetic_safety.cross_requester_hazard_lines == 1, (
+            synthetic_safety
+        )
         with (output / "o6_l2_headroom.csv").open(newline="") as stream:
             l2_rows = list(csv.DictReader(stream))
         assert l2_rows[0]["occupancy_mean"] == "0.5", l2_rows
         assert l2_rows[0]["under_50pct_samples"] == "1", l2_rows
+        assert l2_rows[0]["time_weighted_occupancy_mean"] == "0.375", l2_rows
 
         with (output / "emitter_instrumentation_validation.csv").open(
             newline=""

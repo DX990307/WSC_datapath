@@ -796,6 +796,19 @@ func (cu *ComputeUnit) sendSampledWGCompletionMessage(
 		return false
 	}
 
+	// The detailed scheduler path traces the completion at the CU. Mirror the
+	// same event for sampled workgroups so runner-side completed-WG accounting
+	// has identical semantics in detailed and sampled execution.
+	tracing.StartTask(
+		msg.ID+"_wg_complete",
+		tracing.MsgIDAtReceiver(msg, cu),
+		cu,
+		"req_in",
+		reflect.TypeOf(msg).String(),
+		msg,
+	)
+	tracing.EndTask(msg.ID+"_wg_complete", cu)
+
 	cu.isHandlingWfCompletionEvent = false
 	return true
 }

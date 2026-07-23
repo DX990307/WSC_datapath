@@ -79,8 +79,8 @@ func (b Builder) WithRemoteModules(m mem.LowModuleFinder) Builder {
 	return b
 }
 
-// WithRemoteDataPath configures requester-side exact deduplication, FIFO page
-// batching, optional access-unit prefetch, and requester-L2 admission.
+// WithRemoteDataPath configures requester-side filtered exact deduplication,
+// work-conserving page batching, and requester-L2 admission.
 func (b Builder) WithRemoteDataPath(c RemoteDataPathConfig) Builder {
 	b.remoteDataPath = normalizeRemoteDataPathConfig(c)
 	return b

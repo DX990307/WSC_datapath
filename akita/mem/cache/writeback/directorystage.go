@@ -55,7 +55,6 @@ func (ds *directoryStage) processTransaction(
 		if _, evicting := ds.cache.evictingList[cacheLineID]; evicting {
 			break
 		}
-
 		if trans.read != nil {
 			madeProgress = ds.doRead(now, trans) || madeProgress
 			continue
@@ -71,8 +70,16 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 	madeProgress := false
 
 	for i := 0; i < ds.cache.numReqPerCycle; i++ {
-		if !ds.pipeline.CanAccept() {
-			break
+		// Preserve the ordinary cache's pipeline-first admission order. When
+		// the resident filter is present, inspect the head request first so a
+		// confirmed miss can use the independent fast-miss path even while the
+		// tag pipeline is full.
+		pipelineReady := false
+		if !ds.cache.residentFilterEnabled {
+			if !ds.pipeline.CanAccept() {
+				break
+			}
+			pipelineReady = true
 		}
 
 		item := ds.cache.dirStageBuffer.Peek()
@@ -81,6 +88,126 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 		}
 
 		trans := item.(*transaction)
+		// Local M1 admission may already carry a reliable RESIDENT-negative
+		// result for this exact candidate line. It is the same proof consumed by
+		// the ordinary fast-miss path, so forward it directly to the
+		// post-directory buffer without a duplicate Filter or tag lookup.
+		if trans.prefetch && trans.residentFilterChecked && trans.residentFastMiss &&
+			ds.buf.CanPush() {
+			req := trans.accessReq()
+			memtrace.ObservationTransitionByRequest(
+				req.Meta().ID, "l2_directory_start", "l2_filter", now)
+			memtrace.RecordMemoryPathL2DirStart(
+				ds.cache.Name(), req.Meta().ID, accessReqInfo(req), now)
+			ds.buf.Push(dirPipelineItem{trans: trans})
+			ds.cache.dirStageBuffer.Pop()
+			madeProgress = true
+			continue
+		}
+		if ds.canUseResidentFastMiss(trans) && ds.buf.CanPush() &&
+			!trans.residentFilterChecked {
+			req := trans.accessReq()
+			line, _ := getCacheLineID(
+				req.GetAddress(), ds.cache.log2BlockSize)
+			// The exact L2 MSHR and RESIDENT metadata are logically checked in
+			// parallel.  An exact MSHR hit is already authoritative, so it can
+			// enter the ordinary post-directory path without waiting for either
+			// the tag array or an otherwise unused Filter result.  This is an
+			// MSHR reuse, not a bypass: doRead still performs the merge and all
+			// responses remain attached to the exact entry.
+			if trans.read != nil && !trans.read.LookupOnly &&
+				ds.cache.mshr.Query(req.GetPID(), line) != nil {
+				trans.residentFilterChecked = true
+				trans.residentParallelMSHR = true
+				memtrace.ObservationTransitionByRequest(
+					req.Meta().ID, "l2_directory_start", "l2_mshr", now)
+				memtrace.RecordMemoryPathL2DirStart(
+					ds.cache.Name(), req.Meta().ID, accessReqInfo(req), now)
+				ds.buf.Push(dirPipelineItem{trans: trans})
+				ds.cache.dirStageBuffer.Pop()
+				madeProgress = true
+				continue
+			}
+			if trans.residentFilterLookup == nil {
+				lookup, accepted := ds.cache.startResidentLookup(
+					now, req.GetPID(), line)
+				if !accepted {
+					break
+				}
+				trans.residentFilterLookup = lookup
+				if lookup != nil {
+					madeProgress = true
+					continue
+				}
+			}
+			mayContain, reliable, ready := ds.cache.completeResidentLookup(
+				now, trans.residentFilterLookup)
+			if !ready {
+				break
+			}
+			trans.residentFilterLookup = nil
+			trans.residentFilterChecked = true
+			if reliable && !mayContain {
+				trans.residentFilterNegative = true
+				// The cache slice and DRAM bank share the same configured
+				// interleave. Ordinary filter-only reads bypass only when there
+				// is no live miss. M1 deliberately treats the reliable negative
+				// as an optimistic latency bypass even under concurrency; exact
+				// MSHR/resource checks and the ordinary fill path remain below.
+				// Writes retain their shortcut because a full-line write does
+				// not create a DRAM read.
+				canBypass := trans.read == nil ||
+					ds.cache.granularityAdaptationEnabled ||
+					len(ds.cache.mshr.AllEntries()) == 0
+				if trans.read != nil && !canBypass {
+					ds.cache.residentFilterStats.ReadBusyFallbacks++
+				}
+				trans.residentFastMiss = canBypass
+				if canBypass {
+					if trans.read != nil {
+						ds.cache.residentFilterStats.ReadNegativeBypasses++
+					} else {
+						ds.cache.residentFilterStats.WriteNegativeBypasses++
+						if ds.isWritingFullLine(trans.write) {
+							ds.cache.residentFilterStats.WriteFullLineBypasses++
+						} else {
+							ds.cache.residentFilterStats.WritePartialBypasses++
+						}
+					}
+					memtrace.ObservationTransitionByRequest(
+						req.Meta().ID, "l2_directory_start", "l2_filter", now)
+					memtrace.RecordMemoryPathL2DirStart(
+						ds.cache.Name(), req.Meta().ID, accessReqInfo(req), now)
+					ds.buf.Push(dirPipelineItem{trans: trans})
+					ds.cache.dirStageBuffer.Pop()
+					madeProgress = true
+					continue
+				}
+			}
+			trans.residentFilterPositive = reliable && mayContain
+			// M1 uses the one-cycle Filter as the timing access for every
+			// reliable read classification. A possible match still performs the
+			// exact directory lookup in doRead, but it need not traverse the
+			// modeled tag-latency pipeline first. This changes latency, not lookup
+			// width or correctness: a false positive becomes an ordinary miss and
+			// an unreliable result retains the baseline pipeline.
+			if trans.read != nil && trans.residentFilterPositive &&
+				ds.cache.granularityAdaptationEnabled && ds.buf.CanPush() {
+				req := trans.accessReq()
+				ds.cache.residentFilterStats.ReadPositiveFastPaths++
+				memtrace.ObservationTransitionByRequest(
+					req.Meta().ID, "l2_directory_start", "l2_filter", now)
+				memtrace.RecordMemoryPathL2DirStart(
+					ds.cache.Name(), req.Meta().ID, accessReqInfo(req), now)
+				ds.buf.Push(dirPipelineItem{trans: trans})
+				ds.cache.dirStageBuffer.Pop()
+				madeProgress = true
+				continue
+			}
+		}
+		if !pipelineReady && !ds.pipeline.CanAccept() {
+			break
+		}
 		if req := trans.accessReq(); req != nil {
 			memtrace.ObservationTransitionByRequest(
 				req.Meta().ID, "l2_directory_start", "l2_lookup", now)
@@ -98,6 +225,16 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 	}
 
 	return madeProgress
+}
+
+func (ds *directoryStage) canUseResidentFastMiss(trans *transaction) bool {
+	if !ds.cache.residentFilterEnabled || trans == nil {
+		return false
+	}
+	if trans.read != nil && trans.read.LookupOnly {
+		return false
+	}
+	return trans.accessReq() != nil
 }
 
 func (ds *directoryStage) Reset(now sim.VTimeInSec) {
@@ -128,13 +265,36 @@ func (ds *directoryStage) doRead(
 
 	mshrEntry := ds.cache.mshr.Query(trans.read.PID, cachelineID)
 	if mshrEntry != nil {
+		if trans.prefetch {
+			ds.dropRedundantPrefetch(trans)
+			ds.buf.Pop()
+			return true
+		}
+		ds.cache.markLocalPrefetchUseful(
+			trans.read.PID, cachelineID)
+		if trans.residentParallelMSHR {
+			ds.cache.residentFilterStats.ReadParallelMSHRMerges++
+		} else if ds.cache.residentFilterEnabled &&
+			trans.residentFilterNegative {
+			ds.cache.residentFilterStats.ReadNegativeMSHRMerges++
+		}
 		return ds.handleReadMSHRHit(now, trans, mshrEntry)
 	}
 
 	block := ds.cache.directory.Lookup(
 		trans.read.PID, cachelineID)
 	if block != nil {
+		if trans.prefetch {
+			ds.dropRedundantPrefetch(trans)
+			ds.buf.Pop()
+			return true
+		}
+		ds.cache.markLocalPrefetchUseful(
+			trans.read.PID, cachelineID)
 		return ds.handleReadHit(now, trans, block)
+	}
+	if trans.residentFilterPositive {
+		ds.cache.residentFilterStats.FalsePositives++
 	}
 
 	return ds.handleReadMiss(now, trans)
@@ -219,7 +379,6 @@ func (ds *directoryStage) handleReadHit(
 	if block.IsLocked {
 		return false
 	}
-
 	tracing.AddTaskStep(
 		tracing.MsgIDAtReceiver(trans.read, ds.cache),
 		ds.cache,
@@ -252,10 +411,39 @@ func (ds *directoryStage) handleReadMiss(
 	cacheLineID, _ := getCacheLineID(req.Address, ds.cache.log2BlockSize)
 
 	if ds.cache.mshr.IsFull() {
+		if trans.prefetch {
+			ds.dropRedundantPrefetch(trans)
+			ds.buf.Pop()
+			ds.cache.localPrefetchStats.MSHRDrops++
+			return true
+		}
+		if ds.cache.localPrefetchOutstanding > 0 {
+			ds.cache.localPrefetchStats.DemandDelayEvents++
+		}
+		ds.cache.residentFilterStats.MSHRFullStalls++
 		return false
 	}
 
 	victim := ds.cache.directory.FindVictim(cacheLineID)
+	if trans.prefetch {
+		if victim == nil {
+			ds.dropRedundantPrefetch(trans)
+			ds.buf.Pop()
+			ds.cache.localPrefetchStats.VictimDrops++
+			return true
+		}
+		bankNum := bankID(
+			victim, ds.cache.directory.WayAssociativity(),
+			len(ds.cache.dirToBankBuffers))
+		if victim.IsValid || victim.IsLocked ||
+			victim.ReadCount > 0 ||
+			!ds.cache.dirToBankBuffers[bankNum].CanPush() {
+			ds.dropRedundantPrefetch(trans)
+			ds.buf.Pop()
+			ds.cache.localPrefetchStats.VictimDrops++
+			return true
+		}
+	}
 	if victim.IsLocked || victim.ReadCount > 0 {
 		return false
 	}
@@ -309,6 +497,14 @@ func (ds *directoryStage) handleReadMiss(
 	return ok
 }
 
+func (ds *directoryStage) dropRedundantPrefetch(trans *transaction) {
+	if trans == nil || !trans.prefetch || trans.read == nil {
+		return
+	}
+	ds.cache.finishLocalPrefetchWithoutFill(trans.read.PID, trans.read.Address)
+	ds.cache.removeInflightTransaction(trans)
+}
+
 func (ds *directoryStage) doWrite(
 	now sim.VTimeInSec,
 	trans *transaction,
@@ -357,6 +553,9 @@ func (ds *directoryStage) doWrite(
 		}
 
 		return ok
+	}
+	if trans.residentFilterPositive {
+		ds.cache.residentFilterStats.FalsePositives++
 	}
 
 	ok := ds.doWriteMiss(now, trans)
@@ -441,6 +640,7 @@ func (ds *directoryStage) writePartialLineMiss(
 	cachelineID, _ := getCacheLineID(write.Address, ds.cache.log2BlockSize)
 
 	if ds.cache.mshr.IsFull() {
+		ds.cache.residentFilterStats.MSHRFullStalls++
 		return false
 	}
 
@@ -513,11 +713,13 @@ func (ds *directoryStage) writeToBank(
 	cachelineID, _ := getCacheLineID(addr, ds.cache.log2BlockSize)
 
 	ds.cache.untrackRemoteReplica(block)
+	ds.cache.untrackResidentBlock(block)
 	ds.cache.directory.Visit(block)
 	block.IsLocked = true
 	block.Tag = cachelineID
 	block.IsValid = true
 	block.PID = trans.write.PID
+	ds.cache.trackResidentBlock(block)
 	trans.block = block
 	trans.action = bankWriteHit
 	ds.buf.Pop()
@@ -551,7 +753,7 @@ func (ds *directoryStage) evict(
 
 	cacheLineID, _ := getCacheLineID(addr, ds.cache.log2BlockSize)
 
-	ds.updateTransForEviction(trans, victim, pid, cacheLineID)
+	ds.updateTransForEviction(now, trans, victim, pid, cacheLineID)
 	ds.updateVictimBlockMetaData(victim, cacheLineID, pid)
 
 	ds.buf.Pop()
@@ -569,16 +771,25 @@ func (ds *directoryStage) evict(
 	return true
 }
 
-func (ds *directoryStage) updateVictimBlockMetaData(victim *cache.Block, cacheLineID uint64, pid vm.PID) {
+func (ds *directoryStage) updateVictimBlockMetaData(
+	victim *cache.Block,
+	cacheLineID uint64,
+	pid vm.PID,
+) {
 	ds.cache.untrackRemoteReplica(victim)
+	ds.cache.untrackResidentBlock(victim)
 	victim.Tag = cacheLineID
 	victim.PID = pid
 	victim.IsLocked = true
 	victim.IsDirty = false
 	ds.cache.directory.Visit(victim)
+	// trackResidentBlock deliberately ignores this locked allocation. Read
+	// fills and full-line writes insert only after the L2 bank has the data.
+	ds.cache.trackResidentBlock(victim)
 }
 
 func (ds *directoryStage) updateTransForEviction(
+	now sim.VTimeInSec,
 	trans *transaction,
 	victim *cache.Block,
 	pid vm.PID,
@@ -598,6 +809,7 @@ func (ds *directoryStage) updateTransForEviction(
 
 	if ds.evictionNeedFetch(trans) {
 		mshrEntry := ds.cache.mshr.Add(pid, cacheLineID)
+		ds.cache.trackGranularityPending(now, pid, cacheLineID)
 		mshrEntry.Block = victim
 		mshrEntry.Requests = append(mshrEntry.Requests, trans)
 		trans.mshrEntry = mshrEntry
@@ -649,9 +861,11 @@ func (ds *directoryStage) fetch(
 	}
 
 	mshrEntry := ds.cache.mshr.Add(pid, cacheLineID)
+	ds.cache.trackGranularityPending(now, pid, cacheLineID)
 	trans.mshrEntry = mshrEntry
 	trans.block = block
 	ds.cache.untrackRemoteReplica(block)
+	ds.cache.untrackResidentBlock(block)
 	block.IsLocked = true
 	block.Tag = cacheLineID
 	block.PID = pid
@@ -678,11 +892,16 @@ func (ds *directoryStage) fetch(
 }
 
 func (ds *directoryStage) isWritingFullLine(write *mem.WriteReq) bool {
-	if len(write.Data) != (1 << ds.cache.log2BlockSize) {
+	blockSize := 1 << ds.cache.log2BlockSize
+	if write == nil || len(write.Data) != blockSize ||
+		write.Address%uint64(blockSize) != 0 {
 		return false
 	}
 
 	if write.DirtyMask != nil {
+		if len(write.DirtyMask) != blockSize {
+			return false
+		}
 		for _, dirty := range write.DirtyMask {
 			if !dirty {
 				return false
@@ -753,6 +972,25 @@ func accessReqInfo(req mem.AccessReq) interface{} {
 	default:
 		return nil
 	}
+}
+
+func accessReqStreamID(req mem.AccessReq) uint64 {
+	if read, ok := req.(*mem.ReadReq); ok && read != nil {
+		return read.StreamID
+	}
+	return 0
+}
+
+func accessReqLocalStreamID(req mem.AccessReq) uint64 {
+	if read, ok := req.(*mem.ReadReq); ok && read != nil {
+		return read.LocalStreamID
+	}
+	return 0
+}
+
+func accessReqLocalPairHint(req mem.AccessReq) bool {
+	read, ok := req.(*mem.ReadReq)
+	return ok && read != nil && read.LocalPairHint
 }
 
 func accessReqOp(req mem.AccessReq) string {

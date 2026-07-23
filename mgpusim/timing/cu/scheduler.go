@@ -366,19 +366,20 @@ func (s *SchedulerImpl) sendWGCompletionMessage(
 		Build()
 
 	err := s.cu.ToACE.Send(msg)
-
-	tracing.StartTask(
-		msg.ID+"_wg_complete",
-		tracing.MsgIDAtReceiver(msg, s.cu),
-		s.cu,
-		"req_in",
-		reflect.TypeOf(msg).String(),
-		msg,
-	)
-	tracing.EndTask(
-		msg.ID+"_wg_complete",
-		s.cu,
-	)
+	if err == nil {
+		tracing.StartTask(
+			msg.ID+"_wg_complete",
+			tracing.MsgIDAtReceiver(msg, s.cu),
+			s.cu,
+			"req_in",
+			reflect.TypeOf(msg).String(),
+			msg,
+		)
+		tracing.EndTask(
+			msg.ID+"_wg_complete",
+			s.cu,
+		)
+	}
 
 	return err == nil
 }

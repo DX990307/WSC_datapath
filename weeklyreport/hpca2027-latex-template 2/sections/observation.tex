@@ -1,0 +1,134 @@
+\section{Observations: Information Revealed Along the Memory Path}
+\label{sec:observations}
+
+We use the same 14 workloads as the evaluation to examine when a request
+reveals information that can remove or combine memory-system work. O1
+establishes the end-to-end cost. O2 and O3 motivate local paired HBM access,
+O4 and O5 motivate requester-side remote aggregation, and O6 motivates
+selective reuse in the existing requesting-GPM L2.
+
+\noindent\textbf{O1: Cost of a Full Memory Path.}
+We measure each component from request arrival until it forwards the request
+or response, charge local communication to the receiving component, and group
+RDMA processing and wafer traversal as Remote Communication. We count only
+completed demand-read MSHR leaders and exclude L1 and L2 MSHR waiting. As
+Fig.~\ref{fig:obs-full-path} shows, an HBM-reaching local path takes
+74--563~ns, while the seven workloads with a qualifying remote demand path
+take 0.45--7.19~$\mu$s. The local L2 demand-read miss rate ranges from 2.8\%
+to 100\%, and the dominant latency component changes across workloads. The
+bottleneck is therefore an end-to-end path property rather than the property
+of one fixed cache, network, or memory component.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-22-baseline-complete-observation/observation-analysis/figures/o1_memory_path_latency.pdf}
+  \caption{Normalized full-path latency and local-L2 demand-read miss rate for
+  local (L) and remote (R) MSHR leaders. MSHR waiting is excluded, and
+  ``--'' denotes no qualifying remote demand path.}
+  \label{fig:obs-full-path}
+\end{figure}
+
+\noindent\textbf{O2: Local Misses Expose Adjacent Demand Pairs.}
+We record each real L2 read miss and locate the nearest earlier miss to the
+adjacent cacheline in the same aligned access region. Within 16 L2 cycles,
+13 of 14 workloads expose such a relation for 5.0\%--50.0\% of their misses.
+Weighted across all workloads, adjacent relations cover 7.3\%, 15.0\%,
+22.0\%, and 33.0\% of misses within 0, 4, 16, and 64 cycles, respectively
+(Fig.~\ref{fig:obs-adjacent-window}). KMeans exposes no relation in the
+measured window, showing why adjacent access should be learned from real
+demands rather than generated unconditionally.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-22-baseline-complete-observation/observation-analysis/figures/o2_adjacent_line_cdf.pdf}
+  \caption{Fraction of real L2 read misses whose adjacent cacheline miss
+  arrived within a short preceding window.}
+  \label{fig:obs-adjacent-window}
+\end{figure}
+
+\noindent\textbf{O3: Physical Mapping Makes Adjacent Work HBM-Friendly.}
+We apply the controller's bank, row, column, and aligned-access mapping to
+physical read arrivals. Within 16 controller cycles, 29.1\% of reads find an
+earlier read in the same aligned HBM access unit, while only 6.2\% find a
+different column in the same row (Fig.~\ref{fig:obs-dram-locality}). Thus,
+the strongest local relation is not arbitrary spatial proximity but the
+specific adjacent-line relation already aligned with the controller's access
+unit. M1 learns this relation from completed demand pairs and attempts a
+paired access only after exact cache and pending state remove an already
+available half. Otherwise, the original singleton request proceeds.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-22-baseline-complete-observation/observation-analysis/figures/o3_dram_physical_locality.pdf}
+  \caption{CDF of physical-read proximity for an aligned HBM access unit,
+  same-row accesses, row changes within a bank, and different-bank accesses.}
+  \label{fig:obs-dram-locality}
+\end{figure}
+
+\noindent\textbf{O4: Remote Requests Amplify Work Before Owner Coalescing.}
+Across ten workloads, 713,568 sampled remote operations traverse requester
+RDMA, the wafer network, and owner-GPM RDMA before any owner-L2 MSHR can merge
+their memory work. One logical byte produces 6.05 network byte-hops, and mean
+remote-transaction latency ranges from 0.465 to 7.787~$\mu$s
+(Fig.~\ref{fig:obs-remote-amplification}). An owner-L2 MSHR may still reduce
+later HBM accesses, but it acts only after requester endpoint and forward
+network work has already been paid. Removing redundancy at requesting-GPM
+RDMA therefore eliminates work that owner-side coalescing cannot recover.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-22-baseline-complete-observation/observation-analysis/figures/o4_remote_amplification.pdf}
+  \caption{Network byte-hops per logical remote byte and mean end-to-end
+  remote-operation latency. ``--'' denotes no remote operation in the O4
+  trace window.}
+  \label{fig:obs-remote-amplification}
+\end{figure}
+
+\noindent\textbf{O5: Requester RDMA Reveals Two Aggregation Scopes.}
+Among 558,671 sampled remote reads, 144,474 (25.9\%) have an exact same-line
+request already in flight. After removing those duplicates, 129,074 of the
+remaining 414,197 reads (31.2\%) find a different line with the same
+requester, owner GPM, and 4-KB page within 16 RDMA cycles
+(Fig.~\ref{fig:obs-remote-aggregation}). Exact coalescing and same-page packet
+grouping together cover 49.0\% of the original reads, but their contributions
+vary sharply by workload. The interval characterizes available concurrency.
+M2 joins only an existing batch and never delays a request for a future
+partner.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-22-baseline-complete-observation/observation-analysis/figures/o5_remote_aggregation.pdf}
+  \caption{Exact in-flight same-line redundancy and same-page,
+  different-line aggregation opportunities at requesting-GPM RDMA.}
+  \label{fig:obs-remote-aggregation}
+\end{figure}
+
+\noindent\textbf{O6: Remote Reuse Is Selective and Existing L2 Has Headroom.}
+Only 17.7\% of unique remote lines recur, yet reads after the first touch
+account for 33.7\% of all remote reads. The second access establishes reuse
+and can trigger an L2 fill, so third-or-later accesses, which account for
+22.0\% of remote reads, are the direct demand-only opportunity to avoid
+another wafer traversal. The existing requesting-GPM L2 meanwhile has
+60.2\% mean free capacity, with workload means ranging from 9.8\% to 94.1\%
+(Fig.~\ref{fig:obs-remote-reuse}). M3 therefore retains only returns supported
+by recurrence or multiple-waiter evidence, while exact replacement checks
+protect local data and no new cache level is required.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-22-baseline-complete-observation/observation-analysis/figures/o6_remote_reuse_l2_headroom.pdf}
+  \caption{Recurring remote lines, reads after first touch, and mean free
+  capacity in the existing requesting-GPM L2. ``--'' denotes no remote read.}
+  \label{fig:obs-remote-reuse}
+\end{figure}
+
+\noindent\textbf{Synthesis: Visibility Evolves Along the Request Lifetime.}
+The observations reveal a sequence rather than three unrelated
+optimizations. Real local misses expose temporal adjacency, physical mapping
+reveals HBM compatibility, requesting-GPM RDMA exposes cross-L1 duplication
+and common destinations, and completed remote activity reveals recurrence.
+No single point observes all of this information. CuPath therefore acts at
+the first boundary where each relation becomes actionable, removes redundant
+work before it travels farther, and immediately preserves the baseline path
+when no opportunity exists.
+\FloatBarrier

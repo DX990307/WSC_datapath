@@ -12,27 +12,32 @@ type Queue []*signal.Command
 
 // CommandQueueImpl implements a command queue.
 type CommandQueueImpl struct {
-	Queues           []Queue
-	CapacityPerQueue int
-	nextQueueIndex   int
-	Channel          org.Channel
-	RowAware         bool
-	MaxAge           sim.VTimeInSec
-	Freq             sim.Freq
-	stats            RowAwareStats
-	activatedByCmd   map[string]bool
+	Queues                []Queue
+	CapacityPerQueue      int
+	nextQueueIndex        int
+	Channel               org.Channel
+	RowContinuation       bool
+	AggregateContinuation bool
+	Freq                  sim.Freq
+	stats                 RowContinuationStats
+	activatedByCmd        map[string]bool
+	readyScratch          []readyCandidate
+	preferredAggregateID  string
 }
 
-// RowAwareStats reports open-row scheduling behavior.
-type RowAwareStats struct {
-	Enabled            bool
-	CommandsIssued     uint64
-	ColumnCommands     uint64
-	RowReuseHits       uint64
-	ActivateCommands   uint64
-	PrechargeCommands  uint64
-	AgedPriorityIssues uint64
-	MaxQueueAgeCycles  uint64
+// RowContinuationStats reports immediate same-row continuation behavior.
+type RowContinuationStats struct {
+	Enabled                     bool
+	AggregateEnabled            bool
+	CommandsIssued              uint64
+	ColumnCommands              uint64
+	RowReuseHits                uint64
+	AutoPrechargeStops          uint64
+	AggregateAutoPrechargeStops uint64
+	AggregateImmediateContinues uint64
+	ActivateCommands            uint64
+	PrechargeCommands           uint64
+	MaxQueueAgeCycles           uint64
 }
 
 // ObservationDepth reports the occupancy of the queue that owns cmd and the
@@ -88,8 +93,8 @@ func (q *CommandQueueImpl) ObservationReadySameOpenRow(
 func (q *CommandQueueImpl) GetCommandToIssue(
 	now sim.VTimeInSec,
 ) *signal.Command {
-	if q.RowAware {
-		return q.getRowAwareCommandToIssue(now)
+	if q.RowContinuation || q.AggregateContinuation {
+		return q.getRowContinuationCommandToIssue(now)
 	}
 
 	for i := 0; i < len(q.Queues); i++ {
@@ -111,13 +116,13 @@ type readyCandidate struct {
 	ready      *signal.Command
 	age        sim.VTimeInSec
 	rowReady   bool
-	aged       bool
 }
 
-func (q *CommandQueueImpl) getRowAwareCommandToIssue(
+func (q *CommandQueueImpl) getRowContinuationCommandToIssue(
 	now sim.VTimeInSec,
 ) *signal.Command {
-	var firstReady, oldestRowReady, oldestAged *readyCandidate
+	q.resetReadyScratch()
+	firstReadyIndex := -1
 	for offset := 0; offset < len(q.Queues); offset++ {
 		queueIndex := (q.nextQueueIndex + offset) % len(q.Queues)
 		for cmdIndex, cmd := range q.Queues[queueIndex] {
@@ -127,65 +132,184 @@ func (q *CommandQueueImpl) getRowAwareCommandToIssue(
 			}
 
 			age := now - cmd.EnqueuedAt
-			candidate := &readyCandidate{
+			candidate := readyCandidate{
 				queueIndex: queueIndex,
 				cmdIndex:   cmdIndex,
 				cmd:        cmd,
 				ready:      ready,
 				age:        age,
 				rowReady:   ready.Kind == cmd.Kind && cmd.IsReadOrWrite(),
-				aged:       q.MaxAge > 0 && age >= q.MaxAge,
 			}
-			if firstReady == nil {
-				firstReady = candidate
-			}
-			if candidate.rowReady && older(candidate, oldestRowReady) {
-				oldestRowReady = candidate
-			}
-			if candidate.aged && older(candidate, oldestAged) {
-				oldestAged = candidate
+			q.readyScratch = append(q.readyScratch, candidate)
+			if firstReadyIndex < 0 {
+				firstReadyIndex = len(q.readyScratch) - 1
 			}
 		}
 	}
 
-	selected := oldestAged
-	agedPriority := selected != nil
-	if selected == nil {
-		selected = oldestRowReady
-	}
-	if selected == nil {
-		selected = firstReady
-	}
-	if selected == nil {
+	if firstReadyIndex < 0 {
 		return nil
 	}
 
+	firstReady := &q.readyScratch[firstReadyIndex]
+	selected := firstReady
+	continuedAggregate := false
+	if q.preferredAggregateID != "" {
+		for i := range q.readyScratch {
+			candidate := &q.readyScratch[i]
+			if pairedReadAggregateID(candidate.cmd) ==
+				q.preferredAggregateID &&
+				candidate.ready.Kind == candidate.cmd.Kind &&
+				candidate.cmd.IsReadOrWrite() {
+				selected = candidate
+				continuedAggregate = true
+				break
+			}
+		}
+	}
+	autoPrechargeStopped, aggregateStop :=
+		q.stopAutoPrechargeForReadyPeer(selected)
+	if aggregateStop {
+		q.preferredAggregateID = pairedReadAggregateID(selected.cmd)
+	} else if continuedAggregate {
+		q.preferredAggregateID = ""
+	}
+
 	q.nextQueueIndex = (selected.queueIndex + 1) % len(q.Queues)
-	q.recordIssue(selected, agedPriority)
+	q.recordIssue(selected, autoPrechargeStopped, aggregateStop)
+	if continuedAggregate {
+		q.stats.AggregateImmediateContinues++
+	}
 	if selected.cmd.Kind == selected.ready.Kind {
 		queue := q.Queues[selected.queueIndex]
 		q.Queues[selected.queueIndex] = append(
 			queue[:selected.cmdIndex], queue[selected.cmdIndex+1:]...)
 		delete(q.activatedByCmd, selected.cmd.ID)
 	}
-	return selected.ready
+	ready := selected.ready
+	q.resetReadyScratch()
+	return ready
 }
 
-func older(candidate, current *readyCandidate) bool {
-	return current == nil || candidate.cmd.EnqueuedAt < current.cmd.EnqueuedAt
+func (q *CommandQueueImpl) stopAutoPrechargeForReadyPeer(
+	selected *readyCandidate,
+) (stopped bool, aggregate bool) {
+	openKind := signal.NumCmdKind
+	switch selected.ready.Kind {
+	case signal.CmdKindReadPrecharge:
+		openKind = signal.CmdKindRead
+	case signal.CmdKindWritePrecharge:
+		openKind = signal.CmdKindWrite
+	default:
+		return false, false
+	}
+
+	for i := range q.readyScratch {
+		peer := &q.readyScratch[i]
+		if peer.cmd == selected.cmd || !peer.cmd.IsReadOrWrite() ||
+			!samePhysicalBank(peer.cmd, selected.cmd) {
+			continue
+		}
+		// Only the next ready command for this physical bank can justify
+		// keeping the row open. A farther same-row peer behind a different-row
+		// command is not an immediate reuse opportunity.
+		sameAggregate := samePairedReadAggregate(peer.cmd, selected.cmd)
+		if peer.cmd.Row != selected.cmd.Row ||
+			peer.ready.Kind != peer.cmd.Kind ||
+			(!q.RowContinuation && !sameAggregate) {
+			return false, false
+		}
+		selected.cmd.Kind = openKind
+		selected.ready.Kind = openKind
+		return true, sameAggregate
+	}
+	return false, false
+}
+
+// samePairedReadAggregate recognizes only the two independent 64-B reads
+// explicitly linked by the L2. Empty IDs, same-part duplicates, non-adjacent
+// columns, writes, and unrelated transactions never receive M1 priority.
+func samePairedReadAggregate(a, b *signal.Command) bool {
+	if a == nil || b == nil || a.SubTrans == nil || b.SubTrans == nil ||
+		a.SubTrans.Transaction == nil || b.SubTrans.Transaction == nil {
+		return false
+	}
+	if !signal.ArePairedReadPeers(
+		a.SubTrans.Transaction, b.SubTrans.Transaction) {
+		return false
+	}
+	if a.Column > b.Column {
+		return a.Column-b.Column == 1
+	}
+	return b.Column-a.Column == 1
+}
+
+func pairedReadAggregateID(cmd *signal.Command) string {
+	if cmd == nil || cmd.SubTrans == nil ||
+		cmd.SubTrans.Transaction == nil ||
+		cmd.SubTrans.Transaction.Read == nil {
+		return ""
+	}
+	return cmd.SubTrans.Transaction.Read.PairedReadID
+}
+
+// CanAcceptAll checks batch admission without mutating command-queue state.
+func (q *CommandQueueImpl) CanAcceptAll(commands []*signal.Command) bool {
+	required := make(map[int]int)
+	for _, cmd := range commands {
+		if cmd == nil {
+			return false
+		}
+		required[q.getQueueIndex(cmd)]++
+	}
+	for index, count := range required {
+		if len(q.Queues[index])+count > q.CapacityPerQueue {
+			return false
+		}
+	}
+	return true
+}
+
+// AcceptAll atomically appends a previously admitted command batch.
+func (q *CommandQueueImpl) AcceptAll(commands []*signal.Command) {
+	if !q.CanAcceptAll(commands) {
+		panic("command queue batch overflow")
+	}
+	for _, cmd := range commands {
+		index := q.getQueueIndex(cmd)
+		q.Queues[index] = append(q.Queues[index], cmd)
+	}
+}
+
+func (q *CommandQueueImpl) resetReadyScratch() {
+	for i := range q.readyScratch {
+		q.readyScratch[i] = readyCandidate{}
+	}
+	q.readyScratch = q.readyScratch[:0]
+}
+
+func samePhysicalBank(a, b *signal.Command) bool {
+	return a.Channel == b.Channel &&
+		a.Rank == b.Rank &&
+		a.BankGroup == b.BankGroup &&
+		a.Bank == b.Bank
 }
 
 func (q *CommandQueueImpl) recordIssue(
 	candidate *readyCandidate,
-	agedPriority bool,
+	autoPrechargeStopped bool,
+	aggregateStop bool,
 ) {
 	if q.activatedByCmd == nil {
 		q.activatedByCmd = make(map[string]bool)
 	}
 	q.stats.Enabled = true
 	q.stats.CommandsIssued++
-	if agedPriority {
-		q.stats.AgedPriorityIssues++
+	if autoPrechargeStopped {
+		q.stats.AutoPrechargeStops++
+	}
+	if aggregateStop {
+		q.stats.AggregateAutoPrechargeStops++
 	}
 	if q.Freq > 0 {
 		ageCycles := q.Freq.Cycle(candidate.age)
@@ -200,7 +324,8 @@ func (q *CommandQueueImpl) recordIssue(
 		q.activatedByCmd[candidate.cmd.ID] = true
 	case signal.CmdKindPrecharge:
 		q.stats.PrechargeCommands++
-	case signal.CmdKindRead, signal.CmdKindWrite:
+	case signal.CmdKindRead, signal.CmdKindReadPrecharge,
+		signal.CmdKindWrite, signal.CmdKindWritePrecharge:
 		q.stats.ColumnCommands++
 		if !q.activatedByCmd[candidate.cmd.ID] {
 			q.stats.RowReuseHits++
@@ -208,10 +333,11 @@ func (q *CommandQueueImpl) recordIssue(
 	}
 }
 
-// GetRowAwareStats returns a copy of the row-aware scheduler counters.
-func (q *CommandQueueImpl) GetRowAwareStats() RowAwareStats {
+// GetRowContinuationStats returns row-continuation counters.
+func (q *CommandQueueImpl) GetRowContinuationStats() RowContinuationStats {
 	stats := q.stats
-	stats.Enabled = q.RowAware
+	stats.Enabled = q.RowContinuation
+	stats.AggregateEnabled = q.AggregateContinuation
 	return stats
 }
 
@@ -230,9 +356,20 @@ func (q *CommandQueueImpl) getFirstReadyInQueue(
 		readyCmd := q.Channel.GetReadyCommand(now, cmd)
 
 		if readyCmd != nil {
+			// Command counters describe the physical DRAM work, not the
+			// row-continuation policy.  Record the ordinary scheduler as well
+			// so Baseline and M1 expose comparable ACT/PRE/column counts.
+			q.recordIssue(&readyCandidate{
+				queueIndex: queueIndex,
+				cmdIndex:   i,
+				cmd:        cmd,
+				ready:      readyCmd,
+				age:        now - cmd.EnqueuedAt,
+			}, false, false)
 			if cmd.Kind == readyCmd.Kind {
 				q.Queues[queueIndex] = append(
 					q.Queues[queueIndex][:i], q.Queues[queueIndex][i+1:]...)
+				delete(q.activatedByCmd, cmd.ID)
 			}
 			return readyCmd
 		}

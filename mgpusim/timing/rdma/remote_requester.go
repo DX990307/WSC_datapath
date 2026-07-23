@@ -2,8 +2,8 @@ package rdma
 
 import (
 	"fmt"
-	"math/bits"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
@@ -13,26 +13,39 @@ import (
 func (c *Comp) ConfigureRemoteDataPath(config RemoteDataPathConfig) {
 	c.remoteConfig = normalizeRemoteDataPathConfig(config)
 	c.RemoteDataPathStats.Enabled = c.remoteConfig.Enabled
-	c.RemoteDataPathStats.AUPrefetchEnabled = c.remoteConfig.AUPrefetch
 	c.RemoteDataPathStats.DedupEnabled =
 		c.remoteConfig.Enabled && !c.remoteConfig.DisableDedup
 	c.RemoteDataPathStats.BatchingEnabled =
 		c.remoteConfig.Enabled && !c.remoteConfig.DisableBatching
 	c.RemoteDataPathStats.RequesterL2Enabled =
 		c.remoteConfig.Enabled && !c.remoteConfig.DisableRequesterL2
+	c.RemoteDataPathStats.FilterPrefetchEnabled =
+		c.remoteConfig.Enabled && c.remoteConfig.EnableFilterPrefetch
 	c.RemoteDataPathStats.MaxBatchLines = uint64(c.remoteConfig.MaxBatchLines)
-	c.RemoteDataPathStats.MaxWaitNS = c.remoteConfig.MaxWaitNS
 	c.RemoteDataPathStats.MaxBatches = uint64(c.remoteConfig.MaxBatches)
-	c.RemoteDataPathStats.ReuseTableEntries =
-		uint64(c.remoteConfig.ReuseTableEntries)
+	c.RemoteDataPathStats.LineEntryCapacity =
+		uint64(c.remoteOutstandingCapacity())
+	c.RemoteDataPathStats.WaiterEntryCapacity =
+		uint64(c.remoteOutstandingCapacity())
+	c.RemoteDataPathStats.OwnerChildLineCapacity =
+		uint64(c.remoteOwnerChildLineCapacity())
 	if c.remoteConfig.Enabled {
 		c.ensureRemoteDataPathState()
+	}
+	if c.remoteConfig.Enabled && c.remoteConfig.EnableFilterPrefetch &&
+		c.remotePrefetcher == nil {
+		c.remotePrefetcher = writeback.NewPageLocalDemandStridePredictor(
+			c.remoteConfig.PrefetchEntries, remoteLineBytes, remotePageBytes)
 	}
 }
 
 // GetRemoteDataPathStats returns a snapshot of the mechanism counters.
 func (c *Comp) GetRemoteDataPathStats() RemoteDataPathStats {
-	return c.RemoteDataPathStats
+	stats := c.RemoteDataPathStats
+	if c.remotePrefetcher != nil {
+		stats.PrefetchPredictor = c.remotePrefetcher.Stats()
+	}
+	return stats
 }
 
 func (c *Comp) ensureRemoteDataPathState() {
@@ -41,6 +54,22 @@ func (c *Comp) ensureRemoteDataPathState() {
 	}
 	if c.remoteLines == nil {
 		c.remoteLines = make(map[remoteLineKey]*remoteLineEntry)
+	}
+	if c.remoteFilterLookups == nil {
+		c.remoteFilterLookups = make(map[string]writeback.TypedFilterLookup)
+	}
+	if c.remoteHintResults == nil {
+		c.remoteHintResults = make(map[string]bool)
+	}
+	if c.remotePrefetchCandidates == nil {
+		c.remotePrefetchCandidates = make(map[string]*remotePrefetchCandidate)
+	}
+	if c.remotePrefetchObserved == nil {
+		c.remotePrefetchObserved = make(map[string]bool)
+	}
+	if c.remotePatternFilters == nil {
+		c.remotePatternFilters = make(
+			map[writeback.TypedFilterKey]*writeback.TypedCuckooFilter)
 	}
 	if c.remoteProbes == nil {
 		c.remoteProbes = make(map[string]*remoteProbe)
@@ -60,12 +89,267 @@ func (c *Comp) ensureRemoteDataPathState() {
 	if c.remoteUncacheable == nil {
 		c.remoteUncacheable = make(map[remoteLineIdentity]bool)
 	}
-	if c.remoteReuse == nil && !c.remoteConfig.DisableRequesterL2 {
-		c.remoteReuse = newRemoteReuseTable(c.remoteConfig.ReuseTableEntries)
-	}
 	if c.remoteOwnerSubReqs == nil {
 		c.remoteOwnerSubReqs = make(map[string]*remoteOwnerSubReq)
 	}
+	if c.remoteOwnerBatches == nil {
+		c.remoteOwnerBatches = make(map[string]*remoteOwnerBatch)
+	}
+}
+
+// primeRemoteMetadata starts all metadata reads needed by the head request as
+// early as possible in the fixed RDMA pipeline. The tickets still complete
+// through the typed filter's latency-bearing, width-bounded interface.
+func (c *Comp) primeRemoteMetadata(now sim.VTimeInSec, msg sim.Msg) {
+	if !c.remoteConfig.Enabled {
+		return
+	}
+	read, ok := msg.(*mem.ReadReq)
+	if !ok || !remoteReadBatchable(read) {
+		return
+	}
+	dst := c.RemoteRDMAAddressTable.Find(read.Address)
+	c.primeRemotePrefetch(now, read, dst)
+	identity := c.remoteIdentity(read, dst)
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if filter == nil || filter.Mode() == writeback.TypedFilterDisabled {
+		return
+	}
+	key := remoteLineKey{
+		remoteLineIdentity: identity,
+		epoch:              c.remoteEpochs[identity],
+	}
+	negativeResolved := c.remoteBlockedNegativeReqID == read.ID &&
+		c.remoteBlockedNegativeKey == key
+	if !c.remoteConfig.DisableDedup && !negativeResolved {
+		c.primeRemoteFilterLookup(
+			now, read.ID,
+			remoteTypedFilterKey(identity, writeback.FilterPending),
+		)
+	}
+	if c.remoteConfig.DisableRequesterL2 || c.remoteCacheModules == nil ||
+		c.remoteUncacheable[identity] {
+		return
+	}
+	for _, kind := range []writeback.TypedFilterKeyType{
+		writeback.FilterSeen, writeback.FilterResident,
+	} {
+		lookupID := fmt.Sprintf("%s/%d", read.ID, kind)
+		if _, complete := c.remoteHintResults[lookupID]; complete {
+			continue
+		}
+		typedKey := remoteTypedFilterKey(identity, kind)
+		if kind == writeback.FilterResident {
+			typedKey.Owner = 0
+		}
+		c.primeRemoteFilterLookup(now, lookupID, typedKey)
+	}
+}
+
+func (c *Comp) primeRemoteFilterLookup(
+	now sim.VTimeInSec,
+	lookupID string,
+	key writeback.TypedFilterKey,
+) {
+	if _, started := c.remoteFilterLookups[lookupID]; started {
+		return
+	}
+	filter := c.requestFilterForAddress(key.Address)
+	if filter == nil || filter.Mode() == writeback.TypedFilterDisabled {
+		return
+	}
+	lookup, accepted := filter.StartLookup(now, key)
+	if !accepted {
+		c.TickLater(now)
+		return
+	}
+	c.remoteFilterLookups[lookupID] = lookup
+	c.TickLater(now)
+}
+
+// primeRemotePrefetch overlaps speculative metadata with the fixed RDMA input
+// pipeline. It observes each real request once, but never delays that request
+// if prediction or any Filter port is unavailable.
+func (c *Comp) primeRemotePrefetch(
+	now sim.VTimeInSec,
+	read *mem.ReadReq,
+	dst sim.Port,
+) {
+	if !c.remoteConfig.EnableFilterPrefetch ||
+		c.remoteConfig.DisableBatching || c.remotePrefetcher == nil ||
+		read == nil || c.remotePrefetchObserved[read.ID] {
+		return
+	}
+	if len(c.remotePrefetchObserved) >= c.remoteOutstandingCapacity() {
+		c.RemoteDataPathStats.PrefetchCapacityDrops++
+		return
+	}
+	c.remotePrefetchObserved[read.ID] = true
+	c.RemoteDataPathStats.PrefetchRealDemands++
+
+	source := ""
+	if read.Src != nil {
+		source = read.Src.Name()
+	}
+	ownerName := ""
+	if dst != nil {
+		ownerName = dst.Name()
+	}
+	observation := c.remotePrefetcher.ObserveRealDemand(
+		writeback.DemandStreamKey{
+			PID: read.PID,
+			Source: uint64(writeback.TypedFilterOwnerID(
+				source + "->" + ownerName)),
+		},
+		read.Address,
+	)
+	if observation.DeletePattern != nil {
+		if filter := c.remotePatternFilters[*observation.DeletePattern]; filter != nil {
+			filter.ScheduleUpdate(now, *observation.DeletePattern, true)
+		}
+		delete(c.remotePatternFilters, *observation.DeletePattern)
+	}
+	realFilter := c.requestFilterForAddress(read.Address)
+	if observation.InstallPattern != nil {
+		installed := realFilter != nil && realFilter.TryScheduleUpdate(
+			now, *observation.InstallPattern, false)
+		c.remotePrefetcher.SetPatternInstalled(observation.Token, installed)
+		if installed {
+			c.remotePatternFilters[*observation.InstallPattern] = realFilter
+			c.RemoteDataPathStats.PrefetchPatternInstalls++
+		} else {
+			c.RemoteDataPathStats.PrefetchPatternInstallDrops++
+		}
+	}
+	if !observation.HasCandidate {
+		return
+	}
+	c.RemoteDataPathStats.PrefetchCandidates++
+	candidateDst := c.RemoteRDMAAddressTable.Find(observation.Candidate)
+	if candidateDst == nil || dst == nil || candidateDst.Name() != dst.Name() ||
+		remotePageAddress(observation.Candidate) != remotePageAddress(read.Address) {
+		c.RemoteDataPathStats.PrefetchSameGroupDrops++
+		return
+	}
+	identity := c.remoteIdentity(read, candidateDst)
+	identity.lineAddr = remoteLineAddress(observation.Candidate)
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	patternFilter := c.remotePatternFilters[observation.Token.Key]
+	if filter == nil || patternFilter == nil {
+		c.RemoteDataPathStats.PrefetchFilterDrops++
+		return
+	}
+	// PATTERN follows the candidate to the slice that will eventually hold an
+	// admitted requester-L2 line. This keeps unused-line feedback local while
+	// still using exactly the existing per-slice physical Filters.
+	if patternFilter != filter {
+		if !filter.TryScheduleUpdate(now, observation.Token.Key, false) {
+			c.RemoteDataPathStats.PrefetchFilterDrops++
+			return
+		}
+		patternFilter.ScheduleUpdate(now, observation.Token.Key, true)
+		patternFilter = filter
+		c.remotePatternFilters[observation.Token.Key] = filter
+	}
+	residentKey := remoteTypedFilterKey(identity, writeback.FilterResident)
+	residentKey.Owner = 0
+	keys := [4]writeback.TypedFilterKey{
+		observation.Token.Key,
+		residentKey,
+		remoteTypedFilterKey(identity, writeback.FilterPending),
+		remoteTypedFilterKey(identity, writeback.FilterSeen),
+	}
+	candidate := &remotePrefetchCandidate{
+		identity: identity, owner: candidateDst,
+		token: observation.Token, patternKey: observation.Token.Key,
+	}
+	for i, key := range keys {
+		lookupFilter := filter
+		if i == 0 {
+			lookupFilter = patternFilter
+		}
+		lookup, accepted := lookupFilter.StartLookup(now, key)
+		if !accepted {
+			c.RemoteDataPathStats.PrefetchFilterDrops++
+			return
+		}
+		candidate.lookups[i] = lookup
+	}
+	c.remotePrefetchCandidates[read.ID] = candidate
+}
+
+func (c *Comp) takeRemotePrefetchCandidate(
+	requestID string,
+) *remotePrefetchCandidate {
+	candidate := c.remotePrefetchCandidates[requestID]
+	delete(c.remotePrefetchCandidates, requestID)
+	return candidate
+}
+
+func (c *Comp) queueRemotePrefetchCandidate(
+	now sim.VTimeInSec,
+	read *mem.ReadReq,
+	candidate *remotePrefetchCandidate,
+) {
+	if candidate == nil || read == nil {
+		return
+	}
+	filter := c.requestFilterForAddress(candidate.identity.lineAddr)
+	patternFilter := c.remotePatternFilters[candidate.patternKey]
+	if filter == nil || patternFilter == nil {
+		c.RemoteDataPathStats.PrefetchFilterDrops++
+		return
+	}
+	results := [4]bool{}
+	for i, lookup := range candidate.lookups {
+		lookupFilter := filter
+		if i == 0 {
+			lookupFilter = patternFilter
+		}
+		possible, reliable, ready := lookupFilter.CompleteLookup(now, lookup)
+		if !ready || !reliable {
+			c.RemoteDataPathStats.PrefetchFilterDrops++
+			return
+		}
+		results[i] = possible
+	}
+	if !results[0] {
+		c.remotePrefetcher.InvalidatePattern(candidate.token)
+		delete(c.remotePatternFilters, candidate.patternKey)
+		c.RemoteDataPathStats.PrefetchFilterDrops++
+		return
+	}
+	if results[1] || results[2] {
+		c.RemoteDataPathStats.PrefetchFilterDrops++
+		return
+	}
+	key := remoteLineKey{
+		remoteLineIdentity: candidate.identity,
+		epoch:              c.remoteEpochs[candidate.identity],
+	}
+	if c.remoteLines[key] != nil ||
+		len(c.remoteLines) >= c.remoteOutstandingCapacity() {
+		c.RemoteDataPathStats.PrefetchCapacityDrops++
+		return
+	}
+	pendingKey := remoteTypedFilterKey(
+		candidate.identity, writeback.FilterPending)
+	if !filter.TryScheduleUpdate(now, pendingKey, false) {
+		c.RemoteDataPathStats.PrefetchFilterDrops++
+		return
+	}
+	entry := c.newRemoteDemandEntry(key, candidate.owner, read.Info)
+	entry.state = remoteLinePendingBatch
+	entry.speculative = true
+	// A first-touch speculative response may occupy only an invalid requester-
+	// L2 way. Real SEEN/waiter evidence relaxes that restriction to the normal
+	// remote-clean replacement policy in the existing L2.
+	entry.admit = true
+	entry.seenAdmission = results[3]
+	entry.patternToken = candidate.token
+	entry.patternKey = candidate.patternKey
+	c.insertRemoteLine(key, entry)
+	c.remotePendingBatch = append(c.remotePendingBatch, entry)
 }
 
 func (c *Comp) tryProcessRemoteReqFromL1(
@@ -93,20 +377,42 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 		}
 		return false, false
 	}
-	if c.maxOutstanding <= 0 &&
-		c.remoteOutstandingReads >= c.remoteOutstandingCapacity() {
-		return true, false
-	}
-
 	identity := c.remoteIdentity(read, dst)
 	key := remoteLineKey{
 		remoteLineIdentity: identity,
 		epoch:              c.remoteEpochs[identity],
 	}
-	if entry := c.remoteLines[key]; entry != nil &&
-		!c.remoteConfig.DisableDedup {
-		count := c.touchRemoteReuse(identity)
-		c.addRemoteWaiter(entry, read, now, firstSeen, count)
+	var existing *remoteLineEntry
+	negativeRetry := c.remoteBlockedNegativeReqID == read.ID &&
+		c.remoteBlockedNegativeKey == key
+	if !negativeRetry && !c.remoteConfig.DisableDedup {
+		mayContain, ready, filterProgress := c.remotePendingMayContain(
+			now, read.ID, identity)
+		if !ready {
+			return true, filterProgress
+		}
+		if mayContain {
+			existing = c.remoteLines[key]
+			if existing == nil {
+				c.RemoteDataPathStats.InflightFilterFalsePositives++
+			}
+		}
+		if existing == nil {
+			// Preserve the completed negative while this request performs the
+			// SEEN/RESIDENT metadata lookups or waits for a bounded line entry.
+			// A filter false positive followed by an exact miss has reached the
+			// same safe conclusion and also need not be queried again.
+			c.rememberRemoteBlockedNegative(read.ID, key)
+		}
+	}
+	if entry := existing; entry != nil {
+		c.clearRemoteBlockedNegative(read.ID)
+		if c.remoteOutstandingReads >= c.remoteOutstandingCapacity() {
+			c.RemoteDataPathStats.WaiterEntryFullStalls++
+			return true, false
+		}
+		c.addRemoteWaiter(entry, read, now, firstSeen, 0)
+		c.queueRemotePrefetchCandidate(now, read, c.takeRemotePrefetchCandidate(read.ID))
 		if len(entry.data) == int(remoteLineBytes) {
 			c.queueRemoteReady(entry)
 		}
@@ -128,12 +434,52 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 			key.epoch = c.remoteEpochs[identity]
 		}
 	}
-	if !c.canAcceptRequesterOutstanding(1) {
+	// The line table is a bounded coalescing/dedup resource separate from the
+	// packet-granular RDMA outstanding table. Existing lines above are allowed
+	// to merge even when no new line entry can be allocated.
+	if len(c.remoteLines) >= c.remoteOutstandingCapacity() {
+		c.rememberRemoteBlockedNegative(read.ID, key)
+		c.RemoteDataPathStats.LineEntryFullStalls++
+		return true, false
+	}
+	if c.remoteOutstandingReads >= c.remoteOutstandingCapacity() {
+		c.rememberRemoteBlockedNegative(read.ID, key)
+		c.RemoteDataPathStats.WaiterEntryFullStalls++
+		return true, false
+	}
+	c.clearRemoteBlockedNegative(read.ID)
+	if c.remoteConfig.DisableBatching &&
+		!c.canAcceptRequesterOutstanding(1) {
 		return true, false
 	}
 
-	if !c.remoteConfig.DisableRequesterL2 &&
-		c.remoteCacheModules != nil && !c.remoteUncacheable[identity] {
+	probeEligible := !c.remoteConfig.DisableRequesterL2 &&
+		c.remoteCacheModules != nil && !c.remoteUncacheable[identity]
+	seenHit := false
+	residentPossible := false
+	if probeEligible {
+		var ready, lookupProgress bool
+		seenHit, ready, lookupProgress = c.remoteHintMayContain(
+			now, read.ID, identity, writeback.FilterSeen)
+		if !ready {
+			return true, lookupProgress
+		}
+		residentPossible, ready, lookupProgress = c.remoteHintMayContain(
+			now, read.ID, identity, writeback.FilterResident)
+		if !ready {
+			return true, lookupProgress
+		}
+	}
+	// A positive is only a hint. SEEN requests also probe so the existing L2
+	// returns an exact hit/miss and the current fill generation. Cold negative
+	// requests bypass that otherwise guaranteed-miss L2 lookup.
+	shouldProbe := residentPossible || seenHit
+	pendingReady, pendingProgress := c.remotePendingInsertReady(
+		now, read.ID, identity)
+	if !pendingReady {
+		return true, pendingProgress
+	}
+	if shouldProbe {
 		probe := mem.ReadReqBuilder{}.
 			WithSendTime(now).
 			WithSrc(c.ToL2).
@@ -148,37 +494,290 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 			if err := c.ToL2.Send(probe); err != nil {
 				return true, false
 			}
-			count := c.touchRemoteReuse(identity)
 			entry := c.newRemoteDemandEntry(key, dst, read.Info)
-			c.addRemoteWaiter(entry, read, now, firstSeen, count)
-			c.remoteLines[key] = entry
-			c.recordRequesterOutstandingPeak()
+			entry.prefetchCandidate = c.takeRemotePrefetchCandidate(read.ID)
+			entry.admit = seenHit
+			entry.seenAdmission = seenHit
+			if seenHit {
+				c.RemoteDataPathStats.SecondTouchAdmissions++
+				c.RemoteDataPathStats.TwoTouchCandidates++
+			}
+			c.addRemoteWaiter(entry, read, now, firstSeen, 0)
+			c.insertRemoteLine(key, entry)
+			if c.remoteConfig.DisableBatching {
+				c.recordRequesterOutstandingPeak()
+			}
 			c.remoteProbes[probe.ID] = &remoteProbe{
 				entry: entry,
 				req:   probe,
 				sent:  now,
 			}
 			c.consumeRemoteRead(now, read)
+			c.clearRemoteHintResults(read.ID)
 			return true, true
 		}
 	}
 
-	count := c.touchRemoteReuse(identity)
+	if probeEligible && !shouldProbe {
+		c.RemoteDataPathStats.L2OneTouchProbeBypasses++
+	}
 	entry := c.newRemoteDemandEntry(key, dst, read.Info)
+	entry.admit = seenHit
+	entry.seenAdmission = seenHit
+	if seenHit {
+		c.RemoteDataPathStats.SecondTouchAdmissions++
+		c.RemoteDataPathStats.TwoTouchCandidates++
+	}
 	entry.state = remoteLinePendingBatch
-	c.addRemoteWaiter(entry, read, now, firstSeen, count)
-	c.remoteLines[key] = entry
-	c.recordRequesterOutstandingPeak()
+	c.addRemoteWaiter(entry, read, now, firstSeen, 0)
+	c.insertRemoteLine(key, entry)
 	c.remotePendingBatch = append(c.remotePendingBatch, entry)
+	c.queueRemotePrefetchCandidate(now, read, c.takeRemotePrefetchCandidate(read.ID))
+	if c.remoteConfig.DisableBatching {
+		c.recordRequesterOutstandingPeak()
+	}
 	c.consumeRemoteRead(now, read)
+	c.clearRemoteHintResults(read.ID)
 	return true, true
 }
 
-func (c *Comp) touchRemoteReuse(identity remoteLineIdentity) uint8 {
-	if c.remoteConfig.DisableRequesterL2 || c.remoteReuse == nil {
-		return 0
+func (c *Comp) remoteHintMayContain(
+	now sim.VTimeInSec,
+	reqID string,
+	identity remoteLineIdentity,
+	kind writeback.TypedFilterKeyType,
+) (possible, ready, progress bool) {
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if filter == nil || filter.Mode() == writeback.TypedFilterDisabled {
+		if kind == writeback.FilterResident {
+			return true, true, false
+		}
+		return false, true, false
 	}
-	return c.remoteReuse.Touch(identity)
+
+	lookupID := fmt.Sprintf("%s/%d", reqID, kind)
+	if result, complete := c.remoteHintResults[lookupID]; complete {
+		return result, true, false
+	}
+	key := remoteTypedFilterKey(identity, kind)
+	if kind == writeback.FilterResident {
+		key.Owner = 0
+	}
+	lookup, started := c.remoteFilterLookups[lookupID]
+	if !started {
+		var accepted bool
+		lookup, accepted = filter.StartLookup(now, key)
+		if !accepted {
+			c.TickLater(now)
+			return false, false, false
+		}
+		c.remoteFilterLookups[lookupID] = lookup
+		progress = true
+	}
+
+	possible, reliable, complete := filter.CompleteLookup(now, lookup)
+	if !complete {
+		c.TickLater(now)
+		return false, false, true
+	}
+	delete(c.remoteFilterLookups, lookupID)
+	if kind == writeback.FilterSeen {
+		c.RemoteDataPathStats.SeenQueries++
+		if possible && reliable {
+			c.RemoteDataPathStats.SeenHits++
+			if !filter.ExactContains(key) {
+				c.RemoteDataPathStats.SeenFalsePositives++
+			}
+		} else {
+			c.RemoteDataPathStats.SeenNegatives++
+		}
+	} else if kind == writeback.FilterResident {
+		c.RemoteDataPathStats.ResidentQueries++
+		if possible && reliable {
+			c.RemoteDataPathStats.ResidentPositives++
+		} else {
+			c.RemoteDataPathStats.ResidentNegatives++
+		}
+	}
+	if !reliable {
+		possible = kind == writeback.FilterResident
+	}
+	c.remoteHintResults[lookupID] = possible
+	return possible, true, true
+}
+
+func (c *Comp) clearRemoteHintResults(reqID string) {
+	delete(c.remoteHintResults,
+		fmt.Sprintf("%s/%d", reqID, writeback.FilterSeen))
+	delete(c.remoteHintResults,
+		fmt.Sprintf("%s/%d", reqID, writeback.FilterResident))
+}
+
+func (c *Comp) markRemoteSeen(identity remoteLineIdentity) {
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if filter == nil || filter.Mode() == writeback.TypedFilterDisabled {
+		return
+	}
+	key := remoteTypedFilterKey(identity, writeback.FilterSeen)
+	if filter.ExactContains(key) {
+		return
+	}
+	if !filter.ScheduleUpdate(c.Engine.CurrentTime(), key, false) {
+		c.RemoteDataPathStats.SeenInsertFailures++
+	}
+}
+
+func (c *Comp) deleteRemoteSeen(identity remoteLineIdentity) {
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if filter == nil || filter.Mode() == writeback.TypedFilterDisabled {
+		return
+	}
+	key := remoteTypedFilterKey(identity, writeback.FilterSeen)
+	if filter.ExactContains(key) {
+		filter.ScheduleUpdate(c.Engine.CurrentTime(), key, true)
+	}
+}
+
+func (c *Comp) requestFilterForAddress(
+	address uint64,
+) *writeback.TypedCuckooFilter {
+	if len(c.requestFilters) == 0 || c.requestFilterInterleave == 0 {
+		return nil
+	}
+	index := address / c.requestFilterInterleave % uint64(len(c.requestFilters))
+	return c.requestFilters[index]
+}
+
+func remoteTypedFilterKey(
+	identity remoteLineIdentity,
+	kind writeback.TypedFilterKeyType,
+) writeback.TypedFilterKey {
+	return writeback.TypedFilterKey{
+		PID:     identity.pid,
+		Owner:   writeback.TypedFilterOwnerID(identity.ownerName),
+		Address: identity.lineAddr,
+		Type:    kind,
+	}
+}
+
+// remoteInflightMayContain remains as a test/debug snapshot helper. The live
+// path uses remotePendingMayContain so lookup latency and width are modeled.
+func (c *Comp) remoteInflightMayContain(identity remoteLineIdentity) bool {
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if filter == nil {
+		return false
+	}
+	possible, reliable := filter.Query(remoteTypedFilterKey(
+		identity, writeback.FilterPending))
+	return possible && reliable
+}
+
+func (c *Comp) remotePendingMayContain(
+	now sim.VTimeInSec,
+	reqID string,
+	identity remoteLineIdentity,
+) (mayContain, ready, progress bool) {
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if filter == nil || filter.Mode() == writeback.TypedFilterDisabled {
+		c.RemoteDataPathStats.ExactTableLookups++
+		return true, true, false
+	}
+
+	lookup, started := c.remoteFilterLookups[reqID]
+	if !started {
+		var accepted bool
+		lookup, accepted = filter.StartLookup(
+			now, remoteTypedFilterKey(identity, writeback.FilterPending))
+		if !accepted {
+			// A busy shared per-slice port is real backpressure, not a reason to
+			// bypass the modeled interface. Retry on the next RDMA cycle.
+			c.TickLater(now)
+			return false, false, false
+		}
+		c.remoteFilterLookups[reqID] = lookup
+		progress = true
+	}
+
+	possible, reliable, complete := filter.CompleteLookup(now, lookup)
+	if !complete {
+		c.TickLater(now)
+		return false, false, true
+	}
+	delete(c.remoteFilterLookups, reqID)
+	c.RemoteDataPathStats.InflightFilterQueries++
+	if !reliable {
+		c.RemoteDataPathStats.ExactTableLookups++
+		return true, true, true
+	}
+	if possible {
+		c.RemoteDataPathStats.InflightFilterPositives++
+		c.RemoteDataPathStats.ExactTableLookups++
+		return true, true, true
+	}
+	c.RemoteDataPathStats.InflightFilterNegatives++
+	c.RemoteDataPathStats.ExactTableLookupsAvoided++
+	return false, true, true
+}
+
+func (c *Comp) remotePendingInsertReady(
+	now sim.VTimeInSec,
+	_ string,
+	identity remoteLineIdentity,
+) (ready, progress bool) {
+	filter := c.requestFilterForAddress(identity.lineAddr)
+	if filter == nil || filter.Mode() == writeback.TypedFilterDisabled {
+		return true, false
+	}
+	key := remoteTypedFilterKey(identity, writeback.FilterPending)
+	if filter.ExactContains(key) {
+		return true, false
+	}
+	// The exact line entry and the metadata write are launched together. The
+	// shared update port still serializes visibility; a same-key lookup before
+	// ReadyAt fails open to the exact line table instead of stalling the remote
+	// request behind a bookkeeping write.
+	if !filter.ScheduleUpdate(now, key, false) {
+		c.RemoteDataPathStats.InflightFilterInsertFailures++
+	}
+	return true, true
+}
+
+func (c *Comp) rememberRemoteBlockedNegative(
+	reqID string,
+	key remoteLineKey,
+) {
+	c.remoteBlockedNegativeReqID = reqID
+	c.remoteBlockedNegativeKey = key
+}
+
+func (c *Comp) clearRemoteBlockedNegative(reqID string) {
+	if c.remoteBlockedNegativeReqID != reqID {
+		return
+	}
+	c.remoteBlockedNegativeReqID = ""
+	c.remoteBlockedNegativeKey = remoteLineKey{}
+}
+
+func (c *Comp) insertRemoteLine(
+	key remoteLineKey,
+	entry *remoteLineEntry,
+) {
+	c.remoteLines[key] = entry
+	if uint64(len(c.remoteLines)) > c.RemoteDataPathStats.PeakLineEntries {
+		c.RemoteDataPathStats.PeakLineEntries = uint64(len(c.remoteLines))
+	}
+	filter := c.requestFilterForAddress(key.lineAddr)
+	if filter == nil {
+		return
+	}
+	typedKey := remoteTypedFilterKey(
+		key.remoteLineIdentity, writeback.FilterPending)
+	if filter.ExactContains(typedKey) {
+		return
+	}
+	if !filter.Insert(typedKey) {
+		c.RemoteDataPathStats.InflightFilterInsertFailures++
+	}
 }
 
 func (c *Comp) newRemoteDemandEntry(
@@ -198,28 +797,33 @@ func (c *Comp) addRemoteWaiter(
 	entry *remoteLineEntry,
 	read *mem.ReadReq,
 	arrival, firstSeen sim.VTimeInSec,
-	touchCount uint8,
+	_ uint8,
 ) {
-	if entry.wasPrefetch {
-		// If the mate is demanded before the packet is sent, it is no longer
-		// speculative wire traffic and should use normal demand admission.
-		if entry.state == remoteLineCollecting && entry.batch != nil {
-			c.RemoteDataPathStats.AUPrefetchConvertedDemand++
-			line := remoteLineOffset(entry.key.lineAddr)
-			entry.batch.prefetchBitmap &^= uint64(1) << line
-			entry.wasPrefetch = false
-		} else {
-			c.RemoteDataPathStats.AUPrefetchDemandMerges++
-		}
-	}
 	entry.waiters = append(entry.waiters, remoteWaiter{
 		req:       read,
 		arrival:   arrival,
 		firstSeen: firstSeen,
 	})
-	if touchCount >= 2 && !entry.admit {
+	if entry.speculative && !entry.speculativeUseful {
+		entry.speculativeUseful = true
 		entry.admit = true
+		c.RemoteDataPathStats.PrefetchUseful++
+		if c.remotePrefetcher != nil {
+			c.remotePrefetcher.Reward(entry.patternToken)
+		}
+		// The predicted line is no longer speculative once a real request
+		// owns it. In particular, an unsent takeover must fall back to an
+		// ordinary 64-B demand transaction instead of being discarded by
+		// the standalone-speculation guard together with its waiters.
+		entry.speculative = false
+	}
+	if len(entry.waiters) >= 2 && !entry.admit &&
+		!c.remoteConfig.DisableRequesterL2 &&
+		!c.remoteUncacheable[entry.key.remoteLineIdentity] {
+		entry.admit = true
+		entry.multipleDemandAdmission = true
 		c.RemoteDataPathStats.TwoTouchCandidates++
+		c.RemoteDataPathStats.MultipleDemandAdmissions++
 	}
 }
 
@@ -229,9 +833,16 @@ func (c *Comp) consumeRemoteRead(now sim.VTimeInSec, read *mem.ReadReq) {
 		c.firstSeenFromL1Req[read.ID], read.Src, read.Dst,
 	)
 	c.ToL1.Retrieve(now)
+	delete(c.remotePrefetchObserved, read.ID)
+	delete(c.remotePrefetchCandidates, read.ID)
 	c.forgetSeen(c.firstSeenFromL1Req, read.ID)
 	c.RemoteDataPathStats.LogicalRemoteReads++
 	c.remoteOutstandingReads++
+	if uint64(c.remoteOutstandingReads) >
+		c.RemoteDataPathStats.PeakWaiterEntries {
+		c.RemoteDataPathStats.PeakWaiterEntries =
+			uint64(c.remoteOutstandingReads)
+	}
 }
 
 func (c *Comp) remoteIdentity(
@@ -276,10 +887,10 @@ func (c *Comp) remoteOutstandingCapacity() int {
 	return capacity
 }
 
-func (c *Comp) remoteOwnerOutstandingCapacity() int {
-	capacity := c.remoteOutstandingCapacity()
-	if capacity < 64 {
-		return 64
+func (c *Comp) remoteOwnerChildLineCapacity() int {
+	capacity := c.remoteConfig.MaxBatches * c.remoteConfig.MaxBatchLines
+	if capacity < 1 {
+		return 1
 	}
 	return capacity
 }
@@ -333,8 +944,15 @@ func (c *Comp) noteLegacyRemoteReqSent(req mem.AccessReq, dst sim.Port) {
 	for _, identity := range c.remoteIdentities(req, dst) {
 		c.remoteEpochs[identity]++
 		c.remoteUncacheable[identity] = true
-		if c.remoteReuse != nil {
-			c.remoteReuse.Delete(identity)
+		c.deleteRemoteSeen(identity)
+		if filter := c.requestFilterForAddress(identity.lineAddr); filter != nil {
+			resident := writeback.TypedFilterKey{
+				PID: identity.pid, Address: identity.lineAddr,
+				Type: writeback.FilterResident,
+			}
+			if filter.ExactContains(resident) {
+				filter.ScheduleUpdate(c.Engine.CurrentTime(), resident, true)
+			}
 		}
 	}
 }
@@ -360,6 +978,10 @@ func (c *Comp) processRemoteProbeRsp(
 	c.ToL2.Retrieve(now)
 
 	if lookup.Hit {
+		if entry.prefetchCandidate != nil {
+			c.RemoteDataPathStats.PrefetchStandalonePrevented++
+			entry.prefetchCandidate = nil
+		}
 		if len(lookup.Data) != int(remoteLineBytes) {
 			panic("remote L2 lookup hit returned an invalid cache line")
 		}
@@ -373,6 +995,11 @@ func (c *Comp) processRemoteProbeRsp(
 
 	entry.state = remoteLinePendingBatch
 	c.remotePendingBatch = append(c.remotePendingBatch, entry)
+	if entry.prefetchCandidate != nil && len(entry.waiters) > 0 {
+		c.queueRemotePrefetchCandidate(
+			now, entry.waiters[0].req, entry.prefetchCandidate)
+		entry.prefetchCandidate = nil
+	}
 	c.RemoteDataPathStats.L2ProbeMisses++
 	return true
 }
@@ -387,6 +1014,7 @@ func (c *Comp) processRemotePendingBatches(now sim.VTimeInSec) bool {
 			return false
 		}
 		c.remotePendingBatch = c.remotePendingBatch[1:]
+		c.recordRequesterOutstandingPeak()
 		return true
 	}
 	added, progress := c.tryAddRemoteEntryToBatch(now, entry)
@@ -445,8 +1073,20 @@ func (c *Comp) tryAddRemoteEntryToBatch(
 	}
 	line := remoteLineOffset(entry.key.lineAddr)
 	batch := c.remoteBatches[key]
+	if entry.speculative && batch == nil {
+		c.dropUnsentRemotePrefetch(entry)
+		c.RemoteDataPathStats.PrefetchStandalonePrevented++
+		c.RemoteDataPathStats.PrefetchNoExistingBatchDrops++
+		return true, true
+	}
 	if batch != nil && batch.lineBitmap&(uint64(1)<<line) == 0 &&
 		batch.lineCount() >= c.remoteConfig.MaxBatchLines {
+		if entry.speculative {
+			c.dropUnsentRemotePrefetch(entry)
+			c.RemoteDataPathStats.PrefetchCapacityDrops++
+			c.RemoteDataPathStats.PrefetchBatchFullDrops++
+			return true, true
+		}
 		// Let the width-bounded egress scheduler send the full batch before
 		// admitting another batch with the same key.
 		return false, false
@@ -478,51 +1118,23 @@ func (c *Comp) tryAddRemoteEntryToBatch(
 	batch.lines[line] = entry
 	entry.batch = batch
 	entry.state = remoteLineCollecting
-	c.addAUPrefetchLine(batch, line)
+	if entry.speculative {
+		c.RemoteDataPathStats.PrefetchPiggybackLines++
+	}
 	return true, true
 }
 
-func (c *Comp) addAUPrefetchLine(batch *remoteBatch, demandLine uint64) {
-	if !c.remoteConfig.AUPrefetch ||
-		batch.lineCount() >= c.remoteConfig.MaxBatchLines {
+func (c *Comp) dropUnsentRemotePrefetch(entry *remoteLineEntry) {
+	if entry == nil || !entry.speculative {
 		return
 	}
-	mate := demandLine ^ 1
-	if mate >= 64 || batch.lineBitmap&(uint64(1)<<mate) != 0 {
-		return
+	if c.remoteLines[entry.key] == entry {
+		delete(c.remoteLines, entry.key)
 	}
-	lineAddr := batch.key.pageAddr + mate*remoteLineBytes
-	identity := remoteLineIdentity{
-		ownerName: batch.key.ownerName,
-		pid:       batch.key.pid,
-		lineAddr:  lineAddr,
+	if filter := c.requestFilterForAddress(entry.key.lineAddr); filter != nil {
+		filter.ScheduleUpdate(c.Engine.CurrentTime(), remoteTypedFilterKey(
+			entry.key.remoteLineIdentity, writeback.FilterPending), true)
 	}
-	key := remoteLineKey{
-		remoteLineIdentity: identity,
-		epoch:              c.remoteEpochs[identity],
-	}
-	if c.remoteLines[key] != nil {
-		return
-	}
-	if !c.canAcceptRequesterOutstanding(1) {
-		return
-	}
-	entry := &remoteLineEntry{
-		key:               key,
-		owner:             batch.dst,
-		state:             remoteLineCollecting,
-		batch:             batch,
-		wasPrefetch:       true,
-		replicaGeneration: batch.lines[demandLine].replicaGeneration,
-		info:              batch.info,
-	}
-	c.remoteLines[key] = entry
-	c.recordRequesterOutstandingPeak()
-	batch.lineBitmap |= uint64(1) << mate
-	batch.prefetchBitmap |= uint64(1) << mate
-	batch.lineOrder = append(batch.lineOrder, mate)
-	batch.lines[mate] = entry
-	c.RemoteDataPathStats.AUPrefetchCandidates++
 }
 
 func (c *Comp) processRemoteBatches(
@@ -530,7 +1142,8 @@ func (c *Comp) processRemoteBatches(
 	force bool,
 ) bool {
 	madeProgress := false
-	for issued := 0; issued < c.effectivePipelineWidth(); {
+	issued := 0
+	for issued < c.effectivePipelineWidth() {
 		if len(c.remoteBatchOrder) == 0 {
 			break
 		}
@@ -541,7 +1154,6 @@ func (c *Comp) processRemoteBatches(
 			madeProgress = true
 			continue
 		}
-
 		reason := flushReasonIssue
 		if force {
 			reason = flushReasonDrain
@@ -556,6 +1168,9 @@ func (c *Comp) processRemoteBatches(
 		madeProgress = true
 		issued++
 	}
+	if issued >= c.effectivePipelineWidth() && len(c.remoteBatchOrder) > 0 {
+		c.RemoteDataPathStats.RequesterIssueWidthStalls++
+	}
 	return madeProgress || len(c.remoteBatchOrder) > 0
 }
 
@@ -565,6 +1180,9 @@ func (c *Comp) flushRemoteBatch(
 	reason string,
 ) bool {
 	if batch == nil || batch.lineCount() == 0 {
+		return false
+	}
+	if !c.canAcceptRequesterOutstanding(1) {
 		return false
 	}
 
@@ -591,6 +1209,7 @@ func (c *Comp) flushRemoteBatch(
 		entry.batch = nil
 		entry.fromRemote = true
 		c.remoteSingleInflight[req.ID] = entry
+		c.recordRequesterOutstandingPeak()
 		c.RemoteDataPathStats.SingleReadPackets++
 		c.recordRemoteBatchSent(now, batch, req.ID)
 		c.countRemoteFlush(reason)
@@ -624,6 +1243,7 @@ func (c *Comp) flushRemoteBatch(
 		entry.fromRemote = true
 	}
 	c.remoteBitmapInflight[req.ID] = batch
+	c.recordRequesterOutstandingPeak()
 	c.RemoteDataPathStats.BitmapPackets++
 	c.RemoteDataPathStats.BitmapLines += uint64(batch.lineCount())
 	c.recordRemoteBatchSent(now, batch, req.ID)
@@ -640,12 +1260,17 @@ func (c *Comp) recordRemoteBatchMetrics(
 	if lineCount < 1 || lineCount >= len(c.RemoteDataPathStats.BatchSizeHistogram) {
 		panic("remote batch line count is outside the bitmap range")
 	}
-	prefetchLines := bits.OnesCount64(batch.prefetchBitmap)
 	c.RemoteDataPathStats.BatchSizeHistogram[lineCount]++
 	c.RemoteDataPathStats.BatchQueueWaitSamples++
 	c.RemoteDataPathStats.WireLines += uint64(lineCount)
-	c.RemoteDataPathStats.PrefetchWireLines += uint64(prefetchLines)
-	c.RemoteDataPathStats.DemandWireLines += uint64(lineCount - prefetchLines)
+	demandLines := 0
+	for _, line := range batch.lineOrder {
+		if entry := batch.lines[line]; entry != nil && !entry.speculative {
+			demandLines++
+		}
+	}
+	c.RemoteDataPathStats.DemandWireLines += uint64(demandLines)
+	c.RemoteDataPathStats.PrefetchWireLines += uint64(lineCount - demandLines)
 	c.RemoteDataPathStats.NetworkRequestBytes += uint64(requestBytes)
 
 	waitNS := remoteDurationNS(now - batch.createdAt)
@@ -707,10 +1332,6 @@ func (c *Comp) countRemoteFlush(reason string) {
 		c.RemoteDataPathStats.FullFlushes++
 	case flushReasonIssue:
 		c.RemoteDataPathStats.WorkConservingFlushes++
-	case "timeout":
-		// Compatibility for tests or old callers that name the former
-		// timeout reason directly. Runtime batching never uses this path.
-		c.RemoteDataPathStats.TimeoutFlushes++
 	case flushReasonCapacity:
 		c.RemoteDataPathStats.CapacityFlushes++
 	case flushReasonConflict:
@@ -752,8 +1373,7 @@ func (c *Comp) processRemoteSingleRsp(
 	entry.state = remoteLineReady
 	entry.fromRemote = true
 	delete(c.remoteSingleInflight, rsp.GetRspTo())
-	c.RemoteDataPathStats.NetworkResponseBytes +=
-		uint64(remoteLineBytes) + bitmapRspOverhead
+	c.RemoteDataPathStats.NetworkResponseBytes += uint64(rsp.Meta().TrafficBytes)
 	c.ToOutside.Retrieve(now)
 	c.queueRemoteReady(entry)
 	return true
@@ -767,20 +1387,34 @@ func (c *Comp) processBitmapRspFromOutside(
 	if batch == nil {
 		panic("bitmap response has no matching requester batch")
 	}
-	for _, line := range batch.lineOrder {
-		data, ok := rsp.LineData[line]
-		if !ok || len(data) != int(remoteLineBytes) {
-			panic(fmt.Sprintf("bitmap response line %d is missing or invalid", line))
+	for line, data := range rsp.LineData {
+		if line >= 64 {
+			panic(fmt.Sprintf("bitmap response line %d is outside the page", line))
 		}
+		lineBit := uint64(1) << line
 		entry := batch.lines[line]
+		if batch.lineBitmap&lineBit == 0 || entry == nil {
+			panic(fmt.Sprintf("bitmap response line %d was not requested", line))
+		}
+		if len(data) != int(remoteLineBytes) {
+			panic(fmt.Sprintf("bitmap response line %d is invalid", line))
+		}
+		if batch.responseBitmap&lineBit != 0 {
+			panic(fmt.Sprintf("bitmap response line %d was returned twice", line))
+		}
 		entry.data = append([]byte(nil), data...)
 		entry.state = remoteLineReady
 		entry.fromRemote = true
 		c.queueRemoteReady(entry)
+		batch.responseBitmap |= lineBit
 	}
-	c.RemoteDataPathStats.NetworkResponseBytes += uint64(
-		bitmapRspOverhead + batch.lineCount()*int(remoteLineBytes))
-	delete(c.remoteBitmapInflight, rsp.GetRspTo())
+	if len(rsp.LineData) == 0 {
+		panic("bitmap response contains no cache lines")
+	}
+	c.RemoteDataPathStats.NetworkResponseBytes += uint64(rsp.Meta().TrafficBytes)
+	if batch.responseBitmap == batch.lineBitmap {
+		delete(c.remoteBitmapInflight, rsp.GetRspTo())
+	}
 	c.ToOutside.Retrieve(now)
 	return true
 }
@@ -831,7 +1465,7 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 
 	shouldFill := entry.fromRemote &&
 		!c.remoteConfig.DisableRequesterL2 &&
-		(entry.admit || entry.wasPrefetch) &&
+		entry.admit &&
 		!c.remoteUncacheable[entry.key.remoteLineIdentity]
 	if shouldFill && c.remoteCacheModules != nil {
 		if entry.fillComplete {
@@ -845,14 +1479,9 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 			entry.queuedReady = false
 			return true
 		}
-		dst := c.remoteCacheModules.Find(entry.key.lineAddr)
-		if dst != nil {
-			if entry.wasPrefetch {
-				c.RemoteDataPathStats.PrefetchFillAttempts++
-			} else {
-				c.RemoteDataPathStats.TwoTouchFillAttempts++
-			}
-			fill := mem.RemoteDataFillBuilder{}.
+		if dst := c.remoteCacheModules.Find(entry.key.lineAddr); dst != nil {
+			c.RemoteDataPathStats.TwoTouchFillAttempts++
+			fillBuilder := mem.RemoteDataFillBuilder{}.
 				WithSendTime(now).
 				WithSrc(c.ToL2).
 				WithDst(dst).
@@ -860,15 +1489,17 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 				WithAddress(entry.key.lineAddr).
 				WithData(append([]byte(nil), entry.data...)).
 				WithInfo(entry.info).
-				WithGeneration(entry.replicaGeneration).
-				WithPrefetch(entry.wasPrefetch).
-				Build()
-			if err := c.ToL2.Send(fill); err != nil {
-				if entry.wasPrefetch {
-					c.RemoteDataPathStats.PrefetchFillAttempts--
-				} else {
-					c.RemoteDataPathStats.TwoTouchFillAttempts--
+				WithGeneration(entry.replicaGeneration)
+			if entry.speculative {
+				fillBuilder = fillBuilder.WithPattern(
+					entry.patternKey.Owner, entry.patternKey.Address)
+				if !entry.speculativeUseful && !entry.seenAdmission {
+					fillBuilder = fillBuilder.WithRequireInvalidVictim()
 				}
+			}
+			fill := fillBuilder.Build()
+			if err := c.ToL2.Send(fill); err != nil {
+				c.RemoteDataPathStats.TwoTouchFillAttempts--
 				return false
 			}
 			entry.fillInflight = true
@@ -901,12 +1532,9 @@ func (c *Comp) processRemoteFillRsp(
 	delete(c.remoteFillInflight, fillRsp.GetRspTo())
 	entry.fillInflight = false
 	entry.fillComplete = true
+	entry.fillInstalled = fillRsp.Installed
 	if fillRsp.Installed {
-		if entry.wasPrefetch {
-			c.RemoteDataPathStats.PrefetchInstalledFills++
-		} else {
-			c.RemoteDataPathStats.TwoTouchInstalledFills++
-		}
+		c.RemoteDataPathStats.TwoTouchInstalledFills++
 	}
 	c.ToL2.Retrieve(now)
 	if len(entry.waiters) > 0 {
@@ -920,6 +1548,35 @@ func (c *Comp) processRemoteFillRsp(
 func (c *Comp) removeRemoteLine(entry *remoteLineEntry) {
 	if c.remoteLines[entry.key] == entry {
 		delete(c.remoteLines, entry.key)
+		identity := entry.key.remoteLineIdentity
+		if filter := c.requestFilterForAddress(identity.lineAddr); filter != nil {
+			filter.ScheduleUpdate(c.Engine.CurrentTime(), remoteTypedFilterKey(
+				identity, writeback.FilterPending), true)
+		}
+		if entry.speculative && !entry.speculativeUseful && !entry.fillInstalled {
+			c.RemoteDataPathStats.PrefetchUnused++
+			if c.remotePrefetcher != nil {
+				c.remotePrefetcher.Penalize(entry.patternToken)
+				if patternFilter := c.remotePatternFilters[entry.patternKey]; patternFilter != nil {
+					patternFilter.ScheduleUpdate(
+						c.Engine.CurrentTime(), entry.patternKey, true)
+				}
+				delete(c.remotePatternFilters, entry.patternKey)
+			}
+		} else if c.remoteUncacheable[identity] {
+			c.RemoteDataPathStats.ReuseWriteUncacheableSkips++
+			c.deleteRemoteSeen(identity)
+		} else if !entry.fromRemote || entry.fillInstalled {
+			// An exact requester-L2 hit or successful clean-fill supersedes SEEN.
+			c.deleteRemoteSeen(identity)
+		} else {
+			if !entry.admit {
+				c.RemoteDataPathStats.FirstTouchRemoteLines++
+			}
+			// A first transaction, or a clean-fill that could not find a safe
+			// victim, remains reusable evidence for the next real demand.
+			c.markRemoteSeen(identity)
+		}
 	}
 }
 
@@ -927,10 +1584,24 @@ func (c *Comp) resetRemoteDataPathHistory() {
 	if c.remoteOutstandingReads != 0 {
 		panic("RDMA drained with remote read waiters outstanding")
 	}
-	if c.remoteReuse != nil {
-		c.remoteReuse.Reset()
-	}
 	clear(c.remoteEpochs)
+	c.remoteBlockedNegativeReqID = ""
+	c.remoteBlockedNegativeKey = remoteLineKey{}
+	for _, filter := range c.requestFilters {
+		if filter != nil {
+			filter.ClearType(writeback.FilterPending)
+			filter.ClearType(writeback.FilterSeen)
+			filter.ClearType(writeback.FilterPattern)
+		}
+	}
+	if c.remotePrefetcher != nil {
+		c.remotePrefetcher.Reset()
+	}
+	clear(c.remotePrefetchObserved)
+	clear(c.remotePrefetchCandidates)
+	clear(c.remotePatternFilters)
+	clear(c.remoteFilterLookups)
+	clear(c.remoteHintResults)
 }
 
 func (c *Comp) remoteDataPathHasPendingWork() bool {
@@ -944,5 +1615,6 @@ func (c *Comp) remoteDataPathHasPendingWork() bool {
 		len(c.remoteReady) > 0 ||
 		len(c.remoteOwnerPendingReq) > 0 ||
 		len(c.remoteOwnerSubReqs) > 0 ||
-		len(c.remoteOwnerPendingRsp) > 0
+		len(c.remoteOwnerPendingRsp) > 0 ||
+		len(c.remoteOwnerBatches) > 0
 }

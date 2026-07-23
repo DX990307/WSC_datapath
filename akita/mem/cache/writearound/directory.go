@@ -216,9 +216,6 @@ func (d *directory) writeBottom(now sim.VTimeInSec, trans *transaction) bool {
 	write := trans.write
 	addr := write.Address
 	bottomModule := d.cache.lowModuleFinder.Find(addr)
-	if d.cache.bottomReorderEnabled() {
-		return d.enqueueWriteBottom(now, trans, bottomModule)
-	}
 
 	if !d.cache.canSendToBottomModule(bottomModule) {
 		return false
@@ -246,36 +243,6 @@ func (d *directory) writeBottom(now sim.VTimeInSec, trans *transaction) bool {
 	d.cache.trackBottomTransaction(trans, bottomModule)
 
 	tracing.TraceReqInitiate(writeToBottom, d.cache, trans.id)
-
-	return true
-}
-
-func (d *directory) enqueueWriteBottom(
-	now sim.VTimeInSec,
-	trans *transaction,
-	bottomModule sim.Port,
-) bool {
-	if !d.cache.canEnqueueBottomReorder() {
-		return false
-	}
-
-	write := trans.write
-	writeToBottom := mem.WriteReqBuilder{}.
-		WithSendTime(now).
-		WithSrc(d.cache.bottomPort).
-		WithDst(bottomModule).
-		WithAddress(write.Address).
-		WithPID(write.PID).
-		WithData(write.Data).
-		WithDirtyMask(write.DirtyMask).
-		WithInfo(d.memoryPathInfo(trans)).
-		Build()
-
-	trans.writeToBottom = writeToBottom
-	memtrace.LinkObservationRequest(
-		trans.id, writeToBottom.Meta().ID, "l1_bottom_write")
-	d.cache.enqueueBottomReorder(
-		now, trans, writeToBottom, bottomModule, write.Address)
 
 	return true
 }
@@ -332,9 +299,6 @@ func (d *directory) fetchFromBottom(
 	cacheLineID := addr / blockSize * blockSize
 
 	bottomModule := d.cache.lowModuleFinder.Find(cacheLineID)
-	if d.cache.bottomReorderEnabled() {
-		return d.enqueueReadBottom(now, trans, victim, bottomModule, cacheLineID)
-	}
 
 	if !d.cache.canSendToBottomModule(bottomModule) {
 		return false
@@ -347,6 +311,9 @@ func (d *directory) fetchFromBottom(
 		WithAddress(cacheLineID).
 		WithPID(pid).
 		WithByteSize(blockSize).
+		WithStreamID(readStreamID(trans.read)).
+		WithLocalStreamID(readLocalStreamID(trans.read)).
+		WithLocalPairHint(readLocalPairHint(trans.read)).
 		WithInfo(d.memoryPathInfo(trans)).
 		Build()
 	err := d.cache.bottomPort.Send(readToBottom)
@@ -375,49 +342,22 @@ func (d *directory) fetchFromBottom(
 	return true
 }
 
-func (d *directory) enqueueReadBottom(
-	now sim.VTimeInSec,
-	trans *transaction,
-	victim *cache.Block,
-	bottomModule sim.Port,
-	cacheLineID uint64,
-) bool {
-	if !d.cache.canEnqueueBottomReorder() {
-		return false
+func readStreamID(read *mem.ReadReq) uint64 {
+	if read == nil {
+		return 0
 	}
+	return read.StreamID
+}
 
-	pid := trans.PID()
-	blockSize := uint64(1 << d.cache.log2BlockSize)
-	readToBottom := mem.ReadReqBuilder{}.
-		WithSendTime(now).
-		WithSrc(d.cache.bottomPort).
-		WithDst(bottomModule).
-		WithAddress(cacheLineID).
-		WithPID(pid).
-		WithByteSize(blockSize).
-		WithInfo(d.memoryPathInfo(trans)).
-		Build()
+func readLocalStreamID(read *mem.ReadReq) uint64 {
+	if read == nil {
+		return 0
+	}
+	return read.LocalStreamID
+}
 
-	trans.readToBottom = readToBottom
-	memtrace.LinkObservationRequest(
-		trans.id, readToBottom.Meta().ID, "l1_bottom_read")
-	trans.block = victim
-
-	mshrEntry := d.cache.mshr.Add(pid, cacheLineID)
-	mshrEntry.Requests = append(mshrEntry.Requests, trans)
-	mshrEntry.ReadReq = readToBottom
-	mshrEntry.Block = victim
-
-	victim.Tag = cacheLineID
-	victim.PID = pid
-	victim.IsValid = true
-	victim.IsLocked = true
-	d.cache.directory.Visit(victim)
-
-	d.cache.enqueueBottomReorder(
-		now, trans, readToBottom, bottomModule, cacheLineID)
-
-	return true
+func readLocalPairHint(read *mem.ReadReq) bool {
+	return read != nil && read.LocalPairHint
 }
 
 func (d *directory) getBankBuf(block *cache.Block) sim.Buffer {

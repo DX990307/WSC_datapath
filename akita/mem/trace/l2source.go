@@ -55,6 +55,9 @@ type L2AccessInfo struct {
 	TranslationReqID  string
 	TranslationTaskID string
 	TranslatedReqID   string
+
+	HasWGOrigin bool
+	WGOrigin    WGOriginInfo
 }
 
 type l2LocalKey struct {

@@ -62,7 +62,7 @@ var _ = Describe("Dispatcher", func() {
 			Packet:     packet,
 			PacketAddr: packetAddr,
 		})
-
+		alg.EXPECT().NumWG().Return(0).AnyTimes()
 		dispatcher.StartDispatching(req)
 
 		Expect(dispatcher.dispatching).To(BeIdenticalTo(req))

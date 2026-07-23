@@ -23,20 +23,20 @@ type Builder struct {
 	storage          *mem.Storage
 	addrConverter    mem.AddressConverter
 
-	protocol             Protocol
-	transactionQueueSize int
-	commandQueueSize     int
-	rowReorderEnabled    bool
-	rowReorderMaxAge     int
-	busWidth             int
-	burstLength          int
-	deviceWidth          int
-	numChannel           int
-	numRank              int
-	numBankGroup         int
-	numBank              int
-	numRow               int
-	numCol               int
+	protocol              Protocol
+	transactionQueueSize  int
+	commandQueueSize      int
+	rowContinuation       bool
+	aggregateContinuation bool
+	busWidth              int
+	burstLength           int
+	deviceWidth           int
+	numChannel            int
+	numRank               int
+	numBankGroup          int
+	numBank               int
+	numRow                int
+	numCol                int
 
 	burstCycle int
 	tAL        int
@@ -78,7 +78,6 @@ func MakeBuilder() Builder {
 		protocol:             DDR3,
 		transactionQueueSize: 32,
 		commandQueueSize:     8,
-		rowReorderMaxAge:     64,
 		busWidth:             64,
 		burstLength:          8,
 		deviceWidth:          16,
@@ -188,16 +187,19 @@ func (b Builder) WithCommandQueueSize(n int) Builder {
 	return b
 }
 
-// WithRowAwareReorder enables open-page, row-hit-first DRAM scheduling. An
-// oldest-ready fallback takes priority after maxAgeCycles to avoid starvation.
-func (b Builder) WithRowAwareReorder(
-	enabled bool,
-	maxAgeCycles int,
-) Builder {
-	b.rowReorderEnabled = enabled
-	if maxAgeCycles > 0 {
-		b.rowReorderMaxAge = maxAgeCycles
-	}
+// WithRowContinuation enables work-conserving row continuation. The scheduler
+// preserves its ordinary command order, but suppresses auto-precharge when a
+// second ready 64-byte command can immediately reuse the same bank and row.
+func (b Builder) WithRowContinuation(enabled bool) Builder {
+	b.rowContinuation = enabled
+	return b
+}
+
+// WithAggregateContinuation keeps a row open only between physical access
+// units that came from the same front-end aggregate. It does not wait for or
+// reorder unrelated requests.
+func (b Builder) WithAggregateContinuation(enabled bool) Builder {
+	b.aggregateContinuation = enabled
 	return b
 }
 
@@ -434,22 +436,16 @@ func (b Builder) Build(name string) *MemController {
 	m.physicalAccessBytes = uint64(b.busWidth / 8 * b.burstLength)
 	m.subTransSplitter = trans.NewSubTransSplitter(numAccessUnitBit)
 	m.cmdQueue = &cmdq.CommandQueueImpl{
-		Queues:           make([]cmdq.Queue, b.numChannel*b.numRank),
-		CapacityPerQueue: b.commandQueueSize,
-		Channel:          m.channel,
-		RowAware:         b.rowReorderEnabled,
-		MaxAge: sim.VTimeInSec(
-			float64(b.rowReorderMaxAge) / float64(b.freq)),
-		Freq: b.freq,
+		Queues:                make([]cmdq.Queue, b.numChannel*b.numRank),
+		CapacityPerQueue:      b.commandQueueSize,
+		Channel:               m.channel,
+		RowContinuation:       b.rowContinuation,
+		AggregateContinuation: b.aggregateContinuation,
+		Freq:                  b.freq,
 	}
 	cmdCreator := trans.CommandCreator(&trans.ClosePageCommandCreator{
 		AddrMapper: m.addrMapper,
 	})
-	if b.rowReorderEnabled {
-		cmdCreator = &trans.OpenPageCommandCreator{
-			AddrMapper: m.addrMapper,
-		}
-	}
 	m.subTransactionQueue = &trans.FCFSSubTransactionQueue{
 		Capacity:   b.transactionQueueSize,
 		CmdQueue:   m.cmdQueue,

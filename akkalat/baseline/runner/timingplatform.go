@@ -48,13 +48,20 @@ type R9NanoPlatformBuilder struct {
 	l1vRemoteMaxInflight     int
 	l1vMSHREntries           int
 	l1vMaxConcurrentTrans    int
-	l1vBottomReorderPolicy   string
-	l1vBottomReorderWindow   int
-	l1vBottomReorderMaxAgeNS uint64
 	forceLocalDataAccess     bool
-	dramBatch                writeback.DRAMBatchConfig
-	dramRowReorderEnabled    bool
-	dramRowReorderMaxAge     int
+	l2ResidentFilter         bool
+	l2FilterPrefetch         bool
+	l2PrefetchPredictorOnly  bool
+	l2PrefetchUngated        bool
+	prefetchPredictorEntries int
+	l2GranularityAdaptation  bool
+	l2GranularityNoFilter    bool
+	l2GranularityAlways      bool
+	l2GranularityPredictor   bool
+	l2AdaptivePair           bool
+	l2FillForwarding         bool
+	typedFilterConfig        writeback.TypedFilterConfig
+	dramRowContinuation      bool
 	remoteDataPath           rdma.RemoteDataPathConfig
 	rdmaPipelineWidth        int
 	rdmaPipelineLatency      int
@@ -81,28 +88,30 @@ type R9NanoPlatformBuilder struct {
 // MakeR9NanoBuilder creates a EmuBuilder with default parameters.
 func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 	b := R9NanoPlatformBuilder{
-		tileWidth:              7,
-		tileHeight:             7,
-		log2PageSize:           12,
-		visTraceStartTime:      -1,
-		visTraceEndTime:        -1,
-		switchLatency:          20,
-		networkFlitSize:        16,
-		numSAPerGPU:            8,
-		numCUPerSA:             4,
-		maxNumHops:             -1,
-		l1vMSHREntries:         160,
-		l1vMaxConcurrentTrans:  160,
-		l1vBottomReorderPolicy: "none",
-		rdmaPipelineWidth:      8,
-		rdmaPipelineLatency:    10,
-		rdmaMaxOutstanding:     64,
-		dramRowReorderMaxAge:   64,
+		tileWidth:                7,
+		tileHeight:               7,
+		log2PageSize:             12,
+		visTraceStartTime:        -1,
+		visTraceEndTime:          -1,
+		switchLatency:            20,
+		networkFlitSize:          16,
+		numSAPerGPU:              8,
+		numCUPerSA:               4,
+		maxNumHops:               -1,
+		l1vMSHREntries:           16,
+		l1vMaxConcurrentTrans:    16,
+		prefetchPredictorEntries: 64,
+		typedFilterConfig: writeback.TypedFilterConfig{
+			Mode:                writeback.TypedFilterCuckoo,
+			LookupLatencyCycles: 1,
+			UpdateLatencyCycles: 1,
+		},
+		rdmaPipelineWidth:   8,
+		rdmaPipelineLatency: 10,
+		rdmaMaxOutstanding:  64,
 		remoteDataPath: rdma.RemoteDataPathConfig{
-			MaxBatchLines:     8,
-			MaxWaitNS:         0,
-			MaxBatches:        64,
-			ReuseTableEntries: 4096,
+			MaxBatchLines: 8,
+			MaxBatches:    64,
 		},
 	}
 	return b
@@ -264,19 +273,6 @@ func (b R9NanoPlatformBuilder) WithL1VMaxConcurrentTrans(
 	return b
 }
 
-// WithL1VBottomReorder configures an optional post-L1V bottom request reorder
-// queue used by M1 experiments.
-func (b R9NanoPlatformBuilder) WithL1VBottomReorder(
-	policy string,
-	window int,
-	maxAgeNS uint64,
-) R9NanoPlatformBuilder {
-	b.l1vBottomReorderPolicy = policy
-	b.l1vBottomReorderWindow = window
-	b.l1vBottomReorderMaxAgeNS = maxAgeNS
-	return b
-}
-
 // WithForceLocalDataAccess routes L1V data-cache misses to local L2/DRAM.
 func (b R9NanoPlatformBuilder) WithForceLocalDataAccess(
 	enable bool,
@@ -285,23 +281,86 @@ func (b R9NanoPlatformBuilder) WithForceLocalDataAccess(
 	return b
 }
 
-// WithDRAMBatch configures confirmed-L2-miss DRAM access-unit batching.
-func (b R9NanoPlatformBuilder) WithDRAMBatch(
-	config writeback.DRAMBatchConfig,
+// WithL2ResidentFilter enables local L2 Cuckoo-filter fast misses.
+func (b R9NanoPlatformBuilder) WithL2ResidentFilter(
+	enable bool,
 ) R9NanoPlatformBuilder {
-	b.dramBatch = config
+	b.l2ResidentFilter = enable
 	return b
 }
 
-// WithDRAMRowReorder configures open-page, row-hit-first DRAM scheduling.
-func (b R9NanoPlatformBuilder) WithDRAMRowReorder(
-	enabled bool,
-	maxAgeCycles int,
+// WithL2FilterPrefetch enables the Filter-coupled candidate path.
+func (b R9NanoPlatformBuilder) WithL2FilterPrefetch(
+	enable bool,
 ) R9NanoPlatformBuilder {
-	b.dramRowReorderEnabled = enabled
-	if maxAgeCycles > 0 {
-		b.dramRowReorderMaxAge = maxAgeCycles
+	b.l2FilterPrefetch = enable
+	return b
+}
+
+// WithL2PrefetchDiagnostics configures non-paper predictor diagnostics.
+func (b R9NanoPlatformBuilder) WithL2PrefetchDiagnostics(
+	predictorOnly, ungated bool,
+) R9NanoPlatformBuilder {
+	b.l2PrefetchPredictorOnly = predictorOnly
+	b.l2PrefetchUngated = ungated
+	return b
+}
+
+// WithL2GranularityAdaptation configures formal M1 and its two causal
+// diagnostics. The predictor and Cuckoo Filter remain per-GPU/per-slice as
+// configured by the GPU builder.
+func (b R9NanoPlatformBuilder) WithL2GranularityAdaptation(
+	enable, withoutFilter, alwaysExpand, predictorOnly bool,
+) R9NanoPlatformBuilder {
+	b.l2GranularityAdaptation = enable
+	b.l2GranularityNoFilter = withoutFilter
+	b.l2GranularityAlways = alwaysExpand
+	b.l2GranularityPredictor = predictorOnly
+	return b
+}
+
+// WithL2AdaptivePair enables the restored historical M1 adapter on every GPM.
+func (b R9NanoPlatformBuilder) WithL2AdaptivePair(
+	enable bool,
+) R9NanoPlatformBuilder {
+	b.l2AdaptivePair = enable
+	return b
+}
+
+// WithPrefetchPredictorEntries sets the common bounded predictor capacity for
+// local and remote instances of the same candidate-generation design.
+func (b R9NanoPlatformBuilder) WithPrefetchPredictorEntries(
+	entries int,
+) R9NanoPlatformBuilder {
+	if entries < 1 {
+		panic("prefetch predictor entries must be positive")
 	}
+	b.prefetchPredictorEntries = entries
+	return b
+}
+
+// WithL2FillForwarding enables best-effort read-only local fill forwarding.
+func (b R9NanoPlatformBuilder) WithL2FillForwarding(
+	enable bool,
+) R9NanoPlatformBuilder {
+	b.l2FillForwarding = enable
+	return b
+}
+
+// WithTypedFilterConfig sets the metadata implementation and ports for every
+// L2 slice.
+func (b R9NanoPlatformBuilder) WithTypedFilterConfig(
+	config writeback.TypedFilterConfig,
+) R9NanoPlatformBuilder {
+	b.typedFilterConfig = config
+	return b
+}
+
+// WithDRAMRowContinuation configures work-conserving same-row continuation.
+func (b R9NanoPlatformBuilder) WithDRAMRowContinuation(
+	enabled bool,
+) R9NanoPlatformBuilder {
+	b.dramRowContinuation = enabled
 	return b
 }
 
@@ -591,17 +650,21 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
 		WithL1VMSHREntries(b.l1vMSHREntries).
 		WithL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
-		WithL1VBottomReorder(
-			b.l1vBottomReorderPolicy,
-			b.l1vBottomReorderWindow,
-			b.l1vBottomReorderMaxAgeNS,
-		).
 		WithForceLocalDataAccess(b.forceLocalDataAccess).
-		WithDRAMBatch(b.dramBatch).
-		WithDRAMRowReorder(
-			b.dramRowReorderEnabled,
-			b.dramRowReorderMaxAge,
-		).
+		WithL2ResidentFilter(b.l2ResidentFilter).
+		WithL2FilterPrefetch(b.l2FilterPrefetch).
+		WithL2PrefetchDiagnostics(
+			b.l2PrefetchPredictorOnly, b.l2PrefetchUngated).
+		WithL2GranularityAdaptation(
+			b.l2GranularityAdaptation,
+			b.l2GranularityNoFilter,
+			b.l2GranularityAlways,
+			b.l2GranularityPredictor).
+		WithL2AdaptivePair(b.l2AdaptivePair).
+		WithPrefetchPredictorEntries(b.prefetchPredictorEntries).
+		WithL2FillForwarding(b.l2FillForwarding).
+		WithTypedFilterConfig(b.typedFilterConfig).
+		WithDRAMRowContinuation(b.dramRowContinuation).
 		WithRemoteDataPath(b.remoteDataPath).
 		WithRDMAPipeline(
 			b.rdmaPipelineWidth,

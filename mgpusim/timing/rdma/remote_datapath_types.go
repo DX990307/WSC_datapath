@@ -1,9 +1,9 @@
 package rdma
 
 import (
-	"container/list"
 	"math/bits"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
@@ -27,33 +27,25 @@ const (
 // existing zero-value callers with Enabled set. The whole mechanism is
 // disabled by default.
 type RemoteDataPathConfig struct {
-	Enabled            bool
-	AUPrefetch         bool
-	DisableDedup       bool
-	DisableBatching    bool
-	DisableRequesterL2 bool
-	MaxBatchLines      int
-	MaxWaitNS          uint64
-	MaxBatches         int
-	ReuseTableEntries  int
+	Enabled              bool
+	DisableDedup         bool
+	DisableBatching      bool
+	DisableRequesterL2   bool
+	EnableFilterPrefetch bool
+	PrefetchEntries      int
+	MaxBatchLines        int
+	MaxBatches           int
 }
 
 func normalizeRemoteDataPathConfig(c RemoteDataPathConfig) RemoteDataPathConfig {
+	if c.PrefetchEntries <= 0 {
+		c.PrefetchEntries = 64
+	}
 	if c.MaxBatchLines <= 0 || c.MaxBatchLines > 64 {
 		c.MaxBatchLines = 8
 	}
 	if c.MaxBatches <= 0 {
 		c.MaxBatches = 64
-	}
-	if c.ReuseTableEntries <= 0 {
-		c.ReuseTableEntries = 4096
-	}
-	// Remote batching is work-conserving. Keep MaxWaitNS in the public
-	// configuration for command-line compatibility, but never delay a ready
-	// batch in the hope that a future request will join it.
-	c.MaxWaitNS = 0
-	if c.DisableBatching || c.DisableRequesterL2 {
-		c.AUPrefetch = false
 	}
 	return c
 }
@@ -61,58 +53,102 @@ func normalizeRemoteDataPathConfig(c RemoteDataPathConfig) RemoteDataPathConfig 
 // RemoteDataPathStats contains the small set of counters needed to separate
 // batching, exact deduplication, L2 reuse, and fill admission effects.
 type RemoteDataPathStats struct {
-	Enabled                   bool
-	AUPrefetchEnabled         bool
-	DedupEnabled              bool
-	BatchingEnabled           bool
-	RequesterL2Enabled        bool
-	MaxBatchLines             uint64
-	MaxWaitNS                 uint64
-	MaxBatches                uint64
-	ReuseTableEntries         uint64
-	LogicalRemoteReads        uint64
-	WireLines                 uint64
-	DemandWireLines           uint64
-	PrefetchWireLines         uint64
-	DuplicateReads            uint64
-	CollectingMerges          uint64
-	InflightMerges            uint64
-	ReadyMerges               uint64
-	L2ProbeHits               uint64
-	L2ProbeMisses             uint64
-	L2LogicalResponses        uint64
-	SingleReadPackets         uint64
-	BitmapPackets             uint64
-	BitmapLines               uint64
-	BatchSizeHistogram        [65]uint64
-	AUPrefetchCandidates      uint64
-	AUPrefetchConvertedDemand uint64
-	AUPrefetchDemandMerges    uint64
-	TwoTouchCandidates        uint64
-	TwoTouchFillAttempts      uint64
-	PrefetchFillAttempts      uint64
-	TwoTouchInstalledFills    uint64
-	PrefetchInstalledFills    uint64
-	FanoutResponses           uint64
-	NetworkRequestBytes       uint64
-	NetworkResponseBytes      uint64
-	BatchQueueWaitSamples     uint64
-	BatchQueueWaitTotalNS     float64
-	BatchQueueWaitMaxNS       float64
-	PreNetworkWaitSamples     uint64
-	PreNetworkWaitTotalNS     float64
-	PreNetworkWaitMaxNS       float64
-	ProbeLatencySamples       uint64
-	ProbeLatencyTotalNS       float64
-	ProbeLatencyMaxNS         float64
-	LogicalReadLatencyTotalNS float64
-	LogicalReadLatencyMaxNS   float64
-	FullFlushes               uint64
-	WorkConservingFlushes     uint64
-	TimeoutFlushes            uint64
-	CapacityFlushes           uint64
-	ConflictFlushes           uint64
-	DrainFlushes              uint64
+	Enabled                      bool
+	DedupEnabled                 bool
+	BatchingEnabled              bool
+	RequesterL2Enabled           bool
+	FilterPrefetchEnabled        bool
+	MaxBatchLines                uint64
+	MaxBatches                   uint64
+	LineEntryCapacity            uint64
+	PeakLineEntries              uint64
+	LineEntryFullStalls          uint64
+	WaiterEntryCapacity          uint64
+	PeakWaiterEntries            uint64
+	WaiterEntryFullStalls        uint64
+	OwnerChildLineCapacity       uint64
+	OwnerPeakChildLines          uint64
+	OwnerChildLineFullStalls     uint64
+	ObservedRemoteReads          uint64
+	ObservedRemoteWrites         uint64
+	LogicalRemoteReads           uint64
+	WireLines                    uint64
+	DemandWireLines              uint64
+	DuplicateReads               uint64
+	InflightFilterQueries        uint64
+	InflightFilterPositives      uint64
+	InflightFilterNegatives      uint64
+	InflightFilterFalsePositives uint64
+	InflightFilterInsertFailures uint64
+	ExactTableLookups            uint64
+	ExactTableLookupsAvoided     uint64
+	CollectingMerges             uint64
+	InflightMerges               uint64
+	ReadyMerges                  uint64
+	L2ProbeHits                  uint64
+	L2ProbeMisses                uint64
+	L2OneTouchProbeBypasses      uint64
+	ReuseWriteUncacheableSkips   uint64
+	L2LogicalResponses           uint64
+	SingleReadPackets            uint64
+	BitmapPackets                uint64
+	BitmapLines                  uint64
+	BitmapResponsePackets        uint64
+	BitmapResponseLines          uint64
+	EarlyBitmapResponses         uint64
+	BatchSizeHistogram           [65]uint64
+	TwoTouchCandidates           uint64
+	ResidentQueries              uint64
+	ResidentPositives            uint64
+	ResidentNegatives            uint64
+	SeenQueries                  uint64
+	SeenHits                     uint64
+	SeenNegatives                uint64
+	SeenFalsePositives           uint64
+	SeenInsertFailures           uint64
+	FirstTouchRemoteLines        uint64
+	SecondTouchAdmissions        uint64
+	MultipleDemandAdmissions     uint64
+	TwoTouchFillAttempts         uint64
+	TwoTouchInstalledFills       uint64
+	FanoutResponses              uint64
+	NetworkRequestBytes          uint64
+	NetworkResponseBytes         uint64
+	BatchQueueWaitSamples        uint64
+	BatchQueueWaitTotalNS        float64
+	BatchQueueWaitMaxNS          float64
+	PreNetworkWaitSamples        uint64
+	PreNetworkWaitTotalNS        float64
+	PreNetworkWaitMaxNS          float64
+	ProbeLatencySamples          uint64
+	ProbeLatencyTotalNS          float64
+	ProbeLatencyMaxNS            float64
+	LogicalReadLatencyTotalNS    float64
+	LogicalReadLatencyMaxNS      float64
+	FullFlushes                  uint64
+	WorkConservingFlushes        uint64
+	CapacityFlushes              uint64
+	ConflictFlushes              uint64
+	DrainFlushes                 uint64
+	RequesterIssueWidthStalls    uint64
+	ResponseFanoutWidthStalls    uint64
+	OwnerIssueWidthStalls        uint64
+	OwnerResponseWidthStalls     uint64
+	PrefetchRealDemands          uint64
+	PrefetchCandidates           uint64
+	PrefetchPatternInstalls      uint64
+	PrefetchPatternInstallDrops  uint64
+	PrefetchFilterDrops          uint64
+	PrefetchSameGroupDrops       uint64
+	PrefetchCapacityDrops        uint64
+	PrefetchNoExistingBatchDrops uint64
+	PrefetchBatchFullDrops       uint64
+	PrefetchPiggybackLines       uint64
+	PrefetchWireLines            uint64
+	PrefetchUseful               uint64
+	PrefetchUnused               uint64
+	PrefetchStandalonePrevented  uint64
+	PrefetchPredictor            writeback.DemandStridePredictorStats
 }
 
 // BitmapReadReq names multiple 64B cache lines in one remote 4KiB page.
@@ -168,20 +204,35 @@ type remoteWaiter struct {
 }
 
 type remoteLineEntry struct {
-	key               remoteLineKey
-	owner             sim.Port
-	state             remoteLineState
-	waiters           []remoteWaiter
-	data              []byte
-	batch             *remoteBatch
-	wasPrefetch       bool
-	admit             bool
-	fromRemote        bool
-	queuedReady       bool
-	fillInflight      bool
-	fillComplete      bool
-	replicaGeneration uint64
-	info              interface{}
+	key                     remoteLineKey
+	owner                   sim.Port
+	state                   remoteLineState
+	waiters                 []remoteWaiter
+	data                    []byte
+	batch                   *remoteBatch
+	admit                   bool
+	fromRemote              bool
+	queuedReady             bool
+	fillInflight            bool
+	fillComplete            bool
+	multipleDemandAdmission bool
+	seenAdmission           bool
+	fillInstalled           bool
+	replicaGeneration       uint64
+	info                    interface{}
+	speculative             bool
+	speculativeUseful       bool
+	patternToken            writeback.PatternToken
+	patternKey              writeback.TypedFilterKey
+	prefetchCandidate       *remotePrefetchCandidate
+}
+
+type remotePrefetchCandidate struct {
+	identity   remoteLineIdentity
+	owner      sim.Port
+	token      writeback.PatternToken
+	patternKey writeback.TypedFilterKey
+	lookups    [4]writeback.TypedFilterLookup
 }
 
 type remoteBatchKey struct {
@@ -191,17 +242,19 @@ type remoteBatchKey struct {
 }
 
 type remoteBatch struct {
-	key            remoteBatchKey
-	dst            sim.Port
-	lineBitmap     uint64
-	prefetchBitmap uint64
-	lineOrder      []uint64
+	key        remoteBatchKey
+	dst        sim.Port
+	lineBitmap uint64
+	lineOrder  []uint64
 	// A page has exactly 64 cache lines. A fixed index avoids allocating and
 	// hashing a small map for every requester batch.
 	lines     [64]*remoteLineEntry
 	oldest    sim.VTimeInSec
 	createdAt sim.VTimeInSec
 	info      interface{}
+	// responseBitmap tracks partial owner responses. A slow cache line must
+	// not hold back other independent 64-B lines already returned by owner L2.
+	responseBitmap uint64
 }
 
 func (b *remoteBatch) lineCount() int {
@@ -215,70 +268,16 @@ type remoteProbe struct {
 }
 
 type remoteOwnerBatch struct {
-	req       *BitmapReadReq
-	remaining int
-	lineData  map[uint64][]byte
+	req         *BitmapReadReq
+	remaining   int
+	readyData   map[uint64][]byte
+	readyQueued bool
 }
 
 type remoteOwnerSubReq struct {
 	batch *remoteOwnerBatch
 	line  uint64
 	read  *mem.ReadReq
-}
-
-type remoteReuseRecord struct {
-	count uint8
-	elem  *list.Element
-}
-
-type remoteReuseTable struct {
-	capacity int
-	records  map[remoteLineIdentity]*remoteReuseRecord
-	lru      *list.List
-}
-
-func newRemoteReuseTable(capacity int) *remoteReuseTable {
-	return &remoteReuseTable{
-		capacity: capacity,
-		records:  make(map[remoteLineIdentity]*remoteReuseRecord),
-		lru:      list.New(),
-	}
-}
-
-func (t *remoteReuseTable) Touch(key remoteLineIdentity) uint8 {
-	if record := t.records[key]; record != nil {
-		if record.count < 2 {
-			record.count++
-		}
-		t.lru.MoveToBack(record.elem)
-		return record.count
-	}
-
-	if len(t.records) >= t.capacity {
-		front := t.lru.Front()
-		if front != nil {
-			old := front.Value.(remoteLineIdentity)
-			delete(t.records, old)
-			t.lru.Remove(front)
-		}
-	}
-	elem := t.lru.PushBack(key)
-	t.records[key] = &remoteReuseRecord{count: 1, elem: elem}
-	return 1
-}
-
-func (t *remoteReuseTable) Delete(key remoteLineIdentity) {
-	record := t.records[key]
-	if record == nil {
-		return
-	}
-	delete(t.records, key)
-	t.lru.Remove(record.elem)
-}
-
-func (t *remoteReuseTable) Reset() {
-	clear(t.records)
-	t.lru.Init()
 }
 
 func remotePageAddress(addr uint64) uint64 {

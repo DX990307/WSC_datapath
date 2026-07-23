@@ -13,45 +13,42 @@ type remoteReplicaKey struct {
 }
 
 type remoteReplicaRecord struct {
-	key      remoteReplicaKey
-	prefetch bool
-	used     bool
-	hits     uint64
+	key        remoteReplicaKey
+	used       bool
+	hits       uint64
+	patternKey *TypedFilterKey
 }
 
 // RemoteReplicaStats reports only the work performed by the requester-side
 // remote replica path. All counters remain zero when the feature is disabled.
 type RemoteReplicaStats struct {
-	FilterQueries                 uint64
-	FilterPositives               uint64
-	FilterNegatives               uint64
-	FilterFalsePositives          uint64
-	FilterTruePositiveUnavailable uint64
-	CleanFills                    uint64
-	TwoTouchFillAttempts          uint64
-	PrefetchFillAttempts          uint64
-	InstalledFills                uint64
-	TwoTouchInstalledFills        uint64
-	PrefetchInstalledFills        uint64
-	DroppedFills                  uint64
-	TwoTouchDroppedFills          uint64
-	PrefetchDroppedFills          uint64
-	FilterInsertFails             uint64
-	TrackedEvictions              uint64
-	UnusedTwoTouchRetirements     uint64
-	UnusedPrefetchRetirements     uint64
-	ReplicaProbeHits              uint64
-	TwoTouchReplicaHits           uint64
-	PrefetchReplicaHits           uint64
-	UsefulTwoTouchFills           uint64
-	UsefulPrefetchFills           uint64
-	FillIntoInvalid               uint64
-	FillReplacedRemote            uint64
-	FillDisplacedLocalClean       uint64
-	TwoTouchLocalDisplacements    uint64
-	PrefetchLocalDisplacements    uint64
-	CurrentRemoteReplicas         uint64
-	PeakRemoteReplicas            uint64
+	FilterQueries                  uint64
+	FilterPositives                uint64
+	FilterNegatives                uint64
+	FilterFalsePositives           uint64
+	FilterTruePositiveUnavailable  uint64
+	CleanFills                     uint64
+	TwoTouchFillAttempts           uint64
+	InstalledFills                 uint64
+	TwoTouchInstalledFills         uint64
+	DroppedFills                   uint64
+	TwoTouchDroppedFills           uint64
+	FilterInsertFails              uint64
+	TrackedEvictions               uint64
+	UnusedTwoTouchRetirements      uint64
+	ReplicaProbeHits               uint64
+	TwoTouchReplicaHits            uint64
+	UsefulTwoTouchFills            uint64
+	FillIntoInvalid                uint64
+	FillReplacedRemote             uint64
+	FillDisplacedLocalClean        uint64
+	TwoTouchLocalDisplacements     uint64
+	LocalCleanProtectionDrops      uint64
+	CurrentRemoteReplicas          uint64
+	PeakRemoteReplicas             uint64
+	UnusedPatternRetirements       uint64
+	SpeculativeInvalidOnlyAttempts uint64
+	SpeculativeInvalidOnlyDrops    uint64
 }
 
 // GetRemoteReplicaStats returns a snapshot of this L2 slice's counters.
@@ -74,20 +71,12 @@ func (c *Cache) remoteReplicaMayContain(pid vm.PID, addr uint64) bool {
 
 func (c *Cache) recordRemoteFillAttempt(fill *mem.RemoteDataFill) {
 	c.remoteReplicaStats.CleanFills++
-	if fill != nil && fill.Prefetch {
-		c.remoteReplicaStats.PrefetchFillAttempts++
-	} else {
-		c.remoteReplicaStats.TwoTouchFillAttempts++
-	}
+	c.remoteReplicaStats.TwoTouchFillAttempts++
 }
 
 func (c *Cache) recordRemoteFillDropped(fill *mem.RemoteDataFill) {
 	c.remoteReplicaStats.DroppedFills++
-	if fill != nil && fill.Prefetch {
-		c.remoteReplicaStats.PrefetchDroppedFills++
-	} else {
-		c.remoteReplicaStats.TwoTouchDroppedFills++
-	}
+	c.remoteReplicaStats.TwoTouchDroppedFills++
 }
 
 func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
@@ -128,34 +117,30 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 
 	victimWasValid := block.IsValid
 	oldRecord, replacedRemote := c.remoteReplicaBlocks[block]
-	if replacedRemote {
-		c.remoteReplicaFilter.Delete(oldRecord.key.pid, oldRecord.key.line)
-		delete(c.remoteReplicaBlocks, block)
-	}
-	if !c.remoteReplicaFilter.Insert(fill.PID, line) {
-		if replacedRemote {
-			if !c.remoteReplicaFilter.Insert(
-				oldRecord.key.pid, oldRecord.key.line,
-			) {
-				panic("failed to restore remote replica filter entry")
-			}
-			c.remoteReplicaBlocks[block] = oldRecord
+	if fill.RequireInvalidVictim {
+		c.remoteReplicaStats.SpeculativeInvalidOnlyAttempts++
+		if victimWasValid {
+			c.remoteReplicaStats.SpeculativeInvalidOnlyDrops++
+			c.recordRemoteFillDropped(fill)
+			return false
 		}
-		c.remoteReplicaStats.FilterInsertFails++
+	}
+	// Remote clean fills are opportunistic. Never evict an ordinary local clean
+	// line for one. Invalid ways and existing remote-clean lines remain eligible
+	// under the benchmark-independent victim policy.
+	if victimWasValid && !replacedRemote {
+		c.remoteReplicaStats.LocalCleanProtectionDrops++
 		c.recordRemoteFillDropped(fill)
 		return false
 	}
 	if replacedRemote {
+		delete(c.remoteReplicaBlocks, block)
+	}
+	c.untrackResidentBlock(block)
+	if replacedRemote {
 		c.recordRemoteReplicaRetirement(oldRecord)
 		c.remoteReplicaStats.TrackedEvictions++
 		c.remoteReplicaStats.FillReplacedRemote++
-	} else if victimWasValid {
-		c.remoteReplicaStats.FillDisplacedLocalClean++
-		if fill.Prefetch {
-			c.remoteReplicaStats.PrefetchLocalDisplacements++
-		} else {
-			c.remoteReplicaStats.TwoTouchLocalDisplacements++
-		}
 	} else {
 		c.remoteReplicaStats.FillIntoInvalid++
 	}
@@ -171,17 +156,21 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 	block.IsLocked = false
 	block.DirtyMask = nil
 	c.directory.Visit(block)
+	c.trackResidentBlock(block)
 
-	c.remoteReplicaBlocks[block] = &remoteReplicaRecord{
-		key:      remoteReplicaKey{pid: fill.PID, line: line},
-		prefetch: fill.Prefetch,
+	record := &remoteReplicaRecord{
+		key: remoteReplicaKey{pid: fill.PID, line: line},
 	}
+	if fill.HasPattern {
+		patternKey := TypedFilterKey{
+			PID: fill.PID, Owner: fill.PatternOwner,
+			Address: fill.PatternAddress, Type: FilterPattern,
+		}
+		record.patternKey = &patternKey
+	}
+	c.remoteReplicaBlocks[block] = record
 	c.remoteReplicaStats.InstalledFills++
-	if fill.Prefetch {
-		c.remoteReplicaStats.PrefetchInstalledFills++
-	} else {
-		c.remoteReplicaStats.TwoTouchInstalledFills++
-	}
+	c.remoteReplicaStats.TwoTouchInstalledFills++
 	c.updateRemoteReplicaOccupancy()
 	return true
 }
@@ -209,16 +198,9 @@ func (c *Cache) recordRemoteReplicaHit(
 	record := c.remoteReplicaBlocks[block]
 	record.hits++
 	c.remoteReplicaStats.ReplicaProbeHits++
-	if record.prefetch {
-		c.remoteReplicaStats.PrefetchReplicaHits++
-		if !record.used {
-			c.remoteReplicaStats.UsefulPrefetchFills++
-		}
-	} else {
-		c.remoteReplicaStats.TwoTouchReplicaHits++
-		if !record.used {
-			c.remoteReplicaStats.UsefulTwoTouchFills++
-		}
+	c.remoteReplicaStats.TwoTouchReplicaHits++
+	if !record.used {
+		c.remoteReplicaStats.UsefulTwoTouchFills++
 	}
 	record.used = true
 	return true
@@ -230,10 +212,11 @@ func (c *Cache) recordRemoteReplicaRetirement(
 	if record == nil || record.used {
 		return
 	}
-	if record.prefetch {
-		c.remoteReplicaStats.UnusedPrefetchRetirements++
-	} else {
-		c.remoteReplicaStats.UnusedTwoTouchRetirements++
+	c.remoteReplicaStats.UnusedTwoTouchRetirements++
+	if record.patternKey != nil && c.requestFilter != nil {
+		c.requestFilter.ScheduleUpdate(
+			c.Engine.CurrentTime(), *record.patternKey, true)
+		c.remoteReplicaStats.UnusedPatternRetirements++
 	}
 }
 
@@ -253,7 +236,6 @@ func (c *Cache) untrackRemoteReplica(block *cachepkg.Block) {
 	if !ok {
 		return
 	}
-	c.remoteReplicaFilter.Delete(record.key.pid, record.key.line)
 	c.recordRemoteReplicaRetirement(record)
 	delete(c.remoteReplicaBlocks, block)
 	c.remoteReplicaStats.TrackedEvictions++
@@ -263,9 +245,6 @@ func (c *Cache) untrackRemoteReplica(block *cachepkg.Block) {
 func (c *Cache) resetRemoteReplicas() {
 	for block := range c.remoteReplicaBlocks {
 		c.untrackRemoteReplica(block)
-	}
-	if c.remoteReplicaFilter != nil {
-		c.remoteReplicaFilter.Reset()
 	}
 }
 

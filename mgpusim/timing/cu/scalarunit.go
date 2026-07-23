@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 	"github.com/sarchlab/mgpusim/v3/emu"
@@ -139,6 +140,8 @@ func (u *ScalarUnit) executeSMEMLoad(byteSize int, now sim.VTimeInSec) bool {
 	curr := start
 	bytesLeft := uint64(byteSize)
 	regIndex := inst.Data.Register.RegIndex()
+	position := 0
+	issuedReads := make([]*mem.ReadReq, 0, numCacheline)
 	for bytesLeft > 0 {
 		bytesLeftInCacheline := u.byteInCacheline(curr, bytesLeft)
 		bytesLeft -= bytesLeftInCacheline
@@ -149,12 +152,18 @@ func (u *ScalarUnit) executeSMEMLoad(byteSize int, now sim.VTimeInSec) bool {
 			WithDst(u.cu.ScalarMem).
 			WithAddress(curr).
 			WithPID(u.toExec.PID()).
+			WithStreamID(memoryStreamID(inst.PC, position)).
+			WithLocalStreamID(localMemoryStreamID(
+				u.toExec, inst.PC, position)).
 			WithByteSize(bytesLeftInCacheline).
 			Build()
+		attachWGOriginToScalarRequest(req, u.toExec, int(u.cu.GPUID))
 		if bytesLeft > 0 {
 			req.CanWaitForCoalesce = true
 		}
 		u.readBuf = append(u.readBuf, req)
+		issuedReads = append(issuedReads, req)
+		position++
 
 		info := &ScalarMemAccessInfo{
 			Req:       req,
@@ -169,12 +178,25 @@ func (u *ScalarUnit) executeSMEMLoad(byteSize int, now sim.VTimeInSec) bool {
 
 		curr += bytesLeftInCacheline
 	}
+	markLocalPairFollowers(issuedReads, u.log2CachelineSize)
 
 	u.toExec.OutstandingScalarMemAccess++
 	u.cu.UpdatePCAndSetReady(u.toExec)
 	u.toExec = nil
 
 	return true
+}
+
+func attachWGOriginToScalarRequest(
+	req *mem.ReadReq,
+	wave *wavefront.Wavefront,
+	requesterGPU int,
+) {
+	origin, ok := wgOriginForWave(wave, requesterGPU)
+	if !ok || req == nil {
+		return
+	}
+	req.Info = memtrace.WithWGOriginInfo(req.Info, origin)
 }
 
 func (u ScalarUnit) numCacheline(start, byteSize uint64) int {

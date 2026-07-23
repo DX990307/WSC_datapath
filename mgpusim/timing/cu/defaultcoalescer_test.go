@@ -3,7 +3,9 @@ package cu
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/mgpusim/v3/insts"
+	"github.com/sarchlab/mgpusim/v3/kernels"
 	"github.com/sarchlab/mgpusim/v3/timing/wavefront"
 )
 
@@ -24,6 +26,7 @@ var _ = Describe("Default Coalescer", func() {
 		inst := insts.NewInst()
 		inst.FormatType = insts.FLAT
 		inst.Opcode = 20 // flat_load_dword
+		inst.PC = 0xabc
 		inst.Dst = insts.NewRegOperand(0, 0, 1)
 		wf.SetDynamicInst(wavefront.NewInst(inst))
 
@@ -37,6 +40,8 @@ var _ = Describe("Default Coalescer", func() {
 
 		Expect(memTransactions).To(HaveLen(1))
 		Expect(memTransactions[0].laneInfo).To(HaveLen(64))
+		Expect(memTransactions[0].Read.StreamID).To(
+			Equal(memoryStreamID(0xabc, 0)))
 	})
 
 	It("should coalesce to multiple cachelines", func() {
@@ -59,6 +64,57 @@ var _ = Describe("Default Coalescer", func() {
 		Expect(memTransactions[1].laneInfo).To(HaveLen(16))
 		Expect(memTransactions[2].laneInfo).To(HaveLen(16))
 		Expect(memTransactions[3].laneInfo).To(HaveLen(16))
+	})
+
+	It("should separate cacheline positions and load PCs", func() {
+		Expect(memoryStreamID(0xabc, 0)).NotTo(
+			Equal(memoryStreamID(0xabc, 1)))
+		Expect(memoryStreamID(0xabc, 0)).NotTo(
+			Equal(memoryStreamID(0xdef, 0)))
+	})
+
+	It("should keep the local stream stable across dynamic waves", func() {
+		firstRaw := kernels.NewWorkGroup()
+		firstRaw.PacketAddress = 0x1000
+		firstRaw.IDX = 3
+		first := wavefront.NewWavefront(kernels.NewWavefront())
+		first.WG = wavefront.NewWorkGroup(firstRaw, nil)
+		first.SIMDID = 1
+		first.VRegOffset = 256
+
+		secondRaw := kernels.NewWorkGroup()
+		secondRaw.PacketAddress = 0x1000
+		secondRaw.IDX = 4
+		second := wavefront.NewWavefront(kernels.NewWavefront())
+		second.WG = wavefront.NewWorkGroup(secondRaw, nil)
+		second.SIMDID = 2
+		second.VRegOffset = 512
+
+		// Neither workgroup identity nor the dynamic hardware slot participates
+		// in M1's bounded predictor key. Source L1, PC, and line position
+		// provide the stable context.
+		Expect(localMemoryStreamID(first, 0xabc, 0)).To(Equal(
+			localMemoryStreamID(second, 0xabc, 0)))
+		Expect(localMemoryStreamID(first, 0xabc, 0)).To(Equal(
+			localMemoryStreamID(second, 0xabc, 1)))
+		Expect(localMemoryStreamID(first, 0xabc, 0)).NotTo(Equal(
+			localMemoryStreamID(second, 0xdef, 0)))
+	})
+
+	It("should hint only later-emitted adjacent cachelines", func() {
+		reqs := []*mem.ReadReq{
+			mem.ReadReqBuilder{}.WithAddress(0x1000).Build(),
+			mem.ReadReqBuilder{}.WithAddress(0x1080).Build(),
+			mem.ReadReqBuilder{}.WithAddress(0x1040).Build(),
+			mem.ReadReqBuilder{}.WithAddress(0x10c0).Build(),
+			mem.ReadReqBuilder{}.WithAddress(0x2000).Build(),
+		}
+		markLocalPairFollowers(reqs, 6)
+		Expect(reqs[0].LocalPairHint).To(BeFalse())
+		Expect(reqs[1].LocalPairHint).To(BeFalse())
+		Expect(reqs[2].LocalPairHint).To(BeTrue())
+		Expect(reqs[3].LocalPairHint).To(BeTrue())
+		Expect(reqs[4].LocalPairHint).To(BeFalse())
 	})
 
 	It("should not generate cross-cache-line requests", func() {

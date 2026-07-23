@@ -432,22 +432,17 @@ func LinkObservationRequest(pathID, requestID, role string) {
 // LinkObservationRequestFromRequest copies all logical owners of parentID to a
 // newly constructed downstream request.
 func LinkObservationRequestFromRequest(parentID, requestID, role string) {
-	if !observationTraceActive.Load() {
-		return
+	if observationTraceActive.Load() {
+		s := globalObservationStats
+		s.Lock()
+		if s.enabled && requestID != "" {
+			for pathID := range s.messageToPaths[parentID] {
+				s.linkRequestLocked(pathID, requestID, role)
+			}
+		}
+		s.Unlock()
 	}
-	s := globalObservationStats
-	s.Lock()
-	defer s.Unlock()
-	if !s.enabled || requestID == "" {
-		return
-	}
-	parents := s.messageToPaths[parentID]
-	if len(parents) == 0 {
-		return
-	}
-	for pathID := range parents {
-		s.linkRequestLocked(pathID, requestID, role)
-	}
+	linkObservationRemoteRequest(parentID, requestID)
 }
 
 func (s *observationStats) linkRequestLocked(pathID, requestID, role string) {
@@ -489,41 +484,43 @@ func MarkObservationL1Result(pathID, result string) {
 
 // MarkObservationL2Result records the lookup outcome for a physical request.
 func MarkObservationL2Result(requestID, component, result string) {
-	if !observationTraceActive.Load() {
-		return
-	}
-	s := globalObservationStats
-	s.Lock()
-	defer s.Unlock()
-	for pathID := range s.messageToPaths[requestID] {
-		if p := s.paths[pathID]; p != nil {
-			p.l2Result = result
-			if p.l2Role == "" {
-				p.l2Role = "leader"
-			}
-			s.appendComponentLocked(p, component)
-			if result == "read-hit" || result == "write-hit" {
-				p.source = "l2"
-				s.propagateLeaderMetadataLocked(pathID, p.source, p.remote)
+	if observationTraceActive.Load() {
+		s := globalObservationStats
+		s.Lock()
+		for pathID := range s.messageToPaths[requestID] {
+			if p := s.paths[pathID]; p != nil {
+				p.l2Result = result
+				if p.l2Role == "" {
+					p.l2Role = "leader"
+				}
+				s.appendComponentLocked(p, component)
+				if result == "read-hit" || result == "write-hit" {
+					p.source = "l2"
+					s.propagateLeaderMetadataLocked(pathID, p.source, p.remote)
+				}
 			}
 		}
+		s.Unlock()
 	}
+	markObservationRemoteL2Result(requestID, result)
 }
 
 // MarkObservationSource marks the ultimate data source reached by a request.
 func MarkObservationSource(requestID, source, component string) {
-	if !observationTraceActive.Load() {
-		return
-	}
-	s := globalObservationStats
-	s.Lock()
-	defer s.Unlock()
-	for pathID := range s.messageToPaths[requestID] {
-		if p := s.paths[pathID]; p != nil {
-			p.source = source
-			s.appendComponentLocked(p, component)
-			s.propagateLeaderMetadataLocked(pathID, source, p.remote)
+	if observationTraceActive.Load() {
+		s := globalObservationStats
+		s.Lock()
+		for pathID := range s.messageToPaths[requestID] {
+			if p := s.paths[pathID]; p != nil {
+				p.source = source
+				s.appendComponentLocked(p, component)
+				s.propagateLeaderMetadataLocked(pathID, source, p.remote)
+			}
 		}
+		s.Unlock()
+	}
+	if source == "dram" {
+		markObservationRemoteHBMAccess(requestID)
 	}
 }
 
@@ -554,7 +551,14 @@ func (s *observationStats) propagateLeaderMetadataLocked(
 		if follower.source == "" && source != "" {
 			follower.source = source
 		}
-		follower.remote = follower.remote || remote
+		// An L1 MSHR follower represents the same requester-side access as
+		// its leader and therefore inherits the leader's route. An L2 MSHR
+		// follower is a distinct access that merely shares the lower-memory
+		// transaction. A local owner access can join an L2 miss created by a
+		// remote requester, so it must not inherit the L2 leader's route.
+		if follower.l1Role == "mshr_follower" {
+			follower.remote = follower.remote || remote
+		}
 	}
 }
 
@@ -627,7 +631,6 @@ func MarkObservationL2MSHRFollower(
 					if p.source == "" {
 						p.source = leader.source
 					}
-					p.remote = p.remote || leader.remote
 				}
 			}
 		}
@@ -731,7 +734,9 @@ func (s *observationStats) completeLocked(
 		if follower.source == "" {
 			follower.source = p.source
 		}
-		follower.remote = follower.remote || p.remote
+		if follower.l1Role == "mshr_follower" {
+			follower.remote = follower.remote || p.remote
+		}
 	}
 
 	if !p.selected {
@@ -793,7 +798,11 @@ func (s *observationStats) validateCompletedPathLocked(
 	if status != "complete" {
 		return
 	}
-	if strings.EqualFold(p.op, "read") && p.source == "" {
+	// Followers do not own a complete physical data path. Their source is
+	// determined by the leader and may become known after the follower has
+	// already responded, so require a source only for physical leaders.
+	if strings.EqualFold(p.op, "read") && p.source == "" &&
+		p.l1Role != "mshr_follower" && p.l2Role != "mshr_follower" {
 		s.validation.missingReadSource++
 	}
 	lowerStages := []string{
@@ -817,6 +826,7 @@ func (s *observationStats) validateCompletedPathLocked(
 	// but deliberately owns only its local MSHR wait and response fanout. The
 	// physical leader, not the follower, owns both network traversals.
 	if p.remote && p.l1Role != "mshr_follower" &&
+		p.l2Role != "mshr_follower" &&
 		(requestNetwork == 0 || responseNetwork == 0) {
 		s.validation.remoteMissingNetwork++
 	}

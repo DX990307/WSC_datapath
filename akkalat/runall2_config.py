@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import shlex
 
 from runall2_constants import (
@@ -39,20 +40,17 @@ def build_common_flags(args):
         common_flags.append(
             f"-l1v-remote-max-inflight={args.l1v_remote_max_inflight}")
     if args.l1v_mshr_entries > 0:
-        common_flags.append(f"-l1v-mshr-entries={args.l1v_mshr_entries}")
+        common_flags = replace_or_append_flag(
+            common_flags,
+            "-l1v-mshr-entries=",
+            f"-l1v-mshr-entries={args.l1v_mshr_entries}",
+        )
     if args.l1v_max_concurrent_trans > 0:
-        common_flags.append(
-            f"-l1v-max-concurrent-trans={args.l1v_max_concurrent_trans}")
-    if args.l1v_bottom_reorder_policy:
-        common_flags.append(
-            f"-l1v-bottom-reorder-policy={args.l1v_bottom_reorder_policy}")
-    if args.l1v_bottom_reorder_window > 0:
-        common_flags.append(
-            f"-l1v-bottom-reorder-window={args.l1v_bottom_reorder_window}")
-    if args.l1v_bottom_reorder_max_age_ns >= 0:
-        common_flags.append(
-            "-l1v-bottom-reorder-max-age-ns="
-            f"{args.l1v_bottom_reorder_max_age_ns}")
+        common_flags = replace_or_append_flag(
+            common_flags,
+            "-l1v-max-concurrent-trans=",
+            f"-l1v-max-concurrent-trans={args.l1v_max_concurrent_trans}",
+        )
     if args.force_local_data_access:
         common_flags.append("-force-local-data-access")
     if args.allocation_profile:
@@ -82,7 +80,7 @@ def build_ablation_configs(args):
             raise ValueError(
                 "--allocation-profile cannot be combined with tracing modes"
             )
-        if args.remote_ablation or args.remote_ablation_include_prefetch:
+        if args.remote_ablation:
             raise ValueError(
                 "--allocation-profile cannot be combined with ablation sweeps"
             )
@@ -127,10 +125,6 @@ def build_ablation_configs(args):
                 "--trace-observation rejects sampled execution flags in "
                 "--extra-benchmark-flags: " + ", ".join(enabled_sampled_flags)
             )
-        if args.configs and parse_csv(args.configs) != ["baseline"]:
-            raise ValueError(
-                "--trace-observation only supports --configs=baseline"
-            )
         if (
             args.trace_observation_exit_on_complete
             and args.trace_observation_max_records == 0
@@ -151,18 +145,19 @@ def build_ablation_configs(args):
             if getattr(args, name) < 0:
                 raise ValueError(name.replace("_", "-") + " must be non-negative")
 
-        if args.remote_ablation or args.remote_ablation_include_prefetch:
-            if args.trace_observation_exit_on_complete:
+        # The raw O1--O6 opportunity trace is baseline-only, but a single
+        # launcher invocation may also run the M1/M2/M3/Complete cells and
+        # collect their ordinary effectiveness counters. runall2.py attaches
+        # -trace-observation only to the mechanisms-off baseline experiment.
+        if not args.remote_ablation:
+            if args.configs and parse_csv(args.configs) != ["baseline"]:
                 raise ValueError(
-                    "--trace-observation-exit-on-complete cannot be used with "
-                    "--remote-ablation because the traced baseline would stop "
-                    "before the other ablation configurations"
+                    "--trace-observation without --remote-ablation only "
+                    "supports --configs=baseline"
                 )
-            return build_remote_data_path_ablation_configs(args)
+            return [("baseline", [])]
 
-        return [("baseline", [])]
-
-    if args.remote_ablation or args.remote_ablation_include_prefetch:
+    if args.remote_ablation:
         return build_remote_data_path_ablation_configs(args)
 
     selected_names = selected_config_names(args)
@@ -195,100 +190,164 @@ def build_ablation_configs(args):
 
 
 def build_remote_data_path_ablation_configs(args):
-    if args.configs:
-        raise ValueError("--remote-ablation cannot be combined with --configs")
     if sampled_param_sweep_requested(args):
         raise ValueError(
             "--remote-ablation cannot be combined with sampled parameter sweeps"
         )
 
     batch_lines = args.remote_data_path_batch_lines
-    wait_ns = args.remote_data_path_wait_ns
     max_batches = args.remote_data_path_batches
-    reuse_entries = args.remote_data_path_reuse_entries
-    dram_entries = args.dram_batch_entries
-    dram_lines = args.dram_batch_lines
-    dram_wait_ns = args.dram_batch_wait_ns
-    dram_row_max_age = args.dram_row_reorder_max_age
     if batch_lines < 1 or batch_lines > 64:
         raise ValueError("remote-data-path-batch-lines must be in [1, 64]")
-    if wait_ns < 0:
-        raise ValueError("remote-data-path-wait-ns must be non-negative")
     if max_batches < 1:
         raise ValueError("remote-data-path-batches must be positive")
-    if reuse_entries < 1:
-        raise ValueError("remote-data-path-reuse-entries must be positive")
-    if dram_entries < 1:
-        raise ValueError("dram-batch-entries must be positive")
-    if dram_lines < 1 or dram_lines > 2:
-        raise ValueError("dram-batch-lines must be in [1, 2]")
-    if dram_wait_ns < 0:
-        raise ValueError("dram-batch-wait-ns must be non-negative")
-    if dram_row_max_age < 1:
-        raise ValueError("dram-row-reorder-max-age must be positive")
-
     fixed_flags = [
-        "-l1v-bottom-reorder-policy=none",
-        "-l1v-bottom-reorder-window=0",
-        "-l1v-bottom-reorder-max-age-ns=0",
-        f"-dram-batch-entries={dram_entries}",
-        f"-dram-batch-lines={dram_lines}",
-        f"-dram-batch-wait-ns={dram_wait_ns}",
-        f"-dram-row-reorder-max-age={dram_row_max_age}",
         f"-remote-data-path-batch-lines={batch_lines}",
-        "-remote-data-path-wait-ns=0",
         f"-remote-data-path-batches={max_batches}",
-        f"-remote-data-path-reuse-entries={reuse_entries}",
+        "-typed-filter-mode=cuckoo",
     ]
 
     def mechanism_flags(
-        local_optimization,
+        resident_filter,
+        granularity_adaptation,
+        adaptive_pair,
+        fill_forwarding,
         remote_enabled,
         remote_dedup,
         remote_batching,
         requester_l2,
-        prefetch,
+        remote_prefetch,
     ):
         return fixed_flags + [
-            f"-dram-batch-enable={str(local_optimization).lower()}",
-            f"-dram-row-reorder-enable={str(local_optimization).lower()}",
+            f"-l2-resident-filter-enable={str(resident_filter).lower()}",
+            f"-l2-fill-forwarding-enable={str(fill_forwarding).lower()}",
+            # Keep the generic same-row policy disabled. M1 separately enables
+            # AggregateContinuation through its granularity mode; that path
+            # recognizes only the two independent reads sharing one PairID.
+            "-dram-row-continuation-enable=false",
+            "-l2-filter-prefetch-enable=false",
+            "-l2-prefetch-predictor-only=false",
+            "-l2-prefetch-ungated=false",
+            f"-l2-granularity-adaptation-enable={str(granularity_adaptation).lower()}",
+            f"-l2-adaptive-pair-enable={str(adaptive_pair).lower()}",
+            "-l2-granularity-without-filter=false",
+            "-l2-granularity-always-expand=false",
+            "-l2-granularity-predictor-only=false",
             f"-remote-data-path-enable={str(remote_enabled).lower()}",
             f"-remote-data-path-dedup-enable={str(remote_dedup).lower()}",
             f"-remote-data-path-batching-enable={str(remote_batching).lower()}",
             f"-remote-data-path-l2-enable={str(requester_l2).lower()}",
-            f"-remote-data-path-prefetch={str(prefetch).lower()}",
+            f"-remote-filter-prefetch-enable={str(remote_prefetch).lower()}",
         ]
 
-    configs = [
+    # Formal five-way paper ablation. Every entry inherits the same explicit
+    # 16-entry L1V MSHR setting from BASE_COMMON_FLAGS.
+    formal_configs = [
+        ("baseline", mechanism_flags(False, False, False, False, False, False, False, False, False)),
         (
-            "baseline",
-            mechanism_flags(False, False, False, False, False, False),
+            "m1",
+            # Preserve the best historical prediction/inflight/buffer policy
+            # and aligned 128-B access. The shared per-slice Cuckoo Filter
+            # suppresses only exactly confirmed RESIDENT/PENDING siblings.
+            mechanism_flags(False, False, True, False, False, False, False, False, False),
         ),
         (
-            "baseline_local_optimization_only",
-            mechanism_flags(True, False, False, False, False, False),
+            "m2",
+            mechanism_flags(False, False, False, False, True, True, True, False, True),
         ),
         (
-            "baseline_remote_request_only",
-            mechanism_flags(False, True, True, True, False, False),
+            "m3",
+            mechanism_flags(False, False, False, False, True, False, False, True, False),
         ),
         (
-            "baseline_remote_l2_only",
-            mechanism_flags(False, True, False, False, True, False),
-        ),
-        (
-            "baseline_all_three",
-            mechanism_flags(True, True, True, True, True, False),
+            "complete",
+            mechanism_flags(False, False, True, False, True, True, True, True, True),
         ),
     ]
-    if args.remote_ablation_include_prefetch:
-        configs.append(
-            (
-                "baseline_all_three_prefetch",
-                mechanism_flags(True, True, True, True, True, True),
-            )
-        )
-    return configs
+    if not args.configs:
+        return formal_configs
+
+    baseline_flags = formal_configs[0][1]
+    m1_flags = formal_configs[1][1]
+
+    def diagnostic_flags(base, replacements):
+        flags = base[:]
+        for prefix, value in replacements:
+            flags = replace_or_append_flag(flags, prefix, value)
+        return flags
+
+    diagnostic_configs = [
+        (
+            "old_m1_independent_prefetch",
+            diagnostic_flags(baseline_flags, [
+                ("-l2-filter-prefetch-enable=", "-l2-filter-prefetch-enable=true"),
+            ]),
+        ),
+        (
+            "cuckoo_filter_only",
+            diagnostic_flags(baseline_flags, [
+                ("-l2-resident-filter-enable=", "-l2-resident-filter-enable=true"),
+            ]),
+        ),
+        (
+            "m1_bypass_fill_only",
+            diagnostic_flags(baseline_flags, [
+                ("-l2-resident-filter-enable=", "-l2-resident-filter-enable=true"),
+                ("-l2-fill-forwarding-enable=", "-l2-fill-forwarding-enable=true"),
+            ]),
+        ),
+        (
+            "m1_bypass_fill_predictor_only",
+            # Isolate paired-read traffic while retaining every other local
+            # M1 behavior. Predictor-only implicitly enables the granularity
+            # frontend (and therefore the same optimistic resident-negative
+            # bypass) but never allocates or sends a sibling transaction.
+            diagnostic_flags(baseline_flags, [
+                ("-l2-resident-filter-enable=", "-l2-resident-filter-enable=true"),
+                ("-l2-fill-forwarding-enable=", "-l2-fill-forwarding-enable=true"),
+                ("-l2-granularity-predictor-only=", "-l2-granularity-predictor-only=true"),
+            ]),
+        ),
+        (
+            "always_pair",
+            diagnostic_flags(baseline_flags, [
+                ("-l2-granularity-always-expand=", "-l2-granularity-always-expand=true"),
+            ]),
+        ),
+        (
+            "predictor_only",
+            diagnostic_flags(baseline_flags, [
+                ("-l2-granularity-predictor-only=", "-l2-granularity-predictor-only=true"),
+            ]),
+        ),
+        (
+            "paired_read_without_filter",
+            diagnostic_flags(baseline_flags, [
+                ("-l2-granularity-without-filter=", "-l2-granularity-without-filter=true"),
+            ]),
+        ),
+        (
+            "m1_without_cuckoo",
+            # Same historical 128-B adapter, but the typed metadata array is
+            # disabled. This isolates the Cuckoo Filter's M1 contribution.
+            diagnostic_flags(m1_flags, [
+                ("-typed-filter-mode=", "-typed-filter-mode=disabled"),
+            ]),
+        ),
+        ("new_m1", m1_flags[:]),
+    ]
+    configs = formal_configs + diagnostic_configs
+
+    selected_names = parse_csv(args.configs)
+    if "all" in selected_names:
+        selected_names = [name for name, _ in formal_configs]
+    known_names = {name for name, _ in configs}
+    unknown = [name for name in selected_names if name not in known_names]
+    if unknown:
+        raise ValueError(f"unknown remote-ablation configs: {unknown}")
+
+    selected_set = set(selected_names)
+    return [config for config in configs if config[0] in selected_set]
 
 
 def sampled_control_flags(args, config_flags):
@@ -481,6 +540,38 @@ def get_selected_benchmarks(args, target):
 def make_exps(args, ablation_configs):
     exps = []
     extra_flags = shlex.split(args.extra_benchmark_flags)
+
+    # Schedule configuration-major so every paper benchmark receives Complete
+    # before workers move to the next configuration. This keeps early partial
+    # results broad instead of launching all variants of AES first.
+    if args.remote_ablation:
+        config_order = {
+            "complete": 0,
+            "baseline": 1,
+            "m1": 2,
+            "m2": 3,
+            "m3": 4,
+        }
+        scheduled_configs = sorted(
+            ablation_configs,
+            key=lambda item: config_order.get(item[0], len(config_order)),
+        )
+        for target in TARGETS:
+            benchmarks = get_selected_benchmarks(args, target)
+            for config_name, config_flags in scheduled_configs:
+                for benchmark in benchmarks:
+                    exps.append({
+                        "target": target,
+                        "benchmark": benchmark,
+                        "config_name": config_name,
+                        "flags": (
+                            DEFAULT_BENCHMARK_FLAGS
+                            + extra_flags
+                            + config_flags
+                        ),
+                    })
+        return exps
+
     for target in TARGETS:
         for benchmark in get_selected_benchmarks(args, target):
             for config_name, config_flags in ablation_configs:
@@ -499,6 +590,58 @@ def filter_missing_metric_exps(exps, results_dir):
     for exp in exps:
         stem = f'{exp["target"]}_{exp["benchmark"]}_{exp["config_name"]}'
         metrics_csv = missing_dir / f"{stem}_metrics.csv"
-        if not metrics_csv.exists():
+        result_json = missing_dir / f"{stem}_result.json"
+        complete = metrics_csv.exists() and result_json.exists()
+        if complete:
+            try:
+                result = json.loads(result_json.read_text(encoding="utf-8"))
+                complete = (
+                    bool(result.get("success"))
+                    and result.get("returncode") == 0
+                    and result.get("simulator_returncode") == 0
+                )
+            except (OSError, ValueError):
+                complete = False
+        if not complete:
             missing.append(exp)
     return missing
+
+
+def valid_runtime_mapping(path: Path, max_wg: int) -> bool:
+    """Validate either passive full-workload or runtime-prefix evidence."""
+    if max_wg < 0 or not path.is_file():
+        return False
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+        observed = int(report["observed_wg_count"])
+        requested = int(report["requested_total_wg"])
+        expected = requested if max_wg == 0 else min(max_wg, requested)
+        per_gpu = report["per_gpu"]
+        per_gpu_total = sum(int(row["observed_wg_count"]) for row in per_gpu)
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+    common = (
+        int(report.get("max_wg", -1)) == max_wg
+        and requested > 0
+        and observed == expected
+        and per_gpu_total == observed
+        and report.get("max_wg_specific_wg_filter") is False
+        and bool(report.get("global_wg_set_sha256"))
+        and bool(report.get("launches"))
+    )
+    if not common:
+        return False
+    if max_wg == 0:
+        return (
+            report.get("stop_reason") == "natural_completion"
+            and int(report.get("completed_wg_count", -1)) == requested
+            and int(report.get("executed_kernel_count", -1))
+            == len(report["launches"])
+            and float(report.get("observed_sampling_coverage", -1)) == 1.0
+            and float(report.get("completed_sampling_coverage", -1)) == 1.0
+            and float(report.get("stop_time_ns", 0)) == 0
+        )
+    return (
+        report.get("stop_reason") == "runner_map_wg_observed_limit"
+        and (requested >= max_wg or float(report.get("stop_time_ns", 0)) == 0)
+    )

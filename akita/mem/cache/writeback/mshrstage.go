@@ -34,12 +34,24 @@ func (s *mshrStage) Reset(now sim.VTimeInSec) {
 }
 
 func (s *mshrStage) processOneReq(now sim.VTimeInSec) bool {
+	mshrEntry := s.processingMSHREntry
+	rawRequest := mshrEntry.Requests[0]
+	trans, isTransaction := rawRequest.(*transaction)
+	if isTransaction && trans.prefetch {
+		if s.findTransaction(trans) {
+			s.removeTransaction(now, trans)
+		}
+		mshrEntry.Requests = mshrEntry.Requests[1:]
+		if len(mshrEntry.Requests) == 0 {
+			s.processingMSHREntry = nil
+		}
+		return true
+	}
+
 	if !s.cache.topSender.CanSend(1) {
 		return false
 	}
-
-	mshrEntry := s.processingMSHREntry
-	trans := mshrEntry.Requests[0].(*transaction)
+	trans = rawRequest.(*transaction)
 
 	transactionPresent := s.findTransaction(trans)
 
@@ -47,7 +59,7 @@ func (s *mshrStage) processOneReq(now sim.VTimeInSec) bool {
 		s.removeTransaction(now, trans)
 
 		if trans.read != nil {
-			s.respondRead(now, trans.read, mshrEntry.Data)
+			s.respondRead(now, trans, mshrEntry.Data)
 		} else {
 			s.respondWrite(now, trans.write)
 		}
@@ -70,18 +82,20 @@ func (s *mshrStage) processOneReq(now sim.VTimeInSec) bool {
 
 func (s *mshrStage) respondRead(
 	now sim.VTimeInSec,
-	read *mem.ReadReq,
+	trans *transaction,
 	data []byte,
 ) {
+	read := trans.read
 	_, offset := getCacheLineID(read.Address, s.cache.log2BlockSize)
-	dataReady := mem.DataReadyRspBuilder{}.
+	builder := mem.DataReadyRspBuilder{}.
 		WithSendTime(now).
 		WithSrc(s.cache.topPort).
 		WithDst(read.Src).
 		WithRspTo(read.ID).
-		WithData(data[offset : offset+read.AccessByteSize]).
-		Build()
+		WithData(data[offset : offset+read.AccessByteSize])
+	dataReady := builder.Build()
 	s.cache.topSender.Send(dataReady)
+	s.cache.recordDemandReadCompletion(now, trans)
 	memtrace.ObservationTransitionByRequest(
 		read.Meta().ID, "l2_response_ready", "l2_response_link", now)
 

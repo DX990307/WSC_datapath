@@ -11,6 +11,7 @@ enabled.
 python3 akkalat/runall2.py \
   --trace-observation \
   --benchmarks=traditional \
+  --max-wg=78600 \
   --max-workers=8 \
   --disable-servers \
   --trace-observation-warmup-accesses=100000 \
@@ -37,6 +38,7 @@ python3 akkalat/runall2.py \
   --remote-ablation \
   --trace-observation \
   --benchmarks=traditional \
+  --max-wg=78600 \
   --max-workers=8 \
   --disable-servers
 ```
@@ -76,7 +78,8 @@ independent windows, so quick early-exit output is not the complete paper run.
   different bank within the same DRAM controller.
 - `*_observation_remote_requests.csv.gz`: requester/owner, line, write epoch,
   requester-local read/read same-line inflight count captured at RDMA
-  admission (before wire issue), wire bytes, hops, and completion latency.
+  admission (before wire issue), wire bytes, hops, completion latency, owner-L2
+  result, and whether the request ultimately accessed owner HBM.
 - `*_observation_l2_utilization.csv.gz`: sparse per-slice valid/dirty/locked
   block and MSHR samples, collected inside the L2 event domain.
 - `*_observation_{summary,remote_summary}.csv`: compact online aggregates.
@@ -94,3 +97,17 @@ python3 akkalat/analyze_observations.py \
 
 See `OBSERVATION_ANALYSIS.md` for output definitions and strict validation
 rules.
+
+The same campaign's M1/M2/M3/Complete metric files can be reduced to direct
+mechanism success rates with:
+
+```bash
+python3 akkalat/plot_cupath_typed_ablation.py \
+  akkalat/results/YOUR-OBSERVATION-RUN
+```
+
+The generated `cupath_mechanism_effectiveness.csv` reports M1 lookup skips and
+prefetch timeliness, M2 request coalescing and packet packing, M3 requester-L2
+reuse, and typed-filter false-positive, failure, and port-stall rates. When
+standalone mechanism cells are absent, the table reads all three mechanisms'
+counters from Complete and marks each `*_metric_source` column as `complete`.

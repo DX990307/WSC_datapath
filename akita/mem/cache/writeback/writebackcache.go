@@ -45,25 +45,80 @@ type Cache struct {
 	lowModuleFinder mem.LowModuleFinder
 	directory       cache.Directory
 	mshr            cache.MSHR
+	mshrCapacity    int
 	log2BlockSize   uint64
 	numReqPerCycle  int
 
-	remoteReplicaFilter *remoteReplicaFilter
-	remoteReplicaBlocks map[*cache.Block]*remoteReplicaRecord
+	requestFilter                *TypedCuckooFilter
+	remoteReplicaFilter          lineMembershipFilter
+	remoteReplicaBlocks          map[*cache.Block]*remoteReplicaRecord
+	residentFilter               lineMembershipFilter
+	residentFilterBlocks         map[*cache.Block]residentFilterKey
+	residentFilterEnabled        bool
+	residentFilterReliable       bool
+	residentFilterStats          ResidentFilterStats
+	filterPrefetchEnabled        bool
+	filterPrefetchPredictorOnly  bool
+	filterPrefetchUngated        bool
+	filterPrefetcher             *DemandStridePredictor
+	localPrefetchPatternFilters  map[TypedFilterKey]*TypedCuckooFilter
+	localPrefetchPeers           []*Cache
+	localPrefetchInterleave      uint64
+	localPrefetchLeader          bool
+	localPrefetchCandidate       *localPrefetchCandidate
+	localPrefetchByLine          map[localPrefetchLineKey]*localPrefetchRecord
+	localPrefetchByBlock         map[*cache.Block]*localPrefetchRecord
+	localPrefetchStats           LocalFilterPrefetchStats
+	localPrefetchOutstanding     int
+	granularityAdaptationEnabled bool
+	granularityWithoutFilter     bool
+	granularityAlwaysExpand      bool
+	granularityPredictorOnly     bool
+	granularityPredictor         *DemandStridePredictor
+	granularityPatternFilters    map[TypedFilterKey]*TypedCuckooFilter
+	granularityLeader            bool
+	granularityByLine            map[granularityLineKey]*granularityRecord
+	granularityByBlock           map[*cache.Block]*granularityRecord
+	granularityStats             GranularityAdaptationStats
+	adaptivePairEnabled          bool
+	adaptivePairAdapter          *adaptivePairAdapter
+	adaptivePairStats            AdaptivePairStats
+	interleaving                 bool
+	interleavingBlocks           int
+	interleavingUnits            int
+	interleavingIndex            int
 
 	observationL2Accesses   uint64
 	remoteReplicaStats      RemoteReplicaStats
 	remoteReplicaGeneration uint64
 
-	dramBatchConfig DRAMBatchConfig
-	dramBatchStats  DRAMBatchStats
-	dramBatches     map[dramBatchKey]*dramBatchEntry
-	dramBatchOrder  []dramBatchKey
-	dramAdapter     *dramPrefetchAdapter
+	localMemoryPathStats LocalMemoryPathStats
+	fillForwarding       bool
+	fillForwardingStats  FillForwardingStats
 
 	state                cacheState
 	inFlightTransactions []*transaction
 	evictingList         map[uint64]bool
+}
+
+// GetAdaptivePairStats returns the counters for the restored historical M1
+// adapter with one aligned 128-B controller-level read.
+func (c *Cache) GetAdaptivePairStats() AdaptivePairStats {
+	return c.adaptivePairStats
+}
+
+// RequestFilter exposes the one physical metadata filter owned by this L2
+// slice to the requester-local RDMA metadata interface.
+func (c *Cache) RequestFilter() *TypedCuckooFilter {
+	return c.requestFilter
+}
+
+// GetTypedFilterStats returns shared-array and per-logical-type counters.
+func (c *Cache) GetTypedFilterStats() TypedFilterStats {
+	if c.requestFilter == nil {
+		return TypedFilterStats{}
+	}
+	return c.requestFilter.Stats()
 }
 
 // SetLowModuleFinder sets the LowModuleFinder used by the cache.
@@ -109,6 +164,10 @@ func (c *Cache) runPipeline(now sim.VTimeInSec) bool {
 	// simulation timestamp, collapsing a configured 10-cycle lookup to zero.
 	madeProgress = c.dirStage.Tick(now) || madeProgress
 	madeProgress = c.runStage(now, c.topParser) || madeProgress
+	// Speculation is deliberately last. A real request consumes every cache
+	// pipeline opportunity first; the prefetcher only uses an otherwise idle
+	// front-end slot and drops its candidate on any conflict.
+	madeProgress = c.runLocalFilterPrefetch(now) || madeProgress
 
 	return madeProgress
 }

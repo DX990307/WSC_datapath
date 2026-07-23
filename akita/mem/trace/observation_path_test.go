@@ -115,6 +115,66 @@ func TestObservationL1MSHRFollowerOwnsOnlyWait(t *testing.T) {
 	}
 }
 
+func TestObservationLocalL2FollowerDoesNotInheritRemoteLeaderRoute(t *testing.T) {
+	prefix := filepath.Join(t.TempDir(), "l2-local-follower")
+	if err := EnableObservationTrace(prefix, 0, 2, false, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	StartObservationPath(ObservationPathStart{
+		PathID: "remote-leader", CacheName: "GPU[4].L1V[0]",
+		Address: 0x4000, ByteSize: 64, Operation: "read", StartTime: 0,
+		Parents: []ObservationParent{{ID: "remote-parent", Address: 0x4000, ByteSize: 4}},
+	})
+	LinkObservationRequest("remote-leader", "leader-l2", "owner_l2_request")
+	MarkObservationRemote("leader-l2")
+	MarkObservationSource("leader-l2", "dram", "GPU[4].L2[0]")
+
+	StartObservationPath(ObservationPathStart{
+		PathID: "local-follower", CacheName: "GPU[4].L1V[1]",
+		Address: 0x4000, ByteSize: 64, Operation: "read", StartTime: ns(1),
+		Parents: []ObservationParent{{ID: "local-parent", Address: 0x4000, ByteSize: 4}},
+	})
+	LinkObservationRequest("local-follower", "follower-l2", "l1_bottom_read")
+	ObservationTransition("local-follower", "coalesce", "l1_directory_queue", ns(2))
+	ObservationTransition("local-follower", "directory", "l1_lookup", ns(3))
+	MarkObservationL1Result("local-follower", "read-miss")
+	ObservationTransition("local-follower", "l1-miss", "l1_downstream", ns(4))
+	MarkObservationL2MSHRFollower("follower-l2", "leader-l2", ns(5))
+	ObservationTransition("local-follower", "l2-response", "l1_fill_response", ns(8))
+	ObservationParentResponded("local-follower", "local-parent", ns(9))
+
+	if err := DumpObservationTrace(); err != nil {
+		t.Fatal(err)
+	}
+	rows := readObservationGZIP(t, prefix+"_paths.csv.gz")
+	var follower map[string]string
+	for _, values := range rows[1:] {
+		row := csvMap(rows[0], values)
+		if row["path_id"] == "local-follower" {
+			follower = row
+			break
+		}
+	}
+	if follower == nil {
+		t.Fatal("local L2 follower was not emitted")
+	}
+	if follower["remote"] != "false" || follower["route"] != "local" {
+		t.Fatalf("local L2 follower inherited remote route: %#v", follower)
+	}
+	if follower["source"] != "dram" || follower["l2_role"] != "mshr_follower" {
+		t.Fatalf("local L2 follower lost shared-source metadata: %#v", follower)
+	}
+	validation := readObservationCSV(t, prefix+"_validation.csv")
+	for _, values := range validation[1:] {
+		item := csvMap(validation[0], values)
+		if (item["invariant"] == "remote_path_missing_network" ||
+			item["invariant"] == "missing_read_source") && item["value"] != "0" {
+			t.Fatalf("valid L2 follower failed validation: %#v", item)
+		}
+	}
+}
+
 func TestObservationRemotePathUsesExclusiveWireAndEndpointStages(t *testing.T) {
 	prefix := filepath.Join(t.TempDir(), "remote-path")
 	if err := EnableObservationTrace(prefix, 0, 1, false, nil); err != nil {

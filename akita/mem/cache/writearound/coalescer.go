@@ -305,11 +305,23 @@ func (c *coalescer) memoryPathParentInfos(trans *transaction) []interface{} {
 func (c *coalescer) coalesceRead() *transaction {
 	blockSize := uint64(1 << c.cache.log2BlockSize)
 	cachelineID := c.toCoalesce[0].Address() / blockSize * blockSize
+	firstRead := c.toCoalesce[0].read
+	localPairHint := false
+	for _, parent := range c.toCoalesce {
+		if parent != nil && parent.read != nil && parent.read.LocalPairHint {
+			localPairHint = true
+			break
+		}
+	}
 	coalescedRead := mem.ReadReqBuilder{}.
 		WithAddress(cachelineID).
 		WithByteSize(blockSize).
 		WithPID(c.toCoalesce[0].PID()).
+		WithLocalStreamID(firstRead.LocalStreamID).
+		WithLocalPairHint(localPairHint).
 		Build()
+	// Ordinary StreamID deliberately remains zero here, preserving the frozen
+	// requester-RDMA predictor behavior.  LocalStreamID is consumed only by M1.
 	return &transaction{
 		id:                      sim.GetIDGenerator().Generate(),
 		read:                    coalescedRead,

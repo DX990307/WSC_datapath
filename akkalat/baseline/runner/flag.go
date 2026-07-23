@@ -6,7 +6,7 @@ var timingFlag = flag.Bool("timing", false, "Run detailed timing simulation.")
 var maxInstCount = flag.Uint64("max-inst", 0,
 	"Terminate the simulation after the given number of instructions is retired.")
 var maxWGCount = flag.Uint64("max-wg", 0,
-	"Terminate the simulation after the given number of workgroups is retired.")
+	"Terminate after this many workgroups complete across all GPUs.")
 var parallelFlag = flag.Bool("parallel", false,
 	"Run the simulation in parallel.")
 var isaDebug = flag.Bool("debug-isa", false, "Generate the ISA debugging file.")
@@ -58,6 +58,12 @@ var observationRemoteMaxRecords = flag.Uint64("trace-observation-remote-max-reco
 	"Maximum logical remote requests in the O4/O5/O6 window; 0 uses a safe finite default.")
 var observationL2SampleMax = flag.Uint64("trace-observation-l2-sample-max", 100000,
 	"Maximum periodic L2 utilization samples for O6; 0 uses a safe finite default.")
+var remoteOriginTracing = flag.Bool("trace-remote-origin", false,
+	"Generate a diagnostic WG/object local-vs-remote data-request trace.")
+var remoteOriginTraceFile = flag.String("trace-remote-origin-file", "",
+	"Output prefix for the remote-origin audit. Defaults to <metric-file-name>_remote_origin.")
+var remoteOriginTraceMaxRecords = flag.Uint64("trace-remote-origin-max-records", 100000,
+	"Maximum raw remote-origin rows; complete aggregates are always retained.")
 var allocationProfile = flag.Bool("allocation-profile", false,
 	"Write allocation metrics and exit immediately before the first kernel launch.")
 var instCountReportFlag = flag.Bool("report-inst-count", false,
@@ -99,49 +105,72 @@ var networkFlitSizeFlag = flag.Int("network-flit-size", 16,
 	"NoC flit payload size in bytes. Larger values reduce response flit count.")
 var l1vRemoteMaxInflightFlag = flag.Int("l1v-remote-max-inflight", 0,
 	"Limit in-flight remote L1V bottom transactions per L1V cache; 0 disables remote-only throttling.")
-var l1vMSHREntriesFlag = flag.Int("l1v-mshr-entries", 160,
+var l1vMSHREntriesFlag = flag.Int("l1v-mshr-entries", 16,
 	"Number of L1V cache MSHR entries per L1V cache.")
-var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 160,
+var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 16,
 	"Maximum concurrent L1V cache transactions per L1V cache.")
-var l1vBottomReorderPolicyFlag = flag.String("l1v-bottom-reorder-policy", "none",
-	"L1V bottom request reorder policy: none, fifo, or hlq.")
-var l1vBottomReorderWindowFlag = flag.Int("l1v-bottom-reorder-window", 0,
-	"Maximum entries in the optional L1V bottom reorder queue. 0 disables the queue.")
-var l1vBottomReorderMaxAgeNSFlag = flag.Uint64("l1v-bottom-reorder-max-age-ns", 0,
-	"Maximum L1V bottom reorder queue age in ns. 0 means unlimited.")
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")
-var dramBatchEnableFlag = flag.Bool("dram-batch-enable", false,
-	"Enable adaptive immediate 128B DRAM prefetch after useful adjacent access patterns.")
-var dramBatchEntriesFlag = flag.Int("dram-batch-entries", 16,
-	"Maximum prefetched cache lines buffered by each L2-slice DRAM adapter.")
-var dramBatchLinesFlag = flag.Int("dram-batch-lines", 2,
-	"Maximum adjacent 64B cache lines per DRAM batch.")
-var dramBatchWaitNSFlag = flag.Uint64("dram-batch-wait-ns", 0,
-	"Deprecated compatibility flag; adaptive DRAM prefetch never waits.")
-var dramRowReorderEnableFlag = flag.Bool("dram-row-reorder-enable", false,
-	"Enable open-page, row-hit-first DRAM command scheduling.")
-var dramRowReorderMaxAgeFlag = flag.Int("dram-row-reorder-max-age", 64,
-	"Maximum DRAM command queue age in cycles before oldest-ready priority.")
+var l2ResidentFilterEnableFlag = flag.Bool("l2-resident-filter-enable", false,
+	"Enable the per-L2-slice resident Cuckoo Filter fast-miss path.")
+var l2FilterPrefetchEnableFlag = flag.Bool("l2-filter-prefetch-enable", false,
+	"Enable real-demand-trained, Filter-coupled 64B prefetching with at most one candidate per demand.")
+var l2PrefetchPredictorOnlyFlag = flag.Bool("l2-prefetch-predictor-only", false,
+	"Diagnostic: train the predictor and count candidates without issuing them.")
+var l2PrefetchUngatedFlag = flag.Bool("l2-prefetch-ungated", false,
+	"Diagnostic: issue predicted candidates without membership gating.")
+var l2GranularityAdaptationEnableFlag = flag.Bool(
+	"l2-granularity-adaptation-enable", false,
+	"Enable demand-attached, filter-guided paired-read aggregation.")
+var l2AdaptivePairEnableFlag = flag.Bool(
+	"l2-adaptive-pair-enable", false,
+	"Enable the historical adjacent-line M1 policy using one aligned 128B DRAM read.")
+var l2GranularityWithoutFilterFlag = flag.Bool(
+	"l2-granularity-without-filter", false,
+	"Diagnostic: adapt controller granularity using prediction and exact checks without Cuckoo gating.")
+var l2GranularityAlwaysExpandFlag = flag.Bool(
+	"l2-granularity-always-expand", false,
+	"Diagnostic: expand every resource-safe demand region without requiring a learned pattern.")
+var l2GranularityPredictorOnlyFlag = flag.Bool(
+	"l2-granularity-predictor-only", false,
+	"Diagnostic: train the paired-read predictor and count eligible sibling candidates without issuing them.")
+var prefetchPredictorEntriesFlag = flag.Int("prefetch-predictor-entries", 256,
+	"Bounded demand-stride predictor entries per GPU/requester.")
+var l2FillForwardingEnableFlag = flag.Bool("l2-fill-forwarding-enable", false,
+	"Enable best-effort read-only L2 fill-and-forward on local DRAM returns.")
+var typedFilterModeFlag = flag.String("typed-filter-mode", "cuckoo",
+	"Per-L2-slice metadata mode: disabled, cuckoo, or exact.")
+var typedFilterCapacityFlag = flag.Int("typed-filter-capacity", 0,
+	"Typed-filter slots per L2 slice; 0 derives capacity from the slice.")
+var typedFilterSlotsPerBucketFlag = flag.Int("typed-filter-slots-per-bucket", 4,
+	"Typed-filter entries per bucket; sensitivity range 1 through 8.")
+var typedFilterFingerprintBitsFlag = flag.Int("typed-filter-fingerprint-bits", 13,
+	"Typed-filter fingerprint width in bits; sensitivity range 4 through 16.")
+var typedFilterLookupLatencyFlag = flag.Int("typed-filter-lookup-latency", 1,
+	"Typed-filter lookup latency in L2 cycles.")
+var typedFilterLookupWidthFlag = flag.Int("typed-filter-lookup-width", 16,
+	"Typed-filter lookups accepted by each L2 slice per cycle.")
+var typedFilterUpdateLatencyFlag = flag.Int("typed-filter-update-latency", 1,
+	"Typed-filter update latency in L2 cycles.")
+var typedFilterUpdateWidthFlag = flag.Int("typed-filter-update-width", 16,
+	"Typed-filter updates accepted by each L2 slice per cycle.")
+var dramRowContinuationEnableFlag = flag.Bool("dram-row-continuation-enable", false,
+	"Enable work-conserving same-bank, same-row DRAM continuation.")
 var remoteDataPathEnableFlag = flag.Bool("remote-data-path-enable", false,
 	"Enable requester RDMA exact dedup/batching and requester-L2 remote replicas.")
 var remoteDataPathDedupEnableFlag = flag.Bool("remote-data-path-dedup-enable", true,
 	"Enable requester RDMA exact same-line deduplication when the remote data path is enabled.")
 var remoteDataPathBatchingEnableFlag = flag.Bool("remote-data-path-batching-enable", true,
 	"Enable requester RDMA FIFO/bitmap batching when the remote data path is enabled.")
+var remoteFilterPrefetchEnableFlag = flag.Bool("remote-filter-prefetch-enable", false,
+	"Allow Filter-approved candidates to piggyback existing remote batches.")
 var remoteDataPathL2EnableFlag = flag.Bool("remote-data-path-l2-enable", true,
 	"Enable requester-L2 Cuckoo probes and remote clean replicas when the remote data path is enabled.")
-var remoteDataPathPrefetchFlag = flag.Bool("remote-data-path-prefetch", false,
-	"Include the other 64B line in the same 128B access unit as a remote prefetch.")
 var remoteDataPathBatchLinesFlag = flag.Int("remote-data-path-batch-lines", 8,
 	"Maximum unique 64B lines in one remote bitmap request.")
-var remoteDataPathWaitNSFlag = flag.Uint64("remote-data-path-wait-ns", 0,
-	"Deprecated compatibility flag; remote batching is work-conserving and never waits for future requests.")
 var remoteDataPathBatchesFlag = flag.Int("remote-data-path-batches", 64,
 	"Maximum collecting page batches per requester RDMA.")
-var remoteDataPathReuseEntriesFlag = flag.Int("remote-data-path-reuse-entries", 4096,
-	"Entries in the requester RDMA two-touch admission history.")
 var maxNumHopsFlag = flag.Int("max-num-hops", -1,
 	"The maximum number of hops in the network")
 var numMemBankFlag = flag.Int("num-memory-banks", 16,

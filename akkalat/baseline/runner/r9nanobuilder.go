@@ -44,13 +44,20 @@ type R9NanoGPUBuilder struct {
 	l1vRemoteMaxInflight           int
 	l1vMSHREntries                 int
 	l1vMaxConcurrentTrans          int
-	l1vBottomReorderPolicy         string
-	l1vBottomReorderWindow         int
-	l1vBottomReorderMaxAgeNS       uint64
 	forceLocalDataAccess           bool
-	dramBatch                      writeback.DRAMBatchConfig
-	dramRowReorderEnabled          bool
-	dramRowReorderMaxAge           int
+	l2ResidentFilter               bool
+	l2FilterPrefetch               bool
+	l2PrefetchPredictorOnly        bool
+	l2PrefetchUngated              bool
+	prefetchPredictorEntries       int
+	l2GranularityAdaptation        bool
+	l2GranularityWithoutFilter     bool
+	l2GranularityAlwaysExpand      bool
+	l2GranularityPredictorOnly     bool
+	l2AdaptivePair                 bool
+	l2FillForwarding               bool
+	typedFilterConfig              writeback.TypedFilterConfig
+	dramRowContinuation            bool
 	remoteDataPath                 rdma.RemoteDataPathConfig
 	rdmaPipelineWidth              int
 	rdmaPipelineLatency            int
@@ -120,17 +127,20 @@ func MakeR9NanoGPUBuilder() R9NanoGPUBuilder {
 		log2MemoryBankInterleavingSize: 12,
 		l2CacheSize:                    4 * mem.MB,
 		dramSize:                       8 * mem.GB,
-		l1vMSHREntries:                 160,
-		l1vMaxConcurrentTrans:          160,
-		rdmaPipelineWidth:              8,
-		rdmaPipelineLatency:            10,
-		rdmaMaxOutstanding:             64,
-		dramRowReorderMaxAge:           64,
+		l1vMSHREntries:                 16,
+		l1vMaxConcurrentTrans:          16,
+		prefetchPredictorEntries:       64,
+		typedFilterConfig: writeback.TypedFilterConfig{
+			Mode:                writeback.TypedFilterCuckoo,
+			LookupLatencyCycles: 1,
+			UpdateLatencyCycles: 1,
+		},
+		rdmaPipelineWidth:   8,
+		rdmaPipelineLatency: 10,
+		rdmaMaxOutstanding:  64,
 		remoteDataPath: rdma.RemoteDataPathConfig{
-			MaxBatchLines:     8,
-			MaxWaitNS:         0,
-			MaxBatches:        64,
-			ReuseTableEntries: 4096,
+			MaxBatchLines: 8,
+			MaxBatches:    64,
 		},
 	}
 	return b
@@ -280,19 +290,6 @@ func (b R9NanoGPUBuilder) WithL1VMaxConcurrentTrans(n int) R9NanoGPUBuilder {
 	return b
 }
 
-// WithL1VBottomReorder configures an optional post-L1V bottom request reorder
-// queue used by M1 experiments.
-func (b R9NanoGPUBuilder) WithL1VBottomReorder(
-	policy string,
-	window int,
-	maxAgeNS uint64,
-) R9NanoGPUBuilder {
-	b.l1vBottomReorderPolicy = policy
-	b.l1vBottomReorderWindow = window
-	b.l1vBottomReorderMaxAgeNS = maxAgeNS
-	return b
-}
-
 // WithForceLocalDataAccess routes L1V data-cache misses to local L2/DRAM even
 // when the physical address belongs to another GPU's address range. This is an
 // experiment knob for isolating remote data-movement cost; address translation,
@@ -303,23 +300,79 @@ func (b R9NanoGPUBuilder) WithForceLocalDataAccess(enable bool) R9NanoGPUBuilder
 	return b
 }
 
-// WithDRAMBatch configures confirmed-L2-miss DRAM access-unit batching.
-func (b R9NanoGPUBuilder) WithDRAMBatch(
-	config writeback.DRAMBatchConfig,
-) R9NanoGPUBuilder {
-	b.dramBatch = config
+// WithL2ResidentFilter enables the per-slice resident Cuckoo Filter fast-miss
+// path without bypassing L2 allocation or MSHR handling.
+func (b R9NanoGPUBuilder) WithL2ResidentFilter(enable bool) R9NanoGPUBuilder {
+	b.l2ResidentFilter = enable
 	return b
 }
 
-// WithDRAMRowReorder configures open-page, row-hit-first DRAM scheduling.
-func (b R9NanoGPUBuilder) WithDRAMRowReorder(
-	enabled bool,
-	maxAgeCycles int,
+// WithL2FilterPrefetch enables the demand-trained, Filter-coupled candidate
+// path in every L2 slice.
+func (b R9NanoGPUBuilder) WithL2FilterPrefetch(enable bool) R9NanoGPUBuilder {
+	b.l2FilterPrefetch = enable
+	return b
+}
+
+// WithL2PrefetchDiagnostics configures coverage-only and ungated diagnostics.
+func (b R9NanoGPUBuilder) WithL2PrefetchDiagnostics(
+	predictorOnly, ungated bool,
 ) R9NanoGPUBuilder {
-	b.dramRowReorderEnabled = enabled
-	if maxAgeCycles > 0 {
-		b.dramRowReorderMaxAge = maxAgeCycles
+	b.l2PrefetchPredictorOnly = predictorOnly
+	b.l2PrefetchUngated = ungated
+	return b
+}
+
+// WithL2GranularityAdaptation enables the demand-attached M1 path.
+func (b R9NanoGPUBuilder) WithL2GranularityAdaptation(
+	enable, withoutFilter, alwaysExpand, predictorOnly bool,
+) R9NanoGPUBuilder {
+	b.l2GranularityAdaptation = enable
+	b.l2GranularityWithoutFilter = withoutFilter
+	b.l2GranularityAlwaysExpand = alwaysExpand
+	b.l2GranularityPredictorOnly = predictorOnly
+	return b
+}
+
+// WithL2AdaptivePair enables the restored best historical M1 policy.
+func (b R9NanoGPUBuilder) WithL2AdaptivePair(enable bool) R9NanoGPUBuilder {
+	b.l2AdaptivePair = enable
+	return b
+}
+
+// WithPrefetchPredictorEntries sets the bounded predictor capacity shared by
+// the four local L2 slices. RDMA uses the same capacity and state format.
+func (b R9NanoGPUBuilder) WithPrefetchPredictorEntries(
+	entries int,
+) R9NanoGPUBuilder {
+	if entries < 1 {
+		panic("prefetch predictor entries must be positive")
 	}
+	b.prefetchPredictorEntries = entries
+	return b
+}
+
+// WithL2FillForwarding enables best-effort early read responses while the
+// ordinary L2 bank fill proceeds.
+func (b R9NanoGPUBuilder) WithL2FillForwarding(enable bool) R9NanoGPUBuilder {
+	b.l2FillForwarding = enable
+	return b
+}
+
+// WithTypedFilterConfig sets the common metadata implementation and ports for
+// every L2 slice.
+func (b R9NanoGPUBuilder) WithTypedFilterConfig(
+	config writeback.TypedFilterConfig,
+) R9NanoGPUBuilder {
+	b.typedFilterConfig = config
+	return b
+}
+
+// WithDRAMRowContinuation configures work-conserving same-row continuation.
+func (b R9NanoGPUBuilder) WithDRAMRowContinuation(
+	enabled bool,
+) R9NanoGPUBuilder {
+	b.dramRowContinuation = enabled
 	return b
 }
 
@@ -394,11 +447,6 @@ func (b R9NanoGPUBuilder) WithL2TLBTable(
 
 // Build creates a pre-configure GPU similar to the AMD R9 Nano GPU.
 func (b R9NanoGPUBuilder) Build(name string, id uint64) *GPU {
-	if b.remoteDataPath.Enabled {
-		b.l1vBottomReorderPolicy = "none"
-		b.l1vBottomReorderWindow = 0
-		b.l1vBottomReorderMaxAgeNS = 0
-	}
 	b.createGPU(name, id)
 	b.buildSAs()
 	b.buildL2Caches()
@@ -508,6 +556,12 @@ func (b *R9NanoGPUBuilder) connectL1ToL2() {
 		l1ToL2Conn.PlugIn(l2.GetPortByName("Top"), 64)
 	}
 	b.rdmaEngine.SetRemoteCacheModuleFinder(remoteCacheFinder)
+	requestFilters := make([]*writeback.TypedCuckooFilter, 0, len(b.l2Caches))
+	for _, l2 := range b.l2Caches {
+		requestFilters = append(requestFilters, l2.RequestFilter())
+	}
+	b.rdmaEngine.SetRequestFilters(
+		requestFilters, 1<<b.log2MemoryBankInterleavingSize)
 
 	for _, l1v := range b.l1vCaches {
 		l1v.SetLowModuleFinder(l1vLowModuleFinder)
@@ -687,11 +741,6 @@ func (b *R9NanoGPUBuilder) buildSAs() {
 		withL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
 		withL1VMSHREntries(b.l1vMSHREntries).
 		withL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
-		withL1VBottomReorder(
-			b.l1vBottomReorderPolicy,
-			b.l1vBottomReorderWindow,
-			b.l1vBottomReorderMaxAgeNS,
-		).
 		withNumCU(b.numCUPerShaderArray)
 
 	if b.enableISADebugging {
@@ -726,7 +775,22 @@ func (b *R9NanoGPUBuilder) buildL2Caches() {
 		WithNumMSHREntry(64).
 		WithNumReqPerCycle(16).
 		WithDirectoryLatency(10).
-		WithDRAMBatchConfig(b.dramBatch).
+		WithTypedFilter(
+			b.l2ResidentFilter || b.l2FilterPrefetch || b.l2AdaptivePair ||
+				b.remoteDataPath.Enabled).
+		WithTypedFilterConfig(b.typedFilterConfig).
+		WithResidentFilter(b.l2ResidentFilter).
+		WithFilterCoupledPrefetch(b.l2FilterPrefetch).
+		WithPrefetchPredictorOnly(b.l2PrefetchPredictorOnly).
+		WithUngatedPrefetch(b.l2PrefetchUngated).
+		WithFilterCoupledPrefetchStreams(b.prefetchPredictorEntries).
+		WithGranularityAdaptation(b.l2GranularityAdaptation).
+		WithGranularityAdaptationWithoutFilter(
+			b.l2GranularityWithoutFilter).
+		WithAlwaysExpandGranularity(b.l2GranularityAlwaysExpand).
+		WithGranularityPredictorOnly(b.l2GranularityPredictorOnly).
+		WithAdaptivePair(b.l2AdaptivePair).
+		WithFillForwarding(b.l2FillForwarding).
 		WithRemoteReplicaFilter(
 			b.remoteDataPath.Enabled &&
 				!b.remoteDataPath.DisableRequesterL2)
@@ -740,6 +804,17 @@ func (b *R9NanoGPUBuilder) buildL2Caches() {
 		).Build(cacheName)
 		b.l2Caches = append(b.l2Caches, l2)
 		b.gpu.L2Caches = append(b.gpu.L2Caches, l2)
+		if i == b.numMemoryBank-1 && b.l2FilterPrefetch {
+			writeback.ConnectFilterCoupledPrefetchGroup(
+				b.l2Caches, b.prefetchPredictorEntries,
+				uint64(1)<<b.log2MemoryBankInterleavingSize,
+				uint64(1)<<b.log2PageSize)
+		}
+		if i == b.numMemoryBank-1 && b.l2GranularityAdaptation {
+			writeback.ConnectGranularityAdaptationGroup(
+				b.l2Caches, b.prefetchPredictorEntries,
+				uint64(1)<<b.log2PageSize)
+		}
 
 		if b.enableVisTracing {
 			tracing.CollectTrace(l2, b.visTracer)
@@ -863,7 +938,9 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 
 	dramCol := 64
 	dramRow := 16384
-	dramDeviceWidth := 128 * 2
+	// M1 evaluates the historical coarse-grain HBM organization: BL4 over the
+	// modeled 256-bit controller datapath forms one 128-B physical access unit.
+	dramDeviceWidth := 256
 	dramBankSize := dramCol * dramRow * dramDeviceWidth
 	dramBank := 4
 	dramBankGroup := 4
@@ -877,7 +954,7 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 
 	memCtrlBuilder := dram.MakeBuilder().
 		WithEngine(b.engine).
-		WithFreq(500*sim.MHz).
+		WithFreq(500 * sim.MHz).
 		WithProtocol(dram.HBM).
 		WithBurstLength(4).
 		WithDeviceWidth(dramDeviceWidth).
@@ -890,10 +967,8 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 		WithNumRow(dramRow).
 		WithCommandQueueSize(8).
 		WithTransactionQueueSize(32).
-		WithRowAwareReorder(
-			b.dramRowReorderEnabled,
-			b.dramRowReorderMaxAge,
-		).
+		WithAggregateContinuation(b.l2GranularityAdaptation).
+		WithRowContinuation(b.dramRowContinuation).
 		WithTCL(7).
 		WithTCWL(2).
 		WithTRCDRD(7).

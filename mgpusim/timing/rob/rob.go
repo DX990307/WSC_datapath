@@ -255,6 +255,10 @@ func (b *ReorderBuffer) duplicateReadReq(req *mem.ReadReq) *mem.ReadReq {
 		WithAddress(req.Address).
 		WithByteSize(req.AccessByteSize).
 		WithPID(req.PID).
+		WithStreamID(req.StreamID).
+		WithLocalStreamID(req.LocalStreamID).
+		WithLocalPairHint(req.LocalPairHint).
+		WithInfo(req.Info).
 		WithDst(b.BottomUnit).
 		Build()
 }
@@ -263,6 +267,7 @@ func (b *ReorderBuffer) duplicateWriteReq(req *mem.WriteReq) *mem.WriteReq {
 	return mem.WriteReqBuilder{}.
 		WithAddress(req.Address).
 		WithPID(req.PID).
+		WithInfo(req.Info).
 		WithData(req.Data).
 		WithDirtyMask(req.DirtyMask).
 		WithDst(b.BottomUnit).

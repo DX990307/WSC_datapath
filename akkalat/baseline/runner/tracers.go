@@ -130,10 +130,10 @@ func firstTraceForComponent(seen map[string]bool, comp sim.Named) bool {
 func (r *Runner) defineMetrics() {
 	r.metricsCollector = &collector{}
 	r.addMaxInstStopper()
-	r.addMaxWGStopper()
 	r.addKernelTimeTracer()
 	r.addInstCountTracer()
 	r.addWGCountTracer()
+	r.addMaxWGStopper()
 	r.addCUCPIHook()
 	r.addCacheLatencyTracer()
 	r.addCacheHitRateTracer()
@@ -241,7 +241,7 @@ func (r *Runner) addInstCountTracer() {
 }
 
 func (r *Runner) addWGCountTracer() {
-	if !r.ReportInstCount {
+	if !r.ReportInstCount && *maxWGCount == 0 {
 		return
 	}
 

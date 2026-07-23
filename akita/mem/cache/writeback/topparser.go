@@ -47,13 +47,22 @@ func (p *topParser) Tick(now sim.VTimeInSec) bool {
 	if !p.cache.dirStageBuffer.CanPush() {
 		return false
 	}
-
 	trans := &transaction{id: sim.GetIDGenerator().Generate()}
 	switch req := req.(type) {
 	case *mem.ReadReq:
 		trans.read = req
 	case *mem.WriteReq:
 		trans.write = req
+	}
+	if trans.read != nil && !trans.read.LookupOnly {
+		// Train exactly once, when the real demand is accepted. A request that
+		// is backpressured at the top port must not manufacture spatial evidence.
+		p.cache.observeGranularityDemand(now, trans)
+		p.cache.observeLocalReadDemand(now, trans.read)
+		p.cache.primeAdaptivePairLookups(now, trans)
+	}
+	if !trans.prefetch {
+		p.cache.primeResidentLookup(now, trans)
 	}
 	p.cache.dirStageBuffer.Push(trans)
 	p.acceptTransaction(now, trans)
@@ -65,6 +74,7 @@ func (p *topParser) acceptTransaction(
 	now sim.VTimeInSec,
 	trans *transaction,
 ) {
+	trans.l2Arrival = now
 	req := trans.req()
 
 	p.cache.inFlightTransactions = append(p.cache.inFlightTransactions, trans)
