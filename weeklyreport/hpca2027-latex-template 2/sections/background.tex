@@ -43,18 +43,16 @@ sends the resulting data responses back to their requesting GPMs.  A bounded
 request table limits the number of requester transactions in flight and
 propagates backpressure to L1 when no entry is available.
 
-Figure~\ref{fig:baseline-overview} follows a baseline remote request from the
-requesting GPM's L1 to the owner GPM's L2.  At \ding{192}, address translation
-identifies a remote page, and the L1 miss allocates a request table entry before
-reaching TX.  At \ding{193}, requester TX injects the request packet into the
-wafer mesh.  At \ding{194}, the owner L2 facing RX accepts the packet.  At
-\ding{195}, RX forwards the recovered cacheline request to the owner L2.  An
-owner L2 hit supplies the data directly, while an L2 miss accesses owner HBM.
-The response returns through owner TX, the wafer mesh, and requester RX.  The
-request table then completes the stored transaction and delivers the data to
-the original L1 request.  In the baseline, same line misses from different
-private L1 caches allocate separate entries and network packets before the
-owner L2 can observe and merge them.
+A baseline remote request starts when address translation identifies a remote
+page. The L1 miss allocates a request-table entry before requester TX injects
+the packet into the wafer mesh. The owner L2-facing RX accepts the packet and
+forwards the recovered cacheline request to owner L2. An owner-L2 hit supplies
+the data directly, while an L2 miss accesses owner HBM. The response returns
+through owner TX, the wafer mesh, and requester RX. The request table then
+completes the stored transaction and delivers the data to the original L1
+request. In the baseline, same-line misses from different private L1 caches
+allocate separate entries and network packets before owner L2 can observe and
+merge them.
 
 \subsection{HBM Organization and Row Locality}
 \label{sec:background-hbm}

@@ -42,7 +42,10 @@ func TestRemoteDataPathDefaultOffKeepsBaselineStateUnallocated(t *testing.T) {
 
 func TestRemoteMetadataInterfaceModelsLatencyAndSharedPortWidth(t *testing.T) {
 	c, _, _, _, remoteGPU := newRemoteDataPathTestComp(t,
-		RemoteDataPathConfig{Enabled: true, MaxBatchLines: 8, MaxBatches: 8})
+		RemoteDataPathConfig{
+			Enabled: true, EnableAuthoritativeAudit: true,
+			MaxBatchLines: 8, MaxBatches: 8,
+		})
 	filter := writeback.NewTypedCuckooFilter(writeback.TypedFilterConfig{
 		Capacity:            64,
 		CriticalReserve:     32,
@@ -96,6 +99,39 @@ func TestRemoteMetadataInterfaceModelsLatencyAndSharedPortWidth(t *testing.T) {
 		!filter.ExactContains(remoteTypedFilterKey(b, writeback.FilterPending)) {
 		t.Fatal("modeled updates did not commit exact PENDING metadata")
 	}
+	stats := c.GetRemoteDataPathStats()
+	if stats.PendingAuthoritativeChecks != 2 ||
+		stats.PendingVerifiedSafeBypasses != 2 ||
+		stats.PendingAuthoritativeFalseNegatives != 0 ||
+		stats.ExactTableLookupsAvoided != 2 {
+		t.Fatalf("unexpected verified negative counters: %+v", stats)
+	}
+}
+
+func TestRemotePendingNegativeIsCheckedAgainstExactLineTable(t *testing.T) {
+	c, _, _, _, remoteGPU := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled: true, EnableAuthoritativeAudit: true,
+			MaxBatchLines: 8, MaxBatches: 8,
+		})
+	identity := remoteLineIdentity{
+		ownerName: remoteGPU.Name(), pid: 1, lineAddr: 0x1400,
+	}
+	key := remoteLineKey{remoteLineIdentity: identity}
+	c.remoteLines[key] = c.newRemoteDemandEntry(key, remoteGPU, nil)
+
+	possible, ready, _ := c.remotePendingMayContain(0, "pending-fn", identity)
+	if !ready || !possible {
+		t.Fatal("authoritative Pending mismatch did not fail open to exact lookup")
+	}
+	stats := c.GetRemoteDataPathStats()
+	if stats.InflightFilterNegatives != 1 ||
+		stats.PendingAuthoritativeChecks != 1 ||
+		stats.PendingVerifiedSafeBypasses != 0 ||
+		stats.PendingAuthoritativeFalseNegatives != 1 ||
+		stats.ExactTableLookups != 1 || stats.ExactTableLookupsAvoided != 0 {
+		t.Fatalf("unexpected Pending false-negative audit: %+v", stats)
+	}
 }
 
 func TestRemoteParallelHintsMakeProgressWithWidthOne(t *testing.T) {
@@ -138,11 +174,12 @@ type remoteTestPort struct {
 	inbox   []sim.Msg
 	sent    []sim.Msg
 	blocked bool
+	comp    sim.Component
 }
 
 func (p *remoteTestPort) Name() string                   { return p.name }
 func (p *remoteTestPort) SetConnection(sim.Connection)   {}
-func (p *remoteTestPort) Component() sim.Component       { return nil }
+func (p *remoteTestPort) Component() sim.Component       { return p.comp }
 func (p *remoteTestPort) NotifyAvailable(sim.VTimeInSec) {}
 func (p *remoteTestPort) CanSend() bool                  { return !p.blocked }
 func (p *remoteTestPort) Recv(msg sim.Msg) *sim.SendError {
@@ -169,6 +206,33 @@ func (p *remoteTestPort) Peek() sim.Msg {
 		return nil
 	}
 	return p.inbox[0]
+}
+
+type authoritativeL2TestComponent struct {
+	*sim.ComponentBase
+	resident bool
+}
+
+func newAuthoritativeL2TestComponent(resident bool) *authoritativeL2TestComponent {
+	return &authoritativeL2TestComponent{
+		ComponentBase: sim.NewComponentBase("AuthoritativeL2"),
+		resident:      resident,
+	}
+}
+
+func (c *authoritativeL2TestComponent) Handle(sim.Event) error { return nil }
+func (c *authoritativeL2TestComponent) NotifyRecv(
+	sim.VTimeInSec, sim.Port,
+) {
+}
+func (c *authoritativeL2TestComponent) NotifyPortFree(
+	sim.VTimeInSec, sim.Port,
+) {
+}
+func (c *authoritativeL2TestComponent) AuthoritativeLookupOnlyHit(
+	vm.PID, uint64,
+) bool {
+	return c.resident
 }
 
 func newRemoteDataPathTestComp(
@@ -756,6 +820,68 @@ func TestRemoteSeenPositiveStillRequiresExactL2Lookup(t *testing.T) {
 	c.processRemotePendingBatches(3)
 	if len(toOutside.sent) != 1 {
 		t.Fatal("exact requester-L2 miss did not fall back to remote memory")
+	}
+}
+
+func TestRequesterL2NegativeIsVerifiedBeforeBypass(t *testing.T) {
+	c, toL1, toL2, _, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled: true, DisableBatching: true,
+			EnableAuthoritativeAudit: true,
+			MaxBatchLines:            8, MaxBatches: 8,
+		})
+	l2Top := &remoteTestPort{
+		name: "Requester.L2.Top",
+		comp: newAuthoritativeL2TestComponent(false),
+	}
+	c.SetRemoteCacheModuleFinder(&mem.SingleLowModuleFinder{LowModule: l2Top})
+	toL1.inbox = append(toL1.inbox,
+		remoteTestRead(&remoteTestPort{name: "L1"}, 0x3cc0))
+
+	c.processFromL1(1)
+	if len(toL2.sent) != 0 {
+		t.Fatal("verified absent requester line still issued an exact L2 probe")
+	}
+	stats := c.GetRemoteDataPathStats()
+	if !stats.AuthoritativeAuditEnabled ||
+		stats.RequesterL2FilterNegativeDecisions != 1 ||
+		stats.L2OneTouchProbeBypasses != 1 ||
+		stats.RequesterL2AuthoritativeChecks != 1 ||
+		stats.RequesterL2VerifiedSafeBypasses != 1 ||
+		stats.RequesterL2AuthoritativeFalseNegatives != 0 ||
+		stats.RequesterL2AuthoritativeUnavailable != 0 {
+		t.Fatalf("unexpected requester-L2 verified bypass audit: %+v", stats)
+	}
+}
+
+func TestRequesterL2FalseNegativeFailsOpenToExactProbe(t *testing.T) {
+	c, toL1, toL2, _, _ := newRemoteDataPathTestComp(t,
+		RemoteDataPathConfig{
+			Enabled: true, DisableBatching: true,
+			EnableAuthoritativeAudit: true,
+			MaxBatchLines:            8, MaxBatches: 8,
+		})
+	l2Top := &remoteTestPort{
+		name: "Requester.L2.Top",
+		comp: newAuthoritativeL2TestComponent(true),
+	}
+	c.SetRemoteCacheModuleFinder(&mem.SingleLowModuleFinder{LowModule: l2Top})
+	toL1.inbox = append(toL1.inbox,
+		remoteTestRead(&remoteTestPort{name: "L1"}, 0x3d40))
+
+	c.processFromL1(1)
+	if len(toL2.sent) != 1 {
+		t.Fatalf("authoritative requester-L2 hit issued %d probes, want 1",
+			len(toL2.sent))
+	}
+	stats := c.GetRemoteDataPathStats()
+	if stats.RequesterL2FilterNegativeDecisions != 1 ||
+		stats.L2OneTouchProbeBypasses != 0 ||
+		stats.RequesterL2AuthoritativeChecks != 1 ||
+		stats.RequesterL2VerifiedSafeBypasses != 0 ||
+		stats.RequesterL2AuthoritativeFalseNegatives != 1 ||
+		stats.RequesterL2AuthoritativeUnavailable != 0 {
+		t.Fatalf("unexpected requester-L2 false-negative audit: %+v", stats)
 	}
 }
 

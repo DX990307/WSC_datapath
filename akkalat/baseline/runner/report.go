@@ -86,6 +86,7 @@ func (r *Runner) reportAdaptivePairStats() {
 			r.metricsCollector.Collect(
 				where, "adaptive_pair_enabled", boolMetric(stats.Enabled))
 			values := map[string]uint64{
+				"region_lines":                   stats.RegionLines,
 				"miss_lines_seen":                stats.MissLinesSeen,
 				"observations":                   stats.Observations,
 				"useful":                         stats.Useful,
@@ -101,6 +102,8 @@ func (r *Runner) reportAdaptivePairStats() {
 				"unused":                         stats.Unused,
 				"confidence":                     stats.Confidence,
 				"wide_128b_reads":                stats.Wide128BReads,
+				"expanded_region_reads":          stats.ExpandedRegionReads,
+				"prefetched_region_lines":        stats.PrefetchedRegionLines,
 				"filter_candidates":              stats.FilterCandidates,
 				"filter_lookups":                 stats.FilterLookups,
 				"filter_busy_fallbacks":          stats.FilterBusyFallbacks,
@@ -347,9 +350,17 @@ func (r *Runner) reportResidentFilterStats() {
 			where := l2.Name()
 			r.metricsCollector.Collect(where, "l2_resident_filter_enabled", boolMetric(stats.Enabled))
 			r.metricsCollector.Collect(where, "l2_resident_filter_reliable", boolMetric(stats.Reliable))
+			r.metricsCollector.Collect(where, "l2_resident_filter_authoritative_audit_enabled", boolMetric(stats.AuthoritativeAuditEnabled))
 			r.metricsCollector.Collect(where, "l2_resident_filter_queries", float64(stats.Queries))
 			r.metricsCollector.Collect(where, "l2_resident_filter_positives", float64(stats.Positives))
 			r.metricsCollector.Collect(where, "l2_resident_filter_negatives", float64(stats.Negatives))
+			r.metricsCollector.Collect(where, "l2_resident_filter_read_filter_eligible", float64(stats.ReadFilterEligible))
+			r.metricsCollector.Collect(where, "l2_resident_filter_read_issued_bypasses", float64(stats.ReadIssuedBypasses))
+			r.metricsCollector.Collect(where, "l2_resident_filter_read_exact_tag_lookups", float64(stats.ReadExactTagLookups))
+			r.metricsCollector.Collect(where, "l2_resident_filter_read_authoritative_checks", float64(stats.ReadAuthoritativeChecks))
+			r.metricsCollector.Collect(where, "l2_resident_filter_read_verified_safe_bypasses", float64(stats.ReadVerifiedSafeBypasses))
+			r.metricsCollector.Collect(where, "l2_resident_filter_read_authoritative_false_negatives", float64(stats.ReadAuthoritativeFalseNegatives))
+			r.metricsCollector.Collect(where, "l2_resident_filter_read_authoritative_mshr_hits", float64(stats.ReadAuthoritativeMSHRHits))
 			r.metricsCollector.Collect(where, "l2_resident_filter_read_bypasses", float64(stats.ReadNegativeBypasses))
 			r.metricsCollector.Collect(where, "l2_resident_filter_read_positive_fast_paths", float64(stats.ReadPositiveFastPaths))
 			r.metricsCollector.Collect(where, "l2_resident_filter_read_busy_fallbacks", float64(stats.ReadBusyFallbacks))
@@ -659,6 +670,10 @@ func (r *Runner) reportRemoteDataPathStats() {
 		r.metricsCollector.Collect(where, "remote_inflight_filter_negatives", float64(stats.InflightFilterNegatives))
 		r.metricsCollector.Collect(where, "remote_inflight_filter_false_positives", float64(stats.InflightFilterFalsePositives))
 		r.metricsCollector.Collect(where, "remote_inflight_filter_insert_failures", float64(stats.InflightFilterInsertFailures))
+		r.metricsCollector.Collect(where, "remote_authoritative_audit_enabled", boolMetric(stats.AuthoritativeAuditEnabled))
+		r.metricsCollector.Collect(where, "remote_pending_authoritative_checks", float64(stats.PendingAuthoritativeChecks))
+		r.metricsCollector.Collect(where, "remote_pending_verified_safe_bypasses", float64(stats.PendingVerifiedSafeBypasses))
+		r.metricsCollector.Collect(where, "remote_pending_authoritative_false_negatives", float64(stats.PendingAuthoritativeFalseNegatives))
 		r.metricsCollector.Collect(where, "remote_exact_table_lookups", float64(stats.ExactTableLookups))
 		r.metricsCollector.Collect(where, "remote_exact_table_lookups_avoided", float64(stats.ExactTableLookupsAvoided))
 		r.metricsCollector.Collect(where, "remote_pre_send_merges", float64(stats.CollectingMerges))
@@ -666,7 +681,12 @@ func (r *Runner) reportRemoteDataPathStats() {
 		r.metricsCollector.Collect(where, "remote_ready_merges", float64(stats.ReadyMerges))
 		r.metricsCollector.Collect(where, "remote_l2_probe_hits", float64(stats.L2ProbeHits))
 		r.metricsCollector.Collect(where, "remote_l2_probe_misses", float64(stats.L2ProbeMisses))
+		r.metricsCollector.Collect(where, "remote_requester_l2_filter_negative_decisions", float64(stats.RequesterL2FilterNegativeDecisions))
 		r.metricsCollector.Collect(where, "remote_l2_one_touch_probe_bypasses", float64(stats.L2OneTouchProbeBypasses))
+		r.metricsCollector.Collect(where, "remote_requester_l2_authoritative_checks", float64(stats.RequesterL2AuthoritativeChecks))
+		r.metricsCollector.Collect(where, "remote_requester_l2_verified_safe_bypasses", float64(stats.RequesterL2VerifiedSafeBypasses))
+		r.metricsCollector.Collect(where, "remote_requester_l2_authoritative_false_negatives", float64(stats.RequesterL2AuthoritativeFalseNegatives))
+		r.metricsCollector.Collect(where, "remote_requester_l2_authoritative_unavailable", float64(stats.RequesterL2AuthoritativeUnavailable))
 		r.metricsCollector.Collect(where, "remote_resident_queries", float64(stats.ResidentQueries))
 		r.metricsCollector.Collect(where, "remote_resident_positives", float64(stats.ResidentPositives))
 		r.metricsCollector.Collect(where, "remote_resident_negatives", float64(stats.ResidentNegatives))
@@ -791,6 +811,9 @@ func (r *Runner) reportTypedFilterStats(gpu *GPU) {
 		r.metricsCollector.Collect(where, "typed_filter_update_width", float64(stats.UpdateWidth))
 		r.metricsCollector.Collect(where, "typed_filter_lookup_port_stalls", float64(stats.LookupPortStalls))
 		r.metricsCollector.Collect(where, "typed_filter_update_port_stalls", float64(stats.UpdatePortStalls))
+		r.metricsCollector.Collect(where, "typed_filter_kick_attempts", float64(stats.KickAttempts))
+		r.metricsCollector.Collect(where, "typed_filter_kicked_insertions", float64(stats.KickedInsertions))
+		r.metricsCollector.Collect(where, "typed_filter_kick_rollbacks", float64(stats.KickRollbacks))
 		typeNames := [...]string{
 			"resident", "pending", "seen", "pattern",
 			"granularity_pending",
@@ -806,9 +829,11 @@ func (r *Runner) reportTypedFilterStats(gpu *GPU) {
 			r.metricsCollector.Collect(where, prefix+"positives", float64(typeStats.Positives))
 			r.metricsCollector.Collect(where, prefix+"negatives", float64(typeStats.Negatives))
 			r.metricsCollector.Collect(where, prefix+"false_positives", float64(typeStats.FalsePositives))
+			r.metricsCollector.Collect(where, prefix+"active_false_negatives", float64(typeStats.ActiveFalseNegatives))
 			r.metricsCollector.Collect(where, prefix+"insertions", float64(typeStats.Insertions))
 			r.metricsCollector.Collect(where, prefix+"deletes", float64(typeStats.Deletes))
 			r.metricsCollector.Collect(where, prefix+"insert_failures", float64(typeStats.InsertFailures))
+			r.metricsCollector.Collect(where, prefix+"reference_count_saturations", float64(typeStats.ReferenceCountSaturations))
 			r.metricsCollector.Collect(where, prefix+"fail_open", float64(typeStats.FailOpen))
 			r.metricsCollector.Collect(where, prefix+"lookup_busy_drops", float64(typeStats.LookupBusyDrops))
 			r.metricsCollector.Collect(where, prefix+"update_busy_drops", float64(typeStats.UpdateBusyDrops))

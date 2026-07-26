@@ -21,10 +21,9 @@ memory capacity, and memory bandwidth of one MI100
 \textbf{Cache and memory hierarchy.}
 Each GPM contains 32 CUs organized as eight shader arrays.  Every CU has a
 private 16~KB, four-way L1 vector cache with a 10-cycle access, 16 MSHRs, and
-at most 160 concurrent transactions.  Each shader array also has a 16~KB
-scalar cache and a 32~KB instruction cache.  The GPM-wide 4~MB L2 is divided
-into four independently accessed 1~MB partitions.  Each partition is 16-way
-associative, accepts 16 requests per cycle, contains 64 MSHRs, and charges a
+at most 16 concurrent transactions.  Each shader array also has a 16~KB
+scalar cache and a 32~KB instruction cache.  The GPM-wide 4~MB L2 is 16-way
+associative, accepts 64 requests per cycle, contains 256 MSHRs, and charges a
 10-cycle directory lookup to both
 hits and misses.  Four memory controllers connect the L2 to 8~GB of local HBM
 with 1.23~TB/s aggregate bandwidth.  Each RDMA endpoint processes eight
@@ -38,8 +37,8 @@ and L2 and explores reallocating L2 capacity to that new level
 \cite{arunkumar2017mcm}.  CuPath does not add an L1.5 cache, a victim cache,
 or another independently addressable cache.  Baseline and CuPath therefore
 use identical L1 and L2 capacities, associativities, ports, MSHRs, and lookup
-latencies.  CuPath adds one metadata-only Cuckoo Filter and a bounded 16-line
-M1 response buffer per L2 partition, together with bounded local and remote
+latencies.  CuPath adds one logical metadata-only Cuckoo Filter and bounded
+64-line M1 response capacity per GPM, together with bounded local and remote
 prediction state.  The response buffer holds an adjacent line returned by a
 paired HBM access until a matching demand consumes it or replacement removes
 it.  A retained remote response is instead inserted as a clean line through
@@ -75,8 +74,7 @@ the same termination rule.
                 16 MSHRs \\
     L1 scalar & 16~KB/shader array, 4-way, 16 MSHRs \\
     L1 instruction & 32~KB/shader array, 4-way, 16 MSHRs \\
-    Shared L2 & 4~MB/GPM, four partitions, 16-way, 64 MSHRs/partition,
-                16 req./cycle/partition, 10-cycle lookup \\
+    Shared L2 & 4~MB/GPM, 16-way, 256 MSHRs, 64 req./cycle, 10-cycle lookup \\
     HBM & 8~GB/GPM, four controllers, 1.23~TB/s, BL4 \\
     RDMA endpoint & 8 transfers/cycle, 10-cycle processing,
                     64 outstanding/direction \\
@@ -84,10 +82,10 @@ the same termination rule.
     \midrule
     \multicolumn{2}{l}{\textit{CuPath additions}} \\
     Cache capacity & No L1.5 or new addressable cache; baseline L1/L2 unchanged \\
-    Typed Filter & One shared array/L2 partition, 4K buckets, four slots/bucket,
+    Typed Filter & One logical shared structure/GPM, 32K buckets, four slots/bucket,
                    13-bit fingerprint \\
-    Filter ports & 1-cycle lookup/update, 16 lookups and 16 updates/cycle/partition \\
-    M1 state & 64 observed regions and 16 returned lines/L2 partition \\
+    Filter ports & 1-cycle lookup/update, 16 parallel lookups and updates/cycle/array \\
+    M1 state & 256 observed regions and 64 returned lines/GPM \\
     Remote predictor & 256 entries/requesting GPM \\
     M1 & Filter-guided paired HBM access \\
     M2 & Up to eight lines/packet, 64 packet descriptors/requesting GPM \\
@@ -98,7 +96,8 @@ the same termination rule.
 
 \subsection{Ablation Configurations}
 
-We run five configurations from the same frozen simulator binary.
+We run five configurations with the same benchmark inputs, architectural
+parameters, workgroup-completion rule, and completed workgroup count.
 \emph{Baseline} disables every CuPath transformation.  \emph{M1} enables the
 complete local request-pairing path: reliable \textsc{Resident} negatives
 bypass guaranteed-miss L2 tag lookups, and typed membership state admits at
@@ -121,22 +120,22 @@ performance, rather than treating the three stage speedups as additive.
 \subsection{Hardware Overhead}
 
 We estimate CuPath's storage and area overhead with CACTI~7.0
-\cite{balasubramonian2017cacti} at 32~nm.  Each L2 partition has a 4K-bucket
-Typed Filter with four slots per bucket.  Each slot contains a 13-bit
-fingerprint, three type bits, one valid bit, and a four-bit reference count,
-requiring 42~KiB per Filter.  We model each Filter as 16 banks with two read
-ports and one write port per bank.  In the conflict-free case, this organization
-supports 16 two-bucket lookups and 16 updates per cycle.  The 256-entry remote
-predictor is conservatively budgeted at 64~B per entry, or 16~KiB per GPM.
-The four Filters and predictor therefore require 184~KiB per GPM, equal to
-4.49\% of the 4-MiB L2 data capacity.
+\cite{balasubramonian2017cacti} at 32~nm. The evaluated GPM contains four
+physical Filter arrays with 8K buckets per array. Each bucket has four 21-bit
+slots, and each slot contains one valid bit, a 13-bit fingerprint, three type
+bits, and a four-bit reference count. One array therefore requires 84~KiB,
+and the four arrays require 336~KiB per GPM. We model each array as a 16-bank
+scratch RAM with two read ports and one write port per bank. The 256-entry
+remote predictor is conservatively budgeted at 64~B per entry, or 16~KiB per
+GPM. The Filter arrays and predictor therefore require 352~KiB per GPM, equal
+to 8.59\% of the 4-MiB L2 data capacity.
 
-CACTI estimates 0.358~mm$^2$ for each Filter and 0.036~mm$^2$ for the remote
-predictor.  The resulting CuPath area is 1.469~mm$^2$ per GPM.  A complete
-4-MiB, 16-way L2, modeled as four 1-MiB partitions and including data arrays,
+CACTI estimates 0.590~mm$^2$ for each Filter array and 0.036~mm$^2$ for the
+remote predictor. The resulting CuPath array area is 2.396~mm$^2$ per GPM. A complete
+4-MiB, 16-way L2 including data arrays,
 tag arrays, and peripheral circuitry, occupies 54.510~mm$^2$.  CuPath therefore
-adds 2.70\% area relative to the modeled L2.  Filter and predictor accesses take
-0.523~ns and 0.241~ns, respectively, and fit within the 1-ns cycle.  The estimate
+adds 4.40\% area relative to the modeled L2. Filter and predictor accesses take
+0.661~ns and 0.241~ns, respectively, and fit within the 1-ns cycle. The estimate
 includes the arrays and their modeled ports, but excludes hashing, fingerprint
 comparators, arbitration, bank conflicts, and CuPath control logic.
 

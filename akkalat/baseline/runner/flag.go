@@ -109,6 +109,8 @@ var l1vMSHREntriesFlag = flag.Int("l1v-mshr-entries", 16,
 	"Number of L1V cache MSHR entries per L1V cache.")
 var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 16,
 	"Maximum concurrent L1V cache transactions per L1V cache.")
+var l2CacheSizeMBFlag = flag.Int("l2-cache-size-mb", 4,
+	"Total L2 cache capacity per GPM in MiB.")
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")
@@ -126,6 +128,9 @@ var l2GranularityAdaptationEnableFlag = flag.Bool(
 var l2AdaptivePairEnableFlag = flag.Bool(
 	"l2-adaptive-pair-enable", false,
 	"Enable the historical adjacent-line M1 policy using one aligned 128B DRAM read.")
+var l2AdaptivePairRegionLinesFlag = flag.Int(
+	"l2-adaptive-pair-region-lines", 2,
+	"Aligned row-local region fetched by adaptive pairing, in 64B cachelines; valid values are 2, 4, 8, and 16.")
 var l2GranularityWithoutFilterFlag = flag.Bool(
 	"l2-granularity-without-filter", false,
 	"Diagnostic: adapt controller granularity using prediction and exact checks without Cuckoo gating.")
@@ -167,6 +172,9 @@ var remoteFilterPrefetchEnableFlag = flag.Bool("remote-filter-prefetch-enable", 
 	"Allow Filter-approved candidates to piggyback existing remote batches.")
 var remoteDataPathL2EnableFlag = flag.Bool("remote-data-path-l2-enable", true,
 	"Enable requester-L2 Cuckoo probes and remote clean replicas when the remote data path is enabled.")
+var typedFilterAuthoritativeAuditFlag = flag.Bool(
+	"typed-filter-authoritative-audit", false,
+	"Enable timing-neutral exact-state checks for typed-Filter negative decisions.")
 var remoteDataPathBatchLinesFlag = flag.Int("remote-data-path-batch-lines", 8,
 	"Maximum unique 64B lines in one remote bitmap request.")
 var remoteDataPathBatchesFlag = flag.Int("remote-data-path-batches", 64,

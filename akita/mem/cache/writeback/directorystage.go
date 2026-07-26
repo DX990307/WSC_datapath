@@ -132,7 +132,10 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 				lookup, accepted := ds.cache.startResidentLookup(
 					now, req.GetPID(), line)
 				if !accepted {
-					break
+					// Filter contention must not delay a demand. A nil lookup
+					// below is an explicit fail-open result and immediately sends
+					// the read through the ordinary directory pipeline.
+					ds.cache.residentFilterStats.ReadBusyFallbacks++
 				}
 				trans.residentFilterLookup = lookup
 				if lookup != nil {
@@ -145,34 +148,52 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 			if !ready {
 				break
 			}
+			if !trans.prefetch {
+				ds.cache.residentFilterStats.ReadFilterEligible++
+			}
 			trans.residentFilterLookup = nil
 			trans.residentFilterChecked = true
 			if reliable && !mayContain {
 				trans.residentFilterNegative = true
-				// The cache slice and DRAM bank share the same configured
-				// interleave. Ordinary filter-only reads bypass only when there
-				// is no live miss. M1 deliberately treats the reliable negative
-				// as an optimistic latency bypass even under concurrency; exact
-				// MSHR/resource checks and the ordinary fill path remain below.
-				// Writes retain their shortcut because a full-line write does
-				// not create a DRAM read.
-				canBypass := trans.read == nil ||
-					ds.cache.granularityAdaptationEnabled ||
-					len(ds.cache.mshr.AllEntries()) == 0
-				if trans.read != nil && !canBypass {
-					ds.cache.residentFilterStats.ReadBusyFallbacks++
+				bypassAllowed := true
+				if !trans.prefetch && ds.cache.authoritativeAuditEnabled {
+					resident := ds.cache.AuthoritativeResidentLookup(
+						req.GetPID(), req.GetAddress())
+					inFlight := ds.cache.AuthoritativeMSHRLookup(
+						req.GetPID(), req.GetAddress())
+					ds.cache.recordResidentNegativeBypassAudit(
+						resident, inFlight)
+					if resident {
+						// The diagnostic lookup is timing-neutral, but a
+						// disagreement is fail-open. Preserve the ordinary
+						// directory pipeline and its configured latency.
+						trans.residentFilterNegative = false
+						trans.residentFilterPositive = true
+						bypassAllowed = false
+					} else if inFlight {
+						// Preserve the exact MSHR merge path if the line became
+						// active after the first parallel MSHR check.
+						trans.residentParallelMSHR = true
+						memtrace.ObservationTransitionByRequest(
+							req.Meta().ID, "l2_directory_start", "l2_mshr", now)
+						memtrace.RecordMemoryPathL2DirStart(
+							ds.cache.Name(), req.Meta().ID,
+							accessReqInfo(req), now)
+						ds.buf.Push(dirPipelineItem{trans: trans})
+						ds.cache.dirStageBuffer.Pop()
+						madeProgress = true
+						continue
+					}
 				}
-				trans.residentFastMiss = canBypass
-				if canBypass {
-					if trans.read != nil {
-						ds.cache.residentFilterStats.ReadNegativeBypasses++
-					} else {
-						ds.cache.residentFilterStats.WriteNegativeBypasses++
-						if ds.isWritingFullLine(trans.write) {
-							ds.cache.residentFilterStats.WriteFullLineBypasses++
-						} else {
-							ds.cache.residentFilterStats.WritePartialBypasses++
-						}
+				if bypassAllowed {
+					// A reliable negative, combined with the exact same-line MSHR
+					// check above, proves that this demand read cannot hit. Bypass
+					// only the modeled tag pipeline. Victim selection, allocation,
+					// adaptive pairing, the L2 fill, and all writes remain unchanged.
+					trans.residentFastMiss = true
+					ds.cache.residentFilterStats.ReadNegativeBypasses++
+					if !trans.prefetch {
+						ds.cache.residentFilterStats.ReadIssuedBypasses++
 					}
 					memtrace.ObservationTransitionByRequest(
 						req.Meta().ID, "l2_directory_start", "l2_filter", now)
@@ -184,26 +205,11 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 					continue
 				}
 			}
-			trans.residentFilterPositive = reliable && mayContain
-			// M1 uses the one-cycle Filter as the timing access for every
-			// reliable read classification. A possible match still performs the
-			// exact directory lookup in doRead, but it need not traverse the
-			// modeled tag-latency pipeline first. This changes latency, not lookup
-			// width or correctness: a false positive becomes an ordinary miss and
-			// an unreliable result retains the baseline pipeline.
-			if trans.read != nil && trans.residentFilterPositive &&
-				ds.cache.granularityAdaptationEnabled && ds.buf.CanPush() {
-				req := trans.accessReq()
-				ds.cache.residentFilterStats.ReadPositiveFastPaths++
-				memtrace.ObservationTransitionByRequest(
-					req.Meta().ID, "l2_directory_start", "l2_filter", now)
-				memtrace.RecordMemoryPathL2DirStart(
-					ds.cache.Name(), req.Meta().ID, accessReqInfo(req), now)
-				ds.buf.Push(dirPipelineItem{trans: trans})
-				ds.cache.dirStageBuffer.Pop()
-				madeProgress = true
-				continue
+			if !trans.residentFilterPositive {
+				trans.residentFilterPositive = reliable && mayContain
 			}
+			// A possible match is not authoritative. It retains the exact
+			// directory lookup and its configured 10-cycle latency.
 		}
 		if !pipelineReady && !ds.pipeline.CanAccept() {
 			break
@@ -218,6 +224,10 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 				now,
 			)
 		}
+		if ds.canUseResidentFastMiss(trans) &&
+			trans.residentFilterChecked && !trans.prefetch {
+			ds.cache.residentFilterStats.ReadExactTagLookups++
+		}
 		ds.pipeline.Accept(now, dirPipelineItem{trans})
 		ds.cache.dirStageBuffer.Pop()
 
@@ -228,13 +238,13 @@ func (ds *directoryStage) acceptNewTransaction(now sim.VTimeInSec) bool {
 }
 
 func (ds *directoryStage) canUseResidentFastMiss(trans *transaction) bool {
-	if !ds.cache.residentFilterEnabled || trans == nil {
+	if !ds.cache.residentFilterEnabled || trans == nil || trans.read == nil {
 		return false
 	}
-	if trans.read != nil && trans.read.LookupOnly {
+	if trans.read.LookupOnly {
 		return false
 	}
-	return trans.accessReq() != nil
+	return true
 }
 
 func (ds *directoryStage) Reset(now sim.VTimeInSec) {
@@ -299,7 +309,6 @@ func (ds *directoryStage) doRead(
 
 	return ds.handleReadMiss(now, trans)
 }
-
 func (ds *directoryStage) handleLookupOnlyMiss(
 	now sim.VTimeInSec,
 	trans *transaction,
@@ -755,6 +764,9 @@ func (ds *directoryStage) evict(
 
 	ds.updateTransForEviction(now, trans, victim, pid, cacheLineID)
 	ds.updateVictimBlockMetaData(victim, cacheLineID, pid)
+	if trans.read != nil {
+		ds.cache.trackResidentReadAllocation(victim)
+	}
 
 	ds.buf.Pop()
 	bankBuf.Push(trans)
@@ -783,8 +795,8 @@ func (ds *directoryStage) updateVictimBlockMetaData(
 	victim.IsLocked = true
 	victim.IsDirty = false
 	ds.cache.directory.Visit(victim)
-	// trackResidentBlock deliberately ignores this locked allocation. Read
-	// fills and full-line writes insert only after the L2 bank has the data.
+	// Ordinary resident tracking ignores locked allocations. The read path
+	// explicitly tracks its pending fill after this common metadata update.
 	ds.cache.trackResidentBlock(victim)
 }
 
@@ -871,6 +883,13 @@ func (ds *directoryStage) fetch(
 	block.PID = pid
 	block.IsValid = true
 	ds.cache.directory.Visit(block)
+	// The Filter represents both allocated and serviceable L2 lines. Keeping
+	// this locked fill visible prevents a later read from incorrectly proving
+	// absence after the DRAM response has left the exact MSHR but before the
+	// 10-cycle bank fill completes.
+	if trans.read != nil {
+		ds.cache.trackResidentReadAllocation(block)
+	}
 
 	tracing.AddTaskStep(
 		tracing.MsgIDAtReceiver(req, ds.cache),

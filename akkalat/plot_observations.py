@@ -124,10 +124,7 @@ def plot_o1(root, out):
     x = np.arange(len(bs), dtype=float) * x_step
     group_width = .56
     width = group_width / 2
-    fig, (ax, mx) = plt.subplots(
-        2, 1, figsize=(3.45, 2.25), sharex=True,
-        gridspec_kw={"height_ratios": [1.8, 1.0], "hspace": .10},
-    )
+    fig, ax = plt.subplots(figsize=(3.45, 1.48))
     path_specs = [
         ("local", {"dram"}, -width / 2),
         ("remote", {"l2", "dram"}, width / 2),
@@ -170,7 +167,10 @@ def plot_o1(root, out):
     ax.set_yticks([0, 50, 100])
     ax.set_yticklabels(["0", "50", "100"])
     ax.set_xticks(x)
-    ax.set_xticklabels([])
+    ax.set_xticklabels(
+        [label for _, label in workload_order], rotation=30,
+        ha="right", rotation_mode="anchor", fontsize=6.0,
+    )
     ax.set_xlim(x[0] - group_width * .62, x[-1] + group_width * .62)
     ax.grid(axis="y", color="#dddddd", linewidth=.45, zorder=1)
     ax.tick_params(axis="both", labelsize=6.0, length=2.4, width=.7)
@@ -188,15 +188,18 @@ def plot_o1(root, out):
         spine.set_linewidth(.7)
     handles = [Patch(facecolor=color, edgecolor="none", label=label)
                for _, label, color in groups]
-    ax.legend(handles=handles, loc="lower left",
-              bbox_to_anchor=(.02, 1.06, .96, .16), ncol=2, mode="expand",
-              frameon=False, columnspacing=.9, handlelength=1.0,
-              handletextpad=.45, fontsize=5.7)
+    ax.legend(
+        handles=handles, loc="lower center", bbox_to_anchor=(.5, 1.05),
+        ncol=4, frameon=False, columnspacing=.65, handlelength=.85,
+        handletextpad=.3, fontsize=4.8,
+    )
+    save(fig, out, "o1_full_path_latency")
 
-    # The lower panel reports the demand-read miss probability at the local
+    # The second figure reports the demand-read miss probability at the local
     # or owner L2 for the same completed-leader population. A missing remote
     # bar means that no qualifying remote path was observed; a real zero is
     # shown explicitly so that absence is not confused with an all-hit trace.
+    fig, mx = plt.subplots(figsize=(3.45, 1.32))
     miss_present = {
         "local": np.zeros(len(bs), dtype=bool),
         "remote": np.zeros(len(bs), dtype=bool),
@@ -228,16 +231,10 @@ def plot_o1(root, out):
             color=color, edgecolor="none", linewidth=0, zorder=3,
         )
         for i, xpos in enumerate(x):
-            short = "L" if path_key == "local" else "R"
             if present[i] and values[i] == 0:
-                mx.text(xpos + offset, 2.0, short + "0", ha="center",
+                mx.text(xpos + offset, 2.0, "0", ha="center",
                         va="bottom", fontsize=4.6, color=COLORS["dark"],
                         zorder=5)
-            elif present[i]:
-                mx.text(xpos + offset, min(2.0, values[i] * .45), short,
-                        ha="center", va="bottom", fontsize=4.8,
-                        color="white" if values[i] >= 10 else COLORS["dark"],
-                        fontweight="bold", zorder=5)
             elif path_key == "remote" and not present[i]:
                 mx.text(xpos + offset, 1.0, "--", ha="center", va="bottom",
                         fontsize=5.2, color=COLORS["gray"], zorder=5)
@@ -257,7 +254,23 @@ def plot_o1(root, out):
     for spine in mx.spines.values():
         spine.set_visible(True)
         spine.set_linewidth(.7)
-    save(fig, out, "o1_memory_path_latency")
+    miss_handles = [
+        Patch(
+            facecolor=BLUE[300], edgecolor="none",
+            label="Local GPM L2 Cache",
+        ),
+        Patch(
+            facecolor=ORANGE[300], edgecolor="none",
+            label="Owner GPM L2 Cache",
+        ),
+    ]
+    mx.legend(
+        handles=miss_handles, loc="lower left",
+        bbox_to_anchor=(.02, 1.05, .96, .14), ncol=2, mode="expand",
+        frameon=False, columnspacing=.9, handlelength=1.0,
+        handletextpad=.45, fontsize=5.7,
+    )
+    save(fig, out, "o1_l2_miss_rate")
 
 
 def plot_o2(root, out):
@@ -285,7 +298,7 @@ def plot_o2(root, out):
                   ["Weighted"] + [BENCH_LABEL.get(b, b) for b in bs],
                   fontsize=5.6)
     hx.axhline(.5, color="white", linewidth=1.0)
-    hx.set_xlabel("Nearest sibling window (L1 cycles)", fontsize=6.5)
+    hx.set_xlabel("Adjacent-line window (L1 cycles)", fontsize=6.5)
     cbar = fig.colorbar(im, ax=hx, fraction=.055, pad=.025)
     cbar.set_ticks([0, 25, 50])
     cbar.ax.tick_params(labelsize=5.5)
@@ -296,7 +309,12 @@ def plot_o2(root, out):
 def plot_o3(root, out):
     rows = [r for r in read_rows(root / "o3_physical_locality_cdf.csv") if r["distance"] == "cycles"]
     relations = ["same_access_unit", "same_row_different_column", "same_bank_different_row", "different_bank_same_controller"]
-    labels = ["Same 128-B unit", "Same row", "Same bank/new row", "Different bank"]
+    labels = [
+        "Adjacent row region",
+        "Same row/other column",
+        "Same bank/new row",
+        "Different bank",
+    ]
     colors = [COLORS["blue"], COLORS["green"], COLORS["orange"], COLORS["red"]]
     fig, (ax, hx) = plt.subplots(
         1, 2, figsize=(3.45, 1.72),
@@ -325,7 +343,7 @@ def plot_o3(root, out):
         matrix.append(line)
     im=hx.imshow(matrix, aspect="auto", cmap=ORANGE_HEATMAP,
                  vmin=0, vmax=100)
-    hx.set_xticks(range(4), ["128B", "Row", "Bank", "Diff."],
+    hx.set_xticks(range(4), ["Adjacent", "Row", "Bank", "Diff."],
                   rotation=30, ha="right", fontsize=4.3)
     hx.set_yticks(range(len(bs)), [BENCH_LABEL.get(b,b) for b in bs],
                   fontsize=3.8)
@@ -338,15 +356,25 @@ def plot_o3(root, out):
 
 def plot_o4(root, out):
     rows=read_rows(root/"o4_remote_amplification.csv"); bs=benches(rows); x=np.arange(len(bs))
-    byte_hops=[f(next(r for r in rows if r["benchmark"]==b),"byte_hops_per_logical_byte") for b in bs]
-    latency=[f(next(r for r in rows if r["benchmark"]==b),"latency_mean_ns") for b in bs]
-    fig, ax=plt.subplots(figsize=(3.45,1.62)); ax.bar(x,byte_hops,color=COLORS["red"],width=.7,zorder=2)
-    ax2=ax.twinx(); ax2.plot(x,latency,color=COLORS["blue"],marker="o",lw=1.5,ms=3,label="Remote latency")
-    ax.set_xticks(x,[BENCH_LABEL.get(b,b) for b in bs],rotation=40,ha="right",
+    hops=[f(next(r for r in rows if r["benchmark"]==b),"manhattan_hops_mean") for b in bs]
+    latency_cycles=[f(next(r for r in rows if r["benchmark"]==b),"latency_mean_ns") for b in bs]
+    fig, ax=plt.subplots(figsize=(3.45,1.75)); ax.bar(x,hops,color=COLORS["red"],width=.7,zorder=2,label="Requester-owner distance")
+    ax2=ax.twinx(); ax2.plot(x,latency_cycles,color=COLORS["blue"],marker="o",lw=1.5,ms=3,label="Round-trip latency")
+    ax.set_xticks(x,[BENCH_LABEL.get(b,b) for b in bs],rotation=40,ha="center",
                   fontsize=5.2)
-    style(ax,"Byte-hops / logical byte")
+    style(ax,"Requester-owner distance (hops)")
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, fontsize=4.6, frameon=False, ncol=2,
+              columnspacing=.7, handletextpad=.35, loc="lower center",
+              bbox_to_anchor=(.5, 1.0))
+    for i, value in enumerate(hops):
+        if value > 0:
+            ax.text(i, value + .12, f"{value:.1f}", ha="center", va="bottom",
+                    fontsize=3.8, color=COLORS["dark"])
+    ax.set_ylim(0, max(hops) * 1.18)
     ax.yaxis.label.set_size(6.3); ax.tick_params(axis="y", labelsize=5.5)
-    ax2.set_ylabel("Mean latency (ns)",fontsize=6.3,color=COLORS["blue"])
+    ax2.set_ylabel("Mean latency (cycles)",fontsize=6.3,color=COLORS["blue"])
     ax.spines["right"].set_visible(False)
     ax2.spines["top"].set_visible(False)
     ax2.spines["bottom"].set_visible(False)
@@ -364,53 +392,66 @@ def plot_o4(root, out):
 
 
 def plot_o5(root,out):
-    exact=read_rows(root/"o5_exact_inflight_dedup.csv"); spatial=read_rows(root/"o5_remote_page_spatial_cdf.csv"); bs=benches(exact); x=np.arange(len(bs)); window=16
-    e=[100*f(next(r for r in exact if r["benchmark"]==b),"exact_inflight_dedup_fraction") for b in bs]
-    s=[]
+    exact=read_rows(root/"o5_exact_inflight_dedup.csv")
+    spatial=read_rows(root/"o5_remote_page_spatial_cdf.csv")
+    bs=benches(exact); x=np.arange(len(bs)); window=16
+    exact_share=[]; page_share=[]; read_counts=[]
     for b in bs:
-        rs=[r for r in spatial if r["benchmark"]==b]; chosen=min(rs,key=lambda r:abs(f(r,"window_remote_cycles")-window)) if rs else None; s.append(100*f(chosen,"cdf_fraction_all_requests") if chosen else 0)
-    fig,ax=plt.subplots(figsize=(3.45,1.62)); ax.bar(x-.19,e,.38,color=COLORS["blue"],label="Exact inflight",zorder=2); ax.bar(x+.19,s,.38,color=COLORS["orange"],label=f"Same page (≤{window} cyc.)",zorder=2)
-    for i, b in enumerate(bs):
-        row = next(r for r in exact if r["benchmark"] == b)
-        if f(row, "read_requests") == 0:
-            ax.text(i, 1.0, "--", ha="center", va="bottom",
-                    fontsize=7, color=COLORS["gray"])
-    ax.set_xticks(x,[BENCH_LABEL.get(b,b) for b in bs],rotation=40,ha="right",
-                  fontsize=5.2)
-    ax.legend(fontsize=5.1,frameon=False,ncol=2, columnspacing=.8,
-              handletextpad=.35, loc="lower center",
-              bbox_to_anchor=(.5, 1.0))
-    style(ax,"Remote reads (%)")
-    ax.yaxis.label.set_size(6.3); ax.tick_params(axis="y", labelsize=5.5)
-    save(fig,out,"o5_remote_aggregation")
-
+        erow=next(r for r in exact if r["benchmark"]==b)
+        total=f(erow,"read_requests")
+        exact_share.append(100*f(erow,"exact_inflight_dedup_fraction"))
+        rs=[r for r in spatial if r["benchmark"]==b]
+        chosen=min(rs,key=lambda r:abs(f(r,"window_remote_cycles")-window)) if rs else None
+        page_count=f(chosen,"count") if chosen else 0
+        page_share.append(100*page_count/total if total else 0)
+        read_counts.append(total)
+    fig,ax=plt.subplots(figsize=(3.45,1.68)); width=.34
+    ax.bar(x-width/2,exact_share,width,color=COLORS["blue"],label="Same-line deduplication",zorder=2)
+    ax.bar(x+width/2,page_share,width,color=COLORS["orange"],label="Same-page aggregation",zorder=2)
+    for i, count in enumerate(read_counts):
+        if count == 0:
+            ax.text(i, 1.0, "--", ha="center", va="bottom", fontsize=7, color=COLORS["gray"])
+    ax.set_xticks(x,[BENCH_LABEL.get(b,b) for b in bs],rotation=40,ha="center",fontsize=5.2)
+    ax.legend(fontsize=4.7,frameon=False,ncol=2,columnspacing=.7,handletextpad=.35,loc="lower center",bbox_to_anchor=(.5,1.0))
+    style(ax,"Remote reads covered (%)")
+    ax.set_ylim(0,105)
+    ax.yaxis.label.set_size(7.5); ax.tick_params(axis="y",labelsize=6.5)
+    save(fig,out,"o5_remote_aggregation_separate")
 
 def plot_o6(root,out):
     reuse=read_rows(root/"o6_remote_reuse_summary.csv"); l2=read_rows(root/"o6_l2_headroom.csv"); bs=benches(l2); x=np.arange(len(bs))
-    repeated=[]; recurring=[]; free=[]; read_counts=[]
+    recurring=[]; free=[]; read_counts=[]
     for b in bs:
         rr=next((r for r in reuse if r["benchmark"]==b),None); lr=next(r for r in l2 if r["benchmark"]==b)
-        repeated.append(100*f(rr,"repeated_read_fraction") if rr else 0)
         recurring.append(100*f(rr,"reused_key_fraction") if rr else 0)
         read_counts.append(f(rr, "read_requests") if rr else 0)
         free.append(100*f(lr,"free_fraction_mean"))
-    fig,ax=plt.subplots(figsize=(3.45,1.72))
-    width=.25
-    ax.bar(x-width,recurring,width,color=COLORS["yellow"],label="Recurring lines",zorder=2)
-    ax.bar(x,repeated,width,color=COLORS["red"],label="Reads after first",zorder=2)
-    ax.bar(x+width,free,width,color=COLORS["green"],label="Free L2",zorder=2)
+
+    fig,ax=plt.subplots(figsize=(3.45,1.42))
+    ax.bar(x,recurring,.66,color=COLORS["orange"],zorder=2)
     for i, count in enumerate(read_counts):
         if count == 0:
             ax.text(i, 1.0, "--", ha="center", va="bottom",
                     fontsize=7, color=COLORS["gray"])
-    ax.legend(fontsize=4.4,frameon=False,ncol=3, columnspacing=.55,
-              handletextpad=.3, loc="lower center",
-              bbox_to_anchor=(.5, 1.0))
     ax.set_xticks(x,[BENCH_LABEL.get(b,b) for b in bs],rotation=40,ha="right",
                   fontsize=5.0)
-    style(ax,"Share / free capacity (%)")
-    ax.yaxis.label.set_size(5.8); ax.tick_params(axis="y", labelsize=5.2)
-    save(fig,out,"o6_remote_reuse_l2_headroom")
+    ax.set_ylim(0,105)
+    style(ax,"Recurring remote\ncachelines (%)")
+    ax.yaxis.label.set_size(7.2)
+    ax.yaxis.labelpad = 5.0
+    ax.tick_params(axis="y", labelsize=5.8)
+    save(fig,out,"o6_remote_recurrence")
+
+    fig,ax=plt.subplots(figsize=(3.45,1.42))
+    ax.bar(x,free,.66,color=COLORS["green"],zorder=2)
+    ax.set_xticks(x,[BENCH_LABEL.get(b,b) for b in bs],rotation=40,ha="right",
+                  fontsize=5.0)
+    ax.set_ylim(0,105)
+    style(ax,"Mean free L2\ncapacity (%)")
+    ax.yaxis.label.set_size(7.2)
+    ax.yaxis.labelpad = 5.0
+    ax.tick_params(axis="y", labelsize=5.8)
+    save(fig,out,"o6_l2_free_capacity")
 
 
 def main():

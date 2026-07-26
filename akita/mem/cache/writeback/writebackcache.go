@@ -56,6 +56,7 @@ type Cache struct {
 	residentFilterBlocks         map[*cache.Block]residentFilterKey
 	residentFilterEnabled        bool
 	residentFilterReliable       bool
+	authoritativeAuditEnabled    bool
 	residentFilterStats          ResidentFilterStats
 	filterPrefetchEnabled        bool
 	filterPrefetchPredictorOnly  bool
@@ -104,7 +105,11 @@ type Cache struct {
 // GetAdaptivePairStats returns the counters for the restored historical M1
 // adapter with one aligned 128-B controller-level read.
 func (c *Cache) GetAdaptivePairStats() AdaptivePairStats {
-	return c.adaptivePairStats
+	stats := c.adaptivePairStats
+	if c.adaptivePairAdapter != nil {
+		stats.RegionLines = uint64(c.adaptivePairAdapter.regionLines)
+	}
+	return stats
 }
 
 // RequestFilter exposes the one physical metadata filter owned by this L2

@@ -27,14 +27,15 @@ const (
 // existing zero-value callers with Enabled set. The whole mechanism is
 // disabled by default.
 type RemoteDataPathConfig struct {
-	Enabled              bool
-	DisableDedup         bool
-	DisableBatching      bool
-	DisableRequesterL2   bool
-	EnableFilterPrefetch bool
-	PrefetchEntries      int
-	MaxBatchLines        int
-	MaxBatches           int
+	Enabled                  bool
+	DisableDedup             bool
+	DisableBatching          bool
+	DisableRequesterL2       bool
+	EnableFilterPrefetch     bool
+	EnableAuthoritativeAudit bool
+	PrefetchEntries          int
+	MaxBatchLines            int
+	MaxBatches               int
 }
 
 func normalizeRemoteDataPathConfig(c RemoteDataPathConfig) RemoteDataPathConfig {
@@ -53,102 +54,111 @@ func normalizeRemoteDataPathConfig(c RemoteDataPathConfig) RemoteDataPathConfig 
 // RemoteDataPathStats contains the small set of counters needed to separate
 // batching, exact deduplication, L2 reuse, and fill admission effects.
 type RemoteDataPathStats struct {
-	Enabled                      bool
-	DedupEnabled                 bool
-	BatchingEnabled              bool
-	RequesterL2Enabled           bool
-	FilterPrefetchEnabled        bool
-	MaxBatchLines                uint64
-	MaxBatches                   uint64
-	LineEntryCapacity            uint64
-	PeakLineEntries              uint64
-	LineEntryFullStalls          uint64
-	WaiterEntryCapacity          uint64
-	PeakWaiterEntries            uint64
-	WaiterEntryFullStalls        uint64
-	OwnerChildLineCapacity       uint64
-	OwnerPeakChildLines          uint64
-	OwnerChildLineFullStalls     uint64
-	ObservedRemoteReads          uint64
-	ObservedRemoteWrites         uint64
-	LogicalRemoteReads           uint64
-	WireLines                    uint64
-	DemandWireLines              uint64
-	DuplicateReads               uint64
-	InflightFilterQueries        uint64
-	InflightFilterPositives      uint64
-	InflightFilterNegatives      uint64
-	InflightFilterFalsePositives uint64
-	InflightFilterInsertFailures uint64
-	ExactTableLookups            uint64
-	ExactTableLookupsAvoided     uint64
-	CollectingMerges             uint64
-	InflightMerges               uint64
-	ReadyMerges                  uint64
-	L2ProbeHits                  uint64
-	L2ProbeMisses                uint64
-	L2OneTouchProbeBypasses      uint64
-	ReuseWriteUncacheableSkips   uint64
-	L2LogicalResponses           uint64
-	SingleReadPackets            uint64
-	BitmapPackets                uint64
-	BitmapLines                  uint64
-	BitmapResponsePackets        uint64
-	BitmapResponseLines          uint64
-	EarlyBitmapResponses         uint64
-	BatchSizeHistogram           [65]uint64
-	TwoTouchCandidates           uint64
-	ResidentQueries              uint64
-	ResidentPositives            uint64
-	ResidentNegatives            uint64
-	SeenQueries                  uint64
-	SeenHits                     uint64
-	SeenNegatives                uint64
-	SeenFalsePositives           uint64
-	SeenInsertFailures           uint64
-	FirstTouchRemoteLines        uint64
-	SecondTouchAdmissions        uint64
-	MultipleDemandAdmissions     uint64
-	TwoTouchFillAttempts         uint64
-	TwoTouchInstalledFills       uint64
-	FanoutResponses              uint64
-	NetworkRequestBytes          uint64
-	NetworkResponseBytes         uint64
-	BatchQueueWaitSamples        uint64
-	BatchQueueWaitTotalNS        float64
-	BatchQueueWaitMaxNS          float64
-	PreNetworkWaitSamples        uint64
-	PreNetworkWaitTotalNS        float64
-	PreNetworkWaitMaxNS          float64
-	ProbeLatencySamples          uint64
-	ProbeLatencyTotalNS          float64
-	ProbeLatencyMaxNS            float64
-	LogicalReadLatencyTotalNS    float64
-	LogicalReadLatencyMaxNS      float64
-	FullFlushes                  uint64
-	WorkConservingFlushes        uint64
-	CapacityFlushes              uint64
-	ConflictFlushes              uint64
-	DrainFlushes                 uint64
-	RequesterIssueWidthStalls    uint64
-	ResponseFanoutWidthStalls    uint64
-	OwnerIssueWidthStalls        uint64
-	OwnerResponseWidthStalls     uint64
-	PrefetchRealDemands          uint64
-	PrefetchCandidates           uint64
-	PrefetchPatternInstalls      uint64
-	PrefetchPatternInstallDrops  uint64
-	PrefetchFilterDrops          uint64
-	PrefetchSameGroupDrops       uint64
-	PrefetchCapacityDrops        uint64
-	PrefetchNoExistingBatchDrops uint64
-	PrefetchBatchFullDrops       uint64
-	PrefetchPiggybackLines       uint64
-	PrefetchWireLines            uint64
-	PrefetchUseful               uint64
-	PrefetchUnused               uint64
-	PrefetchStandalonePrevented  uint64
-	PrefetchPredictor            writeback.DemandStridePredictorStats
+	Enabled                                bool
+	DedupEnabled                           bool
+	BatchingEnabled                        bool
+	RequesterL2Enabled                     bool
+	FilterPrefetchEnabled                  bool
+	AuthoritativeAuditEnabled              bool
+	MaxBatchLines                          uint64
+	MaxBatches                             uint64
+	LineEntryCapacity                      uint64
+	PeakLineEntries                        uint64
+	LineEntryFullStalls                    uint64
+	WaiterEntryCapacity                    uint64
+	PeakWaiterEntries                      uint64
+	WaiterEntryFullStalls                  uint64
+	OwnerChildLineCapacity                 uint64
+	OwnerPeakChildLines                    uint64
+	OwnerChildLineFullStalls               uint64
+	ObservedRemoteReads                    uint64
+	ObservedRemoteWrites                   uint64
+	LogicalRemoteReads                     uint64
+	WireLines                              uint64
+	DemandWireLines                        uint64
+	DuplicateReads                         uint64
+	InflightFilterQueries                  uint64
+	InflightFilterPositives                uint64
+	InflightFilterNegatives                uint64
+	InflightFilterFalsePositives           uint64
+	InflightFilterInsertFailures           uint64
+	PendingAuthoritativeChecks             uint64
+	PendingVerifiedSafeBypasses            uint64
+	PendingAuthoritativeFalseNegatives     uint64
+	ExactTableLookups                      uint64
+	ExactTableLookupsAvoided               uint64
+	CollectingMerges                       uint64
+	InflightMerges                         uint64
+	ReadyMerges                            uint64
+	L2ProbeHits                            uint64
+	L2ProbeMisses                          uint64
+	RequesterL2FilterNegativeDecisions     uint64
+	L2OneTouchProbeBypasses                uint64
+	RequesterL2AuthoritativeChecks         uint64
+	RequesterL2VerifiedSafeBypasses        uint64
+	RequesterL2AuthoritativeFalseNegatives uint64
+	RequesterL2AuthoritativeUnavailable    uint64
+	ReuseWriteUncacheableSkips             uint64
+	L2LogicalResponses                     uint64
+	SingleReadPackets                      uint64
+	BitmapPackets                          uint64
+	BitmapLines                            uint64
+	BitmapResponsePackets                  uint64
+	BitmapResponseLines                    uint64
+	EarlyBitmapResponses                   uint64
+	BatchSizeHistogram                     [65]uint64
+	TwoTouchCandidates                     uint64
+	ResidentQueries                        uint64
+	ResidentPositives                      uint64
+	ResidentNegatives                      uint64
+	SeenQueries                            uint64
+	SeenHits                               uint64
+	SeenNegatives                          uint64
+	SeenFalsePositives                     uint64
+	SeenInsertFailures                     uint64
+	FirstTouchRemoteLines                  uint64
+	SecondTouchAdmissions                  uint64
+	MultipleDemandAdmissions               uint64
+	TwoTouchFillAttempts                   uint64
+	TwoTouchInstalledFills                 uint64
+	FanoutResponses                        uint64
+	NetworkRequestBytes                    uint64
+	NetworkResponseBytes                   uint64
+	BatchQueueWaitSamples                  uint64
+	BatchQueueWaitTotalNS                  float64
+	BatchQueueWaitMaxNS                    float64
+	PreNetworkWaitSamples                  uint64
+	PreNetworkWaitTotalNS                  float64
+	PreNetworkWaitMaxNS                    float64
+	ProbeLatencySamples                    uint64
+	ProbeLatencyTotalNS                    float64
+	ProbeLatencyMaxNS                      float64
+	LogicalReadLatencyTotalNS              float64
+	LogicalReadLatencyMaxNS                float64
+	FullFlushes                            uint64
+	WorkConservingFlushes                  uint64
+	CapacityFlushes                        uint64
+	ConflictFlushes                        uint64
+	DrainFlushes                           uint64
+	RequesterIssueWidthStalls              uint64
+	ResponseFanoutWidthStalls              uint64
+	OwnerIssueWidthStalls                  uint64
+	OwnerResponseWidthStalls               uint64
+	PrefetchRealDemands                    uint64
+	PrefetchCandidates                     uint64
+	PrefetchPatternInstalls                uint64
+	PrefetchPatternInstallDrops            uint64
+	PrefetchFilterDrops                    uint64
+	PrefetchSameGroupDrops                 uint64
+	PrefetchCapacityDrops                  uint64
+	PrefetchNoExistingBatchDrops           uint64
+	PrefetchBatchFullDrops                 uint64
+	PrefetchPiggybackLines                 uint64
+	PrefetchWireLines                      uint64
+	PrefetchUseful                         uint64
+	PrefetchUnused                         uint64
+	PrefetchStandalonePrevented            uint64
+	PrefetchPredictor                      writeback.DemandStridePredictorStats
 }
 
 // BitmapReadReq names multiple 64B cache lines in one remote 4KiB page.
@@ -266,6 +276,16 @@ type remoteProbe struct {
 	req   *mem.ReadReq
 	sent  sim.VTimeInSec
 }
+
+// authoritativeL2LookupOnly is a simulator-only, timing-neutral audit
+// interface. The normal requester path never uses this result unless it finds
+// a dangerous Filter false negative, in which case it conservatively restores
+// the exact requester-L2 probe.
+type authoritativeL2LookupOnly interface {
+	AuthoritativeLookupOnlyHit(pid vm.PID, address uint64) bool
+}
+
+var _ authoritativeL2LookupOnly = (*writeback.Cache)(nil)
 
 type remoteOwnerBatch struct {
 	req         *BitmapReadReq

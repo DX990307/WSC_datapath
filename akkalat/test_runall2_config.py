@@ -321,7 +321,7 @@ class RemoteAblationIsolationTest(unittest.TestCase):
                 "false", "false", "false", "false", "false", "false", "false", "false", "false", "false", "false", "false", "false", "false", "false", "false"
             ),
             "m1": (
-                "false", "false", "false", "false", "false", "false", "false", "true", "false", "false", "false", "false", "false", "false", "false", "false"
+                "true", "true", "false", "false", "false", "false", "false", "true", "false", "false", "false", "false", "false", "false", "false", "false"
             ),
             "m2": (
                 "false", "false", "false", "false", "false", "false", "false", "false", "false", "false", "false", "true", "true", "true", "false", "true"
@@ -330,7 +330,7 @@ class RemoteAblationIsolationTest(unittest.TestCase):
                 "false", "false", "false", "false", "false", "false", "false", "false", "false", "false", "false", "true", "false", "false", "true", "false"
             ),
             "complete": (
-                "false", "false", "false", "false", "false", "false", "false", "true", "false", "false", "false", "true", "true", "true", "true", "true"
+                "true", "true", "false", "false", "false", "false", "false", "true", "false", "false", "false", "true", "true", "true", "true", "true"
             ),
         }
         prefixes = (
@@ -485,6 +485,32 @@ class RemoteAblationIsolationTest(unittest.TestCase):
             ValueError, "unknown remote-ablation configs"
         ):
             runall2_config.build_remote_data_path_ablation_configs(args)
+
+
+class SafeLayerNormRerunTest(unittest.TestCase):
+    def test_removes_only_layernorm_loop_sampling(self):
+        layernorm = {
+            "benchmark": "llmop",
+            "common_flags": [
+                "-sampled",
+                "-loop-sampled",
+                "-loop-sampled-warmup=8",
+            ],
+            "flags": ["-op=layernorm", "-hidden=4096"],
+        }
+        softmax = {
+            "benchmark": "llmop",
+            "common_flags": ["-sampled", "-loop-sampled"],
+            "flags": ["-op=row-softmax"],
+        }
+
+        updated = runall2_config.disable_layernorm_loop_sampling(
+            [layernorm, softmax]
+        )
+
+        self.assertEqual(updated, 1)
+        self.assertEqual(layernorm["common_flags"], ["-sampled"])
+        self.assertIn("-loop-sampled", softmax["common_flags"])
 
 
 class ReusableBaselineLibraryTest(unittest.TestCase):

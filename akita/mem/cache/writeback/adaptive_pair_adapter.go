@@ -27,6 +27,7 @@ type adaptivePairLineKey struct {
 // adapter.
 type AdaptivePairStats struct {
 	Enabled                    bool
+	RegionLines                uint64
 	MissLinesSeen              uint64
 	Observations               uint64
 	Useful                     uint64
@@ -42,6 +43,8 @@ type AdaptivePairStats struct {
 	Unused                     uint64
 	Confidence                 uint64
 	Wide128BReads              uint64
+	ExpandedRegionReads        uint64
+	PrefetchedRegionLines      uint64
 	FilterCandidates           uint64
 	FilterLookups              uint64
 	FilterBusyFallbacks        uint64
@@ -67,28 +70,36 @@ const (
 // requests its sibling; a later sibling demand joins the in-flight request or
 // consumes a bounded response buffer.  The prediction policy is unchanged.
 type adaptivePairAdapter struct {
-	confidence int
-	capacity   int
+	confidence  int
+	capacity    int
+	regionLines int
 
+	// seen stores a bitmap of real-demand lines observed in each aligned
+	// region. Prediction becomes useful only after two adjacent bits appear.
 	seen      map[adaptivePairWindowKey]uint64
 	seenOrder []adaptivePairWindowKey
 
 	inflight     map[adaptivePairLineKey]*mem.ReadReq
-	readPrefetch map[string]adaptivePairLineKey
+	readPrefetch map[string][]adaptivePairLineKey
 
 	buffered    map[adaptivePairLineKey][]byte
 	bufferOrder []adaptivePairLineKey
 }
 
-func newAdaptivePairAdapter(capacity int) *adaptivePairAdapter {
+func newAdaptivePairAdapter(capacity, regionLines int) *adaptivePairAdapter {
 	if capacity < 1 {
 		capacity = 16
 	}
+	if regionLines != 2 && regionLines != 4 &&
+		regionLines != 8 && regionLines != 16 {
+		panic("adaptive-pair region lines must be one of 2, 4, 8, or 16")
+	}
 	return &adaptivePairAdapter{
 		capacity:     capacity,
+		regionLines:  regionLines,
 		seen:         make(map[adaptivePairWindowKey]uint64),
 		inflight:     make(map[adaptivePairLineKey]*mem.ReadReq),
-		readPrefetch: make(map[string]adaptivePairLineKey),
+		readPrefetch: make(map[string][]adaptivePairLineKey),
 		buffered:     make(map[adaptivePairLineKey][]byte),
 	}
 }
@@ -103,7 +114,7 @@ func (a *adaptivePairAdapter) reset(c *Cache) {
 	a.seen = make(map[adaptivePairWindowKey]uint64)
 	a.seenOrder = nil
 	a.inflight = make(map[adaptivePairLineKey]*mem.ReadReq)
-	a.readPrefetch = make(map[string]adaptivePairLineKey)
+	a.readPrefetch = make(map[string][]adaptivePairLineKey)
 	a.buffered = make(map[adaptivePairLineKey][]byte)
 	a.bufferOrder = nil
 	a.publishOccupancy(c)
@@ -143,6 +154,7 @@ func (c *Cache) adaptivePairKeyForAddress(
 	address uint64,
 ) adaptivePairWindowKey {
 	lineBytes := uint64(1) << c.log2BlockSize
+	regionLines := uint64(c.adaptivePairAdapter.regionLines)
 	lowModule := c.lowModuleFinder.Find(address)
 	lowModuleName := ""
 	if lowModule != nil {
@@ -150,8 +162,24 @@ func (c *Cache) adaptivePairKeyForAddress(
 	}
 	return adaptivePairWindowKey{
 		pid: pid, lowModuleName: lowModuleName,
-		windowID: address / (2 * lineBytes),
+		windowID: address / (regionLines * lineBytes),
 	}
+}
+
+func (a *adaptivePairAdapter) regionBase(address, lineBytes uint64) uint64 {
+	regionBytes := uint64(a.regionLines) * lineBytes
+	return address / regionBytes * regionBytes
+}
+
+func (a *adaptivePairAdapter) adjacentAddress(
+	address, lineBytes uint64,
+) uint64 {
+	base := a.regionBase(address, lineBytes)
+	index := (address - base) / lineBytes
+	if index%2 == 0 {
+		return address + lineBytes
+	}
+	return address - lineBytes
 }
 
 func (a *adaptivePairAdapter) observeDemand(
@@ -161,16 +189,21 @@ func (a *adaptivePairAdapter) observeDemand(
 ) bool {
 	key := c.adaptivePairKeyForAddress(pid, address)
 	c.adaptivePairStats.Observations++
-	if first, ok := a.seen[key]; ok && first != address {
+	lineBytes := uint64(1) << c.log2BlockSize
+	base := a.regionBase(address, lineBytes)
+	index := (address - base) / lineBytes
+	bit := uint64(1) << index
+	adjacentIndex := index ^ 1
+	if observed := a.seen[key]; observed&(uint64(1)<<adjacentIndex) != 0 {
 		delete(a.seen, key)
 		a.removeSeenOrder(key)
 		a.reward(c)
 		return true
 	}
 	if _, ok := a.seen[key]; !ok {
-		a.seen[key] = address
 		a.seenOrder = append(a.seenOrder, key)
 	}
+	a.seen[key] |= bit
 	limit := a.capacity * 4
 	for len(a.seenOrder) > limit {
 		oldest := a.seenOrder[0]
@@ -235,7 +268,7 @@ func (a *adaptivePairAdapter) joinInflight(
 		return false
 	}
 	delete(a.inflight, key)
-	delete(a.readPrefetch, read.ID)
+	a.removeReadPrefetch(read.ID, key)
 	a.publishOccupancy(c)
 	trans.fetchReadReq = read
 	c.writeBuffer.inflightFetch = append(c.writeBuffer.inflightFetch, trans)
@@ -243,6 +276,25 @@ func (a *adaptivePairAdapter) joinInflight(
 	c.adaptivePairStats.InflightHits++
 	a.reward(c)
 	return true
+}
+
+func (a *adaptivePairAdapter) removeReadPrefetch(
+	readID string,
+	key adaptivePairLineKey,
+) {
+	keys := a.readPrefetch[readID]
+	for i, candidate := range keys {
+		if candidate != key {
+			continue
+		}
+		keys = append(keys[:i], keys[i+1:]...)
+		if len(keys) == 0 {
+			delete(a.readPrefetch, readID)
+		} else {
+			a.readPrefetch[readID] = keys
+		}
+		return
+	}
 }
 
 func (a *adaptivePairAdapter) shouldPredict() bool {
@@ -264,11 +316,7 @@ func (c *Cache) primeAdaptivePairLookups(
 	}
 	lineBytes := uint64(1) << c.log2BlockSize
 	line, _ := getCacheLineID(trans.read.Address, c.log2BlockSize)
-	base := line & ^(2*lineBytes - 1)
-	sibling := base
-	if sibling == line {
-		sibling += lineBytes
-	}
+	sibling := c.adaptivePairAdapter.adjacentAddress(line, lineBytes)
 	if !c.ownsAddress(sibling) || c.lowModuleFinder == nil ||
 		c.lowModuleFinder.Find(line) != c.lowModuleFinder.Find(sibling) {
 		return
@@ -303,11 +351,8 @@ func (c *Cache) adaptivePairFilterAllows(
 		return true
 	}
 	lineBytes := uint64(1) << c.log2BlockSize
-	base := trans.fetchAddress & ^(2*lineBytes - 1)
-	sibling := base
-	if sibling == trans.fetchAddress {
-		sibling += lineBytes
-	}
+	sibling := c.adaptivePairAdapter.adjacentAddress(
+		trans.fetchAddress, lineBytes)
 	for i := 0; i < adaptivePairLookupCount; i++ {
 		if !trans.adaptivePairLookupSet[i] {
 			// The lookup port was busy or confidence became high only after L2
@@ -356,27 +401,28 @@ func (a *adaptivePairAdapter) captureResponse(
 	rsp *mem.DataReadyRsp,
 	read *mem.ReadReq,
 ) {
-	key, ok := a.readPrefetch[rsp.RespondTo]
+	keys, ok := a.readPrefetch[rsp.RespondTo]
 	if !ok {
 		return
 	}
 	delete(a.readPrefetch, rsp.RespondTo)
-	delete(a.inflight, key)
 	lineBytes := uint64(1) << c.log2BlockSize
-	if key.address < read.Address {
-		c.adaptivePairStats.PrefetchUnused++
-		a.publishOccupancy(c)
-		return
+	for _, key := range keys {
+		delete(a.inflight, key)
+		if key.address < read.Address {
+			c.adaptivePairStats.PrefetchUnused++
+			continue
+		}
+		offset := key.address - read.Address
+		if offset+lineBytes > uint64(len(rsp.Data)) {
+			c.adaptivePairStats.PrefetchUnused++
+			continue
+		}
+		data := make([]byte, lineBytes)
+		copy(data, rsp.Data[offset:offset+lineBytes])
+		a.insert(c, key, data)
 	}
-	offset := key.address - read.Address
-	if offset+lineBytes > uint64(len(rsp.Data)) {
-		c.adaptivePairStats.PrefetchUnused++
-		a.publishOccupancy(c)
-		return
-	}
-	data := make([]byte, lineBytes)
-	copy(data, rsp.Data[offset:offset+lineBytes])
-	a.insert(c, key, data)
+	a.publishOccupancy(c)
 }
 
 func (a *adaptivePairAdapter) insert(
@@ -429,7 +475,7 @@ func (a *adaptivePairAdapter) invalidateAddress(
 	}
 	if read := a.inflight[key]; read != nil {
 		delete(a.inflight, key)
-		delete(a.readPrefetch, read.ID)
+		a.removeReadPrefetch(read.ID, key)
 		c.adaptivePairStats.PrefetchUnused++
 		c.adaptivePairStats.PrefetchUnusedInvalidates++
 		a.penalize(c)
@@ -486,21 +532,36 @@ func (wb *writeBufferStage) issueAdaptivePair(
 		return false
 	}
 	lineBytes := uint64(1) << wb.cache.log2BlockSize
-	base := trans.fetchAddress / (2 * lineBytes) * (2 * lineBytes)
-	sibling := base
-	if sibling == trans.fetchAddress {
-		sibling += lineBytes
-	}
+	a := wb.cache.adaptivePairAdapter
+	regionBytes := uint64(a.regionLines) * lineBytes
+	base := a.regionBase(trans.fetchAddress, lineBytes)
 	lowModule := wb.cache.lowModuleFinder.Find(base)
-	if lowModule == nil || lowModule != wb.cache.lowModuleFinder.Find(sibling) {
+	if lowModule == nil || lowModule != wb.cache.lowModuleFinder.Find(
+		base+regionBytes-lineBytes) {
 		return false
+	}
+	prefetched := make([]adaptivePairLineKey, 0, a.regionLines-1)
+	for address := base; address < base+regionBytes; address += lineBytes {
+		if address == trans.fetchAddress {
+			continue
+		}
+		key := adaptivePairLineKey{pid: trans.fetchPID, address: address}
+		if wb.cache.directory.Lookup(trans.fetchPID, address) != nil ||
+			wb.cache.mshr.Query(trans.fetchPID, address) != nil ||
+			a.inflight[key] != nil {
+			return false
+		}
+		if _, buffered := a.buffered[key]; buffered {
+			return false
+		}
+		prefetched = append(prefetched, key)
 	}
 	read := mem.ReadReqBuilder{}.
 		WithSrc(wb.cache.bottomPort).
 		WithDst(lowModule).
 		WithPID(trans.fetchPID).
 		WithAddress(base).
-		WithByteSize(2 * lineBytes).
+		WithByteSize(regionBytes).
 		WithStreamID(accessReqStreamID(trans.accessReq())).
 		WithLocalStreamID(accessReqLocalStreamID(trans.accessReq())).
 		WithInfo(accessReqInfo(trans.accessReq())).
@@ -510,14 +571,19 @@ func (wb *writeBufferStage) issueAdaptivePair(
 	trans.fetchReadReq = read
 	wb.recordDRAMReadSend(now, read, trans)
 	wb.inflightFetch = append(wb.inflightFetch, trans)
-	key := adaptivePairLineKey{pid: trans.fetchPID, address: sibling}
-	wb.cache.adaptivePairAdapter.inflight[key] = read
-	wb.cache.adaptivePairAdapter.readPrefetch[read.ID] = key
-	wb.cache.adaptivePairAdapter.publishOccupancy(wb.cache)
-	wb.cache.adaptivePairAdapter.forgetWindow(
+	for _, key := range prefetched {
+		a.inflight[key] = read
+	}
+	a.readPrefetch[read.ID] = prefetched
+	a.publishOccupancy(wb.cache)
+	a.forgetWindow(
 		wb.cache, trans.fetchPID, trans.fetchAddress)
 	wb.cache.adaptivePairStats.Predictions++
-	wb.cache.adaptivePairStats.Wide128BReads++
+	wb.cache.adaptivePairStats.ExpandedRegionReads++
+	wb.cache.adaptivePairStats.PrefetchedRegionLines += uint64(len(prefetched))
+	if a.regionLines == 2 {
+		wb.cache.adaptivePairStats.Wide128BReads++
+	}
 	wb.cache.localMemoryPathStats.DRAMReadRequests++
 
 	memtrace.LinkObservationRequestFromRequest(

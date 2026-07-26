@@ -21,6 +21,8 @@ func (c *Comp) ConfigureRemoteDataPath(config RemoteDataPathConfig) {
 		c.remoteConfig.Enabled && !c.remoteConfig.DisableRequesterL2
 	c.RemoteDataPathStats.FilterPrefetchEnabled =
 		c.remoteConfig.Enabled && c.remoteConfig.EnableFilterPrefetch
+	c.RemoteDataPathStats.AuthoritativeAuditEnabled =
+		c.remoteConfig.Enabled && c.remoteConfig.EnableAuthoritativeAudit
 	c.RemoteDataPathStats.MaxBatchLines = uint64(c.remoteConfig.MaxBatchLines)
 	c.RemoteDataPathStats.MaxBatches = uint64(c.remoteConfig.MaxBatches)
 	c.RemoteDataPathStats.LineEntryCapacity =
@@ -479,6 +481,17 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 	if !pendingReady {
 		return true, pendingProgress
 	}
+	filterRequestedL2Bypass := probeEligible && !shouldProbe
+	authoritativeResident, auditAvailable := false, false
+	if filterRequestedL2Bypass && c.remoteConfig.EnableAuthoritativeAudit {
+		authoritativeResident, auditAvailable =
+			c.authoritativeRequesterL2Resident(identity)
+		if auditAvailable && authoritativeResident {
+			// A reliable Filter negative must never hide an exact L2 hit. Keep
+			// the audit timing-neutral, but fail open to the normal lookup path.
+			shouldProbe = true
+		}
+	}
 	if shouldProbe {
 		probe := mem.ReadReqBuilder{}.
 			WithSendTime(now).
@@ -493,6 +506,11 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 		if probe.Dst != nil {
 			if err := c.ToL2.Send(probe); err != nil {
 				return true, false
+			}
+			if filterRequestedL2Bypass {
+				c.RemoteDataPathStats.RequesterL2FilterNegativeDecisions++
+				c.RemoteDataPathStats.RequesterL2AuthoritativeChecks++
+				c.RemoteDataPathStats.RequesterL2AuthoritativeFalseNegatives++
 			}
 			entry := c.newRemoteDemandEntry(key, dst, read.Info)
 			entry.prefetchCandidate = c.takeRemotePrefetchCandidate(read.ID)
@@ -518,8 +536,17 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 		}
 	}
 
-	if probeEligible && !shouldProbe {
+	if filterRequestedL2Bypass {
+		c.RemoteDataPathStats.RequesterL2FilterNegativeDecisions++
 		c.RemoteDataPathStats.L2OneTouchProbeBypasses++
+		if !c.remoteConfig.EnableAuthoritativeAudit {
+			// Preserve the ordinary fast path when diagnostic auditing is off.
+		} else if auditAvailable {
+			c.RemoteDataPathStats.RequesterL2AuthoritativeChecks++
+			c.RemoteDataPathStats.RequesterL2VerifiedSafeBypasses++
+		} else {
+			c.RemoteDataPathStats.RequesterL2AuthoritativeUnavailable++
+		}
 	}
 	entry := c.newRemoteDemandEntry(key, dst, read.Info)
 	entry.admit = seenHit
@@ -648,6 +675,24 @@ func (c *Comp) requestFilterForAddress(
 	return c.requestFilters[index]
 }
 
+func (c *Comp) authoritativeRequesterL2Resident(
+	identity remoteLineIdentity,
+) (resident, available bool) {
+	if c.remoteCacheModules == nil {
+		return false, false
+	}
+	port := c.remoteCacheModules.Find(identity.lineAddr)
+	if port == nil || port.Component() == nil {
+		return false, false
+	}
+	lookup, ok := port.Component().(authoritativeL2LookupOnly)
+	if !ok {
+		return false, false
+	}
+	return lookup.AuthoritativeLookupOnlyHit(
+		identity.pid, identity.lineAddr), true
+}
+
 func remoteTypedFilterKey(
 	identity remoteLineIdentity,
 	kind writeback.TypedFilterKeyType,
@@ -715,6 +760,23 @@ func (c *Comp) remotePendingMayContain(
 		return true, true, true
 	}
 	c.RemoteDataPathStats.InflightFilterNegatives++
+	if !c.remoteConfig.EnableAuthoritativeAudit {
+		c.RemoteDataPathStats.ExactTableLookupsAvoided++
+		return false, true, true
+	}
+	c.RemoteDataPathStats.PendingAuthoritativeChecks++
+	key := remoteLineKey{
+		remoteLineIdentity: identity,
+		epoch:              c.remoteEpochs[identity],
+	}
+	if c.remoteLines[key] != nil {
+		// This exact map access is audit-only and has no modeled latency. A
+		// mismatch restores the ordinary exact lookup, preserving correctness.
+		c.RemoteDataPathStats.PendingAuthoritativeFalseNegatives++
+		c.RemoteDataPathStats.ExactTableLookups++
+		return true, true, true
+	}
+	c.RemoteDataPathStats.PendingVerifiedSafeBypasses++
 	c.RemoteDataPathStats.ExactTableLookupsAvoided++
 	return false, true, true
 }

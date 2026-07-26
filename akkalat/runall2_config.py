@@ -246,10 +246,10 @@ def build_remote_data_path_ablation_configs(args):
         ("baseline", mechanism_flags(False, False, False, False, False, False, False, False, False)),
         (
             "m1",
-            # Preserve the best historical prediction/inflight/buffer policy
-            # and aligned 128-B access. The shared per-slice Cuckoo Filter
-            # suppresses only exactly confirmed RESIDENT/PENDING siblings.
-            mechanism_flags(False, False, True, False, False, False, False, False, False),
+            # A one-cycle Resident Filter short-circuits proven read misses,
+            # adaptive pairing preserves the best historical HBM policy, and
+            # read-only fills return to L1 while the L2 bank write continues.
+            mechanism_flags(True, False, True, True, False, False, False, False, False),
         ),
         (
             "m2",
@@ -261,7 +261,7 @@ def build_remote_data_path_ablation_configs(args):
         ),
         (
             "complete",
-            mechanism_flags(False, False, True, False, True, True, True, True, True),
+            mechanism_flags(True, False, True, True, True, True, True, True, True),
         ),
     ]
     if not args.configs:
@@ -605,6 +605,25 @@ def filter_missing_metric_exps(exps, results_dir):
         if not complete:
             missing.append(exp)
     return missing
+
+
+def disable_layernorm_loop_sampling(exps):
+    """Disable only unsafe loop fast-forwarding in recorded LayerNorm cells."""
+    updated = 0
+    for exp in exps:
+        all_flags = (*exp.get("common_flags", []), *exp.get("flags", []))
+        if exp.get("benchmark") != "llmop" or "-op=layernorm" not in all_flags:
+            continue
+
+        for field in ("common_flags", "flags"):
+            exp[field] = [
+                flag
+                for flag in exp.get(field, [])
+                if flag != "-loop-sampled"
+                and not flag.startswith("-loop-sampled-")
+            ]
+        updated += 1
+    return updated
 
 
 def valid_runtime_mapping(path: Path, max_wg: int) -> bool:

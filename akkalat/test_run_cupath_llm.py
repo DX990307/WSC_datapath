@@ -42,6 +42,22 @@ class RunCuPathLLMTest(unittest.TestCase):
         self.assertNotIn("-sampled", exps[0]["common_flags"])
         self.assertIn("-l2-adaptive-pair-enable=true", exps[0]["flags"])
 
+    def test_layernorm_disables_only_loop_sampling(self):
+        args = run_cupath_llm.parse_args([
+            "--models=gpt",
+            "--configs=baseline",
+            "--layers=1",
+            "--limit=2",
+        ])
+        exps, _ = run_cupath_llm.build_campaign(args)
+        embedding, layernorm = exps
+
+        self.assertIn("-loop-sampled", embedding["common_flags"])
+        self.assertNotIn("-loop-sampled", layernorm["common_flags"])
+        self.assertIn("-sampled", layernorm["common_flags"])
+        self.assertIn("-branch-sampled", layernorm["common_flags"])
+        self.assertIn("-kernel-sampled", layernorm["common_flags"])
+
     def test_one_gpt_layer_and_identical_ops_reconstruct_full_model(self):
         args = run_cupath_llm.parse_args([
             "--models=gpt",

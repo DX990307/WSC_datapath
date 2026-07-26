@@ -23,6 +23,15 @@ def parse_args():
         help="Reuse a results directory and rerun missing metrics.",
     )
     parser.add_argument(
+        "--rerun-layernorm-safe-sampling",
+        action="store_true",
+        help=(
+            "With --rerun-missing, remove loop sampling only from recorded "
+            "LayerNorm cells whose barriers are incompatible with loop "
+            "fast-forwarding."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         dest="output_dir",
         default="",

@@ -3,12 +3,17 @@ package writeback
 import (
 	"testing"
 
+	cachepkg "github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 )
 
 func newResidentFilterTestCache() *Cache {
+	return newResidentFilterTestCacheWithAudit(true)
+}
+
+func newResidentFilterTestCacheWithAudit(enableAudit bool) *Cache {
 	return MakeBuilder().
 		WithEngine(sim.NewSerialEngine()).
 		WithByteSize(4 * 64).
@@ -16,6 +21,10 @@ func newResidentFilterTestCache() *Cache {
 		WithNumReqPerCycle(1).
 		WithDirectoryLatency(10).
 		WithResidentFilter(true).
+		WithTypedFilterConfig(TypedFilterConfig{
+			Mode: TypedFilterCuckoo, EnableAuthoritativeAudit: enableAudit,
+			LookupLatencyCycles: 1, UpdateLatencyCycles: 1,
+		}).
 		Build("L2")
 }
 
@@ -45,8 +54,8 @@ func TestResidentFilterReadNegativeSkipsDirectoryButKeepsMSHR(t *testing.T) {
 	if entry == nil || len(entry.Requests) != 1 {
 		t.Fatal("filter-negative read did not retain the L2 MSHR/fill path")
 	}
-	if cache.residentFilter.Contains(pid, line) {
-		t.Fatal("line entered the resident filter before its DRAM fill returned")
+	if !cache.residentFilter.Contains(pid, line) {
+		t.Fatal("allocated fill was not represented in the resident filter")
 	}
 
 	follower := mem.ReadReqBuilder{}.
@@ -74,6 +83,14 @@ func TestResidentFilterReadNegativeSkipsDirectoryButKeepsMSHR(t *testing.T) {
 		stats.ReadParallelMSHRMerges != 1 {
 		t.Fatalf("read negative stats = %+v", stats)
 	}
+	if stats.ReadFilterEligible != 1 || stats.ReadIssuedBypasses != 1 ||
+		stats.ReadAuthoritativeChecks != 1 ||
+		stats.ReadVerifiedSafeBypasses != 1 ||
+		stats.ReadAuthoritativeFalseNegatives != 0 ||
+		stats.ReadAuthoritativeMSHRHits != 0 ||
+		stats.ReadExactTagLookups != 0 {
+		t.Fatalf("verified read-bypass stats = %+v", stats)
+	}
 
 	leader := entry.Requests[0].(*transaction)
 	leader.action = bankWriteFetched
@@ -93,7 +110,7 @@ func TestResidentFilterReadNegativeSkipsDirectoryButKeepsMSHR(t *testing.T) {
 	}
 }
 
-func TestResidentFilterReadNegativeFallsBackWhenBankHasLiveMiss(t *testing.T) {
+func TestResidentFilterReadNegativeBypassesWhenAnotherMissIsLive(t *testing.T) {
 	cache := newResidentFilterTestCache()
 	pid := vm.PID(29)
 	busyLine := uint64(0x2000)
@@ -115,13 +132,14 @@ func TestResidentFilterReadNegativeFallsBackWhenBankHasLiveMiss(t *testing.T) {
 		t.Fatal("top parser did not accept read")
 	}
 	cache.dirStage.Tick(2)
+	cache.dirStage.Tick(3)
 
-	if cache.mshr.Query(pid, line) != nil {
-		t.Fatal("busy-bank negative bypassed the ordinary directory lookup")
+	if cache.mshr.Query(pid, line) == nil {
+		t.Fatal("reliable negative did not bypass while another miss was live")
 	}
 	stats := cache.GetResidentFilterStats()
-	if stats.ReadBusyFallbacks != 1 || stats.ReadNegativeBypasses != 0 {
-		t.Fatalf("busy-bank fallback stats = %+v", stats)
+	if stats.ReadBusyFallbacks != 0 || stats.ReadNegativeBypasses != 1 {
+		t.Fatalf("concurrent-miss bypass stats = %+v", stats)
 	}
 }
 
@@ -160,7 +178,7 @@ func TestM1ResidentNegativeBypassesWhileOtherMissIsLive(t *testing.T) {
 	}
 }
 
-func TestM1ResidentPositiveSkipsModeledTagLatencyButKeepsExactHit(t *testing.T) {
+func TestResidentPositiveRetainsModeledTagLatency(t *testing.T) {
 	cache := newResidentFilterTestCache()
 	cache.granularityAdaptationEnabled = true
 	cache.dirStage.pipeline.Accept(
@@ -192,19 +210,19 @@ func TestM1ResidentPositiveSkipsModeledTagLatencyButKeepsExactHit(t *testing.T) 
 	if !cache.topParser.Tick(1) {
 		t.Fatal("top parser did not accept M1 read")
 	}
-	if !cache.dirStage.acceptNewTransaction(2) {
-		t.Fatal("M1 resident positive stalled behind tag pipeline")
+	if cache.dirStage.acceptNewTransaction(2) {
+		t.Fatal("possible Filter match bypassed a full tag pipeline")
 	}
-	if cache.dirStageBuffer.Peek() != nil || cache.dirStage.buf.Peek() == nil {
-		t.Fatal("M1 resident positive did not reach exact post-filter lookup")
+	if cache.dirStageBuffer.Peek() == nil || cache.dirStage.buf.Peek() != nil {
+		t.Fatal("possible Filter match did not retain the directory path")
 	}
 	stats := cache.GetResidentFilterStats()
-	if stats.Positives != 1 || stats.ReadPositiveFastPaths != 1 {
-		t.Fatalf("M1 positive fast-path stats = %+v", stats)
+	if stats.Positives != 1 || stats.ReadPositiveFastPaths != 0 {
+		t.Fatalf("positive fallback stats = %+v", stats)
 	}
 }
 
-func TestM1ResidentFalsePositiveFastPathStillAllocatesExactMiss(t *testing.T) {
+func TestResidentFalsePositiveRetainsExactMiss(t *testing.T) {
 	cache := newResidentFilterTestCache()
 	cache.granularityAdaptationEnabled = true
 	pid := vm.PID(32)
@@ -225,14 +243,17 @@ func TestM1ResidentFalsePositiveFastPathStillAllocatesExactMiss(t *testing.T) {
 	if !cache.topParser.Tick(1) {
 		t.Fatal("top parser did not accept M1 false-positive read")
 	}
-	cache.dirStage.Tick(2)
-	cache.dirStage.Tick(3)
+	for cycle := sim.VTimeInSec(2); cycle <= 12; cycle++ {
+		cache.dirStage.Tick(cycle)
+	}
 	if cache.mshr.Query(pid, line) == nil {
 		t.Fatal("Filter false positive suppressed the exact L2 miss")
 	}
 	stats := cache.GetResidentFilterStats()
-	if stats.ReadPositiveFastPaths != 1 || stats.FalsePositives != 1 {
-		t.Fatalf("M1 false-positive fast-path stats = %+v", stats)
+	if stats.ReadPositiveFastPaths != 0 || stats.FalsePositives != 1 ||
+		stats.ReadFilterEligible != 1 || stats.ReadExactTagLookups != 1 ||
+		stats.ReadIssuedBypasses != 0 {
+		t.Fatalf("false-positive fallback stats = %+v", stats)
 	}
 }
 
@@ -256,9 +277,9 @@ func TestResidentFilterFullLineWriteNegativeAllocatesInL2(t *testing.T) {
 		t.Fatal("top parser did not accept write")
 	}
 
-	cache.dirStage.Tick(2)
-	cache.dirStage.Tick(3)
-	cache.dirStage.Tick(4)
+	for cycle := sim.VTimeInSec(2); cycle <= 12; cycle++ {
+		cache.dirStage.Tick(cycle)
+	}
 
 	block := cache.directory.Lookup(pid, line)
 	if block == nil || !block.IsValid || !block.IsLocked {
@@ -268,13 +289,12 @@ func TestResidentFilterFullLineWriteNegativeAllocatesInL2(t *testing.T) {
 		t.Fatal("full-line write unnecessarily allocated an MSHR/DRAM read")
 	}
 	if cache.residentFilter.Contains(pid, line) {
-		t.Fatal("locked full-line write entered the resident filter before the bank write")
+		t.Fatal("locked write entered resident metadata before bank commit")
 	}
 	stats := cache.GetResidentFilterStats()
-	if stats.WriteNegativeBypasses != 1 ||
-		stats.WriteFullLineBypasses != 1 ||
-		stats.WritePartialBypasses != 0 || stats.Negatives != 1 {
-		t.Fatalf("write negative stats = %+v", stats)
+	if stats.WriteNegativeBypasses != 0 || stats.WriteFullLineBypasses != 0 ||
+		stats.WritePartialBypasses != 0 || stats.Queries != 0 {
+		t.Fatalf("write unexpectedly used read shortcut: %+v", stats)
 	}
 
 	numBanks := len(cache.bankStages)
@@ -310,18 +330,17 @@ func TestResidentFilterPartialWriteNegativeRetainsRFO(t *testing.T) {
 		t.Fatal("top parser did not accept partial write")
 	}
 
-	cache.dirStage.Tick(2)
-	cache.dirStage.Tick(3)
-	cache.dirStage.Tick(4)
+	for cycle := sim.VTimeInSec(2); cycle <= 12; cycle++ {
+		cache.dirStage.Tick(cycle)
+	}
 
 	if cache.mshr.Query(pid, line) == nil {
 		t.Fatal("partial filter-negative write incorrectly skipped RFO")
 	}
 	stats := cache.GetResidentFilterStats()
-	if stats.WriteNegativeBypasses != 1 ||
-		stats.WriteFullLineBypasses != 0 ||
-		stats.WritePartialBypasses != 1 {
-		t.Fatalf("partial write negative stats = %+v", stats)
+	if stats.WriteNegativeBypasses != 0 || stats.WriteFullLineBypasses != 0 ||
+		stats.WritePartialBypasses != 0 || stats.Queries != 0 {
+		t.Fatalf("partial write unexpectedly used read shortcut: %+v", stats)
 	}
 }
 
@@ -553,5 +572,180 @@ func TestResidentFilterTransientUpdateVisibilityDoesNotDisableNegatives(t *testi
 	}
 	if stats.Queries != 0 || stats.Positives != 0 || stats.Negatives != 0 {
 		t.Fatalf("transient fallback was counted as a completed lookup: %+v", stats)
+	}
+}
+
+func TestResidentFilterAuthoritativeAuditDetectsDirectoryFalseNegative(
+	t *testing.T,
+) {
+	cache := newResidentFilterTestCache()
+	pid := vm.PID(41)
+	line := uint64(0x9000)
+	block := cache.directory.FindVictim(line)
+	block.PID = pid
+	block.Tag = line
+	block.IsValid = true
+	block.IsLocked = false
+	cache.directory.Visit(block)
+	// Deliberately omit the Filter update to emulate a stale negative. The
+	// validation lookup observes the real directory but adds no modeled delay.
+
+	read := mem.ReadReqBuilder{}.
+		WithSrc(cache.topPort).
+		WithDst(cache.topPort).
+		WithPID(pid).
+		WithAddress(line).
+		WithByteSize(64).
+		Build()
+	if err := cache.topPort.Recv(read); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.topParser.Tick(1) {
+		t.Fatal("top parser did not accept audited read")
+	}
+	cache.dirStage.Tick(2)
+	cache.dirStage.Tick(3)
+	if cache.dirStage.buf.Peek() != nil || block.ReadCount != 0 {
+		t.Fatal("authoritative false negative skipped the tag pipeline latency")
+	}
+
+	stats := cache.GetResidentFilterStats()
+	if stats.ReadFilterEligible != 1 || stats.ReadIssuedBypasses != 0 ||
+		stats.ReadAuthoritativeChecks != 1 ||
+		stats.ReadAuthoritativeFalseNegatives != 1 ||
+		stats.ReadVerifiedSafeBypasses != 0 ||
+		stats.ReadExactTagLookups != 1 {
+		t.Fatalf("authoritative false-negative stats = %+v", stats)
+	}
+}
+
+func TestResidentFilterFailOpenCountsExactTagLookup(t *testing.T) {
+	cache := newResidentFilterTestCache()
+	cache.residentFilterReliable = false
+	pid := vm.PID(42)
+	line := uint64(0xa000)
+	read := mem.ReadReqBuilder{}.
+		WithSrc(cache.topPort).
+		WithDst(cache.topPort).
+		WithPID(pid).
+		WithAddress(line).
+		WithByteSize(64).
+		Build()
+	if err := cache.topPort.Recv(read); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.topParser.Tick(1) {
+		t.Fatal("top parser did not accept fail-open read")
+	}
+	if !cache.dirStage.acceptNewTransaction(2) {
+		t.Fatal("fail-open read did not enter the exact tag pipeline")
+	}
+
+	stats := cache.GetResidentFilterStats()
+	if stats.ReadFilterEligible != 1 || stats.ReadExactTagLookups != 1 ||
+		stats.ReadIssuedBypasses != 0 || stats.ReadAuthoritativeChecks != 0 {
+		t.Fatalf("fail-open exact-tag stats = %+v", stats)
+	}
+}
+
+func TestResidentFilterPostAuditMSHRStillMerges(t *testing.T) {
+	cache := newResidentFilterTestCache()
+	pid := vm.PID(44)
+	line := uint64(0xc000)
+	read := mem.ReadReqBuilder{}.
+		WithSrc(cache.topPort).
+		WithDst(cache.topPort).
+		WithPID(pid).
+		WithAddress(line).
+		WithByteSize(64).
+		Build()
+	if err := cache.topPort.Recv(read); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.topParser.Tick(1) {
+		t.Fatal("top parser did not accept read")
+	}
+	cache.dirStage.Tick(2)
+	entry := cache.mshr.Add(pid, line)
+	entry.Requests = append(entry.Requests, &transaction{})
+	cache.dirStage.Tick(3)
+
+	stats := cache.GetResidentFilterStats()
+	if stats.ReadIssuedBypasses != 1 ||
+		stats.ReadAuthoritativeChecks != 1 ||
+		stats.ReadAuthoritativeMSHRHits != 0 ||
+		stats.ReadVerifiedSafeBypasses != 1 ||
+		stats.ReadAuthoritativeFalseNegatives != 0 {
+		t.Fatalf("post-audit MSHR stats = %+v", stats)
+	}
+	if len(entry.Requests) != 2 {
+		t.Fatal("post-audit exact MSHR did not merge the read")
+	}
+}
+
+func TestResidentFilterAuthoritativeAuditCanBeDisabled(t *testing.T) {
+	cache := newResidentFilterTestCacheWithAudit(false)
+	pid := vm.PID(45)
+	line := uint64(0xd000)
+	block := cache.directory.FindVictim(line)
+	block.PID = pid
+	block.Tag = line
+	block.IsValid = true
+	cache.directory.Visit(block)
+
+	read := mem.ReadReqBuilder{}.
+		WithSrc(cache.topPort).
+		WithDst(cache.topPort).
+		WithPID(pid).
+		WithAddress(line).
+		WithByteSize(64).
+		Build()
+	if err := cache.topPort.Recv(read); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.topParser.Tick(1) {
+		t.Fatal("top parser did not accept read")
+	}
+	cache.dirStage.Tick(2)
+
+	stats := cache.GetResidentFilterStats()
+	if stats.AuthoritativeAuditEnabled || stats.ReadIssuedBypasses != 1 ||
+		stats.ReadAuthoritativeChecks != 0 ||
+		stats.ReadAuthoritativeFalseNegatives != 0 ||
+		stats.ReadExactTagLookups != 0 {
+		t.Fatalf("disabled authoritative-audit stats = %+v", stats)
+	}
+}
+
+func TestAuthoritativeResidentAndMSHRLookupsAlignAddresses(t *testing.T) {
+	cache := newResidentFilterTestCache()
+	pid := vm.PID(43)
+	line := uint64(0xb000)
+	block := cache.directory.FindVictim(line)
+	block.PID = pid
+	block.Tag = line
+	block.IsValid = true
+	cache.directory.Visit(block)
+	cache.mshr.Add(pid, line)
+
+	if !cache.AuthoritativeResidentLookup(pid, line+17) {
+		t.Fatal("authoritative directory lookup did not align the address")
+	}
+	if !cache.AuthoritativeMSHRLookup(pid, line+31) {
+		t.Fatal("authoritative MSHR lookup did not align the address")
+	}
+	if cache.AuthoritativeResidentLookup(pid+1, line) ||
+		cache.AuthoritativeMSHRLookup(pid+1, line) {
+		t.Fatal("authoritative lookup ignored PID")
+	}
+	cache.remoteReplicaBlocks = map[*cachepkg.Block]*remoteReplicaRecord{
+		block: {key: remoteReplicaKey{pid: pid, line: line}},
+	}
+	if !cache.AuthoritativeLookupOnlyHit(pid, line+7) {
+		t.Fatal("authoritative LookupOnly check missed an available replica")
+	}
+	block.IsLocked = true
+	if cache.AuthoritativeLookupOnlyHit(pid, line) {
+		t.Fatal("authoritative LookupOnly check accepted a locked replica")
 	}
 }

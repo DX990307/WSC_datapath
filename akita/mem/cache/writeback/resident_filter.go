@@ -12,26 +12,34 @@ type residentFilterKey struct {
 }
 
 // ResidentFilterStats describes the per-L2-slice Cuckoo Filter. A negative
-// result is used only to skip the tag-lookup pipeline; allocation, MSHR
-// merging, fills, and write combining remain in the L2 cache.
+// result is used only to skip the tag-lookup pipeline for demand reads;
+// allocation, MSHR merging, fills, and write combining remain in the L2.
 type ResidentFilterStats struct {
-	Enabled                bool
-	Reliable               bool
-	Queries                uint64
-	Positives              uint64
-	Negatives              uint64
-	ReadNegativeBypasses   uint64
-	ReadPositiveFastPaths  uint64
-	ReadBusyFallbacks      uint64
-	ReadNegativeMSHRMerges uint64
-	ReadParallelMSHRMerges uint64
-	PrimedLookups          uint64
-	WriteNegativeBypasses  uint64
-	WriteFullLineBypasses  uint64
-	WritePartialBypasses   uint64
-	FalsePositives         uint64
-	InsertFailures         uint64
-	MSHRFullStalls         uint64
+	Enabled                         bool
+	Reliable                        bool
+	AuthoritativeAuditEnabled       bool
+	Queries                         uint64
+	Positives                       uint64
+	Negatives                       uint64
+	ReadFilterEligible              uint64
+	ReadIssuedBypasses              uint64
+	ReadExactTagLookups             uint64
+	ReadAuthoritativeChecks         uint64
+	ReadVerifiedSafeBypasses        uint64
+	ReadAuthoritativeFalseNegatives uint64
+	ReadAuthoritativeMSHRHits       uint64
+	ReadNegativeBypasses            uint64
+	ReadPositiveFastPaths           uint64
+	ReadBusyFallbacks               uint64
+	ReadNegativeMSHRMerges          uint64
+	ReadParallelMSHRMerges          uint64
+	PrimedLookups                   uint64
+	WriteNegativeBypasses           uint64
+	WriteFullLineBypasses           uint64
+	WritePartialBypasses            uint64
+	FalsePositives                  uint64
+	InsertFailures                  uint64
+	MSHRFullStalls                  uint64
 }
 
 // primeResidentLookup starts the metadata access when a request enters the L2
@@ -46,10 +54,10 @@ func (c *Cache) primeResidentLookup(
 		trans.residentFilterChecked || trans.residentFilterLookup != nil {
 		return
 	}
-	req := trans.accessReq()
-	if req == nil || trans.read != nil && trans.read.LookupOnly {
+	if trans.read == nil || trans.read.LookupOnly {
 		return
 	}
+	req := trans.read
 	line, _ := getCacheLineID(req.GetAddress(), c.log2BlockSize)
 	// Avoid consuming a Filter port for an already-authoritative follower.
 	// The directory stage rechecks the MSHR to cover races after this point.
@@ -70,7 +78,61 @@ func (c *Cache) GetResidentFilterStats() ResidentFilterStats {
 	stats := c.residentFilterStats
 	stats.Enabled = c.residentFilterEnabled
 	stats.Reliable = c.residentFilterReliable
+	stats.AuthoritativeAuditEnabled = c.authoritativeAuditEnabled
 	return stats
+}
+
+// AuthoritativeResidentLookup directly inspects the L2 directory. The method
+// is intended for simulator-side validation counters only. It neither models
+// a tag access nor updates replacement state.
+func (c *Cache) AuthoritativeResidentLookup(pid vm.PID, address uint64) bool {
+	if c == nil || c.directory == nil {
+		return false
+	}
+	line, _ := getCacheLineID(address, c.log2BlockSize)
+	return c.directory.Lookup(pid, line) != nil
+}
+
+// AuthoritativeMSHRLookup directly inspects the exact same-line L2 MSHR. The
+// method is a timing-neutral validation hook and does not allocate or merge an
+// MSHR entry.
+func (c *Cache) AuthoritativeMSHRLookup(pid vm.PID, address uint64) bool {
+	if c == nil || c.mshr == nil {
+		return false
+	}
+	line, _ := getCacheLineID(address, c.log2BlockSize)
+	return c.mshr.Query(pid, line) != nil
+}
+
+// AuthoritativeLookupOnlyHit mirrors the exact requester-L2 LookupOnly hit
+// condition without modeling a tag access or changing replacement state.
+func (c *Cache) AuthoritativeLookupOnlyHit(pid vm.PID, address uint64) bool {
+	if c == nil || c.directory == nil {
+		return false
+	}
+	line, _ := getCacheLineID(address, c.log2BlockSize)
+	block := c.directory.Lookup(pid, line)
+	return block != nil && !block.IsLocked &&
+		c.remoteReplicaMatches(block, pid, line)
+}
+
+// recordResidentNegativeBypassAudit records a timing-neutral validation of a
+// Filter-negative decision. A verified safe bypass requires the authoritative
+// directory and exact MSHR to both report absence.
+func (c *Cache) recordResidentNegativeBypassAudit(
+	resident bool,
+	inFlight bool,
+) {
+	c.residentFilterStats.ReadAuthoritativeChecks++
+	if resident {
+		c.residentFilterStats.ReadAuthoritativeFalseNegatives++
+	}
+	if inFlight {
+		c.residentFilterStats.ReadAuthoritativeMSHRHits++
+	}
+	if !resident && !inFlight {
+		c.residentFilterStats.ReadVerifiedSafeBypasses++
+	}
 }
 
 // residentMayContain returns true whenever the filter cannot safely prove a
@@ -149,6 +211,20 @@ func (c *Cache) trackResidentBlock(block *cache.Block) {
 		!block.IsValid || block.IsLocked {
 		return
 	}
+	c.trackResidentState(block)
+}
+
+// trackResidentReadAllocation over-approximates only an allocated read fill.
+// A possible match retains the exact tag path while the bank write is pending;
+// writes keep their original metadata lifetime and are inserted at commit.
+func (c *Cache) trackResidentReadAllocation(block *cache.Block) {
+	if c.residentFilter == nil || block == nil || !block.IsValid {
+		return
+	}
+	c.trackResidentState(block)
+}
+
+func (c *Cache) trackResidentState(block *cache.Block) {
 
 	newKey := residentFilterKey{pid: block.PID, line: block.Tag}
 	if oldKey, ok := c.residentFilterBlocks[block]; ok {

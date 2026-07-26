@@ -10,6 +10,7 @@ from runall2_args import parse_args
 from runall2_config import (
     build_ablation_configs,
     build_common_flags,
+    disable_layernorm_loop_sampling,
     filter_missing_metric_exps,
     make_exps,
     sampled_param_sweep_requested,
@@ -115,6 +116,12 @@ def run_missing_experiments(args):
     set_output_dir(results_dir)
 
     exps = load_experiments_from_metadata(results_dir)
+    if args.rerun_layernorm_safe_sampling:
+        updated = disable_layernorm_loop_sampling(exps)
+        print(
+            "Disabled unsafe loop sampling for "
+            f"{updated} recorded LayerNorm cells."
+        )
     if args.binary_path:
         requested_binary = os.path.abspath(args.binary_path)
         recorded = {os.path.abspath(exp["binary_path"]) for exp in exps}
@@ -159,6 +166,9 @@ def run_missing_experiments(args):
             "timeout_minutes": args.timeout_minutes,
             "skip_build": args.skip_build,
             "rerun_missing": True,
+            "rerun_layernorm_safe_sampling": (
+                args.rerun_layernorm_safe_sampling
+            ),
         },
     )
     print(f"Recorded experiment metadata: {metadata}")

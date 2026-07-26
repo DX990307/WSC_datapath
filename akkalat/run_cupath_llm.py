@@ -264,6 +264,23 @@ def common_flags(args):
     return flags
 
 
+def sampling_flags_for_op(flags, op):
+    """Return sampling flags that are safe for the selected operator.
+
+    Photon loop fast-forward cannot preserve workgroup-wide barriers in the
+    current timing model. LayerNorm uses several such barriers, so it keeps
+    wavefront, branch, and kernel sampling but executes its loops normally.
+    """
+    if op != "layernorm":
+        return list(flags)
+    return [
+        flag
+        for flag in flags
+        if flag != "-loop-sampled"
+        and not flag.startswith("-loop-sampled-")
+    ]
+
+
 def is_repeated_layer_op(label):
     return label.startswith("layer00_")
 
@@ -330,6 +347,8 @@ def build_campaign(args):
             result_profile,
         ))
         for index, (label, op_flags) in enumerate(ops):
+            op = llm.op_kind(op_flags)
+            op_common_flags = sampling_flags_for_op(base_flags, op)
             for config_name, config_flags in configs:
                 flags = DEFAULT_BENCHMARK_FLAGS + config_flags + op_flags
                 if args.log_subtasks:
@@ -341,7 +360,7 @@ def build_campaign(args):
                         f"{model}_{result_profile}_{index:03d}_{label}_"
                         f"{config_name}"
                     ),
-                    "common_flags": base_flags,
+                    "common_flags": op_common_flags,
                     "flags": flags,
                     "timeout_seconds": timeout_seconds,
                 })

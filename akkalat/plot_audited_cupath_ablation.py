@@ -38,9 +38,9 @@ WORKLOADS = (
 )
 CONFIGS = (
     ("baseline", "Baseline", "#D6EFF5"),
-    ("m1", "M1", "#ADDEEB"),
     ("m2", "M2", "#83CEE2"),
     ("m3", "M3", "#FBE0D0"),
+    ("m1", "M1", "#ADDEEB"),
     ("complete", "Complete", "#F4A371"),
 )
 

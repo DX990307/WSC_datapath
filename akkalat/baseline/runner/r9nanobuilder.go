@@ -55,6 +55,7 @@ type R9NanoGPUBuilder struct {
 	l2GranularityAlwaysExpand      bool
 	l2GranularityPredictorOnly     bool
 	l2AdaptivePair                 bool
+	l2AdaptivePairRegionLines      int
 	l2FillForwarding               bool
 	typedFilterConfig              writeback.TypedFilterConfig
 	dramRowContinuation            bool
@@ -130,6 +131,7 @@ func MakeR9NanoGPUBuilder() R9NanoGPUBuilder {
 		l1vMSHREntries:                 16,
 		l1vMaxConcurrentTrans:          16,
 		prefetchPredictorEntries:       64,
+		l2AdaptivePairRegionLines:      2,
 		typedFilterConfig: writeback.TypedFilterConfig{
 			Mode:                writeback.TypedFilterCuckoo,
 			LookupLatencyCycles: 1,
@@ -337,6 +339,15 @@ func (b R9NanoGPUBuilder) WithL2GranularityAdaptation(
 // WithL2AdaptivePair enables the restored best historical M1 policy.
 func (b R9NanoGPUBuilder) WithL2AdaptivePair(enable bool) R9NanoGPUBuilder {
 	b.l2AdaptivePair = enable
+	return b
+}
+
+// WithL2AdaptivePairRegionLines sets the aligned row-local fetch region.
+func (b R9NanoGPUBuilder) WithL2AdaptivePairRegionLines(
+	lines int,
+) R9NanoGPUBuilder {
+	validateAdaptivePairRegionLines(lines)
+	b.l2AdaptivePairRegionLines = lines
 	return b
 }
 
@@ -790,6 +801,7 @@ func (b *R9NanoGPUBuilder) buildL2Caches() {
 		WithAlwaysExpandGranularity(b.l2GranularityAlwaysExpand).
 		WithGranularityPredictorOnly(b.l2GranularityPredictorOnly).
 		WithAdaptivePair(b.l2AdaptivePair).
+		WithAdaptivePairRegionLines(b.l2AdaptivePairRegionLines).
 		WithFillForwarding(b.l2FillForwarding).
 		WithRemoteReplicaFilter(
 			b.remoteDataPath.Enabled &&

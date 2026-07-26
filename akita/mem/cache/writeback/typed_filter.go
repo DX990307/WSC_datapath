@@ -74,33 +74,36 @@ type TypedFilterKey struct {
 // TypedFilterConfig derives capacity from the structures the filter
 // summarizes. CriticalReserve is protected from SEEN pressure.
 type TypedFilterConfig struct {
-	Capacity            int
-	CriticalReserve     int
-	SlotsPerBucket      int
-	FingerprintBits     int
-	Mode                TypedFilterMode
-	LookupLatencyCycles int
-	LookupWidth         int
-	UpdateLatencyCycles int
-	UpdateWidth         int
-	Freq                sim.Freq
+	Capacity                 int
+	CriticalReserve          int
+	SlotsPerBucket           int
+	FingerprintBits          int
+	Mode                     TypedFilterMode
+	EnableAuthoritativeAudit bool
+	LookupLatencyCycles      int
+	LookupWidth              int
+	UpdateLatencyCycles      int
+	UpdateWidth              int
+	Freq                     sim.Freq
 }
 
 // TypedFilterTypeStats reports one logical key class.
 type TypedFilterTypeStats struct {
-	Reliable        bool
-	Queries         uint64
-	Positives       uint64
-	Negatives       uint64
-	FalsePositives  uint64
-	Insertions      uint64
-	Deletes         uint64
-	InsertFailures  uint64
-	FailOpen        uint64
-	LookupBusyDrops uint64
-	UpdateBusyDrops uint64
-	Occupancy       uint64
-	PeakOccupancy   uint64
+	Reliable                  bool
+	Queries                   uint64
+	Positives                 uint64
+	Negatives                 uint64
+	FalsePositives            uint64
+	ActiveFalseNegatives      uint64
+	Insertions                uint64
+	Deletes                   uint64
+	InsertFailures            uint64
+	ReferenceCountSaturations uint64
+	FailOpen                  uint64
+	LookupBusyDrops           uint64
+	UpdateBusyDrops           uint64
+	Occupancy                 uint64
+	PeakOccupancy             uint64
 }
 
 // TypedFilterStats reports the shared physical array and modeled ports.
@@ -117,6 +120,9 @@ type TypedFilterStats struct {
 	UpdateWidth          uint64
 	LookupPortStalls     uint64
 	UpdatePortStalls     uint64
+	KickAttempts         uint64
+	KickedInsertions     uint64
+	KickRollbacks        uint64
 	Occupancy            uint64
 	PeakOccupancy        uint64
 	LowPriorityLimit     uint64
@@ -522,6 +528,12 @@ func (f *TypedCuckooFilter) Query(key TypedFilterKey) (bool, bool) {
 		}
 	} else {
 		typeStats.Negatives++
+		// A reliable negative is allowed to authorize a shortcut. Keep an
+		// explicit diagnostic for the invariant that every active exact key
+		// must therefore remain represented in the physical array.
+		if exact {
+			typeStats.ActiveFalseNegatives++
+		}
 	}
 	return possible, true
 }
@@ -571,6 +583,7 @@ func (f *TypedCuckooFilter) Insert(key TypedFilterKey) bool {
 	if bucket, slot, found := f.find(first, second, fingerprint, key.Type); found {
 		entry := &f.bucket[bucket].slots[slot]
 		if entry.references >= typedFilterMaxReferences {
+			typeStats.ReferenceCountSaturations++
 			f.failInsertion(key)
 			return false
 		}
@@ -602,6 +615,7 @@ func (f *TypedCuckooFilter) Insert(key TypedFilterKey) bool {
 	mutations := make([]typedFilterMutation, 0, typedFilterMaxKicks)
 	bucket := start
 	for kick := 0; kick < typedFilterMaxKicks; kick++ {
+		f.stats.KickAttempts++
 		slotIndex := f.victimSlot(hash, incoming, bucket, kick)
 		victim := f.bucket[bucket].slots[slotIndex]
 		f.replace(bucket, slotIndex, incoming, &mutations)
@@ -614,21 +628,25 @@ func (f *TypedCuckooFilter) Insert(key TypedFilterKey) bool {
 			updated := f.bucket[matchBucket].slots[matchSlot]
 			if typedFilterMaxReferences-updated.references < incoming.references {
 				f.rollback(mutations)
+				typeStats.ReferenceCountSaturations++
 				f.failInsertion(key)
 				return false
 			}
 			updated.references += incoming.references
 			f.replace(matchBucket, matchSlot, updated, &mutations)
+			f.stats.KickedInsertions++
 			f.noteLogicalInsert(key.Type)
 			return true
 		}
 		if f.insertEmpty(bucket, incoming, &mutations) {
+			f.stats.KickedInsertions++
 			f.noteLogicalInsert(key.Type)
 			return true
 		}
 	}
 
 	f.rollback(mutations)
+	f.stats.KickRollbacks++
 	f.failInsertion(key)
 	return false
 }

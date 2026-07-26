@@ -48,19 +48,19 @@ optimize each component using only locally visible state.  We show that useful
 request state changes during a request lifetime: real accesses expose a predictive relation,
 L2 state eliminates already resident or pending work, requesting-GPM RDMA exposes
 cross-L1 and destination aggregation, and returned data exposes reuse.  We
-propose \emph{CuPath}, which connects these decisions through a common bounded
-real-demand predictor design and one typed Cuckoo Filter per L2 slice.  CuPath
-first filters a directly adjacent local candidate and, when useful, exposes it
-with the triggering miss through a paired HBM access,
-then uses Filter-maintained pending-line and active-batch state to merge remote
-requests and permits a remote candidate only to piggyback an existing
-home-GPM/page batch, and finally retains useful
-returned data in the existing requesting-GPM L2 while feeding outcomes back to
-prediction metadata.  Exact tags, MSHRs, and transaction tables remain
-authoritative; unavailable speculative opportunities are dropped immediately.
-CuPath adds no global scheduler or new cache level.
-We evaluate both end-to-end performance and the cache, DRAM, RDMA, packet, and
-wafer-traversal work removed at each boundary.
+propose \emph{CuPath}, which uses typed Cuckoo Filters as a compact control
+plane for coordinating memory requests along the local and remote paths.  The
+control plane works with three request-processing components: a paired-demand
+predictor that identifies adjacent local reads and coarsens HBM accesses, an
+RDMA batcher that merges duplicate remote requests and groups requests to the
+same home GPM and page, and a remote-reuse policy that retains repeatedly
+accessed remote data in the existing requesting-GPM L2.  Exact tags, MSHRs,
+and transaction tables remain authoritative, and a request immediately follows
+the baseline path when an optimization cannot be applied.  CuPath adds no
+global scheduler or new cache level.  Across fourteen workloads, CuPath
+achieves a 1.492$\times$ geometric-mean speedup, deduplicates 9.3\% of remote
+reads, reduces remote request packets by 52.9\% through aggregation, and eliminates 29.3\% of
+repeated wafer traversals.
 \end{abstract}
 
 \section{Introduction}
@@ -82,7 +82,7 @@ more resources on one wafer does not make every memory access local.
 
 The on-wafer mesh provides high-bandwidth communication between GPMs, but each
 physical page still resides in the HBM of one home GPM.  A local L1 miss
-reaches the address-selected L2 slice and, on an L2 miss, accesses local HBM.
+reaches the local L2 cache and, on an L2 miss, accesses local HBM.
 The returned cacheline fills the local cache hierarchy before reaching the
 requesting CU.
 
@@ -118,8 +118,8 @@ one-touch data \cite{zhao2020selective,zhang2023sac}.  Remote acceleration must
 therefore aggregate requests before network injection and retain returned data
 in the existing requesting-GPM L2 only after reuse is observed.
 
-We propose \emph{CuPath}, which uses a lightweight demand predictor and one
-typed Cuckoo Filter per L2 slice to identify and optimize memory requests
+We propose \emph{CuPath}, which uses a lightweight demand predictor and a
+logical typed Cuckoo Filter associated with each GPM's L2 cache to optimize requests
 during memory-path traversal \cite{fan2014cuckoo}.  The predictor proposes
 at most one adjacent candidate from real demand history.  The Filter records
 compact pattern, residency, in-flight, and reuse state, allowing later
@@ -158,10 +158,11 @@ during memory-path traversal.
   \label{fig:cupath-overview}
 \end{figure}
 
-Across fourteen GPU workloads, CuPath improves every workload and achieves a
-1.534$\times$ geometric-mean speedup.  More importantly, the speedup follows
-from work removed along the path.  CuPath reduces L2 tag lookups by 22.6\%,
-on-wafer packets by 48.2\%, and repeated wafer traversals by 30.8\%.
+Across fourteen GPU workloads, CuPath achieves a 1.492$\times$ geometric-mean
+speedup and improves 13 workloads, while the remaining workload stays within
+0.1\% of Baseline.  More importantly, the speedup follows from work removed
+along the path.  CuPath deduplicates 9.3\% of remote reads, reduces remote
+request packets by 52.9\% through aggregation, and eliminates 29.3\% of repeated wafer traversals.
 
 We make the following contributions.
 
@@ -171,11 +172,11 @@ We make the following contributions.
   memory-request lifetime.
 
   \item We propose CuPath, an end-to-end memory-path design that couples a
-  bounded real-demand predictor and per-slice typed Cuckoo Filter with the
-  existing HBM controller, RDMA engine, and requesting-GPM L2.
+  bounded real-demand predictor and logical typed Cuckoo Filter with the
+  existing L2 cache, HBM controller, and RDMA engine.
 
   \item We implement and evaluate CuPath without adding a global scheduler,
-  cache level, achieving a 1.534$\times$
+  cache level, achieving a 1.492$\times$
   geometric-mean speedup while substantially reducing cache and network work.
 \end{itemize}
 

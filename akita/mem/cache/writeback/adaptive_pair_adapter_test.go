@@ -1,6 +1,7 @@
 package writeback
 
 import (
+	"fmt"
 	"testing"
 
 	cachepkg "github.com/sarchlab/akita/v3/mem/cache"
@@ -24,7 +25,7 @@ func newAdaptivePairTestCache() (*Cache, sim.Buffer) {
 		lowModuleFinder:     &mem.SingleLowModuleFinder{LowModule: dramPort},
 		log2BlockSize:       6,
 		adaptivePairEnabled: true,
-		adaptivePairAdapter: newAdaptivePairAdapter(4),
+		adaptivePairAdapter: newAdaptivePairAdapter(4, 2),
 		adaptivePairStats:   AdaptivePairStats{Enabled: true},
 		directory: cachepkg.NewDirectory(
 			4, 2, 64, cachepkg.NewLRUVictimFinder()),
@@ -146,6 +147,54 @@ func TestAdaptivePairBuffersIndependentSiblingResponse(t *testing.T) {
 		c.adaptivePairStats.PeakPrefetchOnlyLines != 1 {
 		t.Fatalf("buffered prefetch accounting is wrong: %+v",
 			c.adaptivePairStats)
+	}
+}
+
+func TestAdaptivePairRegionLineSensitivity(t *testing.T) {
+	for _, regionLines := range []int{4, 8, 16} {
+		t.Run(fmt.Sprintf("%d-lines", regionLines), func(t *testing.T) {
+			c, sendBuffer := newAdaptivePairTestCache()
+			c.adaptivePairAdapter = newAdaptivePairAdapter(32, regionLines)
+			pid := vm.PID(7)
+			trainAdaptivePair(t, c, pid)
+
+			trans := adaptivePairTestTransaction(pid, 0x2000)
+			c.writeBufferBuffer.Push(trans)
+			if !c.writeBuffer.processAdaptivePairFetch(5e-9, trans) {
+				t.Fatal("row-local region access did not issue")
+			}
+			read, ok := sendBuffer.Peek().(*mem.ReadReq)
+			if !ok {
+				t.Fatalf("adapter sent %T, want ReadReq", sendBuffer.Peek())
+			}
+			wantBytes := uint64(regionLines * 64)
+			if read.Address != 0x2000 || read.AccessByteSize != wantBytes {
+				t.Fatalf("region read is %#x/%dB, want 0x2000/%dB",
+					read.Address, read.AccessByteSize, wantBytes)
+			}
+			if got := len(c.adaptivePairAdapter.inflight); got != regionLines-1 {
+				t.Fatalf("tracked %d prefetched lines, want %d",
+					got, regionLines-1)
+			}
+			if c.adaptivePairStats.ExpandedRegionReads != 1 ||
+				c.adaptivePairStats.PrefetchedRegionLines != uint64(regionLines-1) {
+				t.Fatalf("unexpected region accounting: %+v",
+					c.adaptivePairStats)
+			}
+		})
+	}
+}
+
+func TestAdaptivePairTrainingRequiresAdjacentLines(t *testing.T) {
+	c, _ := newAdaptivePairTestCache()
+	c.adaptivePairAdapter = newAdaptivePairAdapter(8, 4)
+	pid := vm.PID(8)
+	if c.adaptivePairAdapter.observeDemand(c, pid, 0x1000) ||
+		c.adaptivePairAdapter.observeDemand(c, pid, 0x1080) {
+		t.Fatal("non-adjacent lines established a row-local pair")
+	}
+	if !c.adaptivePairAdapter.observeDemand(c, pid, 0x1040) {
+		t.Fatal("adjacent line did not establish a row-local pair")
 	}
 }
 

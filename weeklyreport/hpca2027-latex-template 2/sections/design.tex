@@ -13,210 +13,163 @@ local HBM accesses, Cuckoo-Filter-Guided Remote Aggregation combines requests
 before network injection, and Cuckoo-Filter-Guided Remote Reuse retains data
 only after recurrence becomes visible.
 
-\subsection{Shared Typed Membership State}
+\subsection{Shared Typed Cuckoo Filter}
 
-CuPath places one typed Cuckoo Filter beside each L2 partition
-\cite{fan2014cuckoo}. RDMA accesses the Filter selected by the request address,
-so it does not require a separate RDMA-side Filter. The four L2 partitions in
-each of the 48 GPMs therefore provide 192 physical Filters across the wafer.
-One physical bucket array stores five kinds of lifecycle information.
-\textsc{Resident} represents lines installed in the local L2,
-\textsc{Remote-Pending} represents remote lines already tracked by requester
-RDMA, and \textsc{Remote-Batch} represents a joinable batch for one process,
-owner GPM, and page. \textsc{Seen} records a completed remote access that was
-not retained, and \textsc{Pattern} represents real-demand-trained remote
-prediction state.
-The type is included in the key and separates the logical namespaces without
-creating five physical arrays.
+CuPath associates one logical typed Cuckoo Filter with each GPM's existing L2
+cache \cite{fan2014cuckoo}. The Filter provides a shared metadata interface to
+the L2 and requester RDMA. Both components query and update the same typed
+membership state, so CuPath does not require a separate RDMA-side Filter.
 
-The Filter is an accelerator rather than an authoritative directory. A
-reliable negative result proves that an exact structure need not be searched.
-A positive result is only a possible match and is confirmed by an L2 tag,
-MSHR, or RDMA line-table lookup. If an insertion fails or a metadata result is
-not reliable, the request follows the conservative exact path. Filter access
-uses modeled lookup and update ports. Local lookups begin while the demand is
-passing through the ordinary L2 pipeline, and remote lookups begin while the
-request is entering RDMA. The Filter latency therefore overlaps existing path
-latency whenever its ports are available.
+CuPath extends the conventional fingerprint-only entry with a type flag and a
+reference count. Each 21-bit slot contains one valid bit, a 13-bit
+fingerprint, a three-bit type flag, and a four-bit saturating reference count.
+CuPath forms a lookup key from the process identifier, cacheline-aligned
+address, metadata type, and owner identifier when needed. Hashing the key
+produces a fingerprint and two candidate buckets. A slot matches only when
+both its fingerprint and type match the lookup. The reference count records
+how many logical insertions share the same fingerprint and type, allowing
+deletion to clear the slot only after the last reference retires. Adjacent
+access history and prediction confidence are maintained by the local
+predictor rather than stored in the Filter.
+
+The type flag identifies the path state represented by each entry.
+\textbf{L2-Resident} tracks cachelines stored in L2, while
+\textbf{L2-In-Flight} tracks cachelines being fetched by an active L2 MSHR.
+\textbf{RDMA-In-Flight} tracks remote requests awaiting responses.
+\textbf{Remote-History} records previously accessed remote cachelines, and
+\textbf{Demand-Pattern} records demand-trained address relationships. All
+types dynamically share the Filter capacity, while exact remote batches remain
+in the RDMA request table.
+
+The Cuckoo Filter provides negative membership information rather than
+authoritative cache or transaction state. L2 fills and evictions maintain
+\textbf{L2-Resident}. A reliable \textbf{L2-Resident} negative, together with
+an exact same-line MSHR check, allows a demand read to bypass the L2 tag
+pipeline. Requester RDMA maintains \textbf{RDMA-In-Flight} while a remote
+request is active. A reliable negative avoids an unnecessary search of the
+requesting-GPM RDMA request table.
+
+Possible matches are confirmed by the corresponding exact L2, MSHR, predictor,
+or RDMA state. History entries receive lower priority so that they cannot
+displace active state. A Filter lookup costs one cycle and supports 16 parallel
+lookups per cycle. Duplicate insertions increment the reference count, while
+deletions decrement it and clear the slot at zero. Unavailable or unreliable
+lookups follow the exact path, while a correctness-critical
+\textbf{RDMA-In-Flight} lookup retries.
 
 \subsection{Cuckoo-Filter-Guided Local Pairing}
 \label{sec:design-m1}
 
-Motivated by O2 and O3, Local Pairing combines adjacent local read misses that repeatedly
-use the same row-local HBM region. In the baseline, each L2 read miss generates
-an independent HBM request even when the adjacent cacheline is requested soon
-afterward. Local Pairing keeps the cacheline and MSHR formats unchanged and modifies only
-the read sent to HBM. Since the write-back L2 already absorbs and combines
-writes, Local Pairing does not alter the write path. A write hit updates the cached line,
-a full-line write miss avoids an HBM read, and a partial write miss merges with
-the existing L2 MSHR and fill path.
+Motivated by \textbf{O2} and \textbf{O3}, Local Pairing reduces L2 tag work and
+uses HBM row locality for local reads. When a read reaches L2, the typed Cuckoo
+Filter queries \textbf{L2-Resident} while the exact same-line MSHR is checked.
+A reliable negative and an MSHR miss bypass the L2 tag pipeline, while a
+possible match retains the exact tag lookup. Local Pairing does not modify
+writes because the write-back L2 already handles write hits and combines
+partial writes through its existing MSHRs.
 
-Local Pairing adds a bounded pair detector to each L2 partition. For every real L2 read
-miss, the detector records its aligned two-cacheline HBM region. A later demand
-for the other cacheline provides positive evidence and increments a saturating
-confidence counter. If the recorded relation repeatedly expires without the
-other demand, the counter decreases. Only real demand misses train the
-detector, so an extra line fetched by Local Pairing cannot recursively create another
-request.
+Real L2 misses train a lightweight adjacent-access predictor. The predictor
+records recently observed cachelines within aligned two-line HBM regions. When
+real requests access both lines of a region, the predictor increases a
+saturating confidence counter. Once the confidence reaches its threshold,
+every subsequent eligible local read miss proposes its adjacent cacheline.
+The typed Cuckoo Filter then queries \textbf{L2-Resident} and
+\textbf{L2-In-Flight} to remove candidates already cached or being fetched.
+Possible matches are confirmed by the exact L2 tags and MSHRs.
 
-When a local L2 read miss arrives, Local Pairing first consults the pair detector. If no
-relation has been learned, Local Pairing sends the original cacheline request to HBM
-immediately and uses the miss to update the detector. If an earlier paired read
-already covers the requested line, the demand joins that access. Local Pairing similarly
-suppresses another request when the adjacent line is already in flight or
-waiting in the staging buffer.
-
-When the detector identifies a pair candidate, Local Pairing queries \textsc{Resident} for
-the adjacent cacheline. A reliable negative result shows that the candidate is
-not represented as resident, while a possible match triggers an exact L2-tag
-lookup. An exact hit removes the candidate, and an exact miss permits the
-paired read.
-
-If the candidate survives the checks and the ordinary downstream resources
-are available, Local Pairing sends one HBM read covering the demand and its adjacent
-cacheline. Otherwise, the demand follows the original singleton path without
-waiting. The controller services the read with its existing address mapping,
-row buffer, and burst interface \cite{li2016exploring,amd_rama_hbm}; Local Pairing adds no
-new HBM command.
-
-The demanded cacheline completes through the normal L2 fill path. A demand for
-the adjacent cacheline can join the read while it is in flight. If no such
-demand has arrived, the returned adjacent line enters a bounded staging buffer
-and may satisfy a later L2 miss. A consumed adjacent line reinforces the
-learned pair, whereas an unused line reduces its confidence. The staging
-buffer accepts only the unused half of an issued paired read and is not a
-separately addressable cache level.
+An eligible pair uses one aligned HBM read covering both cachelines within the
+same row-local access unit \cite{li2016exploring,amd_rama_hbm}. The requested
+cacheline follows the normal fill path. A request for the adjacent cacheline
+can join the read before completion. Otherwise, the adjacent data waits in a
+bounded staging buffer. Later use strengthens the confidence stored in the
+predictor, while removal without use weakens it. If pairing is
+unavailable, the original read follows the ordinary cacheline path.
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=\columnwidth]{Figure/M1.png}
-  \caption{Local Pairing learns adjacent demand pairs, removes a line that is already
-  resident or covered by an in-flight read, and otherwise fetches the pair
-  with one HBM read.}
+  \caption{Local Pairing uses recent demand history to identify adjacent
+  accesses. The typed Cuckoo Filter bypasses proven L2 misses and removes a
+  paired candidate that is already resident or being fetched.}
   \label{fig:cupath-m1}
 \end{figure}
 
-\subsection{Cuckoo-Filter-Guided Remote Aggregation}
+\subsection{Remote Aggregation Guided by the Cuckoo Filter}
 \label{sec:design-m2}
 
-Motivated by O4 and O5, Remote Aggregation combines remote requests before they consume
-wafer-network work. Private L1 MSHRs cannot observe duplicate misses from
-different L1 caches, while owner-L2 MSHRs act only after the requests have
-crossed the wafer. Requester RDMA is the first point that observes all remote
-misses from one GPM. Remote Aggregation uses the typed Cuckoo Filter at this point to identify
-which requests may share existing work before consulting the exact RDMA state.
-The Filter does not replace the request table or form packets by itself. It
-guides both exact-line coalescing and the discovery of an active owner-page
-batch, and prevents unnecessary lines from entering that batch.
+Motivated by \textbf{O4} and \textbf{O5}, Remote Aggregation reduces
+duplicate remote accesses and network packets on the remote memory path. The
+requester GPM contains the L1 cache that issues the read. The owner GPM stores
+the target page in local memory. All remote reads from the L1 caches in one
+requester GPM enter the same RDMA engine. The shared RDMA entry point exposes
+requests for the same cacheline and requests for different cachelines in the
+same page of the owner GPM.
 
-For every issued remote line, Remote Aggregation inserts a \textsc{Remote-Pending} fingerprint
-into the Filter. The exact requester-RDMA request table retains the complete
-transaction, including its process, owner GPM, cacheline, write epoch, and
-bounded waiter list. When another remote read arrives, Remote Aggregation first queries
-\textsc{Remote-Pending}.
+For every remote read, the requester GPM RDMA checks the Cuckoo Filter for a
+slot with a matching fingerprint and the \textbf{RDMA In Flight} type. A
+reliable negative shows that no request for the cacheline is currently
+recorded. The requester GPM RDMA can therefore create a request table entry
+without searching existing entries. A possible match triggers an exact
+request table lookup. When an exact entry already exists, the new L1 read
+joins the recorded remote access. Only one request reaches the owner GPM, and
+the returned cacheline serves every L1 read attached to the entry.
 
-A reliable negative Filter result shows that no represented transaction is
-outstanding for the line. Remote Aggregation therefore skips the exact same-line lookup,
-allocates a new request-table entry, and inserts \textsc{Remote-Pending}. A
-possible Filter match instead triggers an exact request-table lookup. If the
-transaction exists, Remote Aggregation adds the demand to its waiter list, allowing one remote
-operation to serve all matching L1 misses. A false positive simply allocates a
-new entry and proceeds as a negative result.
+After requests for identical cachelines are merged, the requester GPM RDMA
+groups new request table entries with the same process, owner GPM, and 4 KB
+page. A bitmap in the request table marks the requested cachelines in each
+page. A group containing one cacheline uses a normal remote read packet. A
+group containing multiple cachelines uses one bitmap packet. The requester
+GPM RDMA sends the group after processing the reads accepted during the
+current scheduling cycle. The remote predictor may propose another cacheline
+from the same page. The Cuckoo Filter admits the predicted cacheline only when
+a learned pattern exists, the cacheline is absent from requester L2, no
+request for the cacheline is in flight, and a matching page group already
+exists. The predicted cacheline therefore shares an existing network packet
+and never creates a separate remote access.
 
-A newly allocated line becomes the leader of a remote transaction. Remote Aggregation forms a
-batch key from the process, owner GPM, and 4-KB page and queries
-\textsc{Remote-Batch} before accessing the exact batch table.
-
-A reliable negative Filter result shows that no joinable batch is represented
-for the key. Remote Aggregation allocates a batch descriptor, records the leader in its bitmap,
-and inserts \textsc{Remote-Batch}. A possible Filter match triggers an exact
-batch-table lookup. The new leader joins a matching descriptor when a bitmap
-position remains available. A false or stale match, or a full descriptor,
-causes Remote Aggregation to allocate a new batch without delaying the request.
-
-A batch remains represented by \textsc{Remote-Batch} only while at least one
-matching descriptor can accept another line. When the last joinable descriptor
-becomes full or is selected for egress, Remote Aggregation removes that state. A singleton is
-sent as an ordinary remote read, while multiple leaders in one bitmap cross
-the network as one packet. Owner RDMA expands the bitmap into ordinary
-cacheline accesses to the existing owner L2. Returned lines are matched to
-their exact request-table entries and fanned out to every waiting L1 request.
-Remote Aggregation never delays a request to wait for a future partner and uses no batching
-timeout.
-
-The Filter also controls whether a predicted page-local line may use a free
-position in an existing batch. \textsc{Pattern} must indicate a relation
-trained by real remote demands, while reliable negative results for
-\textsc{Resident} and \textsc{Remote-Pending} show that the line is neither
-cached locally nor already in flight. \textsc{Remote-Batch} must also indicate
-that a compatible batch may exist. Possible matches are confirmed using the
-corresponding exact L2, request-table, predictor, and batch-table state. Remote Aggregation
-admits the line only when the exact batch belongs to the same owner and page
-and still has a free bitmap position. Otherwise, the candidate is discarded
-without creating a packet or delaying a demand.
-
-When the response completes, Remote Aggregation fans out the data, releases the exact request
-entry, and deletes its \textsc{Remote-Pending} fingerprint. If a Filter result
-or update is unavailable, Remote Aggregation uses the conservative exact path. Writes advance
-the transaction epoch so that a read cannot merge with stale state. The Filter
-therefore removes avoidable line-table and batch-table lookups, locates
-possible aggregation opportunities, and filters predicted candidates. The
-exact request table and bitmap batch remain authoritative.
+The owner GPM RDMA decodes the bitmap and sends one cacheline read for every
+marked position to the L2 cache in the owner GPM. An L2 miss continues to the
+HBM of the owner GPM. The owner GPM RDMA returns each cacheline after the
+corresponding L2 access completes. The requester GPM RDMA matches each
+returned cacheline with the request table entry and sends the data to every
+recorded L1 read. After all recorded reads receive data, the requester GPM
+RDMA removes the entry and the corresponding \textbf{RDMA In Flight}
+membership.
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=\columnwidth]{Figure/M2.png}
-  \caption{The typed Cuckoo Filter identifies possible in-flight duplicates,
-  locates a joinable owner-page batch, and filters predicted candidates. Exact
-  RDMA tables confirm matches before identical lines are merged or different
-  lines are grouped into one packet.}
+  \caption{The RDMA engine in the requester GPM uses the Cuckoo Filter to
+  identify repeated remote accesses and combines the remaining accesses to
+  the same owner GPM and page into one network packet.}
   \label{fig:cupath-m2}
 \end{figure}
 
-\subsection{Cuckoo-Filter-Guided Remote Reuse}
+\subsection{Remote Reuse Guided by the Cuckoo Filter}
 \label{sec:design-m3}
 
-Motivated by O6, Remote Reuse uses the existing requester L2 to retain remote data only
-after real accesses reveal reuse. The baseline sends a remote return directly
-to requester L1. Once the line leaves L1, a later access repeats requester
-RDMA, wafer-network, owner-L2, and possibly owner-HBM work. Filling every
-remote return into requester L2 would avoid some traversals but would also
-consume capacity for lines that never recur. Remote Reuse uses \textsc{Seen} to
-distinguish recurring lines from one-time remote data and adds no new cache
-level.
+Motivated by \textbf{O6}, Remote Reuse uses the existing requester L2 to
+avoid repeated remote accesses. Requester RDMA queries the Cuckoo Filter for
+\textbf{L2 Resident} and \textbf{Remote History}. Reliable negatives bypass
+the known miss requester L2 lookup. A first response without additional
+demand returns to L1 and records \textbf{Remote History}. A possible match
+triggers an exact L2 lookup. A hit completes locally, while a miss follows the
+remote path.
 
-After requester RDMA finds no matching in-flight transaction, Remote Reuse checks
-\textsc{Resident} and \textsc{Seen} before issuing the remote request.
-
-Reliable negative results for both types identify a cold remote line that is
-neither represented as resident nor previously observed. Remote Reuse bypasses the
-otherwise guaranteed-miss requester-L2 tag lookup and sends the request to the
-owner GPM. The first completed access returns to L1 without filling requester
-L2 and inserts \textsc{Seen}. A possible Filter match indicates that the line
-may be retained or recurring and triggers an exact requester-L2 tag lookup.
-An L2 hit completes locally, while an exact miss follows the remote path and
-preserves the reuse evidence for the returning response.
-
-A response with real recurrence evidence becomes eligible for a clean fill in
-requester L2. The second completed access supplies such evidence, and multiple
-real demands merged by Remote Aggregation can establish it within one remote transaction. A
-predicted line qualifies only if a real demand claims it while the transaction
-is in flight. A successful fill updates \textsc{Resident}, allowing a later
-access to complete locally without another wafer traversal.
-
-Every fill remains best effort. Remote Reuse may use an invalid way or replace another
-clean remote line, but it does not evict ordinary local data. A dirty, locked,
-active-MSHR, or stale-generation victim rejects the fill. An unclaimed
-predicted return can use only an invalid way. If a fill fails, \textsc{Seen}
-remains recorded so that a later real access can try again. Remote writes
-invalidate the corresponding reuse history and advance the exact transaction
-epoch.
+A returned cacheline becomes eligible for a clean requester L2 fill when
+\textbf{Remote History} records an earlier access, multiple L1 reads join the
+same remote access, or a real demand claims a predicted cacheline. An
+unclaimed predicted cacheline without \textbf{Remote History} can use only an
+invalid L2 way. Other eligible fills may use an invalid way or replace a clean
+remote line, but never an ordinary local line. A successful fill updates
+\textbf{L2 Resident}, allowing later reads to avoid another wafer traversal.
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=\columnwidth]{Figure/M3.png}
-  \caption{Remote Reuse bypasses known-miss requester-L2 lookups and retains a remote
-  return in the existing requester L2 only after real accesses reveal reuse.}
+  \caption{Remote Reuse records the first remote return and uses later
+  recurrence to retain selected data in the existing L2 cache of the requester
+  GPM.}
   \label{fig:cupath-m3}
 \end{figure}
 

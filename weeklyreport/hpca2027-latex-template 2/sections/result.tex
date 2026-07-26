@@ -3,39 +3,103 @@
 
 \subsection{Overall Performance}
 
-Figure~\ref{fig:cupath-performance} compares CuPath with Baseline using the
-formal 14-workload campaign.  Every pair uses the same frozen binary,
-benchmark input, architectural parameters, workgroup-completion rule, and
-completed workgroup count; only the CuPath mechanisms differ.  CuPath achieves
-a 1.465$\times$ geometric-mean speedup and improves 13 of the 14 workloads.
-MM, FWS, and KM obtain the largest gains at 6.171$\times$,
-4.155$\times$, and 2.511$\times$, respectively.  BT and FWT improve by
-1.491$\times$ and 1.578$\times$, while I2C and RELU improve by
-1.214$\times$ and 1.117$\times$.  The remaining workloads stay close to
-Baseline, with SPMV at 0.999$\times$.  The result shows that CuPath provides
-large gains when requests expose eliminable or aggregatable work, while its
-work-conserving fallback keeps workloads with few opportunities near
-Baseline.
+Figure~\ref{fig:cupath-performance} compares CuPath with Baseline across the
+fourteen workloads. CuPath achieves a 1.492$\times$ geometric-mean speedup.
+MM, FWS, and KM obtain the largest gains at 6.180$\times$, 4.341$\times$,
+and 2.501$\times$, respectively. Local workloads also benefit. BT and FWT
+improve by 1.635$\times$ and 1.645$\times$, while RELU improves by
+1.149$\times$. I2C improves by 1.215$\times$ through the remote path. Eight
+workloads improve by more than 1\%, while the remaining six stay within 1\%
+of Baseline. SPMV is the only strict regression and remains within 0.1\% of
+Baseline. CuPath therefore provides large gains when the memory path exposes
+pairing, aggregation, or reuse opportunities without materially penalizing
+workloads that expose few such opportunities.
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-22-baseline-complete-observation/cupath_baseline_complete_speedup.png}
-  \caption{Normalized performance of CuPath relative to Baseline.  Baseline
-  is normalized to 1.0 for every workload, and GM is the geometric mean across
-  all 14 workloads.}
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-23-23-41-05-sampled-validation/cupath_baseline_complete_speedup.png}
+  \caption{Performance normalized to Baseline. Bars exceeding 2$\times$ are
+  clipped and annotated with their actual speedups. GMEAN is the geometric
+  mean across all fourteen workloads.}
   \label{fig:cupath-performance}
+\end{figure}
+
+\subsection{Ablation Study}
+
+Figure~\ref{fig:cupath-ablation} isolates the three CuPath transformations.
+Remote Aggregation is the strongest standalone transformation and achieves a
+1.209$\times$ geometric-mean speedup. Remote Reuse and Local Pairing achieve
+1.156$\times$ and 1.108$\times$, respectively. The different geometric means
+reflect the opportunity exposed at each memory-path stage rather than a
+uniform benefit across all workloads. Remote Aggregation is most effective
+when remote reads expose same-line duplication or same-page grouping. FWS and
+KM consequently reach 2.222$\times$ and 2.462$\times$. Remote Reuse is more concentrated and
+provides its largest gain on MM at 5.451$\times$, where later requests can be
+served by the requesting-GPM L2 instead of crossing the wafer again. I2C also
+benefits from Remote Reuse at 1.097$\times$.
+
+Local Pairing targets a different request population. BT and FWT improve by
+1.635$\times$ and 1.645$\times$, and RELU improves by 1.149$\times$. For these
+workloads, the complete configuration closely follows Local Pairing because
+little remote traffic reaches the other two transformations. In contrast,
+workloads that expose fewer usable pairing opportunities remain close to
+Baseline. The standalone results therefore show that no single transformation
+explains CuPath's gains across the complete workload set.
+
+Complete CuPath reaches 1.492$\times$ and exceeds every standalone
+configuration in geometric mean. Workloads exposing several opportunities
+benefit from their composition. FWS improves from 2.222$\times$ with Remote
+Aggregation to 4.341$\times$ with Complete. MM combines a 2.341$\times$
+Remote Aggregation result with a 5.451$\times$ Remote Reuse result and reaches
+6.180$\times$ with Complete. I2C reaches 1.215$\times$, compared with
+1.097$\times$ for its strongest standalone configuration. When one
+opportunity dominates, Complete remains close to the corresponding standalone
+result. KM, for example, reaches 2.501$\times$ with Complete and
+2.462$\times$ with Remote Aggregation. The speedups are complementary but not
+additive because every stage operates on the requests that remain after
+earlier stages have removed or combined work.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-23-23-41-05-sampled-validation/cupath_latest_ablation_pasta_style.png}
+  \caption{Ablation of the three CuPath transformations. Remote Aggregation,
+  Remote Reuse, and Local Pairing achieve geometric-mean speedups of
+  1.209$\times$, 1.156$\times$, and 1.108$\times$, respectively, while
+  Complete reaches 1.492$\times$. Performance is normalized to Baseline. Bars
+  exceeding 2$\times$ are clipped, with labels showing the actual speedups.}
+  \label{fig:cupath-ablation}
+\end{figure}
+
+\subsection{Large-Model Workloads}
+
+Figure~\ref{fig:cupath-large-models} evaluates CuPath on BERT, GPT, and
+ResNet.  CuPath accelerates all three workloads, with substantially larger
+gains for BERT and GPT than for ResNet.  Transformer execution repeatedly
+exposes adjacent accesses, concurrent remote requests, and remote data reuse,
+allowing CuPath to remove or combine work at several points along the memory
+path.  ResNet exposes fewer of these opportunities, but still benefits from
+the same mechanisms.  The results show that CuPath extends beyond traditional
+GPU kernels and remains effective across both transformer and convolutional
+workloads.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-24-05-33-37-cupath-llm/cupath_large_model_speedup.pdf}
+  \caption{Normalized performance of CuPath on BERT, GPT, and ResNet. CuPath
+  achieves speedups of 6.44$\times$, 6.58$\times$, and 1.27$\times$,
+  respectively, over the normalized Baseline.}
+  \label{fig:cupath-large-models}
 \end{figure}
 
 \subsection{Removing Work Along the Path}
 
 Figure~\ref{fig:cupath-work} explains the speedup in terms of work that no
-longer reaches a downstream component.  Weighted across the fourteen
-workloads, Complete removes 22.6\% of L2 tag lookups, 4.6\% of unique remote
-reads, 48.2\% of wire packets, and 30.8\% of repeated wafer traversals.  The
-different columns peak on different applications: L2 filtering is strongest
-for SPMV and MT, packet aggregation for AES, RELU, and KMeans, and requesting-GPM
-L2 reuse for MM, FIR, SC, and I2C.  This separation supports the path-oriented
-design: no single boundary exposes all four reductions.
+longer reaches a downstream component.  Weighted across the fourteen workloads,
+Complete deduplicates 9.3\% of remote reads, reduces remote request packets by
+52.9\% through aggregation, and eliminates 29.3\% of repeated wafer
+traversals.  The different columns peak on different applications, which
+supports the path-oriented design because no single boundary exposes all three
+reductions.
 
 CuPath does not obtain these gains by increasing aggregate memory traffic.
 Complete reduces physical DRAM reads from 39.25 to 38.71 million (1.38\%) and
@@ -47,11 +111,83 @@ an assumption that every miss takes the fast path.
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-17-filter-prefetch-v5-formal14/cupath_work_reduction.png}
-  \caption{Percentage of baseline work removed at successive boundaries.
-  The bottom row is weighted by the corresponding baseline work count.}
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-22-baseline-complete-observation/cupath_work_reduction.png}
+  \caption{Percentage of work removed at successive remote-path boundaries.
+  The bottom row is weighted by the corresponding request count.}
   \label{fig:cupath-work}
 \end{figure}
+
+\subsection{Typed Filter Effectiveness}
+
+Figure~\ref{fig:filter-effectiveness} summarizes the exact accesses removed by
+reliable negative results across the fourteen Complete runs, while
+Figure~\ref{fig:filter-effectiveness-workloads} shows the workload-level
+distribution. The Filter bypasses
+32.79 million of 135.34 million eligible L2 tag-pipeline lookups, 89.52
+million of 98.88 million requester-RDMA request-table searches, and 13.28
+million of 47.71 million exact requester-L2 probes. These reductions
+correspond to 24.2\%, 90.5\%, and 27.8\% of the respective opportunities.
+The three populations arise at different path stages, showing that the shared
+metadata is exercised by local lookup, remote aggregation, and remote reuse
+rather than serving as an unused auxiliary structure.
+
+Across 434.39 million Filter queries, only 33,993 possible matches are false
+positives. False positives therefore account for 0.0078\% of all queries, and
+the standard false-positive rate among verified absent-key queries is
+0.0148\%. Table~\ref{tab:filter-effectiveness} breaks down activity by type.
+No insertion fails for active residency, RDMA, or paired-access state, even
+though the most heavily used physical Filter reaches 89.9\% peak occupancy.
+Low-priority remote-history and demand-pattern entries have insertion-failure
+rates of 42.3\% and 10.3\%. These failures suppress an optional reuse or
+pairing opportunity and fall back to the demand path without affecting
+correctness.
+
+We normalize lookup stalls by completed queries plus stall events, and update
+stalls by recorded insertions and deletions plus stall events. The resulting
+weighted contention ratios are 0.264\% and 0.049\%. Contention is not uniform,
+however, because RELU reaches a 58.5\% lookup ratio during its concentrated
+local-access stream. The weighted result shows that contention is uncommon
+over the full suite, while the workload maximum prevents us from claiming
+that the interface is contention-free for every access pattern.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-23-23-41-05-sampled-validation/cupath_filter_effectiveness.pdf}
+  \caption{Exact metadata accesses bypassed by reliable negative results from
+  the shared typed Cuckoo Filter. Results aggregate the fourteen Complete runs
+  using eligible exact accesses as the denominator. Labels report the bypass
+  rate and number of bypassed accesses.}
+  \label{fig:filter-effectiveness}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-23-23-41-05-sampled-validation/cupath_filter_effectiveness_by_benchmark.pdf}
+  \caption{Per-workload exact accesses bypassed by reliable Filter negatives.
+  \emph{ALL} aggregates the fourteen Complete runs using the corresponding
+  eligible-access count. Missing bars indicate no eligible access.}
+  \label{fig:filter-effectiveness-workloads}
+\end{figure}
+
+\begin{table}[t]
+  \centering
+  \caption{Per-type activity of the shared typed Filter. FPR is measured only
+  over absent-key queries. ``--'' denotes no absent-key query population.}
+  \label{tab:filter-effectiveness}
+  \scriptsize
+  \setlength{\tabcolsep}{3.2pt}
+  \begin{tabular}{lrrr}
+    \toprule
+    Metadata type & Queries & FPR & Insert failure \\
+    \midrule
+    L2-Resident        & 241.05M & 0.0413\% & 0\% \\
+    RDMA-In-Flight     & 110.66M & 0.0001\% & 0\% \\
+    Remote-History     &  59.53M & 0.0036\% & 42.3\% \\
+    Demand-Pattern     &  11.81M & --        & 10.3\% \\
+    Adjacent-In-Flight &  11.35M & 0.0001\% & 0\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \subsection{M1: Cuckoo-Filter-Guided Local Pairing}
 
@@ -103,43 +239,28 @@ fanout.  M3 installs 7.06 million remote-clean lines in the existing L2;
 lines still resident at termination are unclassified.  Invalid ways absorb
 5.35 million fills and older remote-clean lines absorb the remaining 1.71
 million; no ordinary local-clean line is displaced.  The largest
-workload-level sum of per-slice peaks occupies 37.5\% of wafer L2 lines, a
+workload-level sum of peak occupancies reaches 37.5\% of wafer L2 lines, a
 conservative non-simultaneous upper bound rather than an average footprint.
 Of the unused retirements, 160,257 carry candidate provenance and remove the
 associated \textsc{Pattern}.  A useful patterned hit instead keeps
 \textsc{Pattern} eligible; the aggregate counter does not isolate that subset
 from all requesting-GPM L2 hits.
 
-\subsection{Sensitivity and Limitations}
+\subsection{Limitations}
 
-Figure~\ref{fig:cupath-sensitivity} varies only the parameters needed to audit
-the selected point.  Across four workloads, all tested points span
-1.2713$\times$--1.2817$\times$, compared with 1.2757$\times$ for the
-32K-slot, 13-bit, 64-entry, one-cycle point.  Reducing the Filter to 16K slots
-raises insertion failures from 27 to 156,726, whereas 64K slots, 16
-fingerprint bits, or a 256-entry predictor changes geometric mean by less
-than 0.5\%.  A zero-cycle lookup reaches 1.2791$\times$, only 0.27\% above the
-selected point; the result therefore does not depend on a free Filter lookup.
-
-The long runs expose a limitation hidden by the short screen.  Across the
-fourteen Complete runs, correctness-critical \textsc{Resident} and
-\textsc{Pending} have zero insertion failures, but capacity pressure causes
-9.42 million \textsc{Pattern} and 5.81 million \textsc{Seen} attempts to fail
-closed.  These failures suppress optional prediction or reuse and cannot
-change demand correctness, but they bound coverage.  The modest
+The long runs expose a limitation hidden by the short screen. Across the
+fourteen Complete runs, active residency, RDMA, and paired-access state have
+zero insertion failures. Capacity pressure instead rejects 5.57 million of
+13.17 million low-priority remote-history insertions and 2.85 million of
+27.59 million demand-pattern insertions. These failures suppress optional
+reuse or pairing and cannot change demand correctness, but they bound
+coverage. The modest
 1.187$\times$ Remote-group speedup and M1's FIR regression likewise show that
 CuPath is constrained by available aggregation and safe idle opportunities,
 not by an unlimited speculative upper bound.
 
 A controlled simulator-runtime screen uses seven representative workloads,
 all five configurations, 192 drained workgroups, one host worker, and the
-same binary.  Normalized by simulated GPU time, Complete costs
-1.190$\times$ Baseline; this is simulator overhead, not hardware performance.
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-17-filter-prefetch-v5-sensitivity/cupath_sensitivity.png}
-  \caption{Four-workload sensitivity.  Orange marks the selected point and
-  blue marks alternatives; all use the same frozen binary.}
-  \label{fig:cupath-sensitivity}
-\end{figure}
+same binary. Normalized by simulated GPU time, Complete costs
+1.190$\times$ Baseline. This value is simulator overhead rather than hardware
+performance.

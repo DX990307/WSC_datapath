@@ -379,6 +379,11 @@ func (r *Runner) buildTimingPlatform() {
 		*l1vMSHREntriesFlag,
 		*l1vMaxConcurrentTransFlag,
 	)
+	fmt.Printf(
+		"[Config] L2 capacity=%d MiB adaptive-pair-region=%d cachelines\n",
+		*l2CacheSizeMBFlag,
+		*l2AdaptivePairRegionLinesFlag,
+	)
 	b := MakeR9NanoBuilder().
 		WithLog2PageSize(configuredLog2PageSize()).
 		WithBandwidth(*bandwidthFlag).
@@ -395,6 +400,7 @@ func (r *Runner) buildTimingPlatform() {
 		WithL1VRemoteMaxInflight(*l1vRemoteMaxInflightFlag).
 		WithL1VMSHREntries(*l1vMSHREntriesFlag).
 		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag).
+		WithL2CacheSizeMB(*l2CacheSizeMBFlag).
 		WithForceLocalDataAccess(*forceLocalDataAccessFlag).
 		WithL2ResidentFilter(*l2ResidentFilterEnableFlag).
 		WithL2FilterPrefetch(
@@ -411,28 +417,31 @@ func (r *Runner) buildTimingPlatform() {
 			*l2GranularityAlwaysExpandFlag,
 			*l2GranularityPredictorOnlyFlag).
 		WithL2AdaptivePair(*l2AdaptivePairEnableFlag).
+		WithL2AdaptivePairRegionLines(*l2AdaptivePairRegionLinesFlag).
 		WithPrefetchPredictorEntries(*prefetchPredictorEntriesFlag).
 		WithL2FillForwarding(*l2FillForwardingEnableFlag).
 		WithTypedFilterConfig(writeback.TypedFilterConfig{
-			Mode:                configuredTypedFilterMode(),
-			Capacity:            *typedFilterCapacityFlag,
-			SlotsPerBucket:      *typedFilterSlotsPerBucketFlag,
-			FingerprintBits:     *typedFilterFingerprintBitsFlag,
-			LookupLatencyCycles: *typedFilterLookupLatencyFlag,
-			LookupWidth:         *typedFilterLookupWidthFlag,
-			UpdateLatencyCycles: *typedFilterUpdateLatencyFlag,
-			UpdateWidth:         *typedFilterUpdateWidthFlag,
+			Mode:                     configuredTypedFilterMode(),
+			Capacity:                 *typedFilterCapacityFlag,
+			SlotsPerBucket:           *typedFilterSlotsPerBucketFlag,
+			FingerprintBits:          *typedFilterFingerprintBitsFlag,
+			EnableAuthoritativeAudit: *typedFilterAuthoritativeAuditFlag,
+			LookupLatencyCycles:      *typedFilterLookupLatencyFlag,
+			LookupWidth:              *typedFilterLookupWidthFlag,
+			UpdateLatencyCycles:      *typedFilterUpdateLatencyFlag,
+			UpdateWidth:              *typedFilterUpdateWidthFlag,
 		}).
 		WithDRAMRowContinuation(*dramRowContinuationEnableFlag).
 		WithRemoteDataPath(rdma.RemoteDataPathConfig{
-			Enabled:              *remoteDataPathEnableFlag,
-			DisableDedup:         !*remoteDataPathDedupEnableFlag,
-			DisableBatching:      !*remoteDataPathBatchingEnableFlag,
-			DisableRequesterL2:   !*remoteDataPathL2EnableFlag,
-			EnableFilterPrefetch: *remoteFilterPrefetchEnableFlag,
-			PrefetchEntries:      *prefetchPredictorEntriesFlag,
-			MaxBatchLines:        *remoteDataPathBatchLinesFlag,
-			MaxBatches:           *remoteDataPathBatchesFlag,
+			Enabled:                  *remoteDataPathEnableFlag,
+			DisableDedup:             !*remoteDataPathDedupEnableFlag,
+			DisableBatching:          !*remoteDataPathBatchingEnableFlag,
+			DisableRequesterL2:       !*remoteDataPathL2EnableFlag,
+			EnableFilterPrefetch:     *remoteFilterPrefetchEnableFlag,
+			EnableAuthoritativeAudit: *typedFilterAuthoritativeAuditFlag,
+			PrefetchEntries:          *prefetchPredictorEntriesFlag,
+			MaxBatchLines:            *remoteDataPathBatchLinesFlag,
+			MaxBatches:               *remoteDataPathBatchesFlag,
 		})
 
 	if *sharingTracing {

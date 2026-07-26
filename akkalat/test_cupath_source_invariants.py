@@ -27,7 +27,7 @@ class CuPathSourceInvariantTest(unittest.TestCase):
         ).encode("utf-8")
         self.assertEqual(
             hashlib.sha256(manifest).hexdigest(),
-            "4c95a6b9012fcd40362241f19099afb6a2ad3e7ae1b3e59c4511d7f18f4f3e29",
+            "55b2a7766520219f02254febf10b8a8b05417de7177c6b361c3b21009d283936",
         )
         for relative, expected in {
             "akita/mem/cache/writeback/remote_replica.go":
@@ -98,17 +98,18 @@ class CuPathSourceInvariantTest(unittest.TestCase):
             / float(l2_row["Area (mm2)"])
             * 100
         )
-        self.assertAlmostEqual(area_ratio, 1.2880, places=4)
+        self.assertAlmostEqual(area_ratio, 4.3296, places=4)
 
-        cost = (ROOT / "akkalat/cost/FILTER_COST.md").read_text(encoding="utf-8")
+        cost = (ROOT / "akkalat/cost/CUPATH_CACTI_AREA.md").read_text(
+            encoding="utf-8"
+        )
         paper = (
             ROOT
             / "weeklyreport/hpca2027-latex-template 2/sections/evaluation.tex"
         ).read_text(encoding="utf-8")
-        self.assertIn("45.8082 mm²", cost)
-        self.assertIn("1.29%", cost)
-        self.assertIn(r"1.29\%", paper)
-        self.assertNotIn("44.6667", cost + paper)
+        self.assertIn("2.396247", cost)
+        self.assertIn("4.40%", cost)
+        self.assertIn(r"4.40\%", paper)
 
     def test_predictor_placement_and_local_early_issue_match_source(self):
         cache_builder = (
@@ -246,7 +247,11 @@ class CuPathSourceInvariantTest(unittest.TestCase):
             "for i := 0; i < b.numMemoryBank; i++",
         ):
             self.assertIn(fragment, source)
-        self.assertIn("WithL2CacheSize(4*mem.MB)", platform)
+        self.assertIn("l2CacheSize:               4 * mem.MB", platform)
+        self.assertIn("WithL2CacheSize(b.l2CacheSize)", platform)
+        self.assertIn("WithL2CacheSizeMB(*l2CacheSizeMBFlag)", (
+            ROOT / "akkalat/baseline/runner/runner.go"
+        ).read_text(encoding="utf-8"))
 
     def test_formal_m1_restores_one_aligned_128b_hbm_request(self):
         rdma_production = "\n".join(
@@ -273,7 +278,11 @@ class CuPathSourceInvariantTest(unittest.TestCase):
         adapter = (
             ROOT / "akita/mem/cache/writeback/adaptive_pair_adapter.go"
         ).read_text(encoding="utf-8")
-        self.assertIn("WithByteSize(2 * lineBytes)", adapter)
+        self.assertIn("regionBytes := uint64(a.regionLines) * lineBytes", adapter)
+        self.assertIn("WithByteSize(regionBytes)", adapter)
+        self.assertIn("l2AdaptivePairRegionLines: 2", (
+            ROOT / "akkalat/baseline/runner/timingplatform.go"
+        ).read_text(encoding="utf-8"))
         self.assertIn("WithAddress(base)", adapter)
         self.assertIn("bottomSender.Send(read)", adapter)
         self.assertIn("samePairedReadAggregate", source)
@@ -336,7 +345,7 @@ class CuPathSourceInvariantTest(unittest.TestCase):
             )
         )
         self.assertIn(
-            "CuPath: Continuous Memory-Request Transformation",
+            "CuPath: Cuckoo-Filter-Guided Memory Request Transformation",
             tex,
         )
         self.assertIn("existing requester L2", tex)
@@ -353,6 +362,8 @@ class CuPathSourceInvariantTest(unittest.TestCase):
             ROOT
             / "akkalat/results/2026-07-17-filter-prefetch-v5-formal14"
         )
+        if not formal.exists():
+            self.skipTest("historical result directories are not tracked by Git")
         cells = list(formal.glob("baseline_*_metrics.csv"))
         self.assertEqual(len(cells), 70)
         quarantine = formal / "INVALID_FOR_FINAL_PAPER.md"

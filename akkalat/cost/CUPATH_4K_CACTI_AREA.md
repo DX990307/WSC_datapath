@@ -1,4 +1,9 @@
-# CuPath 4K-bucket CACTI area estimate
+# Legacy CuPath 4K-bucket CACTI area estimate
+
+This file records the earlier 4K-bucket what-if point. The evaluated formal
+configuration derives 8K buckets per physical Filter array. See
+`CUPATH_CACTI_AREA.md` for the result that matches the reported performance
+experiments.
 
 ## Tool and common assumptions
 

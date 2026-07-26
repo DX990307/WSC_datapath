@@ -40,9 +40,9 @@ WORKLOADS = (
 )
 CONFIGS = (
     ("baseline", "Baseline", "#EAF7FA"),
-    ("m1", "M1", "#ADDEEB"),
     ("m2", "M2", "#5ABED8"),
     ("m3", "M3", "#F8C2A0"),
+    ("m1", "M1", "#ADDEEB"),
     ("complete", "Complete", "#F18541"),
 )
 GROUPS = (

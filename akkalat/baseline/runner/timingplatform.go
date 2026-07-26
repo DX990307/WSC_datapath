@@ -28,44 +28,46 @@ import (
 
 // R9NanoPlatformBuilder can build a platform that equips R9Nano GPU.
 type R9NanoPlatformBuilder struct {
-	useParallelEngine        bool
-	debugISA                 bool
-	traceVis                 bool
-	visTraceStartTime        sim.VTimeInSec
-	visTraceEndTime          sim.VTimeInSec
-	traceMem                 bool
-	tileWidth, tileHeight    int
-	numSAPerGPU              int
-	numCUPerSA               int
-	useMagicMemoryCopy       bool
-	log2PageSize             uint64
-	bandwidth                int
-	switchLatency            int
-	maxNumHops               int
-	networkFlitSize          int
-	endpointChannels         int
-	endpointBufferSize       int
-	l1vRemoteMaxInflight     int
-	l1vMSHREntries           int
-	l1vMaxConcurrentTrans    int
-	forceLocalDataAccess     bool
-	l2ResidentFilter         bool
-	l2FilterPrefetch         bool
-	l2PrefetchPredictorOnly  bool
-	l2PrefetchUngated        bool
-	prefetchPredictorEntries int
-	l2GranularityAdaptation  bool
-	l2GranularityNoFilter    bool
-	l2GranularityAlways      bool
-	l2GranularityPredictor   bool
-	l2AdaptivePair           bool
-	l2FillForwarding         bool
-	typedFilterConfig        writeback.TypedFilterConfig
-	dramRowContinuation      bool
-	remoteDataPath           rdma.RemoteDataPathConfig
-	rdmaPipelineWidth        int
-	rdmaPipelineLatency      int
-	rdmaMaxOutstanding       int
+	useParallelEngine         bool
+	debugISA                  bool
+	traceVis                  bool
+	visTraceStartTime         sim.VTimeInSec
+	visTraceEndTime           sim.VTimeInSec
+	traceMem                  bool
+	tileWidth, tileHeight     int
+	numSAPerGPU               int
+	numCUPerSA                int
+	useMagicMemoryCopy        bool
+	log2PageSize              uint64
+	bandwidth                 int
+	switchLatency             int
+	maxNumHops                int
+	networkFlitSize           int
+	endpointChannels          int
+	endpointBufferSize        int
+	l1vRemoteMaxInflight      int
+	l1vMSHREntries            int
+	l1vMaxConcurrentTrans     int
+	l2CacheSize               uint64
+	forceLocalDataAccess      bool
+	l2ResidentFilter          bool
+	l2FilterPrefetch          bool
+	l2PrefetchPredictorOnly   bool
+	l2PrefetchUngated         bool
+	prefetchPredictorEntries  int
+	l2GranularityAdaptation   bool
+	l2GranularityNoFilter     bool
+	l2GranularityAlways       bool
+	l2GranularityPredictor    bool
+	l2AdaptivePair            bool
+	l2AdaptivePairRegionLines int
+	l2FillForwarding          bool
+	typedFilterConfig         writeback.TypedFilterConfig
+	dramRowContinuation       bool
+	remoteDataPath            rdma.RemoteDataPathConfig
+	rdmaPipelineWidth         int
+	rdmaPipelineLatency       int
+	rdmaMaxOutstanding        int
 
 	engine       sim.Engine
 	visTracer    tracing.Tracer
@@ -88,19 +90,21 @@ type R9NanoPlatformBuilder struct {
 // MakeR9NanoBuilder creates a EmuBuilder with default parameters.
 func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 	b := R9NanoPlatformBuilder{
-		tileWidth:                7,
-		tileHeight:               7,
-		log2PageSize:             12,
-		visTraceStartTime:        -1,
-		visTraceEndTime:          -1,
-		switchLatency:            20,
-		networkFlitSize:          16,
-		numSAPerGPU:              8,
-		numCUPerSA:               4,
-		maxNumHops:               -1,
-		l1vMSHREntries:           16,
-		l1vMaxConcurrentTrans:    16,
-		prefetchPredictorEntries: 64,
+		tileWidth:                 7,
+		tileHeight:                7,
+		log2PageSize:              12,
+		visTraceStartTime:         -1,
+		visTraceEndTime:           -1,
+		switchLatency:             20,
+		networkFlitSize:           16,
+		numSAPerGPU:               8,
+		numCUPerSA:                4,
+		maxNumHops:                -1,
+		l1vMSHREntries:            16,
+		l1vMaxConcurrentTrans:     16,
+		l2CacheSize:               4 * mem.MB,
+		prefetchPredictorEntries:  64,
+		l2AdaptivePairRegionLines: 2,
 		typedFilterConfig: writeback.TypedFilterConfig{
 			Mode:                writeback.TypedFilterCuckoo,
 			LookupLatencyCycles: 1,
@@ -273,6 +277,17 @@ func (b R9NanoPlatformBuilder) WithL1VMaxConcurrentTrans(
 	return b
 }
 
+// WithL2CacheSizeMB sets the total L2 capacity of each GPM.
+func (b R9NanoPlatformBuilder) WithL2CacheSizeMB(
+	capacityMB int,
+) R9NanoPlatformBuilder {
+	if capacityMB < 1 {
+		panic("L2 cache size must be positive")
+	}
+	b.l2CacheSize = uint64(capacityMB) * mem.MB
+	return b
+}
+
 // WithForceLocalDataAccess routes L1V data-cache misses to local L2/DRAM.
 func (b R9NanoPlatformBuilder) WithForceLocalDataAccess(
 	enable bool,
@@ -325,6 +340,31 @@ func (b R9NanoPlatformBuilder) WithL2AdaptivePair(
 ) R9NanoPlatformBuilder {
 	b.l2AdaptivePair = enable
 	return b
+}
+
+// WithL2AdaptivePairRegionLines sets the aligned row-local fetch region.
+func (b R9NanoPlatformBuilder) WithL2AdaptivePairRegionLines(
+	lines int,
+) R9NanoPlatformBuilder {
+	validateAdaptivePairRegionLines(lines)
+	b.l2AdaptivePairRegionLines = lines
+	return b
+}
+
+func validateAdaptivePairRegionLines(lines int) {
+	if lines != 2 && lines != 4 && lines != 8 && lines != 16 {
+		panic("adaptive-pair region lines must be one of 2, 4, 8, or 16")
+	}
+}
+
+func adaptivePairInterleavingLog2(lines int) uint64 {
+	validateAdaptivePairRegionLines(lines)
+	log2 := uint64(6)
+	for lines > 1 {
+		log2++
+		lines >>= 1
+	}
+	return log2
 }
 
 // WithPrefetchPredictorEntries sets the common bounded predictor capacity for
@@ -644,8 +684,9 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithNumCUPerShaderArray(b.numCUPerSA).
 		WithNumShaderArray(b.numSAPerGPU).
 		WithNumMemoryBank(numMemoryBank).
-		WithL2CacheSize(4*mem.MB).
-		WithLog2MemoryBankInterleavingSize(7).
+		WithL2CacheSize(b.l2CacheSize).
+		WithLog2MemoryBankInterleavingSize(
+			adaptivePairInterleavingLog2(b.l2AdaptivePairRegionLines)).
 		WithLog2PageSize(b.log2PageSize).
 		WithL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
 		WithL1VMSHREntries(b.l1vMSHREntries).
@@ -661,6 +702,7 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 			b.l2GranularityAlways,
 			b.l2GranularityPredictor).
 		WithL2AdaptivePair(b.l2AdaptivePair).
+		WithL2AdaptivePairRegionLines(b.l2AdaptivePairRegionLines).
 		WithPrefetchPredictorEntries(b.prefetchPredictorEntries).
 		WithL2FillForwarding(b.l2FillForwarding).
 		WithTypedFilterConfig(b.typedFilterConfig).

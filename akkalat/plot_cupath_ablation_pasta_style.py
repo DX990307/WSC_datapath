@@ -27,9 +27,9 @@ from plot_audited_cupath_ablation import (
 
 CONFIGS = (
     ("baseline", "Baseline", "#D6EFF5"),
-    ("m1", "Local Pairing", "#ADDEEB"),
     ("m2", "Remote Aggregation", "#5ABED8"),
     ("m3", "Remote Reuse", "#278BA5"),
+    ("m1", "Local Pairing", "#ADDEEB"),
     ("complete", "Complete", "#F18541"),
 )
 
@@ -37,12 +37,12 @@ CONFIGS = (
 # PASTA prints every value above the 2x cap on one row. These per-label x
 # offsets spread the dense FWS, KM, and MM clusters without changing y.
 CLIPPED_LABEL_X_OFFSETS = {
-    ("floydwarshall", "m2"): -0.8000,
+    ("floydwarshall", "m2"): -0.5704,
     ("floydwarshall", "complete"): -0.6992,
-    ("kmeans", "m2"): -0.5000,
+    ("kmeans", "m2"): -0.2704,
     ("kmeans", "complete"): -0.3992,
-    ("matrixmultiplication", "m2"): -0.2000,
-    ("matrixmultiplication", "m3"): 0.1304,
+    ("matrixmultiplication", "m2"): 0.0296,
+    ("matrixmultiplication", "m3"): 0.3600,
     ("matrixmultiplication", "complete"): 0.4608,
 }
 
@@ -58,17 +58,24 @@ def verify_clipped_labels(fig, labels) -> float:
 
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
-    boxes = sorted(
-        (label.get_window_extent(renderer=renderer) for label in labels),
-        key=lambda box: box.x0,
+    labeled_boxes = sorted(
+        (
+            (label, label.get_window_extent(renderer=renderer))
+            for label in labels
+        ),
+        key=lambda item: item[1].x0,
     )
     min_gap = float("inf")
-    for left, right in zip(boxes, boxes[1:]):
+    for (left_label, left), (right_label, right) in zip(
+        labeled_boxes, labeled_boxes[1:]
+    ):
         gap = right.x0 - left.x1
         min_gap = min(min_gap, gap)
         if gap < 0:
             raise RuntimeError(
-                f"clipped value labels overlap by {-gap:.2f} pixels"
+                "clipped value labels "
+                f"{left_label.get_text()} and {right_label.get_text()} "
+                f"overlap by {-gap:.2f} pixels"
             )
     return min_gap
 
@@ -186,17 +193,29 @@ def plot(output: Path, speedups) -> None:
         Patch(facecolor=color, edgecolor="none", linewidth=0, label=legend)
         for _, legend, color in CONFIGS
     ]
-    ax.legend(
-        handles=handles,
-        loc="lower left",
-        bbox_to_anchor=(0.02, 1.06, 0.96, 0.16),
+    legend_style = {
+        "mode": "expand",
+        "frameon": False,
+        "borderaxespad": 0,
+        "columnspacing": 0.9,
+        "handlelength": 1.0,
+        "handletextpad": 0.45,
+        "fontsize": 5.7,
+    }
+    top_legend = ax.legend(
+        handles=handles[:3],
+        loc="lower center",
+        bbox_to_anchor=(0.0, 1.15, 1.0, 0.08),
         ncol=3,
-        mode="expand",
-        frameon=False,
-        columnspacing=0.9,
-        handlelength=1.0,
-        handletextpad=0.45,
-        fontsize=5.7,
+        **legend_style,
+    )
+    ax.add_artist(top_legend)
+    ax.legend(
+        handles=handles[3:],
+        loc="lower center",
+        bbox_to_anchor=(0.0, 1.06, 1.0, 0.08),
+        ncol=2,
+        **legend_style,
     )
 
     fig.tight_layout(pad=0.25)

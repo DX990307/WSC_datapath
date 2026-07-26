@@ -149,6 +149,50 @@ func TestTypedFilterFingerprintCollisionIsOnlyAFalsePositive(t *testing.T) {
 	}
 }
 
+func TestTypedFilterCountsReliableActiveFalseNegativeByType(t *testing.T) {
+	f := testTypedFilter(32)
+	resident := TypedFilterKey{
+		PID: 1, Address: 0x4000, Type: FilterResident,
+	}
+	if !f.Insert(resident) {
+		t.Fatal("resident insertion failed")
+	}
+
+	fingerprint, first, second, _ := f.signature(resident)
+	bucket, slot, found := f.find(
+		first, second, fingerprint, resident.Type)
+	if !found {
+		t.Fatal("inserted resident signature was not found")
+	}
+	// Corrupt only the physical array to exercise the diagnostic invariant.
+	// The exact analysis shadow intentionally remains active.
+	f.bucket[bucket].slots[slot] = typedFilterSlot{}
+
+	possible, reliable := f.Query(resident)
+	if possible || !reliable {
+		t.Fatalf("corrupted lookup = (%t, %t), want reliable negative",
+			possible, reliable)
+	}
+	missing := TypedFilterKey{
+		PID: 1, Address: 0x8000, Type: FilterPending,
+	}
+	possible, reliable = f.Query(missing)
+	if possible || !reliable {
+		t.Fatalf("ordinary miss = (%t, %t), want reliable negative",
+			possible, reliable)
+	}
+
+	stats := f.Stats()
+	if stats.ByType[FilterResident].ActiveFalseNegatives != 1 {
+		t.Fatalf("resident active false negatives = %d, want 1",
+			stats.ByType[FilterResident].ActiveFalseNegatives)
+	}
+	if stats.ByType[FilterPending].ActiveFalseNegatives != 0 {
+		t.Fatalf("pending active false negatives = %d, want 0",
+			stats.ByType[FilterPending].ActiveFalseNegatives)
+	}
+}
+
 func TestTypedFilterCountedDuplicateDelete(t *testing.T) {
 	f := testTypedFilter(16)
 	key := TypedFilterKey{PID: 1, Address: 0x8000, Type: FilterPending}
@@ -254,6 +298,62 @@ func TestTypedFilterFailedInsertionRollsBack(t *testing.T) {
 		if !f.Contains(key) {
 			t.Fatal("failed insertion lost a previously inserted signature")
 		}
+	}
+}
+
+func TestTypedFilterRelocatesWhenCandidateBucketsAreFull(t *testing.T) {
+	f := NewTypedCuckooFilter(TypedFilterConfig{
+		Capacity: 8, SlotsPerBucket: 1, Mode: TypedFilterCuckoo,
+	})
+	target := TypedFilterKey{PID: 9, Address: 0x4000, Type: FilterResident}
+	targetFingerprint, first, second, hash := f.signature(target)
+	start := first
+	if hash>>63 != 0 {
+		start = second
+	}
+
+	var victim typedFilterSlot
+	var victimAlternate int
+	for fingerprint := uint16(1); fingerprint != 0; fingerprint++ {
+		alternate := f.alternateIndex(
+			start, fingerprint, FilterPending)
+		if alternate == first || alternate == second ||
+			fingerprint == targetFingerprint {
+			continue
+		}
+		victim = typedFilterSlot{
+			fingerprint: fingerprint, references: 1,
+			kind: FilterPending, occupied: true,
+		}
+		victimAlternate = alternate
+		break
+	}
+	if !victim.occupied {
+		t.Fatal("could not construct a relocatable victim")
+	}
+	f.bucket[start].slots[0] = victim
+	other := second
+	if other == start {
+		other = first
+	}
+	f.bucket[other].slots[0] = typedFilterSlot{
+		fingerprint: targetFingerprint ^ 0x1, references: 1,
+		kind: FilterSeen, occupied: true,
+	}
+
+	if !f.Insert(target) {
+		t.Fatal("insertion did not relocate a victim from full candidate buckets")
+	}
+	if !f.Contains(target) {
+		t.Fatal("relocated insertion lost the new key")
+	}
+	if entry := f.bucket[victimAlternate].slots[0]; entry != victim {
+		t.Fatalf("victim was not relocated to bucket %d", victimAlternate)
+	}
+	stats := f.Stats()
+	if stats.KickAttempts == 0 || stats.KickedInsertions != 1 ||
+		stats.KickRollbacks != 0 {
+		t.Fatalf("unexpected relocation counters: %+v", stats)
 	}
 }
 
@@ -391,6 +491,7 @@ func TestTypedFilterReferenceCounterSaturationFailsOpen(t *testing.T) {
 	stats := f.Stats()
 	if stats.ReferenceBits != typedFilterReferenceBits ||
 		stats.ByType[FilterPending].InsertFailures != 1 ||
+		stats.ByType[FilterPending].ReferenceCountSaturations != 1 ||
 		stats.ByType[FilterResident].Reliable != true {
 		t.Fatalf("unexpected saturation accounting: %+v", stats)
 	}

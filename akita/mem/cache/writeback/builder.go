@@ -32,36 +32,38 @@ type Builder struct {
 	dirLatency  int
 	bankLatency int
 
-	remoteReplicaFilter   bool
-	residentFilter        bool
-	fillForwarding        bool
-	filterPrefetch        bool
-	prefetchPredictorOnly bool
-	prefetchUngated       bool
-	prefetchStreams       int
-	granularityAdaptation bool
-	granularityNoFilter   bool
-	granularityAlways     bool
-	granularityPredictor  bool
-	adaptivePair          bool
-	typedFilter           bool
-	typedFilterConfig     TypedFilterConfig
+	remoteReplicaFilter     bool
+	residentFilter          bool
+	fillForwarding          bool
+	filterPrefetch          bool
+	prefetchPredictorOnly   bool
+	prefetchUngated         bool
+	prefetchStreams         int
+	granularityAdaptation   bool
+	granularityNoFilter     bool
+	granularityAlways       bool
+	granularityPredictor    bool
+	adaptivePair            bool
+	adaptivePairRegionLines int
+	typedFilter             bool
+	typedFilterConfig       TypedFilterConfig
 }
 
 // MakeBuilder creates a new builder with default configurations.
 func MakeBuilder() Builder {
 	return Builder{
-		freq:                1 * sim.GHz,
-		wayAssociativity:    4,
-		log2BlockSize:       6,
-		byteSize:            512 * mem.KB,
-		numMSHREntry:        16,
-		numReqPerCycle:      1,
-		writeBufferCapacity: 1024,
-		maxInflightFetch:    128,
-		maxInflightEviction: 128,
-		bankLatency:         10,
-		prefetchStreams:     64,
+		freq:                    1 * sim.GHz,
+		wayAssociativity:        4,
+		log2BlockSize:           6,
+		byteSize:                512 * mem.KB,
+		numMSHREntry:            16,
+		numReqPerCycle:          1,
+		writeBufferCapacity:     1024,
+		adaptivePairRegionLines: 2,
+		maxInflightFetch:        128,
+		maxInflightEviction:     128,
+		bankLatency:             10,
+		prefetchStreams:         64,
 		typedFilterConfig: TypedFilterConfig{
 			Mode:                TypedFilterCuckoo,
 			LookupLatencyCycles: 1,
@@ -271,6 +273,15 @@ func (b Builder) WithAdaptivePair(enable bool) Builder {
 	return b
 }
 
+// WithAdaptivePairRegionLines configures the aligned row-local fetch region.
+func (b Builder) WithAdaptivePairRegionLines(lines int) Builder {
+	if lines != 2 && lines != 4 && lines != 8 && lines != 16 {
+		panic("adaptive-pair region lines must be one of 2, 4, 8, or 16")
+	}
+	b.adaptivePairRegionLines = lines
+	return b
+}
+
 // WithTypedFilter allocates the one per-slice physical metadata filter even
 // when only remote PENDING/SEEN users are enabled.
 func (b Builder) WithTypedFilter(enable bool) Builder {
@@ -328,6 +339,8 @@ func (b *Builder) configureCache(cacheModule *Cache) {
 	cacheModule.state = cacheStateRunning
 	cacheModule.evictingList = make(map[uint64]bool)
 	cacheModule.fillForwarding = b.fillForwarding
+	cacheModule.authoritativeAuditEnabled =
+		b.typedFilterConfig.EnableAuthoritativeAudit
 	cacheModule.interleaving = b.interleaving
 	cacheModule.interleavingBlocks = b.numInterleavingBlock
 	cacheModule.interleavingUnits = b.interleavingUnitCount
@@ -364,7 +377,8 @@ func (b *Builder) configureCache(cacheModule *Cache) {
 	cacheModule.adaptivePairEnabled = b.adaptivePair
 	cacheModule.adaptivePairStats.Enabled = b.adaptivePair
 	if b.adaptivePair {
-		cacheModule.adaptivePairAdapter = newAdaptivePairAdapter(16)
+		cacheModule.adaptivePairAdapter = newAdaptivePairAdapter(
+			16, b.adaptivePairRegionLines)
 	}
 	if b.filterPrefetch {
 		cacheModule.filterPrefetchEnabled = true
