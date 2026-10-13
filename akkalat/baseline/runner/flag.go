@@ -221,6 +221,8 @@ func configuredLog2PageSize() uint64 {
 //
 //nolint:gocyclo
 func (r *Runner) ParseFlag() *Runner {
+	applyConfigFiles()
+
 	if *parallelFlag {
 		r.Parallel = true
 	}
