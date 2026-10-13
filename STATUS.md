@@ -25,7 +25,7 @@
 | T9 第二批 workload | `[提案]`，不要开始 | | |
 | T10 SPMD 通信套件 | `[提案]`，不要开始 | | |
 | T12 driver flush 修复 | 完成（用户已确认；10-13 15:17 补跑带 magic copy 的 R3，通过） | 10-13 15:17 | 修复 `9c30a89`；单元测试、R1、R2、R3 全部通过 |
-| T13 MI300X 配置 | 阻塞 | 10-13 | 阶段 3 校准跑完（`platbench` `0e38983`/`ca7ea0b`）：mi300x HBM 读 −23%、L2 带宽 −69%，**偏差超过 10%，⏸ 停下来等用户决定**；没有调参数 |
+| T13 MI300X 配置 | 进行中 | 10-13 | 阶段 3 校准偏差（HBM 读 −23%、L2 −69%）暂按实测值接受，没有调参数；**阶段 4 全量重跑已启动**（`9220740`，用户 10-13 确认），预计约 2.5 天 |
 | T14 平台数据（第一档） | 完成（⏸ 等用户确认） | 10-13 | 7 项 × 2 套配置全部跑完；摘要表见“结果摘要”，CSV 在 `results_index/platform/` |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
@@ -55,7 +55,7 @@
 
 - [x] (T13 阶段 3 + T14 第一档) **用户 10-13 确认。** 配置确认（CONFIG.md 第 3 节），详见日志 10-13“T13 阶段 3 + T14：配置确认”。两套配置 `hpca`、`mi300x_eighth`，代码 `0e38983`；运行计划 29 个进程/配置，预计约 1 小时（hopmatrix 最慢）。
 
-- [ ] (T13 阶段 3) **校准偏差超过 10%，按规则停下来报告（没有调任何参数）。** 详见“结果摘要 → T13 阶段 3 校准”。
+- [x] (T13 阶段 3) **用户 10-13：先按 mi300x 配置把论文实验跑一遍（相当于暂时接受实测值，不调参数）；诊断以后再说。** 原问题：**校准偏差超过 10%，按规则停下来报告（没有调任何参数）。** 详见“结果摘要 → T13 阶段 3 校准”。
   - **mi300x HBM 读**：峰值 243 B/周期（8 个 CU），满 38 个 CU 时 224；目标 315 → **−23%**（满 CU −29%）。写 318（+1%）、复制 295（−6%）达标。读比写低，说明不是 DRAM 的总线带宽不够，而是读的路径（可能是 DRAM 的行冲突/调度，或 L2 MSHR 每 channel 16 个）限制了。
   - **L2 带宽（两套配置都一样）**：读峰值约 630 B/周期（16 个 CU），写约 640（8 个 CU），复制约 850；满 CU 时反而降到 420–700。目标 2 KB/周期 → **−69%**（读、写），复制 −58%。hpca 的 L2 理论吞吐（4 KB/周期）是 mi300x 的 2 倍，但两套曲线几乎重合，所以**瓶颈在 L2 之前**（候选：每个 L1V 16 个 MSHR/在途请求、地址转换/TLB、L1→L2 的连接），不是 L2 本身。
   - **旧配置（hpca）HBM**：实测 59 B/周期（读）、66（写）、61（复制），1–2 个 CU 就饱和；代码算的理论值 128，按 64 B 请求的有效值约 64，实测和后者一致。投稿版 Table II 写的 0.375 TB/s/GPM 是实测的 6.4 倍。
@@ -479,3 +479,13 @@
 - **结果**：见“结果摘要”的 T13 阶段 3 校准表和 T14 平台数据摘要表。`results_index/` 新增 58 个 `1013_t14-*` 目录（meta.json、summary.csv、config_used.json、platform.csv）；`results_index/platform/` 是汇总：`latency.csv`、`bandwidth.csv`、`hopmatrix.csv`、`remotebw.csv`、`incast.csv`、`patterns.csv`、`kernel.csv`、`pattern_links.csv`（每条链路的推算负载）、`summary.json`。汇总脚本 `akkalat/t14_analyze.py`（`a4738c8`）。
 - **校准偏差超过 10%**：mi300x HBM 读 −23%，L2 读/写 −69%（两套配置都一样）。**按规则停下来，没有调任何参数**，见“需要用户决定”。**T13 阶段 4（全量重跑）没有开始。**
 - 给 Cowork：这次没有改动模拟器和配置；`gpm_preset.go` 的 blob 仍是 `4a149c51b45a`（上一条已说明，CONFIG.md 的表需要更新）。
+
+### 2026-10-13 19:15 (T13 阶段 4) 配置确认、启动全量重跑
+
+- **用户 10-13 决定**：先用 mi300x 配置把论文实验跑一遍；四部分都跑，按 ① T11 探针 → ② 主结果 + filter 统计 → ④ LLM → ③ 敏感性 的顺序；**hpca 用当前代码重跑 ①②** 作为新旧对照；两台服务器各最多 16 个同时运行，留 30 GB 内存。用户确认了下面的配置和计划（“OK，跑实验吧”）。
+- **用的脚本**（都是论文原来的，只加 `--gpm-preset`）：② `runall2.py --remote-ablation --configs=all`（70 个）和 `--configs=complete --extra-benchmark-flags=-typed-filter-authoritative-audit=true`（14 个，Fig 13 用）；④ `CuPathLLM.py --configs=baseline,complete --cu-per-gpu=38`（44 个）；③ `run_cupath_sensitivity.py --include-reference`（252 个，拆成 filter 和 l2、row 两半）。① 用 `isca27_run.sh` 加配置文件，参数和 10-13 的 16 个探针相同，另加 `-l2-source-tile-width=7`。
+- **配置确认**：三个原脚本的 `--dry-run` 命令逐个核对，和 `hpca.json` 相比只差 `-gpm-preset`（mi300x-eighth）和 `-num-memory-banks`（16）；hpca 重跑没有差异。五种机制组合和论文的 Complete / baseline / Local Pairing / Remote Aggregation / Remote Reuse 一致；都保留 `-magic-memory-copy`，都不带 `-disable-servers`；截断 `-max-wg=78600`；敏感性和 LLM 按论文原来的做法用抽样模拟；敏感性在 mi300x 下的 filter 点自动换算成每 GPM 4K/8K/16K/32K bucket。
+- **代码**：`71b08b0` 敏感性脚本去掉写死的 `-disable-servers`（单元测试通过）；`71b08b0`/`fd42936`/`9220740` 新增 `akkalat/isca27_stage4.sh`（每台服务器一份计划，依次调用原脚本；原脚本不改）。
+- **计划**：yss2：hpca ① → hpca ②（主结果 12 个位置 + filter 统计 4 个位置并行）→ ④ LLM → ③ filter 部分（112 个）；yss3：mi300x ① → mi300x ② → ③ L2 和 row 部分（140 个）。各部分内部按历史运行时间“长的先跑”（kmeans 单个就要 18–25 小时，放在最后会拖一整天）。结果在 `results/1013_t13s4-<部分>_wafer48_<配置>_9220740/`。估计每台约 2.5 天。
+- **启动**：10-13 19:14 UTC，`exp` 会话 `t13s4-yss2`、`t13s4-yss3`（监控网页上的组 `t13-stage4`）。同一会话里同时有多个模拟，所以关掉了共用的心跳文件，改由本机的监视脚本看阶段日志、报错和内存。
+- **注意**：mi300x 的结果要带“L2 带宽只有目标约 1/3，原因未查清”的说明；敏感性实验存档的结果和论文正文的数字对不上（见子代理核对），这次重跑没有可直接比对的旧数据。
