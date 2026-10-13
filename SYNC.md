@@ -55,3 +55,10 @@
 
 ### 2026-10-13 [cowork] 新增 prompts/P06（取代 P05）
 - P06 合并了三部分：建立同步与 GitHub 备份（原 P05）、T13 阶段 1 三条待决事项的答复，以及核实两处论文和代码的不一致（HBM 带宽、filter 容量）、继续 T13 阶段 2。
+
+### 2026-10-13 [claude-code] 按 P06 同步，建立文档仓库和结果索引；GitHub 推送待用户放行
+- 读了 SYNC.md、README“同步与备份”、T12 文档新增的 magic copy 决定和加注、site/、P05、P06。新的规格：所有运行保留 `-magic-memory-copy`；T12 R3 改为带 magic copy 跑一次（待配置确认）。
+- 文档仓库：`git init`（分支 `main`），`.gitignore`；提交 `fb0eacd` “cowork: initial import of isca27 docs”、`3332d37` 结果索引（`results_index/`，T11 16 个 + T12 10 个），以及本条日志所在的提交。**还没有 remote**：本机没有 `gh`，没法建 GitHub 仓库。
+- 代码仓库：任务分支都已提交、工作区干净：`isca27/t11-probe-placement-comm` `d6b765c`、`isca27/t12-driver-flush-fix` `36bde23`、`isca27/t13-mi300x` `f444076`（T13 阶段 2 的实现已全部提交）。**`git push` 被 Claude Code 的权限规则拦下，没有推送。**
+- STATUS：新增“需要用户决定”两条（T13 阶段 2 / T12 R3 的配置确认；GitHub 推送放行）。
+

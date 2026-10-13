@@ -45,6 +45,11 @@
 - [x] (T13) **已决定（用户 10-13）：方案 A（64-bit、BL8、每次访问 64 B、DRAM 时钟 1.23 GHz，时序按纳秒不变换算）。延迟不做每周期等效缩放（带宽按 2.1 GHz 每周期等效，延迟保持纳秒值），写进 STATUS 和 meta。最终以阶段 3 实测为准。** 原问题：(T13) **新配置的 HBM channel 怎么设**：每 channel 的目标是 19.7 B/周期（315.5 / 16）。现在的 DRAM 时序全部写死（`r9nanobuilder.go:945-1000`），如果只把控制器数从 4 改成 16、时序不变，每 GPM 理论峰值是 512 B/周期，比目标高 62%。—— A：按 HBM3 的结构建模：每 channel 64-bit 总线、BL8（每次访问 64 B，正好一条 cache line），DRAM 时钟取 1.23 GHz，使每 channel = 64 B / (4 / 1.23 GHz) ≈ 19.7 B/ns；tCL、tRCD 等时序参数按纳秒不变的原则从 500 MHz 换算到 1.23 GHz（乘以 2.46 后取整）。/ B：保持 256-bit、BL4 不变，只把 DRAM 时钟降到约 308 MHz，使每 channel = 128 B / (2 / 0.308 GHz) ≈ 19.7 B/ns（改动最小，但每次访问 128 B，比 64 B 的 line 大）。推荐 A（更接近 HBM3，访问粒度和 cache line 一致），最终都以阶段 3 实测为准。
 - [x] (T13) **已决定（用户 10-13）：同意方案 A。预设取值集中在 `akkalat/baseline/runner/gpm_preset.go`，原文件只做“常量 → 预设字段”的替换，旧配置的数值不改；阶段 2 用旧配置回归（排序后逐项比较，total_time 单独比较），并检查分析脚本里有没有假设 L2 只有 4 个分区。** 原问题：(T13) **阶段 2 需要修改 CONFIG.md 第 1 节列出的文件**：新预设要改的值大多写死在 `shaderarray.go`、`r9nanobuilder.go`、`timingplatform.go` 里，需要在 `flag.go` 加 `-gpm-preset`，并把这些写死的值改成由预设决定的参数。**旧配置的数值一个都不改**（默认预设 = 现在写死的值），并用回归证明周期数完全一致。按你的规则“需要修改 CONFIG.md 第 1 节列出的文件”要先问你。—— A：照上面做，预设的取值集中写在一个新文件 `akkalat/baseline/runner/gpm_preset.go` 里，上面几个文件只做“把常量换成预设字段”的替换 / B：你有别的偏好。推荐 A。
 
+- [ ] (T13 阶段 2) **配置确认（CONFIG.md 第 3 节）：请确认下面两组运行的参数和差异。** 注意：旧配置回归**已经在 P06 到达之前启动**（我当时按 T12 R1 已确认的参数直接跑了，没有为阶段 2 单独等确认，这一点不符合 P06 的要求）；它还在跑，按 SYNC 规则没有打断。如果你不认可，我把结果作废、等确认后重跑。
+  - **旧配置回归（运行中，yss2，commit `f444076`，默认预设 hpca）**：`-timing -num-memory-banks=4 -l1v-mshr-entries=16 -l1v-max-concurrent-trans=16 -bandwidth=48 -switch-latency=32 -rdma-pipeline-width=8 -rdma-pipeline-latency=10 -rdma-max-outstanding=64 -magic-memory-copy -report-all -disable-servers -mmutlb-lookup-latency=80 -max-wg=4096 -benchmark fir|matrixmultiplication`。差异：只有 `-max-wg=4096`（截断参数）和 `-benchmark`。和修改前的基准（T12 R1，`9c30a89`）参数完全相同。
+  - **T12 R3（带 magic copy，T12 文档新要求，待确认后运行）**：`-timing -num-memory-banks=4 -l1v-mshr-entries=16 -l1v-max-concurrent-trans=16 -bandwidth=48 -switch-latency=32 -rdma-pipeline-width=8 -rdma-pipeline-latency=10 -rdma-max-outstanding=64 -magic-memory-copy -report-all -disable-servers -report-l2-source -l2-source-tile-width=7 -mmutlb-lookup-latency=80 -benchmark probe -probe-all-gpms -probe-shared-ctx -probe-bytes 2097152 -probe-passes 2`。差异：统计开关 `-report-l2-source`/`-l2-source-tile-width=7`，探针参数。用修复后的二进制（`9c30a89`，模拟器代码和 T12 分支头 `36bde23` 相同），yss3。验收：48 个 GPM 都有指令、两遍都完成、心跳不报卡死。
+- [ ] (同步) **GitHub 推送被本机的权限规则拦下，需要你处理**：① 这台机器没有安装 `gh`，没法用命令行在 GitHub 上建 `DX990307/cupath-isca27`；② `git push origin isca27/...` 被 Claude Code 的自动模式拦截（“Out-of-Place Publication”）。—— A：你在 GitHub 网页上新建空的私有仓库 `DX990307/cupath-isca27`（不要勾选 README），并允许我推送（例如在 `/permissions` 里允许 `Bash(git push origin isca27/*)` 和 `Bash(git push -u origin main)`，只在 isca27 目录），我来加 remote 并推送 / B：你自己在终端运行推送命令（见日志里的命令）。
+
 ## 规格与代码的差异
 
 <!-- 任务文档写的和代码实际不一致的地方。格式：- (T#) 文档写的：… / 实际情况：… / 我的处理：… -->
@@ -79,7 +84,7 @@
   - **实际运行**：主实验没有设 `-typed-filter-capacity`。运行统计里记录的 `typed_filter_buckets` 在 `2026-07-22-m1-m2-m3-rerun`（8064 行）、`2026-07-24-05-33-37-cupath-llm`、`2026-07-26-filter-authoritative-validation` 里**全部是 8192**，`typed_filter_slots_per_bucket` 全部是 4。也就是**每分区 8K bucket × 4 槽 = 32K 槽，每 GPM 128K 槽**，是论文写的 4K bucket 的 2 倍。
   - **敏感性实验不一样**：`run_cupath_sensitivity.py:49` 的参考点是 `REFERENCE_FILTER_BUCKETS = 16 * 1024`（每 GPM 16K bucket = **每分区 4K bucket**），用 `-typed-filter-capacity=16384` 显式设置。`2026-07-25-19-41-19-cupath-sensitivity` 里扫 filter 大小的点是每分区 1K/2K/4K/8K bucket，**其他敏感性参数都是在每分区 4K bucket 下跑的**，和主实验的 8K 不是同一个点。
   - **论文文字**：`4a04003`（07-23）的 tex 写的是“One shared array/L2 partition, **4K buckets**, four slots/bucket”（和用户说的一致）；`8648917` 改成“32K buckets/GPM”；`95b4f46` 写的是“Four physical arrays/GPM, **8K buckets/array**”，和实际运行一致。
-  - **CACTI**：`akkalat/cost/CUPATH_CACTI_AREA.md`（`95b4f46` 版）按**每阵列 8K bucket**算：4 个 filter 共 336 KiB/GPM、2.50 mm²，CuPath 全部规则阵列 3.74 mm²，占 4 MB L2（54.51 mm²）的 6.86%，和实际运行的容量一致。`CUPATH_4K_CACTI_AREA.md` 是更早的 **4K bucket** 版本，文件开头写明是“earlier 4K-bucket what-if point”。投稿时（论文写 4K）引用的面积如果来自这个 4K 版本，那么**面积是按实际运行容量的一半算的**。投稿版 PDF 里引用的是哪个面积数字，需要用户对照投稿稿确认。
+  - **CACTI**：`akkalat/cost/CUPATH_CACTI_AREA.md`（`95b4f46` 版）按**每阵列 8K bucket**算：4 个 filter 共 336 KiB/GPM、2.50 mm²，CuPath 全部规则阵列 3.74 mm²，占 4 MB L2（54.51 mm²）的 6.86%，和实际运行的容量一致。`CUPATH_4K_CACTI_AREA.md` 是更早的 **4K bucket** 版本，文件开头写明是“earlier 4K-bucket what-if point”。投稿时（论文写 4K）引用的面积如果来自这个 4K 版本，那么**面积是按实际运行容量的一半算的**。投稿版 PDF 里引用的是哪个面积数字，需要用户对照投稿稿确认。用户 10-13 说论文写的是“每 GPM 168 KiB”：这正好是 4 个分区 × 4K bucket × 4 槽 × 21 bit = 64K 槽 × 21 bit = 168 KiB，对应 4K bucket 的配置；**实际运行的容量对应 336 KiB/GPM**（8K bucket × 4 槽 × 4 个分区 = 128K 槽），是论文写的 2 倍。
 
 ## 结果摘要
 
@@ -313,3 +318,12 @@
   - 遗留的不一致（不是本次引入）：主实验 filter 用代码默认的“2 × 块数”（hpca 每 GPM 32K bucket），敏感性实验的参考点是 16K bucket/GPM。阶段 4 重跑时这个差异仍然存在，需要时在“需要用户决定”里再提。
 - **CONFIG.md 第 1 节的 blob 都变了**（用户同意的修改）：`runall2_constants.py` c46181e7ddbc → 0a6b0c4f2f5c；`runall2_config.py` 073257215378 → ea22add79a66；`flag.go` 142c66f8fec7 → 9ca510de581f；`shaderarray.go` 0cad15f3f860 → 743e0ae29af1；`r9nanobuilder.go` be11d0d9cd45 → 6c7c78ea4916；`timingplatform.go` 7f4c214b78e6 → c8636d99cc06；`runner.go` c84865b80dcc → 378f7313f8d4。CONFIG.md 我没有改，需要 Cowork 侧更新快照。
 - **旧配置回归**（运行中）：参数和 T12 R1 完全相同（论文配置 + `-max-wg=4096`，用户在 T12 已确认，没有新的差异），fir 和 matrixmultiplication 用 `f444076` 在 yss2 上跑。修改前的基准复用 T12 R1 修复后的结果（`9c30a89`，同一台 yss2；`9c30a89` 到 `36bde23` 之间只加了一份文档，模拟器代码相同）。比较方法：`total_time` 单独比较，全部统计去掉行号排序后逐项比较。
+
+### 2026-10-13 (同步/T13) 按 P06：同步、建立文档仓库、结果索引；推送待用户放行
+
+- **同步**：读了 `SYNC.md` 全文、README 的“同步与备份”、`tasks/T12_driver_flush_fix.md` 新增的“10-13 用户决定：所有运行都保留 `-magic-memory-copy`”及 Cowork 加注、`site/`（8 个页面）、`prompts/P05`、`P06`。理解到的规格变化：① **以后所有运行都保留 `-magic-memory-copy`**；② T12 取消 R2（已经跑完的 R2/R3 只用于 T12 验证，不进论文）；③ **T12 的 R3 改为带 magic copy、用论文配置、修复后跑一次**（新要求，待配置确认后运行，见“需要用户决定”）；④ 每个停点要更新 STATUS → 追加 SYNC 日志 → 推送两个仓库。
+- **P06 第二部分**（3 条答复、核实 (a)(b)）在 P06 到达之前已经按用户在对话里的相同答复完成，见“需要用户决定”里的已决定条目和“规格与代码的差异”里的 (a)(b)；补了一句 168 KiB 的来源。
+- **P06 第三部分**：工作区里的 `gpm_preset.go`、`shaderarray.go` 等改动已经提交为 `f444076`，对照答复检查过：HBM 方案 A、延迟不缩放（写进了 STATUS 和 meta 的 `notes`）、预设集中在 `gpm_preset.go`、原文件只做常量替换（另加了 `-gpm-preset` 开关和 runner 的接线），没有需要改的地方。
+- **文档仓库**：`~/Desktop/CuPath/isca27/` 已 `git init`（分支 `main`），`.gitignore` 忽略 `.DS_Store` 等；首次提交 `fb0eacd`（`cowork: initial import of isca27 docs`）。**还没有 remote**（见“需要用户决定”）。
+- **结果索引**：`results_index/` 收录 T11 最终 16 个（`*_f7b9eef`）和 T12 的 10 个实验的 `meta.json`、`summary.csv`（T12 R3 修复前那个还附了 `heartbeat_at_hang.json`），加了一个 `README.md` 说明哪些数字作废；提交 `3332d37`。T11 修复死锁前的几轮已作废，没有收录。
+- **代码仓库推送**：`isca27/t11-probe-placement-comm`（`d6b765c`）、`isca27/t12-driver-flush-fix`（`36bde23`）、`isca27/t13-mi300x`（`f444076`）都已提交、工作区干净，但 `git push` 被权限规则拦下，**还没有推送**。
