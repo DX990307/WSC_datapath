@@ -87,6 +87,18 @@ with open(os.path.join(out, "stdout.log"), errors="replace") as f:
 with open(os.path.join(out, "summary.csv"), "w", newline="") as f:
     csv.writer(f).writerows(rows)
 
+# platbench rows (T14): "PLATCSV,header,..." and "PLATCSV,row,..." -> platform.csv
+plat = []
+with open(os.path.join(out, "stdout.log"), errors="replace") as f:
+    for line in f:
+        if line.startswith("PLATCSV,header,") and not plat:
+            plat.append(line.rstrip("\n").split(",")[2:])
+        elif line.startswith("PLATCSV,row,"):
+            plat.append(line.rstrip("\n").split(",")[2:])
+if plat:
+    with open(os.path.join(out, "platform.csv"), "w", newline="") as f:
+        csv.writer(f).writerows(plat)
+
 preset = "hpca"
 used = os.path.join(out, "config_used.json")
 if os.path.exists(used):

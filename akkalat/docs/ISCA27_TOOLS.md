@@ -40,6 +40,36 @@ T11 探针用的 `akkalat/t11_run_probe.sh` + `akkalat/t11_probe_flags.py` 是�
 - 判定卡死：**模拟时间不推进**（死锁：引擎没有事件了），或者**完成的 WG 数长时间不增加**（模拟时间在走但算不完），或者心跳文件本身不更新（进程被冻结）。`exp web` 网页按这个规则标“疑似卡住”（默认阈值 3 / 15 / 3 分钟）。
 - 注意：WG 是成批完成的，大 workload 可能几分钟才完成第一批，WG 数的阈值不要设得太短。
 
+## 2.5 配置文件：`-config`
+
+`akkalat/configs/*.json`：键是参数名，值是参数值；`"extends"` 继承另一个文件，`_` 开头的键是注释。`-config a.json,b.json` 按顺序读，后面的覆盖前面的；命令行显式写的参数覆盖所有文件（会打印出来）。`-config-out <文件>` 写出每个参数的实际值和来源，其中的 `flags` 可以直接当配置文件用。
+
+- `configs/hpca.json`：HPCA 投稿版（= `BASE_COMMON_FLAGS` + `-mmutlb-lookup-latency=80`，由 `test_isca27_configs.py` 保证一致）。
+- `configs/mi300x_eighth.json`：`extends` hpca，只改 `gpm-preset=mi300x-eighth`、`num-memory-banks=16`。
+- 敏感性实验：写一个只含改动项的小文件，叠在后面，例如 `-config configs/mi300x_eighth.json,configs/sens/bw2x.json`。
+- `isca27_run.sh` 的第 4 个参数就是配置名列表，例如 `hpca`、`mi300x_eighth,bw2x`（裸名字指 `akkalat/configs/<名字>.json`）。
+
+## 2.6 平台微基准：`-benchmark platbench`（T14 第一档、T13 阶段 3）
+
+代码在 `mgpusim/benchmarks/microbench/platbench/`（复用探针的 SPMD 骨架），参数在 `akkalat/benchmarkselection/platbench.go`。用 `-plat-test` 选择测量项；每个测量点输出一行 `PLATCSV,row,...`，`isca27_run.sh` 把它们抽成结果目录里的 `platform.csv`。统一的列：`config, test, group, mode, src_driver, src_tile, dst_driver, dst_tile, hops, footprint_bytes, threads, wgs, active_cus, steps, iters, k, pattern, bytes_moved, cycles, latency_ns, bandwidth_B_per_cycle`。时间是模拟时间，1 GHz 下 1 cycle = 1 ns。GPM 编号同时给 driver ID 和 `GPU[t]`（t 是 7×7 mesh 格子编号），跳数是曼哈顿距离。
+
+| `-plat-test` | 测什么 | 主要参数（默认值） | 方法 |
+|---|---|---|---|
+| `latency` | 延迟阶梯 | `-plat-src 1`，`-plat-dsts 1`（数据放在哪些 GPM；远程就填 2,4,7,48），`-plat-footprints`，`-plat-groups A,B`，`-plat-steps 20000`，`-plat-warm-limit 8M` | 1 个线程走随机指针环（每个 cache line 一个节点）。A 组页内集中，B 组每一步跨页。≤ warm-limit 的点先完整走一遍热身；然后各发一次 0 步和 N 步的 kernel，延迟 = (t_N − t_0) / N，抵消 kernel 启动开销。不会遍历整个大 footprint |
+| `bandwidth` | 本地带宽 vs 活跃 CU 数 | `-plat-footprints`（≥ 16 MB 视为 HBM：只读一遍、不热身；< 16 MB 视为 L2：先热身，再重复 4 遍），`-plat-modes read,write,copy`，`-plat-cus 1,2,4,8,16,24,32,38` | 每个 CU 8 个 WG（每 WG 256 线程）。启动“CU 数 × 8”个 WG，编号超出前 k 个 CU 的 WG 直接退出（partition 分派器把 WG 按编号连续分给 CU），从而只有 k 个 CU 干活。copy 两边各占一半 footprint，bytes_moved 按读加写计 |
+| `hopmatrix` | GPM 对之间的远端 L2 命中延迟 | `-plat-sources`（发起方，0 = 全部），`-plat-dsts`（数据所在，0 = 全部），`-plat-footprints 1M`，`-plat-steps` | 每一对：数据所在的 GPM 先用满 CU 读一遍自己的 1 MB（装进它的 L2），发起方再用 1 个线程指针追逐 |
+| `remotebw` | 单对 GPM 的远程读带宽 vs WG 数 | `-plat-src`，`-plat-dsts`，`-plat-footprints`（< 16 MB：远端 L2，先由 owner 热身；≥ 16 MB：远端 HBM），`-plat-wgs 1,...,256` | 发起方的 gather kernel 通过指针表读 owner 的缓冲区 |
+| `incast` | k 个 GPM 同时读一个 owner | `-plat-dsts`（owner，取第一个），`-plat-ks 1,2,4,8,16,47`，`-plat-modes shared,disjoint`，`-plat-footprints 1M` | 发起方按离 owner 由近到远选；shared = 都读同一批 line，disjoint = 各读一段不相交的 line |
+| `patterns` | 通信模式 | `-plat-patterns alltoall,neighbor,transpose,ring,snake`，`-plat-chunk 256K`（每个来源读多少） | 48 个 GPM 各一个分片、各一个 queue，同时 launch。all-to-all 读其他全部 GPM，neighbor 读 mesh 上下左右，transpose 读 (y,x)，ring 读 driver ID 下一个，snake 读蛇形顺序下一个 |
+| `kernel` | kernel 边界开销 | `-plat-src` | 空 kernel：单个 GPM；48 个 GPM 各一个 queue 同时 launch；统一 GPU（1 个 GPM、全部 GPM）。cycles = 一次 launch 到完成，latency_ns = 连续 10 个的平均间隔 |
+
+例子：
+```bash
+akkalat/isca27_run.sh <exp_id> <commit> T14 mi300x_eighth -benchmark platbench -plat-test bandwidth -plat-footprints 1M,16M -plat-modes read
+```
+
+注意：kernel 里的循环和比较用有符号 int，因为模拟器没有实现 `s_cmp_le_u32`（SOPC opcode 9）。
+
 ## 3. 探针 benchmark：`-benchmark probe`
 
 代码在 `mgpusim/benchmarks/microbench/probe/`，在 `akkalat/benchmarkselection/probe.go` 注册。一个 fp32 的 `touch` kernel：mode 0 读（累加后写一个值防止被优化掉），mode 1 写。

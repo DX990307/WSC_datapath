@@ -167,3 +167,14 @@ func lookupGPMPreset(name string, numMemoryBanks int) gpmPreset {
 func (p gpmPreset) NumCU() int {
 	return p.NumSA * p.NumCUPerSA
 }
+
+// CUsPerGPM returns the number of CUs per GPM of the selected -gpm-preset
+// (after -config files are applied). Benchmarks use it to size launches.
+func CUsPerGPM() int {
+	applyConfigFiles()
+	p, ok := gpmPresets[*gpmPresetFlag]
+	if !ok {
+		panic(fmt.Sprintf("unknown -gpm-preset %q (choose from %s)", *gpmPresetFlag, gpmPresetNames()))
+	}
+	return p.NumCU()
+}
