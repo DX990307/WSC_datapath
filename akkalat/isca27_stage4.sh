@@ -36,6 +36,11 @@ log() { echo "[stage4 $(date -Is)] $*"; }
 build() {
   log "build baseline binary"
   (cd akkalat/baseline && go build -buildvcs=false -o baseline .)
+  # isca27_run.sh (T11 probes) uses this cache; filling it here keeps 16
+  # parallel probe runs from building it at the same time.
+  mkdir -p "$HOME/isca27bin"
+  [ -x "$HOME/isca27bin/baseline_$COMMIT" ] ||
+    cp akkalat/baseline/baseline "$HOME/isca27bin/baseline_$COMMIT"
 }
 
 probes() { # config
