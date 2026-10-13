@@ -5,6 +5,8 @@
 #
 #   akkalat/t11_run_probe.sh <exp_id> <commit> [-probe-* flags ...]
 #
+# The configuration flags come from runall2's build_common_flags() via
+# akkalat/t11_probe_flags.py; nothing configuration-related is written here.
 # Output: results/<exp_id>/{meta.json,summary.csv,stats/,stdout.log,stderr.log}
 set -euo pipefail
 
@@ -27,12 +29,12 @@ if [ ! -x "$BIN" ]; then
   (cd akkalat/baseline && go build -buildvcs=false -o "$BIN" .)
 fi
 
-ARGS=(-timing -disable-servers -benchmark probe
+mapfile -t COMMON < <(python3 akkalat/t11_probe_flags.py --list)
+BENCH=(-benchmark probe "$@")
+DEVIATION="$(python3 akkalat/t11_probe_flags.py --deviation "${BENCH[@]}")"
+ARGS=("${COMMON[@]}" "${BENCH[@]}"
   -metric-file-name "$OUT/stats/metrics"
-  -report-l2-source -l2-source-file "$OUT/stats/l2"
-  -report-rdma-transaction-count -report-dram-transaction-count
-  -report-inst-count -report-cache-hit-rate
-  "$@")
+  -l2-source-file "$OUT/stats/l2")
 
 START="$(date -Is)"
 set +e
@@ -48,14 +50,16 @@ END="$(date -Is)"
 } >"$OUT/summary.csv"
 
 python3 - "$OUT/meta.json" "$EXP_ID" "$COMMIT" "$(hostname)" \
-  "$(go version)" "$START" "$END" "$RC" "${ARGS[@]}" <<'EOF'
+  "$(go version)" "$START" "$END" "$RC" "$DEVIATION" "${ARGS[@]}" <<'EOF'
 import json, sys
-path, exp_id, commit, host, gover, start, end, rc, *args = sys.argv[1:]
+path, exp_id, commit, host, gover, start, end, rc, deviation, *args = sys.argv[1:]
 json.dump({
     "exp_id": exp_id, "task": "T11", "commit": commit, "host": host,
     "go_version": gover, "mode": "timing", "verify": False,
+    "config": "paper (95b4f46 BASE_COMMON_FLAGS via runall2 build_common_flags)",
+    "config_deviation": json.loads(deviation),
     "start": start, "end": end, "exit_code": int(rc), "args": args,
-}, open(path, "w"), indent=2)
+}, open(path, "w"), indent=2, ensure_ascii=False)
 EOF
 
 exit "$RC"
