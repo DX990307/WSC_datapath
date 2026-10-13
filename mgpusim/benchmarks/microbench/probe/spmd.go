@@ -20,6 +20,9 @@ import (
 // trigger an L2 flush on all GPMs; the flush responses can then race with the
 // copy responses and leave a queue stuck forever.
 //
+// NewSharedCtxSPMD keeps the old single-context layout (every rank uses base)
+// for testing the driver fix of T12.
+//
 // The driver keeps the selected GPU in each context, so an SPMD must be
 // driven from a single goroutine.
 type SPMD struct {
@@ -40,10 +43,22 @@ type Launch struct {
 // NewSPMD creates one context and one command queue per GPM. All contexts
 // share the PID of base.
 func NewSPMD(d *driver.Driver, base *driver.Context, gpus []int) *SPMD {
+	return newSPMD(d, base, gpus, false)
+}
+
+// NewSharedCtxSPMD creates one command queue per GPM, all in base's context.
+func NewSharedCtxSPMD(d *driver.Driver, base *driver.Context, gpus []int) *SPMD {
+	return newSPMD(d, base, gpus, true)
+}
+
+func newSPMD(d *driver.Driver, base *driver.Context, gpus []int, shared bool) *SPMD {
 	s := &SPMD{Driver: d, GPUs: gpus}
 	for _, g := range gpus {
 		s.mustBeGPU(g)
-		ctx := d.InitWithExistingPID(base)
+		ctx := base
+		if !shared {
+			ctx = d.InitWithExistingPID(base)
+		}
 		d.SelectGPU(ctx, g)
 		s.Ctxs = append(s.Ctxs, ctx)
 		s.Queues = append(s.Queues, d.CreateCommandQueue(ctx))
@@ -90,11 +105,12 @@ func (s *SPMD) UploadPtrTable(shards []driver.Ptr) []driver.Ptr {
 }
 
 // RunPhase launches every kernel of a phase on its own GPM, then waits for
-// all of them. Each rank's context stays selected on its own GPM because the
+// all of them. The rank's GPM is selected before each enqueue because the
 // driver places the code object, kernel arguments, and AQL packet on the
 // selected GPU; otherwise instruction and kernarg fetches would be remote.
 func (s *SPMD) RunPhase(co *insts.HsaCo, launches []Launch) {
 	for _, l := range launches {
+		s.Driver.SelectGPU(s.Ctxs[l.Rank], s.GPUs[l.Rank])
 		s.Driver.EnqueueLaunchKernel(s.Queues[l.Rank], co, l.Grid, l.WG, l.Args)
 	}
 

@@ -45,6 +45,8 @@ type Benchmark struct {
 	Passes  int
 	Threads int // work-items per launch
 	AllGPMs bool
+	// SharedCtx puts every GPM's queue in one context (T12 regression).
+	SharedCtx bool
 }
 
 //go:embed kernels.hsaco
@@ -106,12 +108,16 @@ func (b *Benchmark) runAllGPMs() {
 		gpus[i] = i + 1
 	}
 
-	s := NewSPMD(b.driver, b.context, gpus)
+	newSPMD := NewSPMD
+	if b.SharedCtx {
+		newSPMD = NewSharedCtxSPMD
+	}
+	s := newSPMD(b.driver, b.context, gpus)
 	shards := s.AllocShards(b.Bytes)
 	sinks := s.AllocShards(64)
 	s.UploadPtrTable(shards)
-	fmt.Printf("PROBE_CONFIG all_gpms=%d bytes_per_gpm=%d mode=%d passes=%d threads=%d\n",
-		len(gpus), b.Bytes, b.Mode, b.Passes, b.Threads)
+	fmt.Printf("PROBE_CONFIG all_gpms=%d bytes_per_gpm=%d mode=%d passes=%d threads=%d shared_ctx=%t\n",
+		len(gpus), b.Bytes, b.Mode, b.Passes, b.Threads, b.SharedCtx)
 
 	for p := 1; p <= b.Passes; p++ {
 		launches := make([]Launch, len(gpus))

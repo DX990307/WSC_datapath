@@ -21,6 +21,8 @@ var probeThreadsFlag = flag.Int("probe-threads", 32*4*256,
 	"probe: work-items per launch")
 var probeAllGPMsFlag = flag.Bool("probe-all-gpms", false,
 	"probe: every GPM reads its own shard concurrently")
+var probeSharedCtxFlag = flag.Bool("probe-shared-ctx", false,
+	"probe: with -probe-all-gpms, put every GPM's queue in one driver context")
 
 func newProbe(d *driver.Driver) *probe.Benchmark {
 	b := probe.NewBenchmark(d)
@@ -30,6 +32,7 @@ func newProbe(d *driver.Driver) *probe.Benchmark {
 	b.Passes = *probePassesFlag
 	b.Threads = *probeThreadsFlag
 	b.AllGPMs = *probeAllGPMsFlag
+	b.SharedCtx = *probeSharedCtxFlag
 
 	switch *probeModeFlag {
 	case "read":
