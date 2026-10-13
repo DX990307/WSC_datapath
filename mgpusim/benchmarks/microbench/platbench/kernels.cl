@@ -2,9 +2,12 @@
 
 // Single-thread pointer chase: every load depends on the previous one, so at
 // most one request is in flight. next[] holds element indices.
+// Adding the local id (always 0, launched with one thread) keeps p in a vector
+// register; otherwise the compiler emits s_load_dword and the chase measures
+// the scalar cache instead of L1V.
 __kernel void chase(__global const uint* next, __global uint* out,
                     const uint start, const uint steps) {
-  uint p = start;
+  uint p = start + (uint)get_local_id(0);
   for (uint i = 0; i < steps; i++) {
     p = next[p];
   }
