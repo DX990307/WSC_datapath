@@ -40,3 +40,7 @@ dist/
 !akita/monitoring/web/dist/
 akita/monitoring/web/dist/*
 !akita/monitoring/web/dist/index.html
+
+# Experiment results pulled from servers (exp pull) and T0-style result dirs
+/remote/
+/results/
