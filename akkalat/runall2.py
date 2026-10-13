@@ -6,6 +6,7 @@ import json
 import time
 from pathlib import Path
 
+import slot_pool
 from runall2_args import parse_args
 from runall2_config import (
     build_ablation_configs,
@@ -418,6 +419,13 @@ def run_all_experiments(
     pending = iter(exps)
     pending_exhausted = False
     futures = set()
+    # Optional cross-campaign cap (EXP_SLOT_DIR, see slot_pool.py): every
+    # launch also needs a shared slot; slots[future] holds it until the end.
+    pool = slot_pool.SlotPool.from_env()
+    slots = {}
+    held_back = []
+    if pool:
+        pool.set_waiting(True)
     failures = []
     admitted_concurrency = initial_workers
     next_scan = time.monotonic() + memory_scan_seconds
@@ -428,17 +436,35 @@ def run_all_experiments(
         available = mem_available_fn()
         return available > memory_reserve_gib
 
-    def fill_available_slots():
+    def next_exp():
         nonlocal pending_exhausted
+        if held_back:
+            return held_back.pop()
+        try:
+            return next(pending)
+        except StopIteration:
+            pending_exhausted = True
+            return None
+
+    def fill_available_slots():
         while len(futures) < admitted_concurrency and not pending_exhausted:
             if not memory_allows_launch():
                 return
-            try:
-                exp = next(pending)
-            except StopIteration:
-                pending_exhausted = True
-                return
-            futures.add(executor.submit(run_exp, exp))
+            exp = next_exp()
+            if exp is None:
+                break
+            slot = None
+            if pool:
+                slot = pool.try_acquire()
+                if slot is None:
+                    held_back.append(exp)
+                    return
+            future = executor.submit(run_exp, exp)
+            futures.add(future)
+            if slot is not None:
+                slots[future] = slot
+        if pool and pending_exhausted:
+            pool.set_waiting(False)
 
     try:
         while futures or not pending_exhausted:
@@ -468,12 +494,18 @@ def run_all_experiments(
             if not futures:
                 if pending_exhausted:
                     break
-                time.sleep(max(0.0, next_scan - time.monotonic()))
+                if pool:
+                    time.sleep(slot_pool.POLL_SECONDS)
+                else:
+                    time.sleep(max(0.0, next_scan - time.monotonic()))
                 continue
 
             timeout = None
             if dynamic:
                 timeout = max(0.0, next_scan - time.monotonic())
+            if pool:
+                timeout = (slot_pool.POLL_SECONDS if timeout is None
+                           else min(timeout, slot_pool.POLL_SECONDS))
             done, _ = concurrent.futures.wait(
                 futures,
                 timeout=timeout,
@@ -481,12 +513,18 @@ def run_all_experiments(
             )
             for future in done:
                 futures.remove(future)
+                if future in slots:
+                    slots.pop(future).close()
                 result = future.result()
                 print(result)
                 if not result.get("success"):
                     failures.append(result)
     finally:
         terminate_all_processes()
+        for slot in slots.values():
+            slot.close()
+        if pool:
+            pool.set_waiting(False)
         # A ThreadPoolExecutor context manager waits for every queued future.
         # On Ctrl-C that caused the pending experiments to start one by one
         # after the active simulator processes had already been terminated.

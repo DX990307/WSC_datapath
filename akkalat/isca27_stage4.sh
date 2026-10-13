@@ -6,16 +6,19 @@
 #
 #   akkalat/isca27_stage4.sh <commit> <plan>
 #
-# Plans (one per server, 16 concurrent simulations, 30 GiB memory reserve):
-#   yss2: hpca T11 probes -> hpca main + filter audit -> LLM (mi300x)
-#         -> sensitivity (filter, with the reference point)
-#   yss3: mi300x T11 probes -> mi300x main + filter audit
-#         -> sensitivity (l2, row)
+# Plans (one per server):
+#   yss2: hpca T11 probes, hpca main + filter audit, LLM (mi300x),
+#         sensitivity (filter, with the reference point)
+#   yss3: mi300x T11 probes, mi300x main + filter audit,
+#         sensitivity (l2, row)
 # The mi300x LLM campaign runs on yss2 so both servers finish at about the
 # same time (yss3 carries the longer mi300x main campaign).
-# The main campaign (12 workers) and the filter audit (4 workers) run side by
-# side so that their long kmeans runs overlap. Results go to
-# results/1013_t13s4-<part>_wafer48_<preset>_<commit>/.
+# All parts start at once and share 16 simulation slots per server through
+# slot_pool.py; a free slot goes to the part with the lowest priority number
+# that still has runs to launch (probes 1, main and audit 2, LLM 4,
+# sensitivity 5), so later parts fill the slots left by the long tail of
+# earlier ones. Launches also wait while MemAvailable is below 30 GiB.
+# Results go to results/1013_t13s4-<part>_wafer48_<preset>_<commit>/.
 set -euo pipefail
 
 # Many simulations share this session; a shared heartbeat file would be
@@ -27,6 +30,9 @@ PLAN="$2"
 ROOT="$(pwd)"
 RESERVE=30
 SCAN=10
+WORKERS=16
+export EXP_SLOT_DIR="$HOME/.isca27_slots" EXP_SLOT_COUNT=$WORKERS
+mkdir -p "$EXP_SLOT_DIR"
 # Longest first (paper campaign runtimes), so long runs do not become the tail.
 BENCHMARKS=kmeans,matrixtranspose,matrixmultiplication,aes,pagerank,fir,fft,floydwarshall,im2col,spmv,simpleconvolution,bitonicsort,relu,fastwalshtransform
 
@@ -72,7 +78,8 @@ probes() { # config
     name="${r%%|*}"
     args="${r#*|}"
     # shellcheck disable=SC2086
-    akkalat/isca27_run.sh "1013_t13s4-probe-${name}_wafer48_${label}_$COMMIT" \
+    python3 akkalat/slot_pool.py run -- \
+      akkalat/isca27_run.sh "1013_t13s4-probe-${name}_wafer48_${label}_$COMMIT" \
       "$COMMIT" T13-stage4 "$cfg" "${common[@]}" $args &
     pids+=($!)
   done
@@ -81,35 +88,37 @@ probes() { # config
   log "T11 probes ($cfg) done, rc=$rc"
 }
 
-main_and_audit() { # preset label
+main() { # preset label
   local preset=$1 label=$2
-  log "main ($preset) + filter audit, side by side"
+  log "main ($preset)"
   python3 akkalat/runall2.py --remote-ablation --configs=all \
     --benchmarks="$BENCHMARKS" --max-wg=78600 --gpm-preset="$preset" \
-    --max-workers=12 --initial-workers=12 --memory-reserve-gib="$RESERVE" \
+    --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
     --memory-scan-minutes="$SCAN" --skip-build \
-    --output-dir="$(out main "$label")" &
-  local main=$!
+    --output-dir="$(out main "$label")" || log "main ($preset) rc=$?"
+  log "main ($preset) done"
+}
+
+audit() { # preset label
+  local preset=$1 label=$2
+  log "filter audit ($preset)"
   python3 akkalat/runall2.py --remote-ablation --configs=complete \
     --benchmarks="$BENCHMARKS" --max-wg=78600 --gpm-preset="$preset" \
     --extra-benchmark-flags='-typed-filter-authoritative-audit=true' \
-    --max-workers=4 --initial-workers=4 --memory-reserve-gib="$RESERVE" \
+    --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
     --memory-scan-minutes="$SCAN" --skip-build \
-    --output-dir="$(out filter-audit "$label")" &
-  local audit=$!
-  local rc=0
-  wait "$main" || rc=1
-  wait "$audit" || rc=1
-  log "main + filter audit ($preset) done, rc=$rc"
+    --output-dir="$(out filter-audit "$label")" || log "filter audit ($preset) rc=$?"
+  log "filter audit ($preset) done"
 }
 
 llm() {
   log "LLM (mi300x-eighth)"
   python3 akkalat/CuPathLLM.py --configs=baseline,complete \
     --gpm-preset=mi300x-eighth --cu-per-gpu=38 \
-    --max-workers=16 --initial-workers=16 --memory-reserve-gib="$RESERVE" \
+    --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
     --memory-scan-minutes="$SCAN" --skip-build \
     --output-dir="$(out llm mi300x)" || log "LLM rc=$?"
+  log "LLM done"
 }
 
 sensitivity() { # dimensions label-suffix [--include-reference]
@@ -118,27 +127,37 @@ sensitivity() { # dimensions label-suffix [--include-reference]
   log "sensitivity ($dims)"
   python3 akkalat/run_cupath_sensitivity.py --dimensions="$dims" "$@" \
     --gpm-preset=mi300x-eighth --binary="$ROOT/akkalat/baseline/baseline" \
-    --max-workers=16 --initial-workers=16 --memory-reserve-gib="$RESERVE" \
+    --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
     --memory-scan-minutes="$SCAN" \
     --output-dir="$(out "sens-$part" mi300x)" || log "sensitivity rc=$?"
+  log "sensitivity ($dims) done"
+}
+
+part() { # priority function args...
+  local priority=$1
+  shift
+  (export EXP_SLOT_PRIORITY=$priority; "$@") &
 }
 
 build
 case "$PLAN" in
   yss2)
-    probes hpca hpca
-    main_and_audit hpca hpca
-    llm
-    sensitivity filter filter --include-reference
+    part 1 probes hpca hpca
+    part 2 main hpca hpca
+    part 2 audit hpca hpca
+    part 4 llm
+    part 5 sensitivity filter filter --include-reference
     ;;
   yss3)
-    probes mi300x_eighth mi300x
-    main_and_audit mi300x-eighth mi300x
-    sensitivity l2,row l2-row
+    part 1 probes mi300x_eighth mi300x
+    part 2 main mi300x-eighth mi300x
+    part 2 audit mi300x-eighth mi300x
+    part 5 sensitivity l2,row l2-row
     ;;
   *)
     echo "unknown plan: $PLAN" >&2
     exit 1
     ;;
 esac
+wait
 log "plan $PLAN finished"
