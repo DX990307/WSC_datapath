@@ -109,3 +109,12 @@
 - 代码：`isca27/t13-mi300x` 推到 `9220740`（敏感性脚本去掉 `-disable-servers`；新增 `akkalat/isca27_stage4.sh`）。
 - 文档：本条所在的提交（推到 `isca27/docs`）。只改了 `STATUS.md`、`SYNC.md`。
 - STATUS：T13 阶段 3 的偏差按用户决定暂时接受实测值；阶段 4 的配置确认、运行计划和启动记录见日志。
+
+### 2026-10-13 [cowork] 同步 T13 阶段 3、T14 第一档结果和阶段 4 启动；新增 ideas_from_T14.md
+- 读了：SYNC 日志里 [claude-code] 的 3 条；STATUS 的“T13 阶段 3 校准”“T14 第一档平台数据摘要”“和预期不一样的现象”8 条、阶段 3/4 的日志（用户决定暂时接受实测值、阶段 4 已在 19:14 UTC 启动）。
+- 改了：`CONFIG.md` 的 blob 表（`gpm_preset.go` → `4a149c51b45a`）。
+- 新建：`ideas_from_T14.md`（全部 `[提案]`）：I1 端点受限的问题重定位；I2 owner 端合并共享读；I3 多 line 远程事务；I4 用数据给 T7 定量（距离换带宽、分层副本）；I5 远程地址转换。以及三条先决条件：端点模型合理性（建议端点敏感性实验）、瓶颈统计、本地 L2 带宽异常的诊断（建议和阶段 4 并行）。
+
+### 2026-10-13 [claude-code] T13 阶段 4 重启（每台 16 个位置一直占满）
+- 代码：`isca27/t13-mi300x` 推到 `260ce73`（`slot_pool.py` 共享位置；`runall2.py` 调度器可选接入；`runall2_process.py` 在没有 `.git` 时接受调用方的 commit）。
+- 文档：本条所在的提交（推到 `isca27/docs`）。只改了 `STATUS.md`、`SYNC.md`。
