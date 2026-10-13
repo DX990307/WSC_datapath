@@ -100,6 +100,20 @@ class CuPathSensitivityTest(unittest.TestCase):
                 "-l2-adaptive-pair-region-lines=2", experiment["flags"]
             )
 
+    def test_resume_benchmark_filter_keeps_only_selected_missing_cells(self):
+        experiments = [
+            {"benchmark": "aes", "config_name": "l2-2mb_complete"},
+            {"benchmark": "kmeans", "config_name": "l2-2mb_baseline"},
+            {"benchmark": "kmeans", "config_name": "l2-2mb_complete"},
+        ]
+        selected = sensitivity.filter_resume_benchmarks(
+            experiments, "kmeans"
+        )
+        self.assertEqual(
+            [experiment["config_name"] for experiment in selected],
+            ["l2-2mb_baseline", "l2-2mb_complete"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

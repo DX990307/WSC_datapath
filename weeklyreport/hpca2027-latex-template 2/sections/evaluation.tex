@@ -82,11 +82,13 @@ the same termination rule.
     \midrule
     \multicolumn{2}{l}{\textit{CuPath additions}} \\
     Cache capacity & No L1.5 or new addressable cache; baseline L1/L2 unchanged \\
-    Typed Filter & One logical shared structure/GPM, 32K buckets, four slots/bucket,
+    Typed Filter & Four physical arrays/GPM, 8K buckets/array, four slots/bucket,
                    13-bit fingerprint \\
     Filter ports & 1-cycle lookup/update, 16 parallel lookups and updates/cycle/array \\
-    M1 state & 256 observed regions and 64 returned lines/GPM \\
-    Remote predictor & 256 entries/requesting GPM \\
+    Adjacent-pair predictor & 64 region entries/L2 partition (256/GPM),
+                              FIFO replacement \\
+    Returned-line buffer & 16 cachelines/L2 partition (64/GPM), FIFO replacement \\
+    Remote predictor & One 256-entry direct-mapped table/requesting GPM \\
     M1 & Filter-guided paired HBM access \\
     M2 & Up to eight lines/packet, 64 packet descriptors/requesting GPM \\
     M3 & No separate history; best-effort clean fill into existing L2 \\
@@ -119,25 +121,37 @@ performance, rather than treating the three stage speedups as additive.
 
 \subsection{Hardware Overhead}
 
-We estimate CuPath's storage and area overhead with CACTI~7.0
-\cite{balasubramonian2017cacti} at 32~nm. The evaluated GPM contains four
-physical Filter arrays with 8K buckets per array. Each bucket has four 21-bit
-slots, and each slot contains one valid bit, a 13-bit fingerprint, three type
-bits, and a four-bit reference count. One array therefore requires 84~KiB,
-and the four arrays require 336~KiB per GPM. We model each array as a 16-bank
-scratch RAM with two read ports and one write port per bank. The 256-entry
-remote predictor is conservatively budgeted at 64~B per entry, or 16~KiB per
-GPM. The Filter arrays and predictor therefore require 352~KiB per GPM, equal
-to 8.59\% of the 4-MiB L2 data capacity.
+We estimate CuPath's regular-array overhead using CACTI~7.0 at 32~nm
+\cite{balasubramonian2017cacti}. Each GPM contains four physical typed Cuckoo
+Filter arrays. Each array has 8K buckets, four 21-bit slots per bucket, and
+32K slots in total. The four arrays require 336~KiB/GPM. The adjacent-pair
+predictor contributes 4~KiB/GPM, using 64 entries at a conservative
+16~B/entry in each of four L2 partitions. The four returned-line buffers and
+their metadata contribute another 5~KiB/GPM. The separate 256-entry remote
+predictor contributes 16~KiB/GPM under a conservative 64~B/entry allocation.
+We also include the expanded RDMA line and waiter tables, requester and owner
+batch tables, response-data buffers, and per-L2-line remote-reuse state. All
+CuPath regular arrays together require 533~KiB/GPM.
 
-CACTI estimates 0.590~mm$^2$ for each Filter array and 0.036~mm$^2$ for the
-remote predictor. The resulting CuPath array area is 2.396~mm$^2$ per GPM. A complete
-4-MiB, 16-way L2 including data arrays,
-tag arrays, and peripheral circuitry, occupies 54.510~mm$^2$.  CuPath therefore
-adds 4.40\% area relative to the modeled L2. Filter and predictor accesses take
-0.661~ns and 0.241~ns, respectively, and fit within the 1-ns cycle. The estimate
-includes the arrays and their modeled ports, but excludes hashing, fingerprint
-comparators, arbitration, bank conflicts, and CuPath control logic.
+We model a Filter as a four-way CACTI cache structure. The 13-bit fingerprint
+and three-bit type are represented by a 16-bit tag, while the valid and
+reference-count fields are rounded to one byte. This organization accounts
+for the Filter storage, tag comparisons, selection logic, banking, and ports.
+CACTI estimates 3.741~mm$^2$/GPM for all CuPath regular arrays and
+54.510~mm$^2$/GPM for the complete 4-MiB L2. CuPath therefore adds 6.86\%
+array area relative to L2. The Filter access takes 0.955~ns and fits within
+the modeled one-cycle lookup at 1~GHz. CACTI does not synthesize hash,
+arbitration, or control logic, so 6.86\% is reported as regular-array area
+rather than post-layout GPM area.
+
+The completed runs also confirm that the selected Filter capacity is
+sufficient. Across the fourteen workloads, the mean sum of independently
+observed per-array peaks is 38.0\% of total capacity, while the largest
+individual Filter reaches 89.9\%. The L2-resident, RDMA-in-flight, and
+paired-access types experience no insertion failure across 214.5 million
+insertions. Low-priority history entries reject 8.43 million of 40.7 million
+insertions. Such a rejection only suppresses an optimization hint or restores
+the exact request path.
 
 \subsection{Workloads and Execution}
 

@@ -110,14 +110,16 @@ def plot_o1(root, out):
         ("L1 Cache", "L1 Cache", COLORS["blue"]),
         ("L2 Cache", "L2 Cache", COLORS["green"]),
         ("HBM", "HBM", COLORS["orange"]),
-        ("Remote Communication", "Remote Communication", COLORS["red"]),
+        ("Network Interface", "Network Interface", COLORS["yellow"]),
+        ("Communication", "Communication", COLORS["red"]),
     ]
 
     def coarse_component(row):
         component = row["component"]
-        if component in {"Requester RDMA", "Owner RDMA",
-                         "Remote Communication"}:
-            return "Remote Communication"
+        if component in {"Requester RDMA", "Owner RDMA"}:
+            return "Network Interface"
+        if component == "Remote Communication":
+            return "Communication"
         return component
 
     x_step = .82
@@ -189,9 +191,11 @@ def plot_o1(root, out):
     handles = [Patch(facecolor=color, edgecolor="none", label=label)
                for _, label, color in groups]
     ax.legend(
-        handles=handles, loc="lower center", bbox_to_anchor=(.5, 1.05),
-        ncol=4, frameon=False, columnspacing=.65, handlelength=.85,
-        handletextpad=.3, fontsize=4.8,
+        handles=handles, loc="lower left",
+        bbox_to_anchor=(0, 1.01, 1, .08), mode="expand",
+        borderaxespad=0, ncol=5, frameon=False,
+        columnspacing=.5, handlelength=.72,
+        handletextpad=.25, fontsize=4.4,
     )
     save(fig, out, "o1_full_path_latency")
 

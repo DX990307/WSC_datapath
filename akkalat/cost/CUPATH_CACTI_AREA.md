@@ -1,49 +1,76 @@
-# CuPath CACTI 7.0 area estimate
+# CuPath complete CACTI 7.0 area estimate
 
-## Evaluated configuration
+## Scope and configuration
 
-The estimate uses `topanitanw/Cacti-7.0` commit
-`9144cf2dbdcab7f40c6a6453daf13214305f6c11`, the 32-nm ITRS-HP SRAM model,
-UCA arrays, and a 360-K operating temperature. The latest formal metrics report
-8,192 buckets, 32,768 slots, and four slots per bucket for every physical
-Filter array. Four such arrays are present in one GPM.
+This estimate uses `topanitanw/Cacti-7.0` commit
+`9144cf2dbdcab7f40c6a6453daf13214305f6c11`, the 32-nm ITRS-HP model,
+UCA arrays, and a 360-K operating temperature.  It replaces the earlier
+Filter-plus-predictor lower bound.  All structures are provisioned per GPM and
+compared with a 4-MiB L2 modeled as four complete 1-MiB, 16-way cache arrays.
 
-Each implemented slot contains one valid bit, a 13-bit fingerprint, three type
-bits, and a four-bit reference count. One Filter array therefore stores
+The evaluated performance configuration contains four physical typed Filter
+arrays per GPM.  Every array has 8,192 buckets and four 21-bit slots per
+bucket, for 32,768 slots and 84 KiB of implemented metadata.  The four arrays
+therefore provide 32K buckets, 128K slots, and 336 KiB per GPM.  Sensitivity
+labels expressed in buckets/GPM are aggregate capacities across the same four
+arrays.
 
-`8192 * 4 * 21 bits = 688,128 bits = 84 KiB`.
+The Filter is conservatively represented with CACTI's four-way cache model.
+The 13-bit fingerprint and three-bit type form a 16-bit tag, while valid and
+reference state are rounded to one data byte.  This proxy includes four-way
+tag comparison and selection and rounds every implemented 21-bit slot up to
+24 bits.  Sixteen banks, two read ports, and one read/write port represent two
+candidate-bucket reads and the width-bounded update path.  The remaining
+arrays are modeled as scratch RAMs with the capacity, banking, and ports shown
+in `cacti_full/cacti_full_results.csv`.
 
-The Filter is modeled as a 16-bank scratch RAM with an 84-bit bucket interface,
-two read ports, and one write port per bank. The 256-entry remote predictor is
-conservatively modeled as a 16-KiB, one-bank scratch RAM with one read/write
-port and a 512-bit entry interface. The baseline L2 is modeled as four 1-MiB,
-16-way, 64-B-line cache arrays, each with 16 banks and one read/write port per
-bank.
+## Structures charged per GPM
 
-## CACTI results
+| Structure | Capacity/GPM | Area/GPM (mm²) |
+|---|---:|---:|
+| Four typed Filters | 336 KiB | 2.503736 |
+| 256-entry remote predictor | 16 KiB | 0.036155 |
+| Adjacent-pair history | 4 KiB | 0.010804 |
+| Four local returned-line buffers and metadata | 5 KiB | 0.062903 |
+| 1,024-entry requester RDMA line table | 32 KiB | 0.165352 |
+| 1,024-entry RDMA waiter table | 16 KiB | 0.061379 |
+| Requester page descriptors and same-page bitmaps | 2 KiB | 0.065761 |
+| Owner child-transaction table | 8 KiB | 0.046403 |
+| Owner batch descriptors | 2 KiB | 0.065761 |
+| Requester and owner response data | 96 KiB | 0.693069 |
+| Per-L2-line remote and reuse state | 16 KiB | 0.029854 |
+| **All CuPath regular arrays** | **533 KiB** | **3.741175** |
 
-| Structure | Count/GPM | Capacity each | Area each (mm^2) | Area/GPM (mm^2) |
-|---|---:|---:|---:|---:|
-| 1-MiB L2 array including data and tags | 4 | 1 MiB | 13.627600 | 54.510400 |
-| 8K-bucket typed Filter array | 4 | 84 KiB | 0.590023 | 2.360092 |
-| 256-entry remote predictor | 1 | 16 KiB | 0.036155 | 0.036155 |
-| **CuPath arrays** | -- | **352 KiB/GPM** | -- | **2.396247** |
+CACTI reports 54.5104 mm² for the complete 4-MiB L2.  Regular CuPath arrays
+therefore occupy 6.86% of the L2 area. The Filter proxy reports a 0.955-ns
+access, which fits, with little margin, in the modeled 1-ns lookup cycle.
 
-CuPath metadata capacity is 8.59% of the 4-MiB L2 data capacity. Its CACTI
-array area is 4.40% of the complete L2 area. CACTI reports 0.661 ns for the
-Filter and 0.241 ns for the predictor, both below the modeled 1-ns cycle.
+## Capacity audit
 
-## 4K-bucket what-if point
+The fourteen Complete runs in
+`2026-07-22-baseline-complete-observation` contain 192 physical Filters.  The
+largest individual Filter peak is 89.87% for MatrixTranspose.  The sum of the
+192 independently observed peaks is 88.24% of aggregate capacity for the same
+workload; the peaks are not assumed to occur simultaneously.  Correctness-
+related L2-resident, RDMA-in-flight, and paired-access state records zero
+insertion failures across 214,549,418 insertions.  Low-priority remote-history
+and access-pattern state records 8,432,114 failures across 40,732,802
+insertions, or 20.70%; these failures suppress a hint or use the exact path.
 
-If a future experiment explicitly sets 16,384 slots per physical Filter array,
-the array contains 4,096 buckets and 42 KiB. CACTI reports 0.358314 mm^2 per
-Filter. Four Filters plus the predictor occupy 1.469411 mm^2, equal to 2.70%
-of the modeled L2 area. This smaller point does not describe the current formal
-performance results.
+The frozen performance binary reports ending occupancy and per-Filter peaks,
+not a temporal occupancy integral.  It also predates reporting of the
+reference-count-saturation counter.  Temporal-average occupancy and the
+number of counter overflows are therefore unavailable in this campaign and
+must not be reported as zero.  Reproduced CSV and Markdown audits are under
+`results/2026-07-22-baseline-complete-observation/capacity_audit`.
 
-## Scope
+## What CACTI does not establish
 
-CACTI includes the SRAM arrays and modeled ports. The estimate excludes hash
-logic, fingerprint comparators, arbitration, bank conflicts, adaptive-pair
-history and returned-data buffering, and other CuPath control logic. The result
-is therefore an array-area estimate rather than a post-layout total area.
+The cache-style Filter proxy charges fingerprint/type comparators, decoders,
+multiported arrays, and selection logic.  CACTI does not synthesize CuPath's
+XOR/hash network, bank-conflict arbitration, update-race protocol, or RDMA
+state machines. The 6.86% value is consequently a complete regular-array
+estimate, not a post-layout total-GPM area. A defensible claim
+should call it **CACTI array-area overhead** and should not call it total
+hardware area without RTL synthesis.  All configurations and raw CACTI rows
+are generated by `run_full_cacti.py` under `cacti_full`.

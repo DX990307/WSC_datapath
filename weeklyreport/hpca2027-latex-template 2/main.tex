@@ -41,25 +41,26 @@
 %%%%%%%% -- PAPER CONTENT STARTS -- %%%%
 
 \begin{abstract}
-Wafer-scale GPUs expose distributed compute and HBM as one logical device, yet
-a cache-line miss may traverse the requesting GPM's L2 and RDMA endpoint, the
-wafer network, and the home GPM's RDMA endpoint, L2, and HBM.  Existing designs
-optimize each component using only locally visible state.  We show that useful
-request state changes during a request lifetime: real accesses expose a predictive relation,
-L2 state eliminates already resident or pending work, requesting-GPM RDMA exposes
-cross-L1 and destination aggregation, and returned data exposes reuse.  We
-propose \emph{CuPath}, which uses typed Cuckoo Filters as a compact control
-plane for coordinating memory requests along the local and remote paths.  The
-control plane works with three request-processing components: a paired-demand
-predictor that identifies adjacent local reads and coarsens HBM accesses, an
-RDMA batcher that merges duplicate remote requests and groups requests to the
-same home GPM and page, and a remote-reuse policy that retains repeatedly
-accessed remote data in the existing requesting-GPM L2.  Exact tags, MSHRs,
-and transaction tables remain authoritative, and a request immediately follows
-the baseline path when an optimization cannot be applied.  CuPath adds no
-global scheduler or new cache level.  Across fourteen workloads, CuPath
-achieves a 1.492$\times$ geometric-mean speedup, deduplicates 9.3\% of remote
-reads, reduces remote request packets by 52.9\% through aggregation, and eliminates 29.3\% of
+Wafer-scale GPUs integrate many GPU processing modules (GPMs) and distributed
+HBM into one logical device through a high-bandwidth, low-latency on-wafer
+network. Although this organization reduces conventional multi-GPU
+communication overhead, its memory path remains expensive. A remote cache
+miss may traverse the requesting-GPM L2, both RDMA endpoints, the wafer
+network, the home-GPM L2, and HBM. Existing architectures optimize these
+components independently even though different optimization opportunities
+emerge along the request path. We propose \emph{CuPath}, which uses typed
+Cuckoo Filters as a compact control plane for coordinating memory requests
+along the local and remote paths. The control plane coordinates (2) an RDMA
+batcher that merges duplicate remote requests and groups requests to the same
+home GPM and page, (3) a remote-reuse policy that retains repeatedly accessed
+remote data in the existing requesting-GPM L2, and (1) a paired-demand
+predictor that identifies adjacent local reads and coarsens HBM reads using
+HBM row locality. Exact tags, MSHRs, and transaction tables remain
+authoritative, and a request immediately follows the baseline path when an
+optimization cannot be applied. CuPath adds no global scheduler or new cache
+level. Across fourteen workloads, CuPath achieves a 1.492$\times$
+geometric-mean speedup, deduplicates 9.4\% of remote reads, reduces remote
+request packets by 52.7\% through aggregation, and eliminates 29.4\% of
 repeated wafer traversals.
 \end{abstract}
 
@@ -161,8 +162,8 @@ during memory-path traversal.
 Across fourteen GPU workloads, CuPath achieves a 1.492$\times$ geometric-mean
 speedup and improves 13 workloads, while the remaining workload stays within
 0.1\% of Baseline.  More importantly, the speedup follows from work removed
-along the path.  CuPath deduplicates 9.3\% of remote reads, reduces remote
-request packets by 52.9\% through aggregation, and eliminates 29.3\% of repeated wafer traversals.
+along the path.  CuPath deduplicates 9.4\% of remote reads, reduces remote
+request packets by 52.7\% through aggregation, and eliminates 29.4\% of repeated wafer traversals.
 
 We make the following contributions.
 

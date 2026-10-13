@@ -268,7 +268,7 @@ def load_workload(path: Path, benchmark: str, label: str) -> dict[str, float | s
         "requester_safe": requester_safe,
         "requester_opportunities": requester_safe + requester_hits + requester_misses,
         "requester_false_negatives": requester_fn,
-        "authoritative_false_negatives": local_fn + pending_fn + requester_fn,
+        "false_negatives": local_fn + pending_fn + requester_fn,
     }
 
 
@@ -283,7 +283,7 @@ def load_campaign(root: Path) -> list[dict[str, float | str]]:
 
 
 def count_weighted_row(rows: list[dict[str, float | str]]) -> dict[str, float | str]:
-    output: dict[str, float | str] = {"benchmark": "all", "label": "ALL"}
+    output: dict[str, float | str] = {"benchmark": "average", "label": "Average"}
     for stage in ("local", "pending", "requester"):
         output[f"{stage}_safe"] = sum(float(row[f"{stage}_safe"]) for row in rows)
         output[f"{stage}_opportunities"] = sum(
@@ -293,8 +293,8 @@ def count_weighted_row(rows: list[dict[str, float | str]]) -> dict[str, float | 
             float(row[f"{stage}_false_negatives"]) for row in rows
         )
     output["local_mshr_races"] = sum(float(row["local_mshr_races"]) for row in rows)
-    output["authoritative_false_negatives"] = sum(
-        float(row["authoritative_false_negatives"]) for row in rows
+    output["false_negatives"] = sum(
+        float(row["false_negatives"]) for row in rows
     )
     return output
 
@@ -343,7 +343,7 @@ def write_csv(
         "requester_opportunities",
         "requester_verified_safe_rate_pct",
         "requester_false_negatives",
-        "authoritative_false_negatives",
+        "false_negatives",
     )
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames)
@@ -375,18 +375,18 @@ def plot(
         }
     )
     series = (
-        ("Local L2 tags", BLUE_300, "local"),
-        ("Requester RDMA table", ORANGE_200, "pending"),
-        ("Requester L2 tags", ORANGE_400, "requester"),
+        ("Remote Aggregation", "#5ABED8", "pending"),
+        ("Remote Reuse", "#F18541", "requester"),
+        ("Local Pairing", "#FAB105", "local"),
     )
     plotted_rows = rows + [all_row]
     labels = [str(row["label"]) for row in plotted_rows]
     x_step = 0.82
     xs = [index * x_step for index in range(len(plotted_rows))]
-    group_width = 0.62
+    group_width = 0.56
     bar_width = group_width / len(series)
 
-    fig, ax = plt.subplots(figsize=(7.0, 2.45))
+    fig, ax = plt.subplots(figsize=(3.45, 1.58))
     all_x = xs[-1]
     ax.axvspan(all_x - 0.38, all_x + 0.38, color="#F5F5F5", zorder=0)
     false_negative_labels: list[tuple[float, float, float]] = []
@@ -428,44 +428,52 @@ def plot(
             ha="center",
             va="bottom",
             rotation=90,
-            fontsize=5.5,
+            fontsize=4.9,
             fontweight="bold",
             color=RED_500,
             zorder=4,
         )
 
-    total_false_negatives = float(all_row["authoritative_false_negatives"])
+    total_false_negatives = float(all_row["false_negatives"])
     if total_false_negatives == 0:
         ax.text(
             0.99,
             0.955,
-            "Authoritative false negatives = 0",
+            "False negatives = 0",
             transform=ax.transAxes,
             ha="right",
             va="top",
-            fontsize=6.4,
+            fontsize=5.7,
             color=DARK,
         )
 
     ax.axvline(all_x - x_step / 2, color="#888888", linestyle=":", linewidth=0.7)
     ax.set_ylim(0, 105)
-    ax.set_yticks((0, 20, 40, 60, 80, 100))
-    ax.set_ylabel("Verified-safe bypasses\n(% of exact-path opportunities)", fontsize=7.8)
-    ax.set_xticks(xs, labels)
+    ax.set_yticks((0, 50, 100))
+    ax.set_ylabel("Safe bypass rate (%)", fontsize=7.0)
+    ax.set_xticks(xs)
+    ax.set_xticklabels([])
     ax.set_xlim(xs[0] - group_width * 0.62, xs[-1] + group_width * 0.62)
     ax.grid(axis="y", color="#DDDDDD", linewidth=0.45, zorder=1)
-    ax.tick_params(axis="y", labelsize=7.0, length=2.2, width=0.6)
-    ax.tick_params(axis="x", labelsize=7.0, length=0, pad=3)
-    for tick, label in zip(ax.get_xticklabels(), labels):
-        tick.set_rotation(30)
-        tick.set_ha("right")
-        tick.set_rotation_mode("anchor")
-        if label == "ALL":
+    ax.tick_params(axis="both", labelsize=6.0, length=2.4, width=0.7)
+    for x, label in zip(xs, labels):
+        tick = ax.text(
+            x,
+            -0.08,
+            label,
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="top",
+            rotation=30,
+            rotation_mode="anchor",
+            fontsize=6.0,
+            clip_on=False,
+        )
+        if label == "Average":
             tick.set_fontweight("bold")
     for spine in ax.spines.values():
         spine.set_visible(True)
-        spine.set_color("#656667")
-        spine.set_linewidth(0.65)
+        spine.set_linewidth(0.7)
 
     handles = [
         Patch(facecolor=color, edgecolor="none", label=legend)
@@ -477,25 +485,27 @@ def plot(
                 facecolor="white",
                 edgecolor=RED_500,
                 linewidth=1.0,
-                label="Authoritative false negative",
+                label="False negative",
             )
         )
+        # Matplotlib fills multi-column legends by column. Reorder the handles
+        # so the visual row order follows the three CuPath applications.
+        handles = [handles[0], handles[2], handles[1], handles[3]]
     ax.legend(
         handles=handles,
-        loc="lower center",
-        bbox_to_anchor=(0.0, 1.02, 1.0, 0.08),
+        loc="lower left",
+        bbox_to_anchor=(0.02, 1.01, 0.96, 0.16),
         mode="expand",
-        ncol=len(handles),
+        ncol=2,
         frameon=False,
-        borderaxespad=0,
-        columnspacing=0.7,
+        columnspacing=0.9,
         handlelength=1.0,
-        handletextpad=0.4,
-        fontsize=7.0 if len(handles) == 3 else 6.2,
+        handletextpad=0.45,
+        fontsize=5.7,
     )
-    fig.subplots_adjust(left=0.105, right=0.995, top=0.84, bottom=0.22)
-    fig.savefig(output.with_suffix(".png"), dpi=dpi, bbox_inches="tight", pad_inches=0.025)
-    fig.savefig(output.with_suffix(".pdf"), bbox_inches="tight", pad_inches=0.025)
+    fig.tight_layout(pad=0.25)
+    fig.savefig(output.with_suffix(".png"), dpi=dpi, bbox_inches="tight")
+    fig.savefig(output.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
 
 
@@ -516,8 +526,8 @@ def main() -> None:
     print(csv_path)
     print(output.with_suffix(".png"))
     print(output.with_suffix(".pdf"))
-    total_false_negatives = int(float(all_row["authoritative_false_negatives"]))
-    print(f"authoritative false negatives: {total_false_negatives}")
+    total_false_negatives = int(float(all_row["false_negatives"]))
+    print(f"false negatives: {total_false_negatives}")
 
 
 if __name__ == "__main__":

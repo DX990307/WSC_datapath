@@ -94,12 +94,15 @@ workloads.
 \subsection{Removing Work Along the Path}
 
 Figure~\ref{fig:cupath-work} explains the speedup in terms of work that no
-longer reaches a downstream component.  Weighted across the fourteen workloads,
-Complete deduplicates 9.3\% of remote reads, reduces remote request packets by
-52.9\% through aggregation, and eliminates 29.3\% of repeated wafer
-traversals.  The different columns peak on different applications, which
-supports the path-oriented design because no single boundary exposes all three
-reductions.
+longer reaches a downstream component. Same-line deduplication is the number
+of logical remote reads merged into an existing transaction divided by all
+logical remote reads. Same-page packet reduction is the difference between
+post-dedup cacheline transactions and request packets divided by the former.
+Repeated-traversal elimination counts logical remote reads served by the
+requesting-GPM L2 Cache, normalized by all logical remote reads. The weighted
+bars sum the corresponding numerator and denominator across all workloads.
+Complete deduplicates 9.4\% of remote reads, reduces remote request packets by
+52.7\%, and eliminates 29.4\% of repeated wafer traversals.
 
 CuPath does not obtain these gains by increasing aggregate memory traffic.
 Complete reduces physical DRAM reads from 39.25 to 38.71 million (1.38\%) and
@@ -111,112 +114,76 @@ an assumption that every miss takes the fast path.
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-22-baseline-complete-observation/cupath_work_reduction.png}
-  \caption{Percentage of work removed at successive remote-path boundaries.
-  The bottom row is weighted by the corresponding request count.}
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-23-23-41-05-sampled-validation/cupath_remote_work_reduction.pdf}
+  \caption{Remote-path work removed by Complete CuPath. The weighted bars are
+  calculated from aggregate event counts rather than averaging workload
+  percentages.}
   \label{fig:cupath-work}
 \end{figure}
 
 \subsection{Typed Filter Effectiveness}
 
-Figure~\ref{fig:filter-effectiveness} summarizes the exact accesses removed by
-reliable negative results across the fourteen Complete runs, while
-Figure~\ref{fig:filter-effectiveness-workloads} shows the workload-level
-distribution. The Filter bypasses
-32.79 million of 135.34 million eligible L2 tag-pipeline lookups, 89.52
-million of 98.88 million requester-RDMA request-table searches, and 13.28
-million of 47.71 million exact requester-L2 probes. These reductions
-correspond to 24.2\%, 90.5\%, and 27.8\% of the respective opportunities.
-The three populations arise at different path stages, showing that the shared
-metadata is exercised by local lookup, remote aggregation, and remote reuse
-rather than serving as an unused auxiliary structure.
+Figure~\ref{fig:filter-effectiveness} shows how often a negative Filter result
+eliminates an exact metadata lookup in each CuPath application. \emph{Remote
+Aggregation} reports remote reads that bypass the requester-GPM RDMA
+request-table search. \emph{Remote Reuse} reports remote reads that bypass the
+requester-GPM L2 Cache lookup because the requested line is not retained there.
+\emph{Local Pairing} reports local reads that bypass the local-GPM L2 Cache
+lookup and proceed directly to miss handling.
+\emph{Average} is calculated from the total bypasses and opportunities across
+all workloads rather than from the arithmetic mean of workload percentages.
 
-Across 434.39 million Filter queries, only 33,993 possible matches are false
-positives. False positives therefore account for 0.0078\% of all queries, and
-the standard false-positive rate among verified absent-key queries is
-0.0148\%. Table~\ref{tab:filter-effectiveness} breaks down activity by type.
-No insertion fails for active residency, RDMA, or paired-access state, even
-though the most heavily used physical Filter reaches 89.9\% peak occupancy.
-Low-priority remote-history and demand-pattern entries have insertion-failure
-rates of 42.3\% and 10.3\%. These failures suppress an optional reuse or
-pairing opportunity and fall back to the demand path without affecting
-correctness.
-
-We normalize lookup stalls by completed queries plus stall events, and update
-stalls by recorded insertions and deletions plus stall events. The resulting
-weighted contention ratios are 0.264\% and 0.049\%. Contention is not uniform,
-however, because RELU reaches a 58.5\% lookup ratio during its concentrated
-local-access stream. The weighted result shows that contention is uncommon
-over the full suite, while the workload maximum prevents us from claiming
-that the interface is contention-free for every access pattern.
+Remote Aggregation safely bypasses 89.57 million requester-RDMA table searches,
+or 90.6\% of all opportunities. The rate exceeds 84\% for I2C, KM, MM, MT, PR,
+and SPMV, showing that most remote reads do not require an exact search before
+a new transaction is created. Remote Reuse bypasses 13.27 million requester-GPM
+L2 Cache lookups, corresponding to an aggregate rate of 27.8\%. The rate
+reaches 53.0\% for FWS, 98.4\% for MT, and 99.8\% for SPMV. Missing remote
+bars indicate that the workload generates no qualifying remote access. Local
+Pairing bypasses 32.61 million local-GPM L2 Cache lookups, or 24.1\% of all
+opportunities. The rate exceeds 97\% for AES, FWT, FFT, and RELU, showing that
+most Filter-eligible reads in these workloads are absent from L2 Cache. Only
+65 apparent false negatives occur across all workloads, all during short L2
+Cache write-update windows.
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-23-23-41-05-sampled-validation/cupath_filter_effectiveness.pdf}
-  \caption{Exact metadata accesses bypassed by reliable negative results from
-  the shared typed Cuckoo Filter. Results aggregate the fourteen Complete runs
-  using eligible exact accesses as the denominator. Labels report the bypass
-  rate and number of bypassed accesses.}
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-26-filter-authoritative-validation/cupath_filter_effectiveness_by_benchmark.pdf}
+  \caption{Exact-path opportunities safely bypassed by the typed Cuckoo
+  Filter. \emph{Average} is calculated from aggregate counts across fourteen
+  workloads and reaches 90.6\% for Remote Aggregation, 27.8\% for Remote
+  Reuse, and 24.1\% for Local Pairing. Missing bars denote no qualifying
+  remote access. Only 65 apparent false negatives occur across all workloads.}
   \label{fig:filter-effectiveness}
 \end{figure}
 
+\subsection{Local Pairing Effectiveness}
+
+Figure~\ref{fig:local-pairing-diagnostics} evaluates the requests issued by
+Local Pairing. Accuracy is the fraction of issued pairs whose adjacent line is
+later demanded. Coverage is the fraction of local read-miss lines served by an
+issued adjacent line. Timeliness is the fraction of useful adjacent lines that
+return to the staging buffer before the demand arrives. Across all workloads,
+82.2\% of issued pairs are useful and cover 12.4\% of local read misses. 10.3\%
+of useful lines are timely, while the remaining useful lines join their paired
+access in flight.
+
+Classified unused lines account for 17.5\% of issued pairs. Their 66.2~MB of
+data correspond to 2.65\% of the demand-miss bytes. After useful paired lines
+replace later singleton reads, total HBM read traffic increases by 30.0~MB, or
+1.17\% over Baseline, while aggregate HBM row activations decrease by 10.1\%.
+The staging buffer supplies 500,125 demanded lines and evicts 458,140 unused
+lines. The normalized bars report both events per 1,000 issued pairs.
+
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-23-23-41-05-sampled-validation/cupath_filter_effectiveness_by_benchmark.pdf}
-  \caption{Per-workload exact accesses bypassed by reliable Filter negatives.
-  \emph{ALL} aggregates the fourteen Complete runs using the corresponding
-  eligible-access count. Missing bars indicate no eligible access.}
-  \label{fig:filter-effectiveness-workloads}
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-23-23-41-05-sampled-validation/cupath_local_pairing_diagnostics.pdf}
+  \caption{Aggregate Local Pairing prediction quality, HBM effects, and
+  staging-buffer outcomes. HBM read-byte and row-ACT changes are measured
+  relative to Baseline. Values are calculated from aggregate event counts
+  across all fourteen workloads.}
+  \label{fig:local-pairing-diagnostics}
 \end{figure}
-
-\begin{table}[t]
-  \centering
-  \caption{Per-type activity of the shared typed Filter. FPR is measured only
-  over absent-key queries. ``--'' denotes no absent-key query population.}
-  \label{tab:filter-effectiveness}
-  \scriptsize
-  \setlength{\tabcolsep}{3.2pt}
-  \begin{tabular}{lrrr}
-    \toprule
-    Metadata type & Queries & FPR & Insert failure \\
-    \midrule
-    L2-Resident        & 241.05M & 0.0413\% & 0\% \\
-    RDMA-In-Flight     & 110.66M & 0.0001\% & 0\% \\
-    Remote-History     &  59.53M & 0.0036\% & 42.3\% \\
-    Demand-Pattern     &  11.81M & --        & 10.3\% \\
-    Adjacent-In-Flight &  11.35M & 0.0001\% & 0\% \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\subsection{M1: Cuckoo-Filter-Guided Local Pairing}
-
-M1 is a supporting transformation rather than the dominant source of
-speedup.  It issues 261,615 local candidates over the full suite: 252,850
-reach the DRAM-issue point and 8,765 lose a race to an ordinary demand;
-176,447 are eventually useful.  Although these issued candidates are
-additional logical accesses, exact MSHR merging and demand timing leave total
-physical reads 0.35\% lower than Baseline and increase L2 MSHR-full cycles by
-only 0.22\%.  FIR is the exception: M1 alone is 0.898$\times$ and increases
-physical reads and writes, so we do not claim that local prediction is
-universally beneficial.
-
-The coupling experiment isolates why the Filter is still useful for mostly
-local workloads.  Filter-only definite-miss elimination provides
-1.0145$\times$ geometric mean, while ungated prediction provides only
-1.0059$\times$.  Coupling the same predictor to \textsc{Pattern},
-\textsc{Resident}, and \textsc{Pending} reaches 1.0188$\times$.  It removes
-34.7\% of issued candidates while retaining 96.7\% of useful candidates,
-raising useful-per-issued accuracy from 24.0\% to 35.5\%.  Additional DRAM
-reads fall from 6,206 to 5,578 and demand-delay exposure events from 145,466
-to 33,066.  Predictor-only records candidates but is exactly 1.0000$\times$,
-confirming that observation itself is not counted as timing benefit.
-
-Replacing Cuckoo membership with exact metadata changes the same screen only
-from 1.0188$\times$ to 1.0192$\times$.  The Cuckoo design observes four false
-positives in 273,146 queries (0.0015\%).  Thus the Filter does not move data or
-create prediction benefit by itself; it compactly rejects avoidable work and
-tracks the request lifecycle with little loss relative to exact metadata.
 
 \subsection{M2: Cuckoo-Filter-Guided Remote Aggregation}
 
@@ -245,6 +212,67 @@ Of the unused retirements, 160,257 carry candidate provenance and remove the
 associated \textsc{Pattern}.  A useful patterned hit instead keeps
 \textsc{Pattern} eligible; the aggregate counter does not isolate that subset
 from all requesting-GPM L2 hits.
+
+\subsection{Sensitivity Study}
+
+Figures~\ref{fig:cupath-sensitivity-filter}--\ref{fig:cupath-sensitivity-l2}
+evaluate CuPath's sensitivity to the typed Cuckoo Filter capacity, L2 Cache
+capacity, and the number of cachelines covered by one row-local HBM access.
+Every Complete configuration is normalized to the same fixed Baseline used by
+the overall-performance study, and each panel reports all fourteen workloads
+followed by their geometric mean.  Keeping one denominator makes the absolute
+performance of different configurations directly comparable.  For the L2
+sweep, this normalization measures end-to-end sensitivity to cache capacity
+rather than CuPath's incremental benefit over a capacity-matched Baseline.
+
+CuPath is largely insensitive to Filter capacity.  Each sweep label gives the
+aggregate number of buckets/GPM distributed across four physical arrays; the
+32K point matches the overall-performance configuration. Increasing capacity
+from 4K to 32K buckets per GPM produces geometric-mean speedups of
+1.474$\times$, 1.471$\times$, 1.470$\times$, and 1.479$\times$.  The entire
+range remains within 0.6\% of the 16K-bucket configuration, showing that the
+Filter does not rely on overprovisioned metadata capacity to retain its
+performance benefit.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-25-19-41-19-cupath-sensitivity/cupath_filter_capacity_sensitivity.pdf}
+  \caption{Sensitivity to aggregate typed Cuckoo Filter capacity per GPM,
+  distributed across four physical arrays and normalized to the fixed
+  overall-performance Baseline. Bars above 2$\times$ are clipped.}
+  \label{fig:cupath-sensitivity-filter}
+\end{figure}
+
+The row-local HBM region has a clearer optimum.  Regions containing 2, 4, 8,
+and 16 cachelines achieve 1.470$\times$, 1.428$\times$, 1.351$\times$, and
+1.237$\times$, respectively.  A two-cacheline region captures the recurring
+adjacent access while limiting unnecessary data movement.  Expanding the
+region fetches progressively more lines whose use is less certain and consumes
+additional HBM and cache resources.  The decreasing speedup therefore supports
+CuPath's adjacent-line design.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-25-19-41-19-cupath-sensitivity/cupath_row_locality_sensitivity.pdf}
+  \caption{Sensitivity to the row-local HBM region size, normalized to the
+  fixed overall-performance Baseline.  Larger regions fetch more uncertain
+  cachelines and progressively reduce performance.}
+  \label{fig:cupath-sensitivity-row}
+\end{figure}
+
+L2 capacities of 1, 2, and 4~MiB achieve geometric-mean speedups of
+1.249$\times$, 1.448$\times$, and 1.470$\times$, respectively, across all
+fourteen workloads.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{../../akkalat/results/2026-07-25-19-41-19-cupath-sensitivity/cupath_l2_capacity_sensitivity.pdf}
+  \caption{End-to-end sensitivity to L2 Cache capacity, normalized to the
+  fixed 4-MiB overall-performance Baseline.}
+  \label{fig:cupath-sensitivity-l2}
+\end{figure}
+
+\FloatBarrier
 
 \subsection{Limitations}
 

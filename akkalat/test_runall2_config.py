@@ -432,6 +432,24 @@ class RemoteAblationIsolationTest(unittest.TestCase):
             diagnostics["m1_without_cuckoo"],
         )
 
+    def test_remote_aggregation_split_configs_are_independent(self):
+        args = self.make_args()
+        args.configs = "m2_same_line_only,m2_same_page_only"
+        diagnostics = dict(
+            runall2_config.build_remote_data_path_ablation_configs(args)
+        )
+        same_line = diagnostics["m2_same_line_only"]
+        self.assertIn("-remote-data-path-enable=true", same_line)
+        self.assertIn("-remote-data-path-dedup-enable=true", same_line)
+        self.assertIn("-remote-data-path-batching-enable=false", same_line)
+        self.assertIn("-remote-filter-prefetch-enable=false", same_line)
+
+        same_page = diagnostics["m2_same_page_only"]
+        self.assertIn("-remote-data-path-enable=true", same_page)
+        self.assertIn("-remote-data-path-dedup-enable=false", same_page)
+        self.assertIn("-remote-data-path-batching-enable=true", same_page)
+        self.assertIn("-remote-filter-prefetch-enable=false", same_page)
+
     def test_fixed_capacities_are_identical_across_configs(self):
         configs = runall2_config.build_remote_data_path_ablation_configs(
             self.make_args()

@@ -278,6 +278,25 @@ def build_remote_data_path_ablation_configs(args):
 
     diagnostic_configs = [
         (
+            "m2_same_line_only",
+            # Merge identical in-flight remote cacheline requests, but send
+            # every surviving line in its own network packet.
+            mechanism_flags(
+                False, False, False, False,
+                True, True, False, False, False,
+            ),
+        ),
+        (
+            "m2_same_page_only",
+            # Preserve distinct same-line transactions while packetizing
+            # different demand lines for the same owner GPM and 4-KiB page.
+            # Predicted piggyback lines remain disabled in this isolation.
+            mechanism_flags(
+                False, False, False, False,
+                True, False, True, False, False,
+            ),
+        ),
+        (
             "old_m1_independent_prefetch",
             diagnostic_flags(baseline_flags, [
                 ("-l2-filter-prefetch-enable=", "-l2-filter-prefetch-enable=true"),

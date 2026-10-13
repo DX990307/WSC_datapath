@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import json
 import re
 import unittest
 from pathlib import Path
@@ -77,28 +78,29 @@ class CuPathSourceInvariantTest(unittest.TestCase):
         self.assertIn('"max_wg_kernel_drained", 0', runner)
 
     def test_cacti_outputs_and_paper_cost_remain_consistent(self):
-        cost_dir = ROOT / "akkalat/cost/cacti32"
+        cost_dir = ROOT / "akkalat/cost/cacti_full"
+        with (cost_dir / "cacti_full_results.csv").open(
+            newline="", encoding="utf-8"
+        ) as stream:
+            rows = {row["name"]: row for row in csv.DictReader(stream)}
+        with (cost_dir / "cacti_full_summary.json").open(
+            encoding="utf-8"
+        ) as stream:
+            summary = json.load(stream)
 
-        def read_cacti_row(name):
-            with (cost_dir / name).open(newline="", encoding="utf-8") as stream:
-                rows = list(csv.reader(stream))
-            self.assertEqual(len(rows), 2)
-            return {
-                key.strip(): value.strip()
-                for key, value in zip(rows[0], rows[1])
-                if key.strip()
-            }
-
-        filter_row = read_cacti_row("cupath_filter_output.txt")
-        l2_row = read_cacti_row("cupath_l2_slice_output.txt")
-        self.assertEqual(int(filter_row["Capacity (bytes)"]), 32768 * 21 // 8)
-        self.assertEqual(int(l2_row["Capacity (bytes)"]), 1024 * 1024)
-        area_ratio = (
-            float(filter_row["Area (mm2)"])
-            / float(l2_row["Area (mm2)"])
-            * 100
+        self.assertEqual(int(rows["typed_filter"]["count_per_gpm"]), 4)
+        self.assertEqual(
+            int(float(rows["typed_filter"]["capacity_per_gpm_bytes"])),
+            4 * 32768 * 21 // 8,
         )
-        self.assertAlmostEqual(area_ratio, 4.3296, places=4)
+        self.assertAlmostEqual(
+            summary["required_cupath_array_area_per_gpm_mm2"],
+            3.74117452,
+        )
+        self.assertAlmostEqual(
+            summary["required_array_overhead_percent_of_l2"],
+            6.8632307229,
+        )
 
         cost = (ROOT / "akkalat/cost/CUPATH_CACTI_AREA.md").read_text(
             encoding="utf-8"
@@ -107,9 +109,9 @@ class CuPathSourceInvariantTest(unittest.TestCase):
             ROOT
             / "weeklyreport/hpca2027-latex-template 2/sections/evaluation.tex"
         ).read_text(encoding="utf-8")
-        self.assertIn("2.396247", cost)
-        self.assertIn("4.40%", cost)
-        self.assertIn(r"4.40\%", paper)
+        self.assertIn("3.741175", cost)
+        self.assertIn("6.86%", cost)
+        self.assertIn(r"6.86\%", paper)
 
     def test_predictor_placement_and_local_early_issue_match_source(self):
         cache_builder = (

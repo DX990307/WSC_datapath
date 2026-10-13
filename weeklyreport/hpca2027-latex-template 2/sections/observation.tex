@@ -10,13 +10,16 @@ capacity in the existing requester-GPM L2.
 \noindent\textbf{O1: Cost of a Full Memory Path.}
 We measure each component from the arrival of a demand read until the
 component forwards the request or response. Communication into L1, L2, and
-HBM is charged to the receiving component, while requester RDMA, the wafer
-network, and owner RDMA are grouped as Remote Communication. We count only
-completed MSHR leaders and exclude MSHR waiting. Figure~\ref{fig:obs-full-path}
+HBM is charged to the receiving component. Network Interface contains the time
+spent at requester-GPM and owner-GPM network interfaces, while Communication
+contains request and response traversal through the wafer network. We count
+only completed MSHR leaders and exclude MSHR waiting. Figure~\ref{fig:obs-full-path}
 shows that HBM and the Local GPM L2 Cache account for 65.8\% and 31.0\% of
-the weighted local full-path latency. Remote Communication contributes
-70.0\%--98.8\% of each qualifying remote path and 97.0\% when weighted across
-those paths. Figure~\ref{fig:obs-l2-miss} further shows that local demand-read
+the weighted local full-path latency. Network Interface and Communication together
+contribute 97.0\% of the weighted remote full-path latency. Network Interface alone
+accounts for 80.1\%, showing that endpoint contention is more costly than
+network traversal for the sampled remote paths. Figure~\ref{fig:obs-l2-miss}
+further shows that local demand-read
 miss rates range from 2.8\% to 100\%, although every miss still pays the full
 tag-lookup latency. The opportunity therefore includes both avoiding
 known-miss cache work and reducing downstream memory and communication work.
@@ -27,12 +30,11 @@ known-miss cache work and reducing downstream memory and communication work.
   \caption{The full-path data access latency breakdown. Each stacked bar
   normalizes a completed local (L) or remote (R) MSHR-leader path to 100\%.
   Communication into L1, L2, and HBM is charged to the receiving component,
-  while requester RDMA, the wafer network, and owner RDMA form Remote
-  Communication. ``--'' denotes no qualifying remote path. HBM access and
-  Remote Communication account for most of the full-path latency. HBM
-  contributes 65.8\% of the weighted local-path latency, while Remote
-  Communication contributes 70.0\%--98.8\% of each qualifying remote path
-  and 97.0\% when weighted across those paths.}
+  while Network Interface covers the requester-GPM and owner-GPM network interfaces
+  and Communication covers both wafer-network traversals. ``--'' denotes no
+  qualifying remote path. HBM contributes 65.8\% of the weighted local-path
+  latency. Network Interface and Communication contribute 80.1\% and 16.9\% of
+  the weighted remote-path latency.}
   \label{fig:obs-full-path}
 \end{figure}
 

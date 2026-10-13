@@ -151,6 +151,17 @@ def selected_benchmarks(value: str) -> list[str]:
     return benchmarks
 
 
+def filter_resume_benchmarks(experiments, value: str) -> list[dict]:
+    """Limit an existing campaign resume without changing its manifest."""
+    if not value:
+        return experiments
+    selected = set(selected_benchmarks(value))
+    return [
+        experiment for experiment in experiments
+        if experiment["benchmark"] in selected
+    ]
+
+
 def mechanism_flags() -> dict[str, list[str]]:
     args = SimpleNamespace(
         sampled_sweep=False,
@@ -341,6 +352,14 @@ def run_queue(args, experiments, preserve_metadata=False):
 def resume_campaign(args):
     experiments = load_experiments_from_metadata(args.output_dir)
     experiments = filter_missing_metric_exps(experiments, args.output_dir)
+    if args.resume_benchmarks:
+        experiments = filter_resume_benchmarks(
+            experiments, args.resume_benchmarks
+        )
+        print(
+            f"Restricting resume to benchmarks: {args.resume_benchmarks}",
+            flush=True,
+        )
     if not experiments:
         print(f"No missing experiments in {args.output_dir}")
         return
@@ -365,6 +384,14 @@ def parse_args():
     parser.add_argument("--benchmarks", default="traditional")
     parser.add_argument("--dimensions", default="filter,l2,row")
     parser.add_argument("--include-reference", action="store_true")
+    parser.add_argument(
+        "--resume-benchmarks",
+        default="",
+        help=(
+            "when resuming an existing campaign, rerun missing cells only "
+            "for this comma-separated benchmark selection"
+        ),
+    )
     parser.add_argument("--max-workers", type=int, default=14)
     parser.add_argument("--initial-workers", type=int, default=1)
     parser.add_argument("--memory-reserve-gib", type=float, default=50.0)
@@ -384,6 +411,8 @@ def parse_args():
     try:
         selected_benchmarks(args.benchmarks)
         parse_dimensions(args.dimensions)
+        if args.resume_benchmarks:
+            selected_benchmarks(args.resume_benchmarks)
     except ValueError as error:
         parser.error(str(error))
     args.output_dir = (
@@ -408,6 +437,11 @@ def main():
         verify_or_write_campaign_manifest(args, points)
         resume_campaign(args)
         return
+
+    if args.resume_benchmarks:
+        raise RuntimeError(
+            "--resume-benchmarks requires an existing campaign output directory"
+        )
 
     if args.dry_run:
         binary = args.binary or ROOT / "akkalat" / "baseline" / "baseline"

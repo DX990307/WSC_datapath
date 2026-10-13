@@ -3,15 +3,15 @@
 
 CuPath follows a memory request from the local cache hierarchy to HBM and,
 when necessary, across the wafer. Each stage acts only on information that is
-already visible at that point. The local L2 observes whether adjacent demand
-misses repeatedly share one controller access region. Requester RDMA observes
-duplicate remote lines and requests headed to the same owner and page. A
-returned remote line reveals whether the line is likely to be used again.
+already visible at that point. Requester RDMA observes duplicate remote lines
+and requests headed to the same owner and page. A returned remote line reveals
+whether the line is likely to be used again. The local L2 observes whether
+adjacent demand misses repeatedly share one controller access region.
 CuPath turns these observations into three consecutive transformations shown
-in Fig.~\ref{fig:cupath-overview}. Cuckoo-Filter-Guided Local Pairing adapts
-local HBM accesses, Cuckoo-Filter-Guided Remote Aggregation combines requests
-before network injection, and Cuckoo-Filter-Guided Remote Reuse retains data
-only after recurrence becomes visible.
+in Fig.~\ref{fig:cupath-overview}. Cuckoo-Filter-Guided Remote Aggregation
+combines requests before network injection, Cuckoo-Filter-Guided Remote Reuse
+retains data after recurrence becomes visible, and Cuckoo-Filter-Guided Local
+Pairing adapts local HBM accesses.
 
 \subsection{Shared Typed Cuckoo Filter}
 
@@ -57,45 +57,8 @@ deletions decrement it and clear the slot at zero. Unavailable or unreliable
 lookups follow the exact path, while a correctness-critical
 \textbf{RDMA-In-Flight} lookup retries.
 
-\subsection{Cuckoo-Filter-Guided Local Pairing}
-\label{sec:design-m1}
-
-Motivated by \textbf{O2} and \textbf{O3}, Local Pairing reduces L2 tag work and
-uses HBM row locality for local reads. When a read reaches L2, the typed Cuckoo
-Filter queries \textbf{L2-Resident} while the exact same-line MSHR is checked.
-A reliable negative and an MSHR miss bypass the L2 tag pipeline, while a
-possible match retains the exact tag lookup. Local Pairing does not modify
-writes because the write-back L2 already handles write hits and combines
-partial writes through its existing MSHRs.
-
-Real L2 misses train a lightweight adjacent-access predictor. The predictor
-records recently observed cachelines within aligned two-line HBM regions. When
-real requests access both lines of a region, the predictor increases a
-saturating confidence counter. Once the confidence reaches its threshold,
-every subsequent eligible local read miss proposes its adjacent cacheline.
-The typed Cuckoo Filter then queries \textbf{L2-Resident} and
-\textbf{L2-In-Flight} to remove candidates already cached or being fetched.
-Possible matches are confirmed by the exact L2 tags and MSHRs.
-
-An eligible pair uses one aligned HBM read covering both cachelines within the
-same row-local access unit \cite{li2016exploring,amd_rama_hbm}. The requested
-cacheline follows the normal fill path. A request for the adjacent cacheline
-can join the read before completion. Otherwise, the adjacent data waits in a
-bounded staging buffer. Later use strengthens the confidence stored in the
-predictor, while removal without use weakens it. If pairing is
-unavailable, the original read follows the ordinary cacheline path.
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\columnwidth]{Figure/M1.png}
-  \caption{Local Pairing uses recent demand history to identify adjacent
-  accesses. The typed Cuckoo Filter bypasses proven L2 misses and removes a
-  paired candidate that is already resident or being fetched.}
-  \label{fig:cupath-m1}
-\end{figure}
-
 \subsection{Remote Aggregation Guided by the Cuckoo Filter}
-\label{sec:design-m2}
+\label{sec:design-remote-aggregation}
 
 Motivated by \textbf{O4} and \textbf{O5}, Remote Aggregation reduces
 duplicate remote accesses and network packets on the remote memory path. The
@@ -146,7 +109,7 @@ membership.
 \end{figure}
 
 \subsection{Remote Reuse Guided by the Cuckoo Filter}
-\label{sec:design-m3}
+\label{sec:design-remote-reuse}
 
 Motivated by \textbf{O6}, Remote Reuse uses the existing requester L2 to
 avoid repeated remote accesses. Requester RDMA queries the Cuckoo Filter for
@@ -173,14 +136,58 @@ remote line, but never an ordinary local line. A successful fill updates
   \label{fig:cupath-m3}
 \end{figure}
 
+\subsection{Cuckoo-Filter-Guided Local Pairing}
+\label{sec:design-local-pairing}
+
+Motivated by \textbf{O2} and \textbf{O3}, Local Pairing reduces L2 tag work and
+uses HBM row locality for local reads. When a read reaches L2, the typed Cuckoo
+Filter queries \textbf{L2-Resident} while the exact same-line MSHR is checked.
+A reliable negative and an MSHR miss bypass the L2 tag pipeline, while a
+possible match retains the exact tag lookup. Local Pairing does not modify
+writes because the write-back L2 already handles write hits and combines
+partial writes through its existing MSHRs.
+
+Real L2 misses train a lightweight adjacent-access predictor. The predictor
+records recently observed cachelines within aligned two-line HBM regions. When
+real requests access both lines of a region, the predictor increases a
+saturating confidence counter. Once the confidence reaches two,
+every subsequent eligible local read miss proposes its adjacent cacheline.
+Each L2 partition keeps 64 region entries and one two-bit saturating confidence
+counter. An entry records the process, HBM-controller identity, aligned 128-B
+region tag, and which of the two cachelines has been observed. Observing the
+other cacheline retires the matching entry and strengthens confidence. When
+the table is full, the oldest unmatched entry is replaced and confidence is
+weakened. The four partitions therefore track up to 256 regions per GPM.
+The typed Cuckoo Filter then queries \textbf{L2-Resident} and
+\textbf{L2-In-Flight} to remove candidates already cached or being fetched.
+Possible matches are confirmed by the exact L2 tags and MSHRs.
+
+An eligible pair uses one aligned HBM read covering both cachelines within the
+same row-local access unit \cite{li2016exploring,amd_rama_hbm}. The requested
+cacheline follows the normal fill path. A request for the adjacent cacheline
+can join the read before completion. Otherwise, the adjacent data waits in a
+bounded staging buffer. Later use strengthens the confidence stored in the
+predictor, while removal without use weakens it. If pairing is
+unavailable, the original read follows the ordinary cacheline path.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{Figure/M1.png}
+  \caption{Local Pairing uses recent demand history to identify adjacent
+  accesses. The typed Cuckoo Filter bypasses proven L2 misses and removes a
+  paired candidate that is already resident or being fetched.}
+  \label{fig:cupath-m1}
+\end{figure}
+
 \subsection{End-to-End Composition}
 
-The three transformations operate on one request lifecycle. Local Pairing uses local demand
-history and L2 residency to choose the amount of HBM work. Remote Aggregation uses global
-request visibility and \textsc{Remote-Batch} state at requester RDMA to remove
-duplicates and locate compatible network work. Remote Reuse uses completed remote
-activity to decide whether another wafer traversal can be avoided. The typed
-Cuckoo Filter carries compact lifecycle state between these decisions, while
-exact structures preserve correctness. No mechanism waits for a speculative
-opportunity. When evidence, metadata bandwidth, or downstream capacity is
-unavailable, CuPath continues along the baseline path.
+The three transformations operate on one request lifecycle. Remote
+Aggregation uses global request visibility and \textsc{Remote-Batch} state at
+requester RDMA to remove duplicates and locate compatible network work. Remote
+Reuse uses completed remote activity to decide whether another wafer traversal
+can be avoided. Local Pairing uses local demand history and L2 residency to
+choose the amount of HBM work. The typed Cuckoo Filter carries compact
+lifecycle state between these decisions, while exact structures preserve
+correctness. No mechanism waits for a speculative opportunity. When evidence,
+metadata bandwidth, or downstream capacity is unavailable, CuPath continues
+along the baseline path.

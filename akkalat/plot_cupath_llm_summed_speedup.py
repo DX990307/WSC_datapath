@@ -67,7 +67,7 @@ def plot(result_dir: Path, dpi: int) -> tuple[Path, Path]:
         "ps.fonttype": 42,
         "axes.linewidth": 0.8,
     })
-    fig, ax = plt.subplots(figsize=(3.45, 1.72))
+    fig, ax = plt.subplots(figsize=(3.45, 1.58))
 
     baseline_bars = ax.bar(
         [x - width / 2 for x in xs], baseline, width,
@@ -102,7 +102,7 @@ def plot(result_dir: Path, dpi: int) -> tuple[Path, Path]:
         spine.set_visible(True)
         spine.set_linewidth(0.7)
     ax.legend(
-        loc="lower left", bbox_to_anchor=(0.02, 1.02, 0.96, 0.15),
+        loc="lower left", bbox_to_anchor=(0.02, 1.01, 0.96, 0.12),
         ncol=2, mode="expand", frameon=False, fontsize=6.2,
         handlelength=1.1, handletextpad=0.45,
     )

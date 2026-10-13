@@ -145,6 +145,7 @@ def parse_args():
             + ",".join(name for name, _ in CONFIGS)
             + ". With --remote-ablation, choices are "
             "baseline,m1,m2,m3,complete; explicit diagnostics are "
+            "m2_same_line_only,m2_same_page_only,"
             "old_m1_independent_prefetch,cuckoo_filter_only,m1_bypass_fill_only,"
             "m1_bypass_fill_predictor_only,always_pair,"
             "predictor_only,paired_read_without_filter,m1_without_cuckoo,"
