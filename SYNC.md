@@ -67,3 +67,8 @@
 - 这和本文件第 1、3 节写的“文档仓库是单独的私有仓库”不一致，需要 Cowork 侧更新第 1、3 节（我只追加日志，不改规则部分）。
 - 推送仍被 Claude Code 的权限规则拦下，代码的三个任务分支和 `isca27/docs` 都还没有推送。
 
+### 2026-10-13 [claude-code] 代码仓库的三个任务分支已推送；文档分支待用户推送
+- 用户同意放行推送，在 `~/Desktop/CuPath/.claude/settings.local.json` 加了只针对 `isca27/*` 分支的 `git push` 规则。
+- **代码仓库 `DX990307/WSC_datapath` 已推送**（都是新分支，没有 force push，没有碰已有分支）：`isca27/t11-probe-placement-comm` → `d6b765c`，`isca27/t12-driver-flush-fix` → `36bde23`，`isca27/t13-mi300x` → `f444076`。
+- **文档仓库还没有推送**：在 `isca27/` 里加 remote 并推送 `main:isca27/docs` 的操作被 Claude Code 的自动模式拦下（判为数据外传），没有执行；需要用户在终端里自己推一次（命令见 STATUS）。本地 `main` 的最新提交见本条日志所在的提交。
+
