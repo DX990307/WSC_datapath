@@ -45,10 +45,12 @@
 - [x] (T13) **已决定（用户 10-13）：方案 A（64-bit、BL8、每次访问 64 B、DRAM 时钟 1.23 GHz，时序按纳秒不变换算）。延迟不做每周期等效缩放（带宽按 2.1 GHz 每周期等效，延迟保持纳秒值），写进 STATUS 和 meta。最终以阶段 3 实测为准。** 原问题：(T13) **新配置的 HBM channel 怎么设**：每 channel 的目标是 19.7 B/周期（315.5 / 16）。现在的 DRAM 时序全部写死（`r9nanobuilder.go:945-1000`），如果只把控制器数从 4 改成 16、时序不变，每 GPM 理论峰值是 512 B/周期，比目标高 62%。—— A：按 HBM3 的结构建模：每 channel 64-bit 总线、BL8（每次访问 64 B，正好一条 cache line），DRAM 时钟取 1.23 GHz，使每 channel = 64 B / (4 / 1.23 GHz) ≈ 19.7 B/ns；tCL、tRCD 等时序参数按纳秒不变的原则从 500 MHz 换算到 1.23 GHz（乘以 2.46 后取整）。/ B：保持 256-bit、BL4 不变，只把 DRAM 时钟降到约 308 MHz，使每 channel = 128 B / (2 / 0.308 GHz) ≈ 19.7 B/ns（改动最小，但每次访问 128 B，比 64 B 的 line 大）。推荐 A（更接近 HBM3，访问粒度和 cache line 一致），最终都以阶段 3 实测为准。
 - [x] (T13) **已决定（用户 10-13）：同意方案 A。预设取值集中在 `akkalat/baseline/runner/gpm_preset.go`，原文件只做“常量 → 预设字段”的替换，旧配置的数值不改；阶段 2 用旧配置回归（排序后逐项比较，total_time 单独比较），并检查分析脚本里有没有假设 L2 只有 4 个分区。** 原问题：(T13) **阶段 2 需要修改 CONFIG.md 第 1 节列出的文件**：新预设要改的值大多写死在 `shaderarray.go`、`r9nanobuilder.go`、`timingplatform.go` 里，需要在 `flag.go` 加 `-gpm-preset`，并把这些写死的值改成由预设决定的参数。**旧配置的数值一个都不改**（默认预设 = 现在写死的值），并用回归证明周期数完全一致。按你的规则“需要修改 CONFIG.md 第 1 节列出的文件”要先问你。—— A：照上面做，预设的取值集中写在一个新文件 `akkalat/baseline/runner/gpm_preset.go` 里，上面几个文件只做“把常量换成预设字段”的替换 / B：你有别的偏好。推荐 A。
 
-- [ ] (T13 阶段 2) **配置确认（CONFIG.md 第 3 节）：请确认下面两组运行的参数和差异。** 注意：旧配置回归**已经在 P06 到达之前启动**（我当时按 T12 R1 已确认的参数直接跑了，没有为阶段 2 单独等确认，这一点不符合 P06 的要求）；它还在跑，按 SYNC 规则没有打断。如果你不认可，我把结果作废、等确认后重跑。
+- [x] (T13 阶段 2) **用户 10-13 确认：旧配置回归“跑出来再说”；之后又确认了改用配置文件后的两组运行（fir 配置文件验证、T12 R3），全部确认。** 原问题：**配置确认（CONFIG.md 第 3 节）：请确认下面两组运行的参数和差异。** 注意：旧配置回归**已经在 P06 到达之前启动**（我当时按 T12 R1 已确认的参数直接跑了，没有为阶段 2 单独等确认，这一点不符合 P06 的要求）；它还在跑，按 SYNC 规则没有打断。如果你不认可，我把结果作废、等确认后重跑。
   - **旧配置回归（运行中，yss2，commit `f444076`，默认预设 hpca）**：`-timing -num-memory-banks=4 -l1v-mshr-entries=16 -l1v-max-concurrent-trans=16 -bandwidth=48 -switch-latency=32 -rdma-pipeline-width=8 -rdma-pipeline-latency=10 -rdma-max-outstanding=64 -magic-memory-copy -report-all -disable-servers -mmutlb-lookup-latency=80 -max-wg=4096 -benchmark fir|matrixmultiplication`。差异：只有 `-max-wg=4096`（截断参数）和 `-benchmark`。和修改前的基准（T12 R1，`9c30a89`）参数完全相同。
   - **T12 R3（带 magic copy，T12 文档新要求，待确认后运行）**：`-timing -num-memory-banks=4 -l1v-mshr-entries=16 -l1v-max-concurrent-trans=16 -bandwidth=48 -switch-latency=32 -rdma-pipeline-width=8 -rdma-pipeline-latency=10 -rdma-max-outstanding=64 -magic-memory-copy -report-all -disable-servers -report-l2-source -l2-source-tile-width=7 -mmutlb-lookup-latency=80 -benchmark probe -probe-all-gpms -probe-shared-ctx -probe-bytes 2097152 -probe-passes 2`。差异：统计开关 `-report-l2-source`/`-l2-source-tile-width=7`，探针参数。用修复后的二进制（`9c30a89`，模拟器代码和 T12 分支头 `36bde23` 相同），yss3。验收：48 个 GPM 都有指令、两遍都完成、心跳不报卡死。
 - [ ] (同步) **用户 10-13 决定：不新建 GitHub 仓库，文档仓库作为代码仓库 `DX990307/WSC_datapath` 的新分支 `isca27/docs` 备份。** **代码仓库的三个任务分支已推送**（`isca27/t11-probe-placement-comm` `d6b765c`、`isca27/t12-driver-flush-fix` `36bde23`、`isca27/t13-mi300x` `f444076`）。**文档分支 `isca27/docs` 还没推**：在 `isca27/` 里加 remote 的操作被自动模式拦下，需要用户在终端运行一次：`cd ~/Desktop/CuPath/isca27 && git remote add origin git@github.com:DX990307/WSC_datapath.git && git push -u origin main:isca27/docs`。原问题：**GitHub 推送被本机的权限规则拦下，需要你处理**：① 这台机器没有安装 `gh`，没法用命令行在 GitHub 上建 `DX990307/cupath-isca27`；② `git push origin isca27/...` 被 Claude Code 的自动模式拦截（“Out-of-Place Publication”）。—— A：你在 GitHub 网页上新建空的私有仓库 `DX990307/cupath-isca27`（不要勾选 README），并允许我推送（例如在 `/permissions` 里允许 `Bash(git push origin isca27/*)` 和 `Bash(git push -u origin main)`，只在 isca27 目录），我来加 remote 并推送 / B：你自己在终端运行推送命令（见日志里的命令）。
+
+- [x] (T13) **用户 10-13 决定：配置放在专门的配置文件里，不再在命令行写一长串；配置文件可以保存多份、运行时读取不同的文件，方便做敏感性实验。** 另外**不再使用 `-disable-servers`**（用户担心它会带来 bug）。实现见日志。
 
 ## 规格与代码的差异
 
@@ -327,3 +329,19 @@
 - **文档仓库**：`~/Desktop/CuPath/isca27/` 已 `git init`（分支 `main`），`.gitignore` 忽略 `.DS_Store` 等；首次提交 `fb0eacd`（`cowork: initial import of isca27 docs`）。**还没有 remote**（见“需要用户决定”）。
 - **结果索引**：`results_index/` 收录 T11 最终 16 个（`*_f7b9eef`）和 T12 的 10 个实验的 `meta.json`、`summary.csv`（T12 R3 修复前那个还附了 `heartbeat_at_hang.json`），加了一个 `README.md` 说明哪些数字作废；提交 `3332d37`。T11 修复死锁前的几轮已作废，没有收录。
 - **代码仓库推送**：`isca27/t11-probe-placement-comm`（`d6b765c`）、`isca27/t12-driver-flush-fix`（`36bde23`）、`isca27/t13-mi300x`（`f444076`）都已提交、工作区干净，但 `git push` 被权限规则拦下，**还没有推送**。
+
+### 2026-10-13 (T13) 配置文件 `-config`；不再用 `-disable-servers`
+
+- **用户决定**：配置写进专门的配置文件，命令行不再写一长串；可以保存不同的配置、读取不同的文件做敏感性实验；不用 `-disable-servers`。
+- **核实 `-disable-servers`**：它只关掉两个后台网页服务（Go pprof、akita 监控页面），都监听随机端口（`:0`，`runner.go:98-110`、`akita/monitoring/monitor.go` 的 `StartServer`），多个实验同时跑也不冲突。历史上的论文实验两种都有：带它的有 baseline-complete-observation、m1-m2-m3-rerun、两次 cupath-sensitivity、baseline-library；不带的有 sampled-validation、cupath-llm、filter-authoritative-validation。
+- **实现**（commit `1b1e829`，已推送 `isca27/t13-mi300x`）：
+  - `akkalat/baseline/runner/config_file.go`：`-config a.json,b.json`（键 = 参数名；后面的文件覆盖前面的；`"extends"` 继承另一个文件；`_` 开头的键是注释；参数名写错直接报错；命令行显式写的参数覆盖所有文件，并打印出来）；`-config-out` 写出每个参数的实际值和来源（默认值 / 哪个文件 / 命令行），其中的 `flags` 可以直接当配置文件用。`flag.go` 的 `ParseFlag` 第一行调用它。**二进制的默认值没有改。**
+  - `akkalat/configs/hpca.json`（HPCA 投稿版 = `BASE_COMMON_FLAGS` + `-mmutlb-lookup-latency=80`）、`akkalat/configs/mi300x_eighth.json`（`extends` hpca，只改 `gpm-preset` 和 `num-memory-banks=16`）。两个都保留 `-magic-memory-copy`，都不含 `-disable-servers`。
+  - `akkalat/isca27_config.py`：读取/合并配置文件，生成 `config_deviation`（和 `configs/hpca.json` 比）；`isca27_run.sh` 改成 `isca27_run.sh <exp_id> <commit> <task> <配置名> [benchmark 参数]`，配置名如 `hpca`、`mi300x_eighth,l2_8mb`；结果目录多一个 `config_used.json`。
+  - 测试：`test_isca27_configs.py`（`hpca.json` ≡ `BASE_COMMON_FLAGS`；`mi300x_eighth.json` ≡ 预设参数；所有配置保留 magic copy、不含 disable-servers）；`runner/config_file_test.go`（继承、循环检测、仓库里的配置只用已有参数）。本机实测了单文件、继承、三层叠加、命令行覆盖、拼写错误。已有测试全部通过。
+  - 论文原来的 runall2 / run_cupath_llm / run_cupath_sensitivity 不变，照旧显式传参。
+- **用户确认后启动的两组**（yss3，`1b1e829`）：
+  - 配置文件验证：`isca27_run.sh 1013_t13-cfgcheck-fir-maxwg4096-servers-on_wafer48_hpca_1b1e829 1b1e829 T13 hpca -benchmark fir -max-wg 4096`。和之前“写全参数 + `-disable-servers`”的 fir（T12 R1 / T13 回归）比较，统计必须完全一致，同时证明“配置文件 = 写全参数”和“开着服务不影响结果”。
+  - T12 R3（带 magic copy）：`isca27_run.sh 1013_t12-R3-P4-sharedctx-magic_wafer48_hpca_1b1e829 1b1e829 T12 hpca -report-l2-source -benchmark probe -probe-all-gpms -probe-shared-ctx -probe-bytes 2097152 -probe-passes 2`。
+  - 两个都已确认读到了 `hpca.json`，`disable-servers=false`、`magic-memory-copy=true`、`bandwidth=48`。
+- 旧配置回归：fir 已通过（见阶段 2 日志）；matrixmultiplication 还在跑。

@@ -72,3 +72,8 @@
 - **代码仓库 `DX990307/WSC_datapath` 已推送**（都是新分支，没有 force push，没有碰已有分支）：`isca27/t11-probe-placement-comm` → `d6b765c`，`isca27/t12-driver-flush-fix` → `36bde23`，`isca27/t13-mi300x` → `f444076`。
 - **文档仓库还没有推送**：在 `isca27/` 里加 remote 并推送 `main:isca27/docs` 的操作被 Claude Code 的自动模式拦下（判为数据外传），没有执行；需要用户在终端里自己推一次（命令见 STATUS）。本地 `main` 的最新提交见本条日志所在的提交。
 
+### 2026-10-13 [claude-code] 配置文件 `-config`；不再用 `-disable-servers`
+- 用户决定：配置放进专门的配置文件（`akkalat/configs/*.json`，`-config` 读取，可叠加、可继承），命令行只写配置名和 benchmark 参数；不用 `-disable-servers`。
+- 代码 commit `1b1e829`，已推送 `isca27/t13-mi300x`。CONFIG.md 第 2、3 节写的“完整参数要从 runall2_constants.py 导入”的流程，现在对我的任务脚本变成“读 `configs/hpca.json`”（两者由测试保证一致），需要 Cowork 侧更新 CONFIG.md 的说明。
+- 启动了两组运行（yss3）：配置文件 + 开着服务的 fir 验证、T12 R3（带 magic copy）。
+
