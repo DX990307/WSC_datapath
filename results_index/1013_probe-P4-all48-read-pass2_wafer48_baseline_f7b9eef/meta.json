@@ -1,0 +1,32 @@
+{
+  "exp_id": "1013_probe-P4-all48-read-pass2_wafer48_baseline_f7b9eef",
+  "task": "T11",
+  "commit": "f7b9eef",
+  "host": "yss3",
+  "go_version": "go version go1.22.2 linux/amd64",
+  "mode": "timing",
+  "verify": false,
+  "start": "2026-10-13T04:28:35+00:00",
+  "end": "2026-10-13T04:42:56+00:00",
+  "exit_code": 0,
+  "args": [
+    "-timing",
+    "-disable-servers",
+    "-benchmark",
+    "probe",
+    "-metric-file-name",
+    "/home/daoxuanxu/exp/cupath/results/1013_probe-P4-all48-read-pass2_wafer48_baseline_f7b9eef/stats/metrics",
+    "-report-l2-source",
+    "-l2-source-file",
+    "/home/daoxuanxu/exp/cupath/results/1013_probe-P4-all48-read-pass2_wafer48_baseline_f7b9eef/stats/l2",
+    "-report-rdma-transaction-count",
+    "-report-dram-transaction-count",
+    "-report-inst-count",
+    "-report-cache-hit-rate",
+    "-probe-all-gpms",
+    "-probe-mode",
+    "read",
+    "-probe-passes",
+    "2"
+  ]
+}

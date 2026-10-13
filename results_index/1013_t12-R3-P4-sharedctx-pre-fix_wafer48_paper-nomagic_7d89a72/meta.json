@@ -1,0 +1,83 @@
+{
+  "exp_id": "1013_t12-R3-P4-sharedctx-pre-fix_wafer48_paper-nomagic_7d89a72",
+  "task": "T12",
+  "commit": "7d89a72",
+  "host": "yss3",
+  "go_version": "go version go1.22.2 linux/amd64",
+  "mode": "timing",
+  "verify": false,
+  "config": "paper (95b4f46 BASE_COMMON_FLAGS via runall2 build_common_flags)",
+  "config_deviation": [
+    {
+      "flag": "-magic-memory-copy",
+      "change": "removed",
+      "reason": "T12-R3：不加才会走flush路径，T12要求"
+    },
+    {
+      "flag": "-report-l2-source",
+      "change": "added",
+      "reason": "统计开关：L2 数据来源（本地/远程 × L2/DRAM）"
+    },
+    {
+      "flag": "-l2-source-tile-width=7",
+      "change": "added",
+      "reason": "统计开关的参数：7×7 mesh 宽度，用来算跳数"
+    },
+    {
+      "flag": "-benchmark probe",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-probe-all-gpms",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-probe-shared-ctx",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-probe-bytes 2097152",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-probe-passes 2",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    }
+  ],
+  "start": "2026-10-13T05:23:47+00:00",
+  "end": "2026-10-13T05:28:45+00:00",
+  "exit_code": 143,
+  "args": [
+    "-timing",
+    "-num-memory-banks=4",
+    "-l1v-mshr-entries=16",
+    "-l1v-max-concurrent-trans=16",
+    "-bandwidth=48",
+    "-switch-latency=32",
+    "-rdma-pipeline-width=8",
+    "-rdma-pipeline-latency=10",
+    "-rdma-max-outstanding=64",
+    "-report-all",
+    "-disable-servers",
+    "-report-l2-source",
+    "-l2-source-tile-width=7",
+    "-mmutlb-lookup-latency=80",
+    "-benchmark",
+    "probe",
+    "-probe-all-gpms",
+    "-probe-shared-ctx",
+    "-probe-bytes",
+    "2097152",
+    "-probe-passes",
+    "2",
+    "-metric-file-name",
+    "/home/daoxuanxu/exp/cupath/results/1013_t12-R3-P4-sharedctx-pre-fix_wafer48_paper-nomagic_7d89a72/stats/metrics",
+    "-l2-source-file",
+    "/home/daoxuanxu/exp/cupath/results/1013_t12-R3-P4-sharedctx-pre-fix_wafer48_paper-nomagic_7d89a72/stats/l2"
+  ]
+}

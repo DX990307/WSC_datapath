@@ -1,0 +1,49 @@
+{
+  "exp_id": "1013_t12-R2-fir-maxwg4096-post-fix_wafer48_paper-nomagic_9c30a89",
+  "task": "T12",
+  "commit": "9c30a89",
+  "host": "yss2",
+  "go_version": "go version go1.22.2 linux/amd64",
+  "mode": "timing",
+  "verify": false,
+  "config": "paper (95b4f46 BASE_COMMON_FLAGS via runall2 build_common_flags)",
+  "config_deviation": [
+    {
+      "flag": "-magic-memory-copy",
+      "change": "removed",
+      "reason": "T12-R2回归：让单queue拷贝走被修改的defaultMemoryCopyMiddleware，不进论文"
+    },
+    {
+      "flag": "-max-wg=4096",
+      "change": "added",
+      "reason": "benchmark 截断参数（不算配置修改）"
+    },
+    {
+      "flag": "-benchmark fir",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    }
+  ],
+  "start": "2026-10-13T05:23:49+00:00",
+  "end": "2026-10-13T07:17:19+00:00",
+  "exit_code": 0,
+  "args": [
+    "-timing",
+    "-num-memory-banks=4",
+    "-l1v-mshr-entries=16",
+    "-l1v-max-concurrent-trans=16",
+    "-bandwidth=48",
+    "-switch-latency=32",
+    "-rdma-pipeline-width=8",
+    "-rdma-pipeline-latency=10",
+    "-rdma-max-outstanding=64",
+    "-report-all",
+    "-disable-servers",
+    "-mmutlb-lookup-latency=80",
+    "-max-wg=4096",
+    "-benchmark",
+    "fir",
+    "-metric-file-name",
+    "/home/daoxuanxu/exp/cupath/results/1013_t12-R2-fir-maxwg4096-post-fix_wafer48_paper-nomagic_9c30a89/stats/metrics"
+  ]
+}
