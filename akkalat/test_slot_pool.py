@@ -80,6 +80,37 @@ class SlotPoolTest(unittest.TestCase):
         self.assertEqual(peak, 2)
         self.assertEqual(os.listdir(os.path.join(self.dir, "waiters")), [])
 
+    def test_campaign_at_its_own_limit_does_not_hold_back_others(self):
+        # A higher-priority campaign that is at its own worker limit (with
+        # runs still pending) must not keep a lower-priority one from using
+        # a free shared slot.
+        gate = threading.Event()
+        started = []
+
+        def fake_run(exp):
+            started.append(exp["id"])
+            gate.wait(5)
+            return {"success": True}
+
+        env = {"EXP_SLOT_DIR": self.dir, "EXP_SLOT_COUNT": "3", "EXP_SLOT_PRIORITY": "1"}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(slot_pool, "POLL_SECONDS", 0.01), \
+                mock.patch.object(runall2, "run_exp", side_effect=fake_run), \
+                mock.patch.object(runall2, "terminate_all_processes"):
+            high = threading.Thread(target=runall2.run_all_experiments,
+                                    args=([{"id": f"h{i}"} for i in range(4)],),
+                                    kwargs={"max_workers": 1})
+            high.start()
+            deadline = time.time() + 5
+            while "h0" not in started and time.time() < deadline:
+                time.sleep(0.01)
+            low = slot_pool.SlotPool(self.dir, 3, 2)
+            slot = low.try_acquire()
+            self.assertIsNotNone(slot)
+            slot.close()
+            gate.set()
+            high.join(10)
+
     def test_scheduler_unchanged_without_pool(self):
         peak, running = 0, 0
         lock = threading.Lock()

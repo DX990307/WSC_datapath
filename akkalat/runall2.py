@@ -424,8 +424,6 @@ def run_all_experiments(
     pool = slot_pool.SlotPool.from_env()
     slots = {}
     held_back = []
-    if pool:
-        pool.set_waiting(True)
     failures = []
     admitted_concurrency = initial_workers
     next_scan = time.monotonic() + memory_scan_seconds
@@ -447,9 +445,13 @@ def run_all_experiments(
             return None
 
     def fill_available_slots():
+        # Registered as waiting only while this campaign could launch now but
+        # every shared slot is taken, so lower-priority campaigns are held
+        # back only when they would otherwise take a slot this one can use.
+        waiting = False
         while len(futures) < admitted_concurrency and not pending_exhausted:
             if not memory_allows_launch():
-                return
+                break
             exp = next_exp()
             if exp is None:
                 break
@@ -458,13 +460,14 @@ def run_all_experiments(
                 slot = pool.try_acquire()
                 if slot is None:
                     held_back.append(exp)
-                    return
+                    waiting = True
+                    break
             future = executor.submit(run_exp, exp)
             futures.add(future)
             if slot is not None:
                 slots[future] = slot
-        if pool and pending_exhausted:
-            pool.set_waiting(False)
+        if pool:
+            pool.set_waiting(waiting)
 
     try:
         while futures or not pending_exhausted:
