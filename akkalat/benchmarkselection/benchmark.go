@@ -219,6 +219,8 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		fft.Bytes = 1024
 		fft.Passes = 4
 		benchmark = fft
+	case "probe":
+		benchmark = newProbe(driver)
 	case "floydwarshall":
 		floydwarshall := floydwarshall.NewBenchmark(driver)
 		floydwarshall.NumNodes = 11584
