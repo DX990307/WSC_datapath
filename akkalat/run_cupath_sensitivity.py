@@ -196,10 +196,7 @@ def mechanism_flags() -> dict[str, list[str]]:
 def common_flags(args) -> list[str]:
     flags = apply_gpm_preset(
         BASE_COMMON_FLAGS[:], getattr(args, "gpm_preset", DEFAULT_GPM_PRESET))
-    flags.extend((
-        "-disable-servers",
-        f"-mmutlb-lookup-latency={DEFAULT_MMUTLB_LOOKUP_LATENCY}",
-    ))
+    flags.append(f"-mmutlb-lookup-latency={DEFAULT_MMUTLB_LOOKUP_LATENCY}")
     if args.max_wg > 0:
         flags.append(f"-max-wg={args.max_wg}")
     return flags
