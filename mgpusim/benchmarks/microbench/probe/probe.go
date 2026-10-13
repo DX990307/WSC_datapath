@@ -87,11 +87,9 @@ func (b *Benchmark) Run() {
 
 func (b *Benchmark) runSingle() {
 	s := NewSPMD(b.driver, b.context, []int{b.Runner})
-	s.mustBeGPU(b.Owner)
-	s.mustBeGPU(b.Runner)
 
-	buf := s.AllocOn(b.Owner, b.Bytes)
-	sink := s.AllocOn(b.Runner, 64)
+	buf := s.AllocFor(0, b.Owner, b.Bytes)
+	sink := s.AllocFor(0, b.Runner, 64)
 	fmt.Printf("PROBE_CONFIG owner=%d runner=%d bytes=%d mode=%d passes=%d threads=%d buf=0x%x\n",
 		b.Owner, b.Runner, b.Bytes, b.Mode, b.Passes, b.Threads, uint64(buf))
 

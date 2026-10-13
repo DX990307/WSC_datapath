@@ -13,12 +13,19 @@ import (
 // GPU: every GPM gets its own command queue, so each kernel runs only on the
 // GPM it is launched to.
 //
-// The driver keeps the selected GPU in the context, so an SPMD must be driven
-// from a single goroutine.
+// Every rank also gets its own driver context (sharing one PID, so all ranks
+// see the same virtual address space), as mccl's CommInitAllMultipleContexts
+// does. With a single shared context, processing any rank's kernel launch
+// marks every buffer of the context dirty, so the other ranks' kernarg copies
+// trigger an L2 flush on all GPMs; the flush responses can then race with the
+// copy responses and leave a queue stuck forever.
+//
+// The driver keeps the selected GPU in each context, so an SPMD must be
+// driven from a single goroutine.
 type SPMD struct {
 	Driver *driver.Driver
-	Ctx    *driver.Context
 	GPUs   []int // driver GPU IDs, starting from 1; rank i runs on GPUs[i]
+	Ctxs   []*driver.Context
 	Queues []*driver.CommandQueue
 }
 
@@ -30,27 +37,36 @@ type Launch struct {
 	Args interface{}
 }
 
-// NewSPMD creates one command queue per GPM.
-func NewSPMD(d *driver.Driver, ctx *driver.Context, gpus []int) *SPMD {
-	s := &SPMD{Driver: d, Ctx: ctx, GPUs: gpus}
+// NewSPMD creates one context and one command queue per GPM. All contexts
+// share the PID of base.
+func NewSPMD(d *driver.Driver, base *driver.Context, gpus []int) *SPMD {
+	s := &SPMD{Driver: d, GPUs: gpus}
 	for _, g := range gpus {
+		s.mustBeGPU(g)
+		ctx := d.InitWithExistingPID(base)
 		d.SelectGPU(ctx, g)
+		s.Ctxs = append(s.Ctxs, ctx)
 		s.Queues = append(s.Queues, d.CreateCommandQueue(ctx))
 	}
 	return s
 }
 
-// AllocOn allocates a buffer whose pages live on the given GPM.
-func (s *SPMD) AllocOn(gpu int, bytes uint64) driver.Ptr {
-	s.Driver.SelectGPU(s.Ctx, gpu)
-	return s.Driver.AllocateMemory(s.Ctx, bytes)
+// AllocFor allocates a buffer whose pages live on the given GPM. The buffer is
+// tracked by rank's context, so it should be the rank whose kernels write it.
+func (s *SPMD) AllocFor(rank, gpu int, bytes uint64) driver.Ptr {
+	s.mustBeGPU(gpu)
+	ctx := s.Ctxs[rank]
+	s.Driver.SelectGPU(ctx, gpu)
+	ptr := s.Driver.AllocateMemory(ctx, bytes)
+	s.Driver.SelectGPU(ctx, s.GPUs[rank])
+	return ptr
 }
 
 // AllocShards allocates one shard per rank; shard i lives on GPUs[i].
 func (s *SPMD) AllocShards(bytesPerShard uint64) []driver.Ptr {
 	shards := make([]driver.Ptr, len(s.GPUs))
 	for i, g := range s.GPUs {
-		shards[i] = s.AllocOn(g, bytesPerShard)
+		shards[i] = s.AllocFor(i, g, bytesPerShard)
 	}
 	return shards
 }
@@ -67,19 +83,18 @@ func (s *SPMD) UploadPtrTable(shards []driver.Ptr) []driver.Ptr {
 	bytes := uint64(binary.Size(table))
 	tables := make([]driver.Ptr, len(s.GPUs))
 	for i, g := range s.GPUs {
-		tables[i] = s.AllocOn(g, bytes)
-		s.Driver.MemCopyH2D(s.Ctx, tables[i], table)
+		tables[i] = s.AllocFor(i, g, bytes)
+		s.Driver.MemCopyH2D(s.Ctxs[i], tables[i], table)
 	}
 	return tables
 }
 
 // RunPhase launches every kernel of a phase on its own GPM, then waits for
-// all of them. The GPM is selected before each enqueue because the driver
-// places the code object, kernel arguments, and AQL packet on the selected
-// GPU; otherwise instruction and kernarg fetches would become remote.
+// all of them. Each rank's context stays selected on its own GPM because the
+// driver places the code object, kernel arguments, and AQL packet on the
+// selected GPU; otherwise instruction and kernarg fetches would be remote.
 func (s *SPMD) RunPhase(co *insts.HsaCo, launches []Launch) {
 	for _, l := range launches {
-		s.Driver.SelectGPU(s.Ctx, s.GPUs[l.Rank])
 		s.Driver.EnqueueLaunchKernel(s.Queues[l.Rank], co, l.Grid, l.WG, l.Args)
 	}
 
