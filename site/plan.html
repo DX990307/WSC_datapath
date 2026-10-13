@@ -1,0 +1,30 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>计划与配置</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"><link rel="stylesheet" href="style.css"></head><body><nav class="topnav" aria-label="页面"><div class="in"><a class="brand" href="index.html">CuPath · ISCA 27</a><a class="pg" href="index.html">总览</a><a class="pg" href="plan.html" aria-current="page">计划与配置</a><a class="pg" href="mechanism.html">新机制</a><a class="pg" href="workloads.html">Workload 与实验</a><a class="pg" href="reviews.html">审稿意见</a><a class="pg" href="facts.html">论文数字</a><a class="pg" href="log.html">讨论日志</a></div></nav><div class="wrap"><main><header><h1>计划与配置</h1><p class="sub">时间线、论文配置规则和 MI300X 目标配置。任务文档在 ~/Desktop/CuPath/isca27/。</p></header><section id="timeline"><h2>时间线（10-13 修订）</h2><p class="lede">按 ISCA 2026 的日期推算，摘要通常比全文早一周注册。全量重跑会占用两台服务器，需要和 workload 开发错开安排。</p><div class="timeline">
+<div class="wk now"><div class="when">W1 · 10/12–10/18</div><h3>基础设施和配置</h3><ul><li>T11 探针（完成）</li><li>T12 driver 修复（进行中）</li><li>T13 阶段 1–3：MI300X 预设和校准</li><li>T2 统计、T3 强 baseline</li></ul></div>
+<div class="wk"><div class="when">W2 · 10/19–10/25</div><h3>全量重跑和 go/no-go</h3><ul><li>T13 阶段 4：新配置下全量重跑</li><li>workload 开发（T10 或 T5）</li><li>M1、M2 测量 → go/no-go</li></ul><div class="gate">关口：M1 太低就执行 D8 的退路</div></div>
+<div class="wk"><div class="when">W3 · 10/26–11/1</div><h3>实现新机制</h3><ul><li>T7、T8（前提是通过关口并且你确认）</li></ul></div>
+<div class="wk"><div class="when">W4 · 11/2–11/8</div><h3>全量实验和敏感性分析</h3><ul><li>mesh 带宽和延迟、规模、NI 表容量、page placement</li><li>约 11/9 注册摘要</li></ul></div>
+<div class="wk"><div class="when">W5 · 11/9–11/16</div><h3>写作</h3><ul><li>新的 intro 和 contribution、O→机制映射图、workflow 图</li></ul></div>
+</div></section><section id="config"><h2>论文配置规则</h2><p class="lede">D14、D16：配置不可修改；每个 task 执行前都要确认；所有运行都保留 -magic-memory-copy。</p>
+<div class="tablewrap"><table><thead><tr><th>项目</th><th>内容</th></tr></thead><tbody>
+<tr><td>当前有效配置</td><td>commit <code>95b4f46</code> 的 <code>BASE_COMMON_FLAGS</code> 加上 <code>-disable-servers -mmutlb-lookup-latency=80</code>；机制实验另外加 <code>DEFAULT_BENCHMARK_FLAGS</code>。参数一律从 <code>runall2_constants.py</code> 导入。</td></tr>
+<tr><td>关键参数</td><td><code>-bandwidth=48</code>（768 GB/s）、<code>-switch-latency=32</code>、<code>-rdma-max-outstanding=64</code>、<code>-num-memory-banks=4</code>、<code>-magic-memory-copy</code></td></tr>
+<tr><td>执行前确认</td><td>①检查 7 个配置文件的 blob 是否和基准一致 → ②打印完整参数 → ③列出和论文配置的差异 → ④等你确认；差异写进 meta.json 的 <code>config_deviation</code></td></tr>
+<tr><td>正在切换</td><td>T13 校准完成、你确认之后，1/8 MI300X 预设成为新的论文配置；旧配置保留为“HPCA 投稿版”</td></tr>
+</tbody></table></div></section><section id="mi300"><h2>目标配置：每个 GPM = 1/8 MI300X</h2><p class="lede">1 GHz 下按每周期等效（以 MI300X 的 2.1 GHz 换算）。来源：AMD CDNA 3 白皮书、MI300X 产品页。</p>
+<div class="tablewrap"><table><thead><tr><th>参数</th><th>旧配置</th><th>新配置</th></tr></thead><tbody>
+<tr><td>CU</td><td>32</td><td><b>38</b>（19 组，每组 2 个 CU）</td></tr>
+<tr><td>L1 vector</td><td>16 KB/CU</td><td><b>32 KB/CU</b>（line 仍为 64B）</td></tr>
+<tr><td>L1 instruction</td><td>每个 shader array 32 KB</td><td><b>64 KB，8 路，2 个 CU 共享</b></td></tr>
+<tr><td>L2</td><td>4 × 1 MB，16 路</td><td><b>16 × 256 KB</b>，16 路（总共 4 MB）</td></tr>
+<tr><td>L2 吞吐</td><td>约 4 KB/周期</td><td><b>2 KB/周期</b></td></tr>
+<tr><td>内存 channel</td><td>4</td><td><b>16</b></td></tr>
+<tr><td>HBM 带宽</td><td>按代码是 <b>128 B/周期</b>（论文 Table II 写的是 0.375 TB/s，不一致，待核实）</td><td><b>约 315 B/周期</b>（5.3 TB/s ÷ 8 ÷ 2.1 GHz）</td></tr>
+<tr><td>CuPath filter</td><td>按代码每个分区 <b>32K 槽</b>（2 × 块数；论文写的是 16K，待核实）</td><td>每个 channel 8K 槽，每 GPM 总量不变（128K）</td></tr>
+<tr><td>不变的部分</td><td colspan="2">HBM 容量 8 GB、cache line 64B、不建模 Infinity Cache、1 GHz、wafer 网络、RDMA、MMU</td></tr>
+</tbody></table></div></section><section id="workflow"><h2>工作流和 prompt</h2><p class="lede">本机 Claude Code 写代码、跑实验；Cowork 这边负责讨论、决策和维护文档。两边通过 isca27/ 下的文档交接。</p>
+<div class="tablewrap"><table><thead><tr><th>文件</th><th>谁写</th><th>用途</th></tr></thead><tbody>
+<tr><td><code>README.md</code>、<code>CONFIG.md</code>、<code>00_background.md</code>、<code>tasks/T*.md</code>、<code>guides/</code></td><td>Cowork</td><td>规则、背景、任务规格</td></tr>
+<tr><td><code>STATUS.md</code></td><td>Claude Code</td><td>进度、需要你决定的事、规格和代码的差异、结果摘要</td></tr>
+<tr><td><code>prompts/P01–P04</code></td><td>Cowork</td><td>P01 T11；P02 T12 + T11 重跑；P03 T13；<b>P04 = P02 + P03 合并版（当前使用）</b></td></tr>
+<tr><td>仓库 <code>results/&lt;exp_id&gt;/</code></td><td>Claude Code</td><td>meta.json、summary.csv、stats/、日志（不进 git；meta 和 summary 复制到文档仓库的 results_index/）</td></tr><tr><td><code>SYNC.md</code></td><td>三方</td><td>同步与备份规则，以及只追加的变更日志。开工前先读对方的新条目和 git diff；每个任务结束都推送到 GitHub</td></tr><tr><td><code>prompts/P05</code></td><td>Cowork</td><td>建立同步机制和 GitHub 备份（文档仓库 DX990307/cupath-isca27）</td></tr>
+</tbody></table></div></section><footer>页面由 Cowork 侧维护；任务文档在 ~/Desktop/CuPath/isca27/。状态标签：已定 = 你拍板的；提案 = 待你确认；待验证 = 看实验数据。最后更新 2026-10-13。</footer></main></div></body></html>

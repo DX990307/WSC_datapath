@@ -1,0 +1,56 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>新机制</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"><link rel="stylesheet" href="style.css"></head><body><nav class="topnav" aria-label="页面"><div class="in"><a class="brand" href="index.html">CuPath · ISCA 27</a><a class="pg" href="index.html">总览</a><a class="pg" href="plan.html">计划与配置</a><a class="pg" href="mechanism.html" aria-current="page">新机制</a><a class="pg" href="workloads.html">Workload 与实验</a><a class="pg" href="reviews.html">审稿意见</a><a class="pg" href="facts.html">论文数字</a><a class="pg" href="log.html">讨论日志</a></div></nav><div class="wrap"><main><header><h1>新机制</h1><p class="sub">两项都还是提案（D3、D4 待验证）。</p></header><section id="mechanism">
+      <h2>新机制提案</h2>
+      <p class="lede">两项都还在提案阶段。区域大小、代理选择规则等细节见“待决问题”。</p>
+      <div class="mech">
+        <div class="card">
+          <h3>机制 1 · 按距离分区域的远程数据复制</h3>
+          <ul>
+            <li>把 7×7 mesh 划成若干小区域，每个远程 page 在请求者所在区域内有一个固定的代理 GPM（用页地址哈希选）</li>
+            <li>读请求先去代理（1–2 跳）。代理命中就直接返回；不命中由代理去 home 取，再用自己空闲或已死的 way 缓存</li>
+            <li>只在 home 足够远时走代理，近的直接访问 home</li>
+            <li>代理顺带合并同区域内多个 GPM 的重复请求</li>
+          </ul>
+          <p class="why">好处：闲置 L2 变成分布式远程缓存，仍然不新增 cache 层级；GPM 内的合并升级为跨 GPM 合并；每个区域只存一份副本。</p>
+        </div>
+        <div class="card">
+          <h3>机制 2 · 基于写签名的选择性失效</h3>
+          <ul>
+            <li>每个 owner GPM 在一个 kernel 内把被写过的 page 记进 Bloom 签名</li>
+            <li>kernel 边界广播签名，各 GPM 只失效命中签名的副本</li>
+            <li>其余只读副本跨 kernel 保留，比如权重、迭代算法中的输入数据</li>
+          </ul>
+          <p class="why">Bloom filter 不会有假阴性，假阳性只会多失效一些行，所以正确性由结构本身保证。这同时回答了“为什么要用近似结构”。</p>
+        </div>
+      </div>
+      <div class="waferbox">
+        <div class="wafer" role="img" aria-label="7×7 wafer 示意：请求者 R 所在的 3×3 区域内有代理 P，home H 在远处">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i class="h">H</i>
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          <i></i><i></i><i></i><i class="cpu"></i><i></i><i></i><i></i>
+          <i class="reg"></i><i class="reg"></i><i class="reg"></i><i></i><i></i><i></i><i></i>
+          <i class="reg"></i><i class="p">P</i><i class="reg"></i><i></i><i></i><i></i><i></i>
+          <i class="r">R</i><i class="reg"></i><i class="reg"></i><i></i><i></i><i></i><i></i>
+        </div>
+        <div class="wafer-note">
+          <div><span class="sw" style="background:var(--accent)"></span>R：请求者 GPM</div>
+          <div><span class="sw" style="background:var(--todo)"></span>P：该页在 R 所在区域内的代理，2 跳</div>
+          <div><span class="sw" style="background:var(--warn)"></span>H：home GPM，12 跳</div>
+          <div><span class="sw" style="background:var(--accent-soft);outline:1px solid var(--accent)"></span>R 所在的 3×3 区域（示意，大小未定）</div>
+          <div><span class="sw" style="background:var(--cpu)"></span>中央 CPU / I/O tile</div>
+        </div>
+      </div>
+    </section><section id="related">
+      <h2>需区分的相关工作</h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>工作</th><th>有多接近</th><th>区分点</th></tr></thead>
+        <tbody>
+          <tr><td>HMG（Ren et al., HPCA'20）</td><td><span class="chip c-risk">最接近</span></td><td>HMG 的层级由封装固定；wafer 上没有封装边界，区域按距离划分，是否走代理也随距离自适应</td></tr>
+          <tr><td>R-NUCA（ISCA'09）、victim replication</td><td>CPU 的 NUCA 复制</td><td>GPU 的 scoped consistency；kernel 粒度的选择性失效</td></tr>
+          <tr><td>CARVE（MICRO'18）、HALCONE、MGPU-TSM</td><td>multi-GPU 的远程缓存和一致性</td><td>没有考虑距离；失效是全量的，或基于时间戳</td></tr>
+          <tr><td>Bulk（ISCA'06）的签名</td><td>用签名做一致性</td><td>用在 GPU kernel 边界，配合区域副本</td></tr>
+          <tr><td>MCM-GPU L1.5、SAC、selective replication</td><td>远程缓存</td><td>按模块或按 requester，不考虑距离；需要实际跑对比</td></tr>
+          <tr><td>Barre Chord、HDPAT、Agarwal HPCA'16</td><td>用 CF 或 Bloom 做预测</td><td>不再把 CF 当卖点</td></tr>
+        </tbody>
+      </table></div>
+    </section><footer>页面由 Cowork 侧维护；任务文档在 ~/Desktop/CuPath/isca27/。状态标签：已定 = 你拍板的；提案 = 待你确认；待验证 = 看实验数据。最后更新 2026-10-13。</footer></main></div></body></html>

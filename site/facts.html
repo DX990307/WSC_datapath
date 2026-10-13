@@ -1,0 +1,22 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>论文数字</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"><link rel="stylesheet" href="style.css"></head><body><nav class="topnav" aria-label="页面"><div class="in"><a class="brand" href="index.html">CuPath · ISCA 27</a><a class="pg" href="index.html">总览</a><a class="pg" href="plan.html">计划与配置</a><a class="pg" href="mechanism.html">新机制</a><a class="pg" href="workloads.html">Workload 与实验</a><a class="pg" href="reviews.html">审稿意见</a><a class="pg" href="facts.html" aria-current="page">论文数字</a><a class="pg" href="log.html">讨论日志</a></div></nav><div class="wrap"><main><header><h1>论文数字</h1><p class="sub">HPCA 投稿版（旧配置）下的结果。T13 全量重跑之后会更新。</p></header><div class="next" style="background:var(--risk-soft);border-color:var(--risk)"><div class="tag" style="color:var(--risk)">论文和代码不一致（10-13 T13 阶段 1 发现）</div><p>① HBM 带宽：论文 Table II 写的是每 GPM 0.375 TB/s，代码算出来是 128 B/周期（4 个控制器 × 32 B/ns）。② typed filter：论文写每个分区 4K bucket × 4 槽 = 16K 槽、每 GPM 168 KiB；代码按“2 × 块数”算，每个分区 32K 槽。需要核实论文实验实际用的是哪个值。</p></div><section id="facts">
+      <h2>论文关键数字</h2>
+      <p class="lede">HPCA 投稿版，供讨论时引用。</p>
+      <div class="nums">
+        <div class="num"><div class="k">整体 GMEAN</div><div class="v">1.47×</div></div>
+        <div class="num"><div class="k">单独：Aggregation / Reuse / Pairing</div><div class="v">1.209 / 1.156 / 1.108×</div></div>
+        <div class="num"><div class="k">MM / FWS / KM</div><div class="v">6.18 / 4.34 / 2.50×</div></div>
+        <div class="num"><div class="k">MM 只开 Remote Reuse</div><div class="v">5.451×</div></div>
+        <div class="num"><div class="k">BT / FWT（主要来自 Pairing）</div><div class="v">1.635 / 1.645×</div></div>
+        <div class="num"><div class="k">请求者到 home 的距离</div><div class="v">3.0–6.6 跳</div></div>
+        <div class="num"><div class="k">远程访问端到端延迟</div><div class="v">465–7,787 周期</div></div>
+        <div class="num"><div class="k">O3 同 line / 同 page（16 周期窗口）</div><div class="v">25.9% / 23.1%</div></div>
+        <div class="num"><div class="k">O4 远程 line 中被复用的比例</div><div class="v">17.7%</div></div>
+        <div class="num"><div class="k">O5 平均空闲 L2</div><div class="v">60.1%（9.8–94.1%）</div></div>
+        <div class="num"><div class="k">系统规模</div><div class="v">48 GPM，7×7 mesh</div></div>
+        <div class="num"><div class="k">每 GPM</div><div class="v">32 CU，4 MB L2，0.375 TB/s</div></div>
+        <div class="num"><div class="k">mesh 链路</div><div class="v">768 GB/s，32 周期</div></div>
+        <div class="num"><div class="k">NI</div><div class="v">8 transfers/周期，64 outstanding</div></div>
+        <div class="num"><div class="k">filter</div><div class="v">16K 槽 × 21 bit，168 KiB/GPM</div></div>
+        <div class="num"><div class="k">面积开销</div><div class="v">365 KiB/GPM，相对 L2 为 4.70%</div></div>
+      </div>
+    </section><footer>页面由 Cowork 侧维护；任务文档在 ~/Desktop/CuPath/isca27/。状态标签：已定 = 你拍板的；提案 = 待你确认；待验证 = 看实验数据。最后更新 2026-10-13。</footer></main></div></body></html>

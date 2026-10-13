@@ -1,0 +1,277 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>审稿意见</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"><link rel="stylesheet" href="style.css"></head><body><nav class="topnav" aria-label="页面"><div class="in"><a class="brand" href="index.html">CuPath · ISCA 27</a><a class="pg" href="index.html">总览</a><a class="pg" href="plan.html">计划与配置</a><a class="pg" href="mechanism.html">新机制</a><a class="pg" href="workloads.html">Workload 与实验</a><a class="pg" href="reviews.html" aria-current="page">审稿意见</a><a class="pg" href="facts.html">论文数字</a><a class="pg" href="log.html">讨论日志</a></div></nav><div class="wrap"><main><header><h1>审稿意见</h1><p class="sub">问题对照表在前，6 份评审的英文原文在后。</p></header><section id="reviews">
+      <h2>评审问题对照</h2>
+      <p class="lede">A 为 3 分，B–F 为 2 分；C 是领域专家。右列状态表示新计划对这个问题的覆盖情况。</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>问题</th><th>提出者</th><th>应对</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td>缺强 baseline 和 SOTA 对比</td><td class="who">A B C D E F</td><td>B1–B4；说清和 HDPAT [34]（地址翻译，看作者是你们组的前作）的区别</td><td><span class="chip c-todo">必做</span></td></tr>
+          <tr><td>新颖性不足，CF 用法已有先例</td><td class="who">B D E</td><td>主线换成按距离的区域复制 + 写签名失效（D2–D4）</td><td><span class="chip c-warn">提案</span></td></tr>
+          <tr><td>CF 选型、语义、插入失败、端口</td><td class="who">A C E</td><td>D6；补报 FPR、插入失败、relocation、4-bit 计数溢出、banking 方案</td><td><span class="chip c-warn">提案</span></td></tr>
+          <tr><td>一致性：读写并发；kernel 边界失效过度</td><td class="who">A B</td><td>机制 2；写清 scoped consistency 下的语义；加混合读写实验</td><td><span class="chip c-warn">提案</span></td></tr>
+          <tr><td>Local Pairing 被 128B 取数涵盖；缺预取指标</td><td class="who">A C D</td><td>D5 删除</td><td><span class="chip c-warn">提案</span></td></tr>
+          <tr><td>动机测量和实际机制对不上</td><td class="who">A B C</td><td>报告捕获率：same-cycle 对 16-cycle 的捕获、invalid 和 dead way 的区分、retention 被接受的比例</td><td><span class="chip c-todo">必做</span></td></tr>
+          <tr><td>MI100 参数不一致（L2 是真实的 2 倍）</td><td class="who">C</td><td>跑资源对齐的配置，或修正“collectively reproduce”的表述</td><td><span class="chip c-todo">必做</span></td></tr>
+          <tr><td>缺敏感性分析</td><td class="who">A C F</td><td>mesh 带宽和延迟、规模、NI 表、page placement、bank 映射</td><td><span class="chip c-todo">必做</span></td></tr>
+          <tr><td>同 line 请求为什么没在 MSHR 合并</td><td class="who">D</td><td>写清楚：远程请求从 L1 直接进 NI，绕过 requester L2</td><td><span class="chip c-todo">写作</span></td></tr>
+          <tr><td>网络层指标缺失</td><td class="who">A B C</td><td>packet 数、字节数、链路占用；去重和打包分开消融</td><td><span class="chip c-todo">必做</span></td></tr>
+          <tr><td>workload 老；ML 冷 cache</td><td class="who">A B F</td><td>D7</td><td><span class="chip c-warn">提案</span></td></tr>
+          <tr><td>收益集中在少数负载</td><td class="who">A</td><td>补完 baseline 后重新检查 MM、FWS、KM</td><td><span class="chip c-risk">风险</span></td></tr>
+          <tr><td>写作：缺示意图、O→机制映射、细节太多</td><td class="who">B E</td><td>W5 处理</td><td><span class="chip c-todo">写作</span></td></tr>
+        </tbody>
+      </table></div>
+    </section><section id="hpca-reviews">
+      <h2>HPCA 2027 评审原文</h2>
+      <p class="lede">Paper #1329，CuPath: Cuckoo-Guided Memory Request Optimization for Wafer-Scale GPUs。第一轮被拒。下面是 6 份评审的英文原文，供逐条对照。点击标题可以折叠或展开。</p>
+      <div class="scorebar">
+        <a href="#rv-a"><div class="who">Review A · 熟悉该领域</div><div class="s">3 Weak accept</div></a>
+        <a href="#rv-b"><div class="who">Review B · 熟悉该领域</div><div class="s">2 Weak reject</div></a>
+        <a href="#rv-c"><div class="who">Review C · <b style="color:var(--risk)">领域专家</b></div><div class="s">2 Weak reject</div></a>
+        <a href="#rv-d"><div class="who">Review D · 熟悉该领域</div><div class="s">2 Weak reject</div></a>
+        <a href="#rv-e"><div class="who">Review E · 熟悉该领域</div><div class="s">2 Weak reject</div></a>
+        <a href="#rv-f"><div class="who">Review F · 有所了解</div><div class="s">2 Weak reject</div></a>
+      </div>
+
+      <details class="rv" id="rv-a" open><summary>Review #1329A <span class="chip c-ok">3 Weak accept</span><span class="meta2">Soundness 2 · Novelty 2 · Expertise 2</span></summary>
+<pre class="review">Paper summary
+The paper proposes an approach that targets the high cost of memory accesses in wafer-scale GPUs. The key idea of the proposed CuPath is to identify and exploit opportunities to reduce remote traffic, reuse remote data locally, and hide local memory latency in wafer-scale GPUs. To do so, it relies on three underlying mechanisms: 1) remote aggregation, to merge redundant remote requests before they enter the network; 2) remote reuse, to keep reused remote data in the requester’s L2; and 3) local pairing, to issue likely adjacent memory accesses early and hide HBM latency. The three mechanisms share a typed cuckoo filter that provides fast approximate information about in-flight requests, L2 residency, and remote reuse. Evaluation results show significant performance improvements, with CuPath achieving an average 1.47 speedup across 14 GPU workloads.
+
+Strengths
++ The paper identifies several concrete inefficiencies along the memory-access path, including redundant remote requests, remote-data reuse, and adjacent local misses.
++ The design avoids introducing a new cache level or a global scheduler, which keeps the proposal relatively lightweight.
++ The proposed mechanism is interesting, and the paper is well organized and written.
+
+Weaknesses
+- Limited comparison against stronger or simpler baselines, especially for remote caching, request coalescing, and adjacent-line prefetching.
+- Some of the largest gains come from a few workloads, making it important to rule out baseline artifacts.
+- Remote reuse raises coherence and invalidation questions that are not fully explored, especially with synchronization, atomics, and read-write sharing.
+- Local pairing lacks standard prefetching metrics such as accuracy, coverage, timeliness, and wasted HBM traffic.
+
+Soundness
+2. Major weaknesses: significant gaps in the design or evaluation (e.g., missing baselines, unfair comparisons, unsupported conclusions) leave the key claims unconvincing.
+
+Novelty and Expected Impact
+2. Limited novelty or impact: the contribution is incremental, or addresses a narrow problem unlikely to interest much of the community.
+
+Reviewer expertise
+2. Knowledgeable – Solid understanding, but not active in the area
+
+Comments for authors
+This is an interesting and well-written paper focusing on reducing memory-access overheads in wafer-scale GPUs. The proposed approach is clearly presented in the Introduction and properly motivated, so the reader can easily understand the problem that is being solved. The authors do a good job of breaking down the memory path and identifying concrete optimization opportunities rather than motivating CuPath only from high-level latency arguments. In particular, observation O3 is compelling, showing substantial same-line duplication and same-page aggregation opportunities before requests enter the network, while O4 shows that a non-negligible fraction of remote lines exhibit temporal reuse. I also found O2 and O6 useful, as they connect the increasing cost of remote accesses across the wafer with the observation that many local misses arrive in adjacent pairs that can potentially overlap in HBM. Overall, the motivation is clear, data-driven, and provides a convincing rationale for targeting several points along the memory-access path rather than a single bottleneck.
+
+The proposal relies on three mechanisms: remote aggregation, remote reuse, and local pairing.
+
+1. Remote aggregation is well motivated, especially same-line merging, since it removes redundant requests before they consume network resources. However, the same-page opportunity is measured over a 16-cycle window while the actual design only groups requests within the same scheduling cycle. Moreover, packetization mainly reduces request traffic, as responses are still returned independently, so the paper should quantify the actual reduction in packets, bytes, and network occupancy.
+
+2. Remote reuse has the largest potential benefit, since a local L2 hit can avoid an extremely expensive remote access. However, the baseline never caches remote responses in the requester L2, making it unclear how much of the reported gain requires CuPath rather than a much simpler remote-caching policy. Its interaction with replica invalidation, synchronization, and read-write sharing also deserves a more thorough evaluation. It would be interesting to report the fraction of the O3 opportunity that is actually captured by the implemented coalescer, together with the reduction in request packets, and/or overall network traffic. A comparison against a simple exact same-line merge mechanism without the Cuckoo Filter would also help isolate the benefit of the proposed design.
+
+3. Local pairing is an interesting approach to hide HBM latency when adjacent-line accesses occur close in time. However, it is conceptually similar to a simple adjacent-line prefetcher, and the paper does not compare against such a baseline. Its effectiveness also depends on the assumed address-to-controller/bank mapping, while key metrics such as prediction accuracy, coverage, useless traffic, and bandwidth overhead are missing. It would be interesting to compare local pairing against a simple adjacent-line or next-line prefetcher and report prediction accuracy, coverage, timeliness, extra HBM traffic, and unused prefetched lines.
+
+4. Another concern is the coherence strategy for retained remote lines. Authors justify their coherence strategy by stating that retained remote lines simply follow existing L1 invalidation rules at kernel boundaries and synchronization points. While this avoids the complexity of a wafer-scale hardware coherence protocol, it may lead to performance bottleneck for read-only data like ML model weights. By invalidating all retained remote lines at kernel boundaries, the proposal will evict highly reusable data. In real-world ML execution, which involves hundreds of sequential kernel launches, this forces the hardware to redundantly fetch the same read-only weights across the high-latency wafer network. This issue is particularly relevant because the ML evaluation considers operators independently, starts each operator with cold caches, and does not model cross-operator reuse. Please quantify the performance and traffic overhead caused by kernel-boundary invalidations in an end-to-end workload, and clarify whether read-only or otherwise safe retained lines could be preserved across kernel launches.
+
+5. One minor concern is about the choice of the filter. The paper does not clearly justify why a cuckoo filter is preferable to other approximate membership structures such as a Counting Bloom Filter. Both provide reliable negative queries and support deletion, while their main trade-offs are area, false-positive rate, update bandwidth, and implementation complexity. A discussion against a CBF, or a simpler metadata structure, would help establish whether the cuckoo filter is actually essential to CuPath.
+
+6. Finally, the evaluation is extensive in terms of workloads and ablations but some important dimensions are missing. CuPath is evaluated on a single 48-GPM network configuration, with no sensitivity to system scale, network bandwidth/latency, NI resources, or page placement, even though these parameters directly determine the opportunity for the proposed mechanisms. The comparison is also mostly against the baseline architecture, without stronger simple alternatives for remote caching, request coalescing, or adjacent-line prefetching. It would help strengthen the paper if the authors include a sensitivity study on network scale/bandwidth and compare CuPath against a simple remote-caching baseline.
+
+Questions for revision/rebuttal
+See “Comments for authors” for particular questions to address: (1) to (6).</pre></details>
+
+      <details class="rv" id="rv-b" open><summary>Review #1329B <span class="chip c-risk">2 Weak reject</span><span class="meta2">Soundness 2 · Novelty 1 · Expertise 2</span></summary>
+<pre class="review">Paper summary
+The authors identify that ‌Communication‌ and ‌RDMA Waiting‌ are the critical factors severely degrading the efficiency of remote accesses. To address these issues, this work leverages Cuckoo Filters as a compact control plane to orchestrate diverse memory requests and proposes a series of targeted optimizations: a) Aggregating redundant remote requests to eliminate duplicate communication overhead; b) Partitioning a dedicated segment of the L2 cache as a data residency region to enable efficient data reuse; c) Introducing a Local Pairing mechanism to proactively fetch adjacent cache lines in advance. With the above-proposed mechanisms, the authors significantly improve the data access locality and reduce the overall communication overhead on Wafer-scale GPUs.
+
+Strengths
+This work tries to improve data locality by caching remote data and aggregating requests targeting identical or adjacent memory addresses.
+
+Weaknesses
+1. The author applies the typed Cuckoo Filter to wafer-scale GPUs with only minor optimizations, delivering limited effectiveness on partial workloads, which results in very limited innovation.
+2. The proposed method improves locality by caching remote access data, but it only considers read-only and read-after-write scenarios, without addressing data consistency guarantees under read-write parallelism.
+3. The baseline is a naive original scheme; no breakdown experiments are conducted for the proposed approach; the experiments only present performance speedup, and the impacts of the method on remote access bottleneck factors are not verified.
+
+Soundness
+2. Major weaknesses: significant gaps in the design or evaluation (e.g., missing baselines, unfair comparisons, unsupported conclusions) leave the key claims unconvincing.
+
+Novelty and Expected Impact
+1. Neither novel nor impactful: the core idea is already well known or a trivial increment, and it is unlikely to influence research or practice.
+
+Reviewer expertise
+2. Knowledgeable – Solid understanding, but not active in the area
+
+Comments for authors
+This work shows moderate novelty with clear room for further improvement. It currently focuses heavily on read-heavy scenarios and can be extended to support read-write concurrency. The selected baselines are limited and outdated. The experiments mainly report end-to-end speedup, lacking a factor-wise impact analysis (similar to the referenced Figure 2) and a detailed performance breakdown of the proposed method. These concerns form the basis of my final score.
+
+1. From Figure 7, we can observe that there is a considerable amount of free L2 cache capacity across several evaluated benchmarks. We are curious about the design consideration that leads to a relatively small, fixed-size data residency region, and wonder whether a dynamic sizing mechanism could help make better use of this underutilized L2 resource.
+2. The data reuse mechanism works elegantly for read-heavy workloads where no data modification is involved, and no coherence concern arises naturally. It would be very helpful if the authors could add a discussion on how this design handles scenarios with write operations. We would appreciate it if the authors could clarify the consistency guarantees of their proposed mechanism and share some preliminary results under mixed read-write workloads to demonstrate its robustness.
+3. Section IV provides a detailed textual description of the proposed methods, which is very informative. Adding a few more illustrative diagrams to visualize the workflow and key data paths would make the internal logic of the system even more accessible for readers and further strengthen the overall presentation quality of the manuscript.
+4. The end-to-end speedup results are quite encouraging. To help readers better understand the source of the performance improvement, it would be valuable to include a detailed breakdown experiment that quantifies how each optimization factor contributes to the reduction of remote access overhead.
+5. To better position this work against existing state-of-the-art designs, it would be highly beneficial to include more related schemes that have been discussed in Section VI. This additional comparison will clearly demonstrate the unique advantages of the proposed method and make the experimental conclusions more comprehensive.
+6. The 14 selected benchmarks from Hetero-Mark, AMDAPPSDK, SHOC, and DNNMark already cover a good range of typical GPU workloads. Including results from a broader set of benchmarks would further strengthen the generalizability of the conclusions and help readers gain a more complete picture of the performance characteristics of the proposed design.
+
+Questions for revision/rebuttal
+1. Cuckoo Filter. Does Cuckoo Filter identify and aggregate remote requests? How does it recognize the same cache/page requests? What's the set request capacity per Cuckoo Filter?
+2. Data Consistency‌. How does the proposed design ensure data consistency across multiple GPMs under concurrent read-write workloads? Please detail the consistency implementation mechanism and provide experimental data on the overhead.
+3. Baseline Quality. Why is only one basic-config baseline compared? The experiments only show performance speedup, with no results on cache or communication impacts? No breakdown experiments? Why does it only work for partial workloads?</pre></details>
+
+      <details class="rv" id="rv-c" open><summary>Review #1329C <span class="chip c-risk">2 Weak reject</span><span class="meta2">Soundness 2 · Novelty 2 · Expertise 1（领域专家）</span></summary>
+<pre class="review">Paper summary
+This paper proposes CuPath, an end-to-end memory-request optimization for wafer-scale GPUs. Its central idea is to use a typed Cuckoo filter as a compact shared metadata plane spanning the requester network interface, L2, and HBM access path. CuPath combines three mechanisms: Remote Aggregation merges duplicate remote requests and packetizes same-page requests; Remote Reuse selectively retains remote cache lines in the requester L2 after reuse is detected; and Local Pairing predicts accesses to the adjacent 64-B line and issues that HBM read early. Exact cache tags, MSHRs, and transaction tables remain authoritative. Across 14 workloads, the complete system reports a 1.47× geometric-mean speedup; the standalone geometric means are 1.209×, 1.156×, and 1.108× for Remote Aggregation, Remote Reuse, and Local Pairing, respectively.
+
+Strengths
++ The paper attacks the complete request path rather than optimizing only one component.
++ The design is conservative about architectural correctness.
++ The evaluation includes useful ablations and sensitivity experiments.
+
+Weaknesses
+- Several motivation measurements do not measure exactly what the implemented mechanisms can exploit.
+- The typed Cuckoo filter has important semantic, correctness-fallback, throughput, and hardware-cost questions that are not fully specified.
+- The evaluation platform and comparison baseline need substantially stronger validation.
+
+Soundness
+2. Major weaknesses: significant gaps in the design or evaluation (e.g., missing baselines, unfair comparisons, unsupported conclusions) leave the key claims unconvincing.
+
+Novelty and Expected Impact
+2. Limited novelty or impact: the contribution is incremental, or addresses a narrow problem unlikely to interest much of the community.
+
+Reviewer expertise
+1. Expert – Deep, current research involvement in this area
+
+Comments for authors
+The paper presents an interesting attempt to coordinate multiple memory-path optimizations through one compact metadata structure. The decomposition into Remote Aggregation, Remote Reuse, and Local Pairing is clear, and the ablation study indicates that the mechanisms target complementary request populations. However, I have several concerns about the fidelity of the baseline, the semantics/implementation of the typed Cuckoo filter, and whether several motivation results accurately characterize the opportunities actually exploited by the final design.
+
+1. Motivation measurements: The claimed MI100 scaling is numerically inconsistent with actual MI100 resources, and the evaluation does not quantitatively compare CuPath against the closest remote-caching/coalescing techniques.
+- What fraction of Figure 7's “free” capacity is actually invalid capacity, rather than resident-but-dead local data?
+- How often is a reuse-eligible remote fill accepted versus rejected because no eligible way exists?
+- What fraction of the theoretical 60.1% is therefore actually exploitable by Remote Reuse?
+- Can the authors replace Figure 7 or supplement it with a directly measurable quantity such as invalid-way availability and successful remote-retention rate?
+- What percentage of the 23.1% measured same-page opportunity is actually captured by the same-cycle design?
+-Please report the actual reduction in packet count and network bytes.
+-Can same-line deduplication and same-page packetization be separately ablated? At present they are both included under Remote Aggregation.
+- Is Figure 15 changing address interleaving across controllers, changing the number of lines fetched by Local Pairing, or both simultaneously?
+- If both change together, please separate the two parameters; otherwise the experiment cannot establish which factor causes the observed decline from 1.470× to 1.237×.
+- The design also assumes that adjacent 64-B lines in the aligned 128-B region map to different HBM banks. Can the authors validate this mapping for the modeled AMD-like memory system and show sensitivity to alternative bank mappings?
+
+2. Typed Cuckoo Filter semantics, correctness fallback, and hardware feasibility: The paper repeatedly presents a Cuckoo-filter negative as meaning that the line is definitely absent. However, Figure 13 later reports 65 apparent false negatives in FWS: a clean L2-Resident entry can be removed from the filter before the corresponding L2 line is evicted, and the next read consequently bypasses a potential L2 hit and goes to HBM. This appears safe for clean data, but it means the actual semantic guarantee is not “definitely absent”; it is closer to “safe to bypass the exact lookup”.
+- Can the authors revise the definition of a filter negative throughout the paper to distinguish absence from safe bypass?
+- Are analogous evictions possible for NI-In-Flight and Remote-History entries? If yes, what exact opportunity is lost in each case?
+- Please report filter occupancy, replacement/eviction frequency, insertion failures, and Cuckoo relocation statistics.
+- What happens if a dirty L2-resident entry must be inserted/reinserted but both candidate buckets have no replaceable slot?
+- Is there a stash, reserved capacity, bounded relocation path, or fallback that disables bypass until insertion succeeds?
+- The argument that the filter cannot be exhausted with pinned entries unless every L2 line is dirty does not address bucket-local collisions, which can make an insertion fail well before global capacity is exhausted.
+- The NI-In-Flight reference count is only four bits. What happens if more than 15 logical requesters join the same in-flight cache-line request?
+- The throughput claim also needs more implementation detail. Table II provisions 16 filter lookups and 16 updates per cycle, while a Cuckoo-filter lookup normally requires checking two candidate buckets.
+- Are the two buckets read simultaneously?
+- How is the array banked/replicated to sustain the stated throughput?
+- Are all required read/write ports included in CACTI?
+- Are hash generation, fingerprint comparison, relocation logic, arbiters, packetization logic, predictor logic, and wiring included in the critical path and area?
+
+3. Evaluation platform and scaling assumptions: The paper states that each GPM represents one quarter of an AMD MI100-class GPU and that four GPMs collectively reproduce the MI100's compute, cache, memory capacity, and memory bandwidth. However, using Table II, four modeled GPMs have 128 CUs, 16 MiB L2, 32 GB HBM, and 1.5 TB/s HBM bandwidth. AMD's MI100 specifications give 120 CUs, 8 MB L2, 32 GB HBM2, and approximately 1.228 TB/s memory bandwidth. Thus the model has ~6.7% more CUs, 2× the L2 capacity, and ~22% more HBM bandwidth, while only memory capacity matches.
+- How should the statement that four GPMs collectively reproduce the MI100 resources be reconciled with these differences?
+- Why is the L2 specifically doubled relative to MI100? Could this materially affect both the observed “free” L2 capacity and the benefit of Remote Reuse?
+- Can the authors provide sensitivity using a configuration whose aggregate resources match the actual MI100 more closely?
+- How were the newly added network interface, mesh, page placement, and HBM components validated after extending MGPUSim?
+- What are the per-workload percentages of local versus remote requests? Table III only labels workloads as Local/Mixed/Remote, while CuPath's benefits depend directly on that ratio.
+- Why is the comparison limited primarily to Baseline and CuPath's own ablations? Quantitative comparison against at least representative remote caching/coalescing designs such as DualOpt, MCM-GPU-style remote caching, SAC, or selective replication would make the novelty and performance advantage much clearer.
+
+Questions for revision/rebuttal
+1. How much of the motivation is actually captured by the implemented mechanisms: what fraction of Figure 7's “free” capacity is truly usable, what fraction of the 16-cycle same-page opportunity is captured by same-cycle packetization, and what are Local Pairing's accuracy/useless-fetch/extra-HBM-traffic statistics?
+2. How do the authors justify the claimed MI100 scaling when four modeled GPMs have 128 CUs, 16 MiB L2, and 1.5 TB/s, compared with MI100's 120 CUs, 8 MB L2, and ~1.228 TB/s? How sensitive are the results to a correctly resource-matched baseline?
+3. What guarantees correctness if a dirty L2-Resident filter entry cannot be inserted because its candidate Cuckoo buckets are full/pinned? Please specify relocation limits, insertion-failure handling, reserved capacity/stash mechanisms, and 4-bit reference-count overflow behavior.
+4. How is the claimed 16-lookups + 16-updates/cycle filter implemented when each lookup accesses two candidate buckets, and are the multiport/banking, hashing, comparator, relocation, predictor, and packetization costs included in area/timing/power?
+5. Can the authors add quantitative comparisons against the closest existing remote caching/coalescing mechanisms and clarify Figure 15's interleaving-width versus speculative-fetch-width experiment?</pre></details>
+
+      <details class="rv" id="rv-d" open><summary>Review #1329D <span class="chip c-risk">2 Weak reject</span><span class="meta2">Soundness 2 · Novelty 2 · Expertise 2</span></summary>
+<pre class="review">Paper summary
+The paper presents a characterization of the memory access behaviors in a hypothetical wafer-scale GPU and suggests several memory path optimizations including coalescing of requests, selective caching of remote data, and a sort of prefetch mechanism to reduce latency/increase effective bandwidth. The key artifact that allows this to happen is a typed Cuckoo filter that sits in each GPU and informs these decisions before accessing either local memory and/or the remote memory.
+
+Strengths
++ Data movement optimization is a key necessity in future high throughput systems.
++ The characterization of the data access patterns could be useful for other work
+
+Weaknesses
+- Limited novelty of using a filter-based prediction mechanism to predict coalescing and remote aggregation opportunities.
+- The benefit of the local miss aggregation will be easily subsumed by a baseline that does sector-promotion and maybe a different interleaving granularity across banks/channels.
+
+Soundness
+2. Major weaknesses: significant gaps in the design or evaluation (e.g., missing baselines, unfair comparisons, unsupported conclusions) leave the key claims unconvincing.
+
+Novelty and Expected Impact
+2. Limited novelty or impact: the contribution is incremental, or addresses a narrow problem unlikely to interest much of the community.
+
+Reviewer expertise
+2. Knowledgeable – Solid understanding, but not active in the area
+
+Comments for authors
+This is a good characterization paper, but the actual mechanisms explored seem like obvious extension of previous work on using bloom and/or cuckoo filters. There is a large body of work (e.g "Selective GPU Caches...", Agarwal et al. HPCA 2016 ; "Improving Address Translation in Multi-GPUs...", Li et al. MICRO 2021, as well as the Barre Chord paper [12] all use cuckoo filters to predict various sharing or ownership across multi-GPU systems.
+
+Second, the problem the paper is trying to solve seems rather contrived. Why would there be multiple requests from the same requester for the same cache line to the remote GPU in the baseline ? Also if there are requests for different cache lines within the same page, how would you aggregate the requests without introducing additional latency ?
+
+Third, the local misses in HBM arriving in pairs for a single cache line is something that is sort of well-known in GPU design circles in the industry and academia. If you simply fetch 128Bytes from a single bank (set the interleaving granularity to >128B as is done commonly in this space), then this problem mostly goes away - specially if you assume sectored caches with sector-promotion ("A locality-aware memory hierarchy ..." Rhu et al. MICRO 2013, "Locality-Aware CTA Clustering for Modern GPUs", Li et al. ASPLOS 2017 cites how sector promotion happens at the L1 level").
+
+Questions for revision/rebuttal
+- What would happen if you just fetched 128B from a bank every time for these workloads ?
+- Also, please explain the need for remote aggregation for requests to the same cacheline, why would they not be merged earlier, like in the L2 MSHR on a miss.</pre></details>
+
+      <details class="rv" id="rv-e" open><summary>Review #1329E <span class="chip c-risk">2 Weak reject</span><span class="meta2">Soundness 2 · Novelty 2 · Expertise 2</span></summary>
+<pre class="review">Paper summary
+This paper studies the memory access path of wafer-scale GPUs and proposes CuPath, which uses a typed Cuckoo Filter as a shared control plane to coordinate three mechanisms: Remote Aggregation, Remote Reuse, and Local Pairing. The design is evaluated on an extended MGPUSim across 14 workloads, reporting a 1.47× geometric-mean speedup over the baseline.
+
+Strengths
+• The problem is timely and important: the memory access path of wafer-scale GPUs is a relevant and under-explored target.
+• The motivation section provides a detailed set of profiling observations (O1–O6) that characterize the local and remote memory paths.
+
+Weaknesses
+• The technical contribution is somewhat limited: the design is specific to wafer-scale GPUs, and the three mechanisms are incremental adaptations of known ideas (request merging, remote data retention, adjacent-line prefetching).
+• The choice of Cuckoo Filter as the shared control structure is not well justified relative to simpler alternatives.
+• The evaluation is not sufficiently thorough: it compares only against the baseline, with no comparison to related SOTA work.
+• The writing could be more concise and better organized, with more emphasis on summarizing key insights.
+
+Soundness
+2. Major weaknesses: significant gaps in the design or evaluation (e.g., missing baselines, unfair comparisons, unsupported conclusions) leave the key claims unconvincing.
+
+Novelty and Expected Impact
+2. Limited novelty or impact: the contribution is incremental, or addresses a narrow problem unlikely to interest much of the community.
+
+Reviewer expertise
+2. Knowledgeable – Solid understanding, but not active in the area
+
+Comments for authors
+1. Technical contribution is limited and specific to wafer-scale GPUs.
+The three mechanisms in CuPath—merging duplicate remote requests, retaining reused remote data, and prefetching adjacent cache lines—are each adaptations of known ideas to the wafer-scale GPU context. The paper does not introduce a fundamentally new technique; rather, it combines existing concepts through a shared metadata structure. The contribution is therefore somewhat narrow in scope. It would help to clarify what is fundamentally new here beyond the wafer-scale-specific instantiation, and how the design would generalize (or not) to other multi-module GPU organizations.
+2. The choice of Cuckoo Filter needs stronger justification.
+The paper uses a typed Cuckoo Filter as the shared control plane, but does not explain why a Cuckoo Filter is the right structure for this purpose. As the paper notes, the filter has 16K slots per L2 partition, matching the 16K lines the partition holds. If the filter capacity matches the L2 line count one-to-one, a simple bitmap or direct-mapped table could serve the L2-Resident type without false positives. Similarly, the In-Flight type has only 64 concurrent entries (bounded by the network interface), which a small CAM or direct-mapped table could handle. It would be helpful if the authors could: (a) explain why Cuckoo Filter is preferable to simpler exact structures for each of the three types; (b) report the false positive rate and its impact on performance; and (c) compare the area and latency of the Cuckoo Filter approach against simpler alternatives.
+3. Evaluation lacks comparison with related SOTA work.
+The evaluation compares CuPath only against the baseline configuration, with no comparison to related SOTA mechanisms. Several closely related works could serve as meaningful baselines: MCM-GPU's remote-only L1.5 cache (which targets remote data retention, similar to Remote Reuse), AdCoalescer (which targets redundant request merging in MCM-GPUs, similar to Remote Aggregation), and HDPAT (HPCA 2026, which also uses MGPUSim and a Cuckoo Filter for wafer-scale GPUs). Without these comparisons, it is difficult to judge whether CuPath's 1.47× speedup is an incremental gain over existing approaches or a competitive alternative. The paper's claim of "no new cache level" is only meaningful when compared against designs that do add cache levels. It would strengthen the paper to add at least one SOTA comparison.
+4. Writing could be more concise and better organized.
+The motivation section presents six observations (O1–O6) with substantial profiling data, but lacks a clear summary that connects each observation to the corresponding design mechanism. A overview figure or table mapping O1–O6 to Remote Aggregation, Remote Reuse, and Local Pairing would help readers follow the logic more easily. In addition, the paper contains many implementation details that could be moved to an appendix or condensed, allowing the main narrative to focus on the key insights. The writing would benefit from more summarization and less enumeration of details.
+
+Questions for revision/rebuttal
+1. Could you clarify what is fundamentally new in CuPath beyond adapting known ideas (request merging, remote data retention, adjacent-line prefetching) to the wafer-scale context, and which parts would still apply to other multi-module GPU organizations?
+2. Could you explain why a Cuckoo Filter is preferable to a simple bitmap or direct-mapped table for each of the three types, given that the L2-Resident capacity matches the L2 line count and the In-Flight type is bounded by the network interface's outstanding entries?
+3. Could you report the false positive rate of the typed Cuckoo Filter and its impact on performance?
+4. Could you add at least one comparison with a related SOTA mechanism, such as MCM-GPU's remote-only L1.5 cache, AdCoalescer, or HDPAT, to help readers judge whether CuPath's speedup is an incremental gain over SOTA or a competitive alternative?</pre></details>
+
+      <details class="rv" id="rv-f" open><summary>Review #1329F <span class="chip c-risk">2 Weak reject</span><span class="meta2">Soundness 2 · Novelty 2 · Expertise 3</span></summary>
+<pre class="review">Paper summary
+This paper presents CuPath, a memory-request-path design for wafer-scale GPUs built on the observation that L2 caches, network-interface endpoints, and HBM controllers each decide from isolated local state.
+
+Strengths
+(1) The ablation is clean. The authors state plainly that the standalone product (1.55×) exceeds the measured combination, and they disclose the 65 FWS false negatives with a correct harmlessness argument rather than hiding them.
+(2) The measurement-driven design methodology is exemplary. Six observations (O1–O6) quantify the full path from latency breakdown to aggregation opportunity, reuse, free capacity, and adjacent-pair locality. Each mechanism maps cleanly to an observation, which makes the design feel derived rather than assembled.
+
+Weaknesses
+(1) The evidence is simulation-only, on inherited and dated parameters. Since remote communication is precisely what these assumptions determine, the absolute numbers are only as strong as the parameters, and there is no sensitivity sweep over mesh bandwidth or latency to bound this risk.
+(2) The benchmark suite and the headline number are dated and concentrated. Hetero-Mark, SHOC, AMD APP SDK, and DNNMark are 2010s workloads. The operator-level ML study (BERT-7B 6.44×, GPT-7B 6.58×) uses cold caches, no cross-operator reuse, batch 1/seq 512, and merely tracks the MM result, so it adds no independent evidence.
+
+Soundness
+2. Major weaknesses: significant gaps in the design or evaluation (e.g., missing baselines, unfair comparisons, unsupported conclusions) leave the key claims unconvincing.
+
+Novelty and Expected Impact
+2. Limited novelty or impact: the contribution is incremental, or addresses a narrow problem unlikely to interest much of the community.
+
+Reviewer expertise
+3. Somewhat familiar – Basic understanding; not my main area
+
+Comments for authors
+(1) Add sensitivity studies over mesh link bandwidth/latency and NI table capacity; if CuPath's ranking or magnitude depends on these assumed parameters, the reader needs to know.
+(2) Add a modern workload set, or drop the ML section.
+(3) Provide a same-platform comparison against SAC and/or selective replication, or a composition experiment.</pre></details>
+    </section><footer>页面由 Cowork 侧维护；任务文档在 ~/Desktop/CuPath/isca27/。状态标签：已定 = 你拍板的；提案 = 待你确认；待验证 = 看实验数据。最后更新 2026-10-13。</footer></main></div></body></html>

@@ -1,0 +1,52 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Workload 与实验</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"><link rel="stylesheet" href="style.css"></head><body><nav class="topnav" aria-label="页面"><div class="in"><a class="brand" href="index.html">CuPath · ISCA 27</a><a class="pg" href="index.html">总览</a><a class="pg" href="plan.html">计划与配置</a><a class="pg" href="mechanism.html">新机制</a><a class="pg" href="workloads.html" aria-current="page">Workload 与实验</a><a class="pg" href="reviews.html">审稿意见</a><a class="pg" href="facts.html">论文数字</a><a class="pg" href="log.html">讨论日志</a></div></nav><div class="wrap"><main><header><h1>Workload 与实验</h1><p class="sub">测量定义、workload 讨论和已有的实验结果。</p></header><section id="t11"><h2>T11 探针结果（10-13）</h2><p class="lede">P1、P2 是功能性结论，仍然有效。P3、P4 用的是 baseline 二进制的默认参数（16 GB/s、20 周期交换延迟），<b>不是论文配置，性能数字作废</b>，要用新配置重跑。</p>
+<div class="tablewrap"><table><thead><tr><th>实验</th><th>结论</th><th>说明</th></tr></thead><tbody>
+<tr><td class="who">P1</td><td><span class="chip c-ok">通过</span></td><td>数据和 kernel 在同一个 GPM 上时，远程事务数为 0</td></tr>
+<tr><td class="who">P2</td><td><span class="chip c-ok">通过</span></td><td>只有目标 GPM 的 32 个 CU 执行了指令</td></tr>
+<tr><td class="who">P3</td><td><span class="chip c-ok">路径通过</span></td><td>远程读写都经过远端 L2（第 1 遍 miss、第 2 遍 hit）；延迟数字作废</td></tr>
+<tr><td class="who">P4</td><td><span class="chip c-ok">通过</span></td><td>48 个 GPM 能并发运行；耗时数字作废</td></tr>
+</tbody></table></div>
+<p style="margin-top:12px;font-size:14px;color:var(--muted)">其他发现：fork 是 mgpusim v3；CuPath 的远程通路在 RDMA 内部；可以复用 <code>-report-l2-source</code> 统计；SPMD 骨架在 <code>probe/spmd.go</code>；GPM 有两套编号（driver ID 1–48 和 GPU[t]）。</p></section><section id="t10"><h2>T10 自写通信套件（提案）</h2><p class="lede">数据按 GPM 分片，加上显式的通信阶段；通信用 kernel 直接 load/store 对端缓冲区（和 NCCL、NVSHMEM 的做法一样）。T11 已经确认这种写法可行。</p>
+<div class="tablewrap"><table><thead><tr><th>通信模式</th><th>benchmark</th><th>现实来源</th></tr></thead><tbody>
+<tr><td>all-reduce + 一对多热点读</td><td>张量并行 + 共享前缀的 LLM 层</td><td>Megatron TP、vLLM prefix caching</td></tr>
+<tr><td>偏斜的 all-to-all</td><td>MoE 专家并行层</td><td>GShard、DeepSpeed-MoE</td></tr>
+<tr><td>不规则的多对多 gather</td><td>分布式 GNN</td><td>DistDGL</td></tr>
+<tr><td>只和邻居通信（对照组）</td><td>3D stencil</td><td>HPC 区域分解</td></tr>
+<tr><td>写方向的 all-to-all / 稠密 all-to-all</td><td>sample sort / FFT（以后再做）</td><td>—</td></tr>
+</tbody></table></div></section><section id="w1">
+      <h2>W1 测量定义</h2>
+      <p class="lede">在 MGPUSim 里加统计点。阈值是建议值，可以按实际数据调整。</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>编号</th><th>测什么</th><th>怎么统计</th><th>用来判断</th></tr></thead>
+        <tbody>
+          <tr><td class="who">M1</td><td>跨 GPM 共享度</td><td>每个 kernel 内，对每条远程 line 统计访问它的不同 requester GPM 数，按 home 距离分桶，再按远程读流量加权。同时统计“同一候选区域内 ≥2 个 GPM 读同一行”的远程读占比</td><td>机制 1 是否成立。建议：后者在主要负载上要明显超过 10–15%</td></tr>
+          <tr><td class="who">M2</td><td>跨 kernel 复用</td><td>kernel k 读过的远程 line，在 k+1 及之后被同一 GPM 或同区域再读的比例；以及这些 line 所在 page 在 kernel k 内被写过的比例</td><td>机制 2 能保留多少数据</td></tr>
+          <tr><td class="who">M3</td><td>远程读按距离分布</td><td>远程读的跳数直方图，加上各跳数下的平均延迟（在 Fig 4 的基础上细化）</td><td>按距离决定是否走代理时的阈值</td></tr>
+          <tr><td class="who">B1–B4</td><td>强 baseline</td><td>B1 远程数据总进 L2（可以挤掉本地数据）；B2 128B 取数；B3 MCM-GPU L1.5；B4 精确 NI 合并</td><td>原 CuPath 的收益还剩多少（尤其 MM 上的 5.45×）</td></tr>
+        </tbody>
+      </table></div>
+    </section><section id="workloads">
+      <h2>Workload 讨论</h2>
+      <p class="lede">10-12 开始讨论，下面全部是提案。现有 workload 有三个问题：WG 数量受模拟器限制、page placement 太理想导致远程通信少、benchmark suite 太旧（2010–2017）。</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>问题</th><th>应对（提案）</th></tr></thead>
+        <tbody>
+          <tr><td>模拟预算有限：benchmark 太大跑不完，每个 CU 只能执行前约 5 个 WG（10-12 澄清）</td><td>（已撤回 persistent kernel 的建议：每个 WG 变重之后同样跑不完。）新提案：A. 按模拟预算来定输入规模，让 kernel 真正跑完，用“实际访问到的 footprint”代替“分配的 footprint”，目标是明显超过全 wafer 的 L2 总量 192 MB；优先选访存密集的负载。B. 保留 7×7 mesh，但把每个 GPM 的 CU 数从 32 减到 8，L2、HBM、NI、链路带宽按比例缩小，这样每个 CU 能执行的 WG 数约是原来的 4 倍；再用一部分负载在 32 CU 配置上验证趋势一致。C. Photon 采样（10-12 放弃：移植难度太大）。D. 用小输入做验证：同一负载跑完整版和截断版，对比两者的指标</td></tr>
+          <tr><td>page placement 太好，远程通信少</td><td>不要为了制造远程流量去刻意选差的 placement。正确做法是两种策略都报：local-aware，以及按 page 交错（MI300X 的 NPS1 模式就是把数据交错到全部 8 个 HBM stack 上，有真实依据）。同时选择本身就有不规则、全局共享访问的 workload，这类访问任何静态 placement 都无法消除</td></tr>
+          <tr><td>benchmark 太旧</td><td>主评估换成 2020 年后的负载（LLM、MoE、GNN、推荐系统、带标准输入的图计算）。旧 benchmark 保留少数几个作为“经典 kernel”对照</td></tr>
+        </tbody>
+      </table></div>
+      <div class="tablewrap" style="margin-top:16px"><table>
+        <thead><tr><th>批次</th><th>类别</th><th>Workload 和输入</th><th>共享 / 远程特征</th><th>对应机制</th><th>估计 footprint</th><th>工作量</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip c-ok">第一批</span></td><td>LLM 推理</td><td>共享前缀的批量 decode：1B 级配置（hidden 2048，32 个 Q 头，8 个 KV 头，FFN 8192，fp32），batch 16–32，共享 system prompt 2K token，每个请求私有 512 token。kernel 包括 RMSNorm、QKV/O GEMV、attention、SwiGLU FFN，跑 1–2 层</td><td>共享前缀的 KV 被所有请求读（vLLM prefix caching 的真实场景）；GQA 下一个 KV 头被 4 个 Q 头共享；FFN 的 GEMV 是纯流式访问，充当无优化机会的对照</td><td>机制 1；FFN 部分作对照</td><td>每层权重约 243 MB，KV 约 70 MB</td><td>4–6 天</td></tr>
+          <tr><td><span class="chip c-ok">第一批</span></td><td>图学习</td><td>2 层 GCN，ogbn-arxiv 全图（16.9 万点、117 万边、128 维特征）。kernel：CSR SpMM 聚合、GEMM、ReLU</td><td>幂律分布下热点顶点的特征被很多 GPM 读；CSR 跨层只读</td><td>机制 1 + 机制 2</td><td>特征约 87 MB，CSR 约 10 MB</td><td>3–4 天</td></tr>
+          <tr><td><span class="chip c-ok">第一批</span></td><td>推荐系统</td><td>DLRM embedding bag：前向 gather-sum，反向 scatter-add。索引用 Meta 公开的 lookup trace，或参数明确的 zipf 分布</td><td>热门行被所有 GPM 读；反向是带 atomic 的写，正好回应 B 要的读写混合</td><td>机制 1；机制 2 的写路径</td><td>每批实际访问约 100–200 MB</td><td>2–3 天</td></tr>
+          <tr><td><span class="chip c-ok">第一批</span></td><td>数据库</td><td>Star Schema Benchmark 的 hash join 查询（参考 Crystal，SIGMOD'20），SF 1–2：build 阶段写哈希表，probe 阶段读</td><td>维度表的哈希表很小，被所有 GPM 读；从 build 到 probe 跨越 kernel 边界</td><td>机制 1 + 机制 2 的正确性</td><td>约 100–200 MB</td><td>3–4 天</td></tr>
+          <tr><td><span class="chip c-warn">第二批</span></td><td>LLM 推理</td><td>MoE 层（Mixtral 风格 8 选 2，或 DeepSeek 风格 64 选 6）：gating、token permute、grouped GEMM、combine</td><td>热门 expert 的权重被很多 GPM 读；permute 是 all-to-all 的 scatter</td><td>机制 1、aggregation</td><td>按 expert 规模调整</td><td>在 LLM 基础上 +2–3 天</td></tr>
+          <tr><td><span class="chip c-warn">第二批</span></td><td>图计算</td><td>BFS 和 PR（pull 方式），输入用 GAP/Graph500 的 Kronecker 图，scale 20</td><td>访问不规则；每轮迭代一个 kernel，图结构只读</td><td>机制 2、aggregation</td><td>col_idx 约 128 MB</td><td>3 天</td></tr>
+          <tr><td><span class="chip c-todo">可选</span></td><td>HPC</td><td>3D Jacobi 7 点 stencil，256³，3 轮迭代</td><td>只和相邻 GPM 交换 halo，属于近距离远程</td><td>作对照，检验按距离决定是否走代理的阈值</td><td>约 128 MB</td><td>1–2 天</td></tr>
+          <tr><td><span class="chip c-todo">保留</span></td><td>经典 kernel</td><td>MM、FWS、KM、SPMV</td><td>MM 和 FWS 是原来收益最大的；SPMV 作为无优化机会的对照</td><td>—</td><td>沿用现有设置</td><td>0</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-top:12px;font-size:14px;color:var(--muted)">注意事项：(1) GCN3 没有矩阵核心，所有 kernel 用 fp32 写。这会低估访存瓶颈，所以测出的收益是偏保守的，论文里要写明。(2) 所有 workload 都要报 M1 共享度，包括没有优化机会的负载，避免被说挑 workload。(3) 第一天先检查 MGPUSim 的 GCN3 模拟器对 atomic 和各种 load/store 宽度的支持，用一个小 kernel 在 emulation 模式下跑通，免得移植到一半才发现缺指令。(4) 如果采用方案 B（每 GPM 8 个 CU），全 wafer 的 L2 总量会降到 48 MB，上面这些 footprint 都足以给 cache 施压。</p>
+    </section><footer>页面由 Cowork 侧维护；任务文档在 ~/Desktop/CuPath/isca27/。状态标签：已定 = 你拍板的；提案 = 待你确认；待验证 = 看实验数据。最后更新 2026-10-13。</footer></main></div></body></html>
