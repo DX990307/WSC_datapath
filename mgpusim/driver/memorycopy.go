@@ -251,12 +251,7 @@ func (m *defaultMemoryCopyMiddleware) processMemCopyH2DReturn(
 	}
 	copyCmd.Reqs = newReqs
 
-	if len(copyCmd.Reqs) == 0 {
-		cmdQueue.IsRunning = false
-		cmdQueue.Dequeue()
-
-		m.driver.logCmdComplete(cmd, now)
-	}
+	m.completeIfDone(now, cmd, cmdQueue)
 
 	return true
 }
@@ -274,18 +269,7 @@ func (m *defaultMemoryCopyMiddleware) processMemCopyD2HReturn(
 	copyCmd := cmd.(*MemCopyD2HCommand)
 	copyCmd.RemoveReq(req)
 
-	if len(copyCmd.Reqs) == 0 {
-		cmdQueue.IsRunning = false
-		buf := bytes.NewReader(copyCmd.RawData)
-		err := binary.Read(buf, binary.LittleEndian, copyCmd.Dst)
-		if err != nil {
-			panic(err)
-		}
-
-		cmdQueue.Dequeue()
-
-		m.driver.logCmdComplete(copyCmd, now)
-	}
+	m.completeIfDone(now, cmd, cmdQueue)
 
 	return true
 }
@@ -298,11 +282,42 @@ func (m *defaultMemoryCopyMiddleware) processFlushReturn(
 
 	m.driver.logTaskToGPUClear(now, req)
 
-	cmd, _ := m.driver.findCommandByReq(req)
+	cmd, cmdQueue := m.driver.findCommandByReq(req)
 
 	cmd.RemoveReq(req)
 
 	m.driver.logTaskToGPUClear(now, req)
 
+	// The flush that precedes a copy is part of the copy command. When its
+	// response is the last one to arrive, the command must complete here;
+	// otherwise the queue never moves on.
+	m.completeIfDone(now, cmd, cmdQueue)
+
 	return true
+}
+
+// completeIfDone finishes a memory copy command once every request it sent
+// (copy requests and any preceding flush requests) has returned.
+func (m *defaultMemoryCopyMiddleware) completeIfDone(
+	now sim.VTimeInSec,
+	cmd Command,
+	cmdQueue *CommandQueue,
+) {
+	if len(cmd.GetReqs()) != 0 {
+		return
+	}
+
+	cmdQueue.IsRunning = false
+
+	if copyCmd, ok := cmd.(*MemCopyD2HCommand); ok {
+		buf := bytes.NewReader(copyCmd.RawData)
+		err := binary.Read(buf, binary.LittleEndian, copyCmd.Dst)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	cmdQueue.Dequeue()
+
+	m.driver.logCmdComplete(cmd, now)
 }
