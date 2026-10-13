@@ -1,0 +1,2 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi300x-eighth,patterns,,read,,,,,2.000,262144,,14592,,,,48,ring,12582912,70600,,178.228

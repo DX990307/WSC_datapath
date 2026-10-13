@@ -1,0 +1,15 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+hpca,bandwidth,L2,write,1,0,1,0,0,1048576,2048,8,1,,4,,,4194304,31179,,134.523
+hpca,bandwidth,L2,write,1,0,1,0,0,1048576,4096,16,2,,4,,,4194304,16536,,253.647
+hpca,bandwidth,L2,write,1,0,1,0,0,1048576,8192,32,4,,4,,,4194304,9260,,452.949
+hpca,bandwidth,L2,write,1,0,1,0,0,1048576,16384,64,8,,4,,,4194304,6573,,638.111
+hpca,bandwidth,L2,write,1,0,1,0,0,1048576,32768,128,16,,4,,,4194304,7164,,585.47
+hpca,bandwidth,L2,write,1,0,1,0,0,1048576,49152,192,24,,4,,,4194304,8719,,481.053
+hpca,bandwidth,L2,write,1,0,1,0,0,1048576,65536,256,32,,4,,,4194304,9908,,423.325
+hpca,bandwidth,HBM,write,1,0,1,0,0,16777216,2048,8,1,,1,,,16777216,255252,,65.728
+hpca,bandwidth,HBM,write,1,0,1,0,0,16777216,4096,16,2,,1,,,16777216,282227,,59.4458
+hpca,bandwidth,HBM,write,1,0,1,0,0,16777216,8192,32,4,,1,,,16777216,277664,,60.4227
+hpca,bandwidth,HBM,write,1,0,1,0,0,16777216,16384,64,8,,1,,,16777216,277700,,60.4149
+hpca,bandwidth,HBM,write,1,0,1,0,0,16777216,32768,128,16,,1,,,16777216,279056,,60.1213
+hpca,bandwidth,HBM,write,1,0,1,0,0,16777216,49152,192,24,,1,,,16777216,283686,,59.1401
+hpca,bandwidth,HBM,write,1,0,1,0,0,16777216,65536,256,32,,1,,,16777216,279704,,59.982

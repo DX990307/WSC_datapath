@@ -1,0 +1,833 @@
+{
+  "all_flags": {
+    "allocation-profile": {
+      "value": "false",
+      "source": "default"
+    },
+    "analyzer-Name": {
+      "value": "",
+      "source": "default"
+    },
+    "analyzer-period": {
+      "value": "0",
+      "source": "default"
+    },
+    "arch": {
+      "value": "r9nano",
+      "source": "default"
+    },
+    "bandwidth": {
+      "value": "48",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "batch-size": {
+      "value": "1",
+      "source": "default"
+    },
+    "benchmark": {
+      "value": "platbench",
+      "source": "command line"
+    },
+    "benchmark-size": {
+      "value": "4096",
+      "source": "default"
+    },
+    "bert-batch-size": {
+      "value": "0",
+      "source": "default"
+    },
+    "bert-hidden-size": {
+      "value": "0",
+      "source": "default"
+    },
+    "bert-intermediate-size": {
+      "value": "0",
+      "source": "default"
+    },
+    "bert-log-subtasks": {
+      "value": "false",
+      "source": "default"
+    },
+    "bert-mode": {
+      "value": "block",
+      "source": "default"
+    },
+    "bert-num-heads": {
+      "value": "0",
+      "source": "default"
+    },
+    "bert-num-layers": {
+      "value": "0",
+      "source": "default"
+    },
+    "bert-seq-len": {
+      "value": "0",
+      "source": "default"
+    },
+    "bert-size": {
+      "value": "tiny",
+      "source": "default"
+    },
+    "branch-profiling": {
+      "value": "false",
+      "source": "default"
+    },
+    "branch-profiling-threshold": {
+      "value": "512",
+      "source": "default"
+    },
+    "branch-sampled": {
+      "value": "false",
+      "source": "default"
+    },
+    "branch-sampled-coverage-threshold": {
+      "value": "0.95",
+      "source": "default"
+    },
+    "branch-sampled-threshold": {
+      "value": "0.01",
+      "source": "default"
+    },
+    "collect-data": {
+      "value": "false",
+      "source": "default"
+    },
+    "collect-instnum": {
+      "value": "false",
+      "source": "default"
+    },
+    "collect-ipc": {
+      "value": "false",
+      "source": "default"
+    },
+    "cols": {
+      "value": "0",
+      "source": "default"
+    },
+    "copy-gpus": {
+      "value": "",
+      "source": "default"
+    },
+    "debug-isa": {
+      "value": "false",
+      "source": "default"
+    },
+    "disable-servers": {
+      "value": "false",
+      "source": "default"
+    },
+    "dram-row-continuation-enable": {
+      "value": "false",
+      "source": "default"
+    },
+    "dst-gpus": {
+      "value": "",
+      "source": "default"
+    },
+    "elements": {
+      "value": "0",
+      "source": "default"
+    },
+    "endpoint-buffer-size": {
+      "value": "0",
+      "source": "default"
+    },
+    "endpoint-channels": {
+      "value": "0",
+      "source": "default"
+    },
+    "force-local-data-access": {
+      "value": "false",
+      "source": "default"
+    },
+    "generate-profiler": {
+      "value": "false",
+      "source": "default"
+    },
+    "gpm-preset": {
+      "value": "hpca",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "gpt-batch-size": {
+      "value": "0",
+      "source": "default"
+    },
+    "gpt-hidden-size": {
+      "value": "0",
+      "source": "default"
+    },
+    "gpt-intermediate-size": {
+      "value": "0",
+      "source": "default"
+    },
+    "gpt-log-subtasks": {
+      "value": "false",
+      "source": "default"
+    },
+    "gpt-mode": {
+      "value": "block",
+      "source": "default"
+    },
+    "gpt-num-heads": {
+      "value": "0",
+      "source": "default"
+    },
+    "gpt-num-layers": {
+      "value": "0",
+      "source": "default"
+    },
+    "gpt-seq-len": {
+      "value": "0",
+      "source": "default"
+    },
+    "gpt-size": {
+      "value": "tiny",
+      "source": "default"
+    },
+    "heartbeat-file": {
+      "value": "",
+      "source": "default"
+    },
+    "heartbeat-interval": {
+      "value": "10s",
+      "source": "default"
+    },
+    "hidden": {
+      "value": "1",
+      "source": "default"
+    },
+    "imagenet-data-folder": {
+      "value": "",
+      "source": "default"
+    },
+    "input-dim": {
+      "value": "1",
+      "source": "default"
+    },
+    "intermediate": {
+      "value": "0",
+      "source": "default"
+    },
+    "ipc-sampled": {
+      "value": "false",
+      "source": "default"
+    },
+    "ipc-sampled-threshold": {
+      "value": "0.25",
+      "source": "default"
+    },
+    "kernel-sampled": {
+      "value": "false",
+      "source": "default"
+    },
+    "kernel-sampled-distance-threshold": {
+      "value": "16",
+      "source": "default"
+    },
+    "kernel-sampled-threshold": {
+      "value": "32",
+      "source": "default"
+    },
+    "l1v-max-concurrent-trans": {
+      "value": "16",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "l1v-mshr-entries": {
+      "value": "16",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "l1v-remote-max-inflight": {
+      "value": "0",
+      "source": "default"
+    },
+    "l2-adaptive-pair-enable": {
+      "value": "false",
+      "source": "default"
+    },
+    "l2-adaptive-pair-region-lines": {
+      "value": "2",
+      "source": "default"
+    },
+    "l2-cache-size-mb": {
+      "value": "4",
+      "source": "default"
+    },
+    "l2-fill-forwarding-enable": {
+      "value": "false",
+      "source": "default"
+    },
+    "l2-filter-prefetch-enable": {
+      "value": "false",
+      "source": "default"
+    },
+    "l2-granularity-adaptation-enable": {
+      "value": "false",
+      "source": "default"
+    },
+    "l2-granularity-always-expand": {
+      "value": "false",
+      "source": "default"
+    },
+    "l2-granularity-predictor-only": {
+      "value": "false",
+      "source": "default"
+    },
+    "l2-granularity-without-filter": {
+      "value": "false",
+      "source": "default"
+    },
+    "l2-prefetch-predictor-only": {
+      "value": "false",
+      "source": "default"
+    },
+    "l2-prefetch-ungated": {
+      "value": "false",
+      "source": "default"
+    },
+    "l2-resident-filter-enable": {
+      "value": "false",
+      "source": "default"
+    },
+    "l2-source-file": {
+      "value": "",
+      "source": "default"
+    },
+    "l2-source-tile-width": {
+      "value": "7",
+      "source": "default"
+    },
+    "llmop-log-subtasks": {
+      "value": "false",
+      "source": "default"
+    },
+    "load-history-table": {
+      "value": "",
+      "source": "default"
+    },
+    "load-profiler": {
+      "value": "",
+      "source": "default"
+    },
+    "log2-page-size": {
+      "value": "12",
+      "source": "default"
+    },
+    "loop-sampled": {
+      "value": "false",
+      "source": "default"
+    },
+    "loop-sampled-min-iters": {
+      "value": "16",
+      "source": "default"
+    },
+    "loop-sampled-threshold": {
+      "value": "0.03",
+      "source": "default"
+    },
+    "loop-sampled-warmup": {
+      "value": "8",
+      "source": "default"
+    },
+    "magic-memory-copy": {
+      "value": "true",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "max-inst": {
+      "value": "0",
+      "source": "default"
+    },
+    "max-num-hops": {
+      "value": "-1",
+      "source": "default"
+    },
+    "max-wg": {
+      "value": "0",
+      "source": "default"
+    },
+    "metric-file-name": {
+      "value": "/home/daoxuanxu/exp/cupath/results/1013_t14-hop-s48_wafer48_hpca_ca7ea0b/stats/metrics",
+      "source": "command line"
+    },
+    "mmu-walk-coalescing": {
+      "value": "false",
+      "source": "default"
+    },
+    "mmutlb-lookup-latency": {
+      "value": "80",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "mnist-data-folder": {
+      "value": "",
+      "source": "default"
+    },
+    "network-flit-size": {
+      "value": "16",
+      "source": "default"
+    },
+    "num-heads": {
+      "value": "1",
+      "source": "default"
+    },
+    "num-memory-banks": {
+      "value": "4",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "op": {
+      "value": "linear",
+      "source": "default"
+    },
+    "output-dim": {
+      "value": "1",
+      "source": "default"
+    },
+    "parallel": {
+      "value": "false",
+      "source": "default"
+    },
+    "photon-debug": {
+      "value": "false",
+      "source": "default"
+    },
+    "photon-debug-verbose": {
+      "value": "false",
+      "source": "default"
+    },
+    "plat-chunk": {
+      "value": "256K",
+      "source": "default"
+    },
+    "plat-cus": {
+      "value": "1,2,4,8,16,24,32,38",
+      "source": "default"
+    },
+    "plat-dsts": {
+      "value": "0",
+      "source": "command line"
+    },
+    "plat-footprints": {
+      "value": "1M",
+      "source": "command line"
+    },
+    "plat-groups": {
+      "value": "A,B",
+      "source": "default"
+    },
+    "plat-ks": {
+      "value": "1,2,4,8,16,47",
+      "source": "default"
+    },
+    "plat-modes": {
+      "value": "read",
+      "source": "default"
+    },
+    "plat-patterns": {
+      "value": "alltoall,neighbor,transpose,ring,snake",
+      "source": "default"
+    },
+    "plat-sources": {
+      "value": "48",
+      "source": "command line"
+    },
+    "plat-src": {
+      "value": "1",
+      "source": "default"
+    },
+    "plat-steps": {
+      "value": "10000",
+      "source": "command line"
+    },
+    "plat-test": {
+      "value": "hopmatrix",
+      "source": "command line"
+    },
+    "plat-warm-limit": {
+      "value": "8M",
+      "source": "default"
+    },
+    "plat-wgs": {
+      "value": "1,2,4,8,16,32,64,128,256",
+      "source": "default"
+    },
+    "prefetch-predictor-entries": {
+      "value": "256",
+      "source": "default"
+    },
+    "probe-all-gpms": {
+      "value": "false",
+      "source": "default"
+    },
+    "probe-bytes": {
+      "value": "2097152",
+      "source": "default"
+    },
+    "probe-mode": {
+      "value": "read",
+      "source": "default"
+    },
+    "probe-owner": {
+      "value": "5",
+      "source": "default"
+    },
+    "probe-passes": {
+      "value": "2",
+      "source": "default"
+    },
+    "probe-runner": {
+      "value": "5",
+      "source": "default"
+    },
+    "probe-shared-ctx": {
+      "value": "false",
+      "source": "default"
+    },
+    "probe-threads": {
+      "value": "32768",
+      "source": "default"
+    },
+    "rdma-max-outstanding": {
+      "value": "64",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "rdma-pipeline-latency": {
+      "value": "10",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "rdma-pipeline-width": {
+      "value": "8",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "remote-data-path-batch-lines": {
+      "value": "8",
+      "source": "default"
+    },
+    "remote-data-path-batches": {
+      "value": "64",
+      "source": "default"
+    },
+    "remote-data-path-batching-enable": {
+      "value": "true",
+      "source": "default"
+    },
+    "remote-data-path-dedup-enable": {
+      "value": "true",
+      "source": "default"
+    },
+    "remote-data-path-enable": {
+      "value": "false",
+      "source": "default"
+    },
+    "remote-data-path-l2-enable": {
+      "value": "true",
+      "source": "default"
+    },
+    "remote-filter-prefetch-enable": {
+      "value": "false",
+      "source": "default"
+    },
+    "report-all": {
+      "value": "true",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "report-cache-hit-rate": {
+      "value": "false",
+      "source": "default"
+    },
+    "report-cache-latency": {
+      "value": "false",
+      "source": "default"
+    },
+    "report-cpi-stack": {
+      "value": "false",
+      "source": "default"
+    },
+    "report-dram-transaction-count": {
+      "value": "false",
+      "source": "default"
+    },
+    "report-inst-count": {
+      "value": "false",
+      "source": "default"
+    },
+    "report-l2-source": {
+      "value": "false",
+      "source": "default"
+    },
+    "report-rdma-transaction-count": {
+      "value": "false",
+      "source": "default"
+    },
+    "report-tlb-hit-rate": {
+      "value": "false",
+      "source": "default"
+    },
+    "resnet-batch-size": {
+      "value": "1",
+      "source": "default"
+    },
+    "resnet-depth": {
+      "value": "18",
+      "source": "default"
+    },
+    "resnet-image-size": {
+      "value": "32",
+      "source": "default"
+    },
+    "resnet-log-subtasks": {
+      "value": "false",
+      "source": "default"
+    },
+    "resnet-mode": {
+      "value": "block",
+      "source": "default"
+    },
+    "rows": {
+      "value": "1",
+      "source": "default"
+    },
+    "sampled": {
+      "value": "false",
+      "source": "default"
+    },
+    "sampled-granularity": {
+      "value": "2048",
+      "source": "default"
+    },
+    "sampled-threshold": {
+      "value": "0.03",
+      "source": "default"
+    },
+    "sampled-warmup": {
+      "value": "1024",
+      "source": "default"
+    },
+    "seq-len": {
+      "value": "0",
+      "source": "default"
+    },
+    "split-k": {
+      "value": "1",
+      "source": "default"
+    },
+    "src-gpus": {
+      "value": "",
+      "source": "default"
+    },
+    "switch-latency": {
+      "value": "32",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "timing": {
+      "value": "true",
+      "source": "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+    },
+    "trace-mem": {
+      "value": "false",
+      "source": "default"
+    },
+    "trace-memory-path": {
+      "value": "false",
+      "source": "default"
+    },
+    "trace-memory-path-exit-on-complete": {
+      "value": "false",
+      "source": "default"
+    },
+    "trace-memory-path-file": {
+      "value": "",
+      "source": "default"
+    },
+    "trace-memory-path-max-records": {
+      "value": "100000",
+      "source": "default"
+    },
+    "trace-memory-path-warmup-accesses": {
+      "value": "100000",
+      "source": "default"
+    },
+    "trace-observation": {
+      "value": "false",
+      "source": "default"
+    },
+    "trace-observation-dram-max-records": {
+      "value": "100000",
+      "source": "default"
+    },
+    "trace-observation-dram-warmup-accesses": {
+      "value": "100000",
+      "source": "default"
+    },
+    "trace-observation-exit-on-complete": {
+      "value": "false",
+      "source": "default"
+    },
+    "trace-observation-file": {
+      "value": "",
+      "source": "default"
+    },
+    "trace-observation-l2-sample-max": {
+      "value": "100000",
+      "source": "default"
+    },
+    "trace-observation-max-records": {
+      "value": "100000",
+      "source": "default"
+    },
+    "trace-observation-remote-max-records": {
+      "value": "100000",
+      "source": "default"
+    },
+    "trace-observation-remote-warmup-requests": {
+      "value": "0",
+      "source": "default"
+    },
+    "trace-observation-warmup-accesses": {
+      "value": "100000",
+      "source": "default"
+    },
+    "trace-remote-origin": {
+      "value": "false",
+      "source": "default"
+    },
+    "trace-remote-origin-file": {
+      "value": "",
+      "source": "default"
+    },
+    "trace-remote-origin-max-records": {
+      "value": "100000",
+      "source": "default"
+    },
+    "trace-sharing": {
+      "value": "false",
+      "source": "default"
+    },
+    "trace-sharing-file": {
+      "value": "sharing_trace.csv.gz",
+      "source": "default"
+    },
+    "trace-sharing-max-records": {
+      "value": "1000000",
+      "source": "default"
+    },
+    "trace-sharing-sample": {
+      "value": "1",
+      "source": "default"
+    },
+    "trace-vis": {
+      "value": "false",
+      "source": "default"
+    },
+    "trace-vis-db": {
+      "value": "sqlite",
+      "source": "default"
+    },
+    "trace-vis-db-file": {
+      "value": "",
+      "source": "default"
+    },
+    "trace-vis-end": {
+      "value": "-1",
+      "source": "default"
+    },
+    "trace-vis-start": {
+      "value": "-1",
+      "source": "default"
+    },
+    "transfer-bytes": {
+      "value": "0",
+      "source": "default"
+    },
+    "typed-filter-authoritative-audit": {
+      "value": "false",
+      "source": "default"
+    },
+    "typed-filter-capacity": {
+      "value": "0",
+      "source": "default"
+    },
+    "typed-filter-fingerprint-bits": {
+      "value": "13",
+      "source": "default"
+    },
+    "typed-filter-lookup-latency": {
+      "value": "1",
+      "source": "default"
+    },
+    "typed-filter-lookup-width": {
+      "value": "16",
+      "source": "default"
+    },
+    "typed-filter-mode": {
+      "value": "cuckoo",
+      "source": "default"
+    },
+    "typed-filter-slots-per-bucket": {
+      "value": "4",
+      "source": "default"
+    },
+    "typed-filter-update-latency": {
+      "value": "1",
+      "source": "default"
+    },
+    "typed-filter-update-width": {
+      "value": "16",
+      "source": "default"
+    },
+    "use-unified-memory": {
+      "value": "false",
+      "source": "default"
+    },
+    "verify": {
+      "value": "false",
+      "source": "default"
+    },
+    "wf-profiling": {
+      "value": "false",
+      "source": "default"
+    }
+  },
+  "args": [
+    "-config",
+    "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json",
+    "-config-out",
+    "/home/daoxuanxu/exp/cupath/results/1013_t14-hop-s48_wafer48_hpca_ca7ea0b/config_used.json",
+    "-benchmark",
+    "platbench",
+    "-plat-test",
+    "hopmatrix",
+    "-plat-sources",
+    "48",
+    "-plat-dsts",
+    "0",
+    "-plat-footprints",
+    "1M",
+    "-plat-steps",
+    "10000",
+    "-metric-file-name",
+    "/home/daoxuanxu/exp/cupath/results/1013_t14-hop-s48_wafer48_hpca_ca7ea0b/stats/metrics"
+  ],
+  "config_files": [
+    "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json"
+  ],
+  "flags": {
+    "bandwidth": "48",
+    "benchmark": "platbench",
+    "gpm-preset": "hpca",
+    "l1v-max-concurrent-trans": "16",
+    "l1v-mshr-entries": "16",
+    "magic-memory-copy": "true",
+    "metric-file-name": "/home/daoxuanxu/exp/cupath/results/1013_t14-hop-s48_wafer48_hpca_ca7ea0b/stats/metrics",
+    "mmutlb-lookup-latency": "80",
+    "num-memory-banks": "4",
+    "plat-dsts": "0",
+    "plat-footprints": "1M",
+    "plat-sources": "48",
+    "plat-steps": "10000",
+    "plat-test": "hopmatrix",
+    "rdma-max-outstanding": "64",
+    "rdma-pipeline-latency": "10",
+    "rdma-pipeline-width": "8",
+    "report-all": "true",
+    "switch-latency": "32",
+    "timing": "true"
+  }
+}

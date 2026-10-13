@@ -1,0 +1,11 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+hpca,patterns,,read,,,,,4.716,16384,,12288,,,,2256,alltoall,36962304,108998,,339.11
+hpca,patterns,,read,,,,,1.000,262144,,12288,,,,160,neighbor,41943040,46652,,899.062
+hpca,patterns,,read,,,,,2.000,262144,,12288,,,,48,ring,12582912,69205,,181.821
+hpca,patterns,,read,,,,,1.250,262144,,12288,,,,48,snake,12582912,69217,,181.789
+hpca,patterns,,read,,,,,5.333,262144,,10752,,,,42,transpose,11010048,68845,,159.925
+mi300x-eighth,patterns,,read,,,,,4.716,16384,,14592,,,,2256,alltoall,36962304,108640,,340.227
+mi300x-eighth,patterns,,read,,,,,1.000,262144,,14592,,,,160,neighbor,41943040,46478,,902.428
+mi300x-eighth,patterns,,read,,,,,2.000,262144,,14592,,,,48,ring,12582912,70600,,178.228
+mi300x-eighth,patterns,,read,,,,,1.250,262144,,14592,,,,48,snake,12582912,70555,,178.342
+mi300x-eighth,patterns,,read,,,,,5.333,262144,,12768,,,,42,transpose,11010048,70094,,157.075

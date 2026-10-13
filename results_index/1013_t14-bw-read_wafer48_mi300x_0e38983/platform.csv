@@ -1,0 +1,17 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,2048,8,1,,4,,,4194304,47191,,88.8793
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,4096,16,2,,4,,,4194304,25222,,166.295
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,8192,32,4,,4,,,4194304,13924,,301.228
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,16384,64,8,,4,,,4194304,8559,,490.046
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,32768,128,16,,4,,,4194304,6644,,631.292
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,49152,192,24,,4,,,4194304,8215,,510.567
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,65536,256,32,,4,,,4194304,8681,,483.159
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,77824,304,38,,4,,,4194304,9025,,464.743
+mi300x-eighth,bandwidth,HBM,read,1,0,1,0,0,16777216,2048,8,1,,1,,,16777216,289499,,57.9526
+mi300x-eighth,bandwidth,HBM,read,1,0,1,0,0,16777216,4096,16,2,,1,,,16777216,145362,,115.417
+mi300x-eighth,bandwidth,HBM,read,1,0,1,0,0,16777216,8192,32,4,,1,,,16777216,74414,,225.458
+mi300x-eighth,bandwidth,HBM,read,1,0,1,0,0,16777216,16384,64,8,,1,,,16777216,69093,,242.821
+mi300x-eighth,bandwidth,HBM,read,1,0,1,0,0,16777216,32768,128,16,,1,,,16777216,72366,,231.838
+mi300x-eighth,bandwidth,HBM,read,1,0,1,0,0,16777216,49152,192,24,,1,,,16777216,73067,,229.614
+mi300x-eighth,bandwidth,HBM,read,1,0,1,0,0,16777216,65536,256,32,,1,,,16777216,72533,,231.305
+mi300x-eighth,bandwidth,HBM,read,1,0,1,0,0,16777216,77824,304,38,,1,,,16777216,75008,,223.672

@@ -1,0 +1,60 @@
+{
+  "exp_id": "1013_t14-rbw-d7-16M_wafer48_hpca_0e38983",
+  "task": "T14",
+  "commit": "0e38983",
+  "host": "yss2",
+  "go_version": "go version go1.22.2 linux/amd64",
+  "mode": "timing",
+  "verify": false,
+  "config": "hpca",
+  "gpm_preset": "hpca",
+  "notes": [],
+  "config_deviation": [
+    {
+      "flag": "-benchmark platbench",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-test remotebw",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-dsts 7",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-footprints 16M",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-wgs 1,2,4,8,16,32,64,128,256",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    }
+  ],
+  "start": "2026-10-13T16:07:00+00:00",
+  "end": "2026-10-13T16:44:44+00:00",
+  "exit_code": 0,
+  "args": [
+    "-config",
+    "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json",
+    "-config-out",
+    "/home/daoxuanxu/exp/cupath/results/1013_t14-rbw-d7-16M_wafer48_hpca_0e38983/config_used.json",
+    "-benchmark",
+    "platbench",
+    "-plat-test",
+    "remotebw",
+    "-plat-dsts",
+    "7",
+    "-plat-footprints",
+    "16M",
+    "-plat-wgs",
+    "1,2,4,8,16,32,64,128,256",
+    "-metric-file-name",
+    "/home/daoxuanxu/exp/cupath/results/1013_t14-rbw-d7-16M_wafer48_hpca_0e38983/stats/metrics"
+  ]
+}

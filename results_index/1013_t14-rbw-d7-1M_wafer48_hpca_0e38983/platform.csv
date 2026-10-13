@@ -1,0 +1,10 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+hpca,remotebw,remoteL2,read,1,0,7,6,6,1048576,256,1,,,1,,,1048576,536739,,1.95361
+hpca,remotebw,remoteL2,read,1,0,7,6,6,1048576,512,2,,,1,,,1048576,268611,,3.9037
+hpca,remotebw,remoteL2,read,1,0,7,6,6,1048576,1024,4,,,1,,,1048576,135288,,7.75069
+hpca,remotebw,remoteL2,read,1,0,7,6,6,1048576,2048,8,,,1,,,1048576,131966,,7.9458
+hpca,remotebw,remoteL2,read,1,0,7,6,6,1048576,4096,16,,,1,,,1048576,131972,,7.94544
+hpca,remotebw,remoteL2,read,1,0,7,6,6,1048576,8192,32,,,1,,,1048576,131937,,7.94755
+hpca,remotebw,remoteL2,read,1,0,7,6,6,1048576,16384,64,,,1,,,1048576,132582,,7.90889
+hpca,remotebw,remoteL2,read,1,0,7,6,6,1048576,32768,128,,,1,,,1048576,133029,,7.88231
+hpca,remotebw,remoteL2,read,1,0,7,6,6,1048576,65536,256,,,1,,,1048576,132168,,7.93366

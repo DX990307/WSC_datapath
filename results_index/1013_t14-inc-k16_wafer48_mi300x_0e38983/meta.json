@@ -1,0 +1,83 @@
+{
+  "exp_id": "1013_t14-inc-k16_wafer48_mi300x_0e38983",
+  "task": "T14",
+  "commit": "0e38983",
+  "host": "yss3",
+  "go_version": "go version go1.22.2 linux/amd64",
+  "mode": "timing",
+  "verify": false,
+  "config": "mi300x_eighth",
+  "gpm_preset": "mi300x-eighth",
+  "notes": [
+    "GPM 内部按 1/8 MI300X：L2、HBM 带宽按 MI300X 在 2.1 GHz 下的每周期等效值设置；延迟（DRAM 时序等）保持纳秒值，不做每周期等效缩放。HBM channel：64-bit、BL8、每次访问 64 B、DRAM 时钟 1.23 GHz。"
+  ],
+  "config_deviation": [
+    {
+      "flag": "-gpm-preset",
+      "change": "changed",
+      "paper": "hpca",
+      "value": "mi300x-eighth",
+      "reason": "T13 预设 mi300x-eighth：GPM 内部改为 1/8 MI300X（38 CU、16 个 L2/HBM channel）；带宽按 2.1 GHz 每周期等效，延迟保持纳秒值、不做每周期等效缩放"
+    },
+    {
+      "flag": "-num-memory-banks",
+      "change": "changed",
+      "paper": "4",
+      "value": "16",
+      "reason": "T13 预设 mi300x-eighth：GPM 内部改为 1/8 MI300X（38 CU、16 个 L2/HBM channel）；带宽按 2.1 GHz 每周期等效，延迟保持纳秒值、不做每周期等效缩放"
+    },
+    {
+      "flag": "-benchmark platbench",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-test incast",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-dsts 25",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-ks 16",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-modes shared,disjoint",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-footprints 1M",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    }
+  ],
+  "start": "2026-10-13T16:07:03+00:00",
+  "end": "2026-10-13T16:10:25+00:00",
+  "exit_code": 0,
+  "args": [
+    "-config",
+    "/home/daoxuanxu/exp/cupath/akkalat/configs/mi300x_eighth.json",
+    "-config-out",
+    "/home/daoxuanxu/exp/cupath/results/1013_t14-inc-k16_wafer48_mi300x_0e38983/config_used.json",
+    "-benchmark",
+    "platbench",
+    "-plat-test",
+    "incast",
+    "-plat-dsts",
+    "25",
+    "-plat-ks",
+    "16",
+    "-plat-modes",
+    "shared,disjoint",
+    "-plat-footprints",
+    "1M",
+    "-metric-file-name",
+    "/home/daoxuanxu/exp/cupath/results/1013_t14-inc-k16_wafer48_mi300x_0e38983/stats/metrics"
+  ]
+}

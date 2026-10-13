@@ -1,0 +1,2 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+hpca,patterns,,read,,,,,5.333,262144,,10752,,,,42,transpose,11010048,68845,,159.925

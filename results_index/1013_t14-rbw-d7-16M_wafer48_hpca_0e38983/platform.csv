@@ -1,0 +1,10 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+hpca,remotebw,remoteHBM,read,1,0,7,6,6,16777216,256,1,,,1,,,16777216,9.17864e+06,,1.82785
+hpca,remotebw,remoteHBM,read,1,0,7,6,6,16777216,512,2,,,1,,,16777216,4.59054e+06,,3.65474
+hpca,remotebw,remoteHBM,read,1,0,7,6,6,16777216,1024,4,,,1,,,16777216,2.29704e+06,,7.30383
+hpca,remotebw,remoteHBM,read,1,0,7,6,6,16777216,2048,8,,,1,,,16777216,2.2478e+06,,7.46383
+hpca,remotebw,remoteHBM,read,1,0,7,6,6,16777216,4096,16,,,1,,,16777216,2.24833e+06,,7.46207
+hpca,remotebw,remoteHBM,read,1,0,7,6,6,16777216,8192,32,,,1,,,16777216,2.24808e+06,,7.4629
+hpca,remotebw,remoteHBM,read,1,0,7,6,6,16777216,16384,64,,,1,,,16777216,2.24972e+06,,7.45746
+hpca,remotebw,remoteHBM,read,1,0,7,6,6,16777216,32768,128,,,1,,,16777216,2.25036e+06,,7.45533
+hpca,remotebw,remoteHBM,read,1,0,7,6,6,16777216,65536,256,,,1,,,16777216,2.24902e+06,,7.4598

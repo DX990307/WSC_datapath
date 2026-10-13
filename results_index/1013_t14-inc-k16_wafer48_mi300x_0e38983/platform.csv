@@ -1,0 +1,3 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi300x-eighth,incast,remoteL2,shared,19,18,25,25,1,1048576,,4864,,,,16,,16777216,150013,,111.838
+mi300x-eighth,incast,remoteL2,disjoint,19,18,25,25,1,1048576,,4864,,,,16,,1048576,11287,,92.9012

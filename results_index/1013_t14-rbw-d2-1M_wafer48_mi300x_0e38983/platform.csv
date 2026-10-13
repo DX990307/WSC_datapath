@@ -1,0 +1,10 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi300x-eighth,remotebw,remoteL2,read,1,0,2,1,1,1048576,256,1,,,1,,,1048576,268513,,3.90512
+mi300x-eighth,remotebw,remoteL2,read,1,0,2,1,1,1048576,512,2,,,1,,,1048576,84296,,12.4392
+mi300x-eighth,remotebw,remoteL2,read,1,0,2,1,1,1048576,1024,4,,,1,,,1048576,43082,,24.3391
+mi300x-eighth,remotebw,remoteL2,read,1,0,2,1,1,1048576,2048,8,,,1,,,1048576,39759,,26.3733
+mi300x-eighth,remotebw,remoteL2,read,1,0,2,1,1,1048576,4096,16,,,1,,,1048576,39753,,26.3773
+mi300x-eighth,remotebw,remoteL2,read,1,0,2,1,1,1048576,8192,32,,,1,,,1048576,39717,,26.4012
+mi300x-eighth,remotebw,remoteL2,read,1,0,2,1,1,1048576,16384,64,,,1,,,1048576,39693,,26.4172
+mi300x-eighth,remotebw,remoteL2,read,1,0,2,1,1,1048576,32768,128,,,1,,,1048576,40859,,25.6633
+mi300x-eighth,remotebw,remoteL2,read,1,0,2,1,1,1048576,65536,256,,,1,,,1048576,40080,,26.1621

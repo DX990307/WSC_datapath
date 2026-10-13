@@ -1,0 +1,5 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi300x-eighth,kernel,,,,,,,,,,1,,,10,1,one-gpm,,884,885.5,
+mi300x-eighth,kernel,,,,,,,,,,1,,,10,48,all-gpms-per-gpm-queues,,935,936,
+mi300x-eighth,kernel,,,,,,,,,,38,,,10,1,unified-1-gpm,,927,927,
+mi300x-eighth,kernel,,,,,,,,,,1824,,,10,48,unified-all-gpms,,1114,1114,
