@@ -5,6 +5,29 @@
 > **用户 10-13 的规定**：之前设置的实验配置是**论文始终使用的配置，不要改**。**每一个 task 执行之前，都要先按本文件做一次配置确认。**
 > 本文件只记录事实，不提出任何修改。配置以代码为准，本文件是它的快照，用来对照检查。
 
+
+> 🔄 **10-13 更新（T13 阶段 2 之后）**
+> - 配置改为**配置文件**：`akkalat/configs/hpca.json`（HPCA 投稿版，**当前论文配置**）和 `akkalat/configs/mi300x_eighth.json`（`extends` hpca，只改 `gpm-preset=mi300x-eighth`、`num-memory-banks=16`；**T13 校准确认之前不是论文配置**）。运行时用 `-config <文件>`，命令行只写配置名和 benchmark 参数；`-config-out` 写出每个参数的实际值和来源。
+> - **不再使用 `-disable-servers`**（用户决定；已验证开着服务结果完全一致）。
+> - `hpca.json` ≡ `BASE_COMMON_FLAGS` + `-mmutlb-lookup-latency=80`，由 `test_isca27_configs.py` 保证；论文原有的 runall2 / run_cupath_* 脚本照旧显式传参，默认生成的参数和以前逐字相同。
+> - **新的基准 commit：`1b1e829`**（分支 `isca27/t13-mi300x`）。7 个文件因为加预设而改动（用户同意），旧配置的数值没有变；**检查方法改为两条**：①下表 blob 一致；② `hpca` 预设的回归和 95b4f46 完全一致（T13 阶段 2 已验证：fir、matrixmultiplication 十万多项统计排序后一致）。
+>
+> | 文件 | 1b1e829 时的 blob |
+> |---|---|
+> | `akkalat/runall2_constants.py` | `0a6b0c4f2f5c` |
+> | `akkalat/runall2_config.py` | `ea22add79a66` |
+> | `akkalat/baseline/runner/flag.go` | `10c50a3b9fc5` |
+> | `akkalat/baseline/runner/shaderarray.go` | `743e0ae29af1` |
+> | `akkalat/baseline/runner/r9nanobuilder.go` | `6c7c78ea4916` |
+> | `akkalat/baseline/runner/timingplatform.go` | `c8636d99cc06` |
+> | `akkalat/baseline/runner/runner.go` | `378f7313f8d4` |
+> | `akkalat/baseline/runner/gpm_preset.go`（新） | `487bbd5e578d` |
+> | `akkalat/baseline/runner/config_file.go`（新） | `f31cc47e59fb` |
+> | `akkalat/configs/hpca.json`（新） | `90954272240e` |
+> | `akkalat/configs/mi300x_eighth.json`（新） | `9accc5e93b62` |
+>
+> 下面第 1–3 节是 95b4f46 时的原始快照，保留作历史记录；第 3 节的确认流程仍然适用，只是“打印完整参数”改成“给出配置文件名、`-config-out` 的结果和差异”。
+
 ## 1. 配置的唯一来源
 
 基准 commit：**`95b4f46`**（2026-10-12，“Update CuPath sensitivity runs, CACTI cost analysis, plots, and paper sections”），在仓库 `WSC_datapath` 中。
@@ -29,7 +52,7 @@
 -bandwidth=48 -switch-latency=32 -rdma-pipeline-width=8 -rdma-pipeline-latency=10
 -rdma-max-outstanding=64 -magic-memory-copy -report-all
 ```
-**再加上**：`-disable-servers -mmutlb-lookup-latency=80`（`DEFAULT_MMUTLB_LOOKUP_LATENCY = 80`）
+**再加上**：`-mmutlb-lookup-latency=80`（10-13 起不再加 `-disable-servers`）（`DEFAULT_MMUTLB_LOOKUP_LATENCY = 80`）
 
 **机制相关的实验另外加 `DEFAULT_BENCHMARK_FLAGS`**：
 ```

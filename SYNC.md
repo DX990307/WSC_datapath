@@ -9,7 +9,7 @@
 |---|---|---|
 | **Cowork 侧 Claude** | **只读代码，不改代码**；改 `isca27/` 下的文档（README、CONFIG、background、tasks、guides、prompts、site）；维护记录网页 | 不能 commit/push（它的 shell 里 git 写操作不可靠）；改完之后在下面的日志里追加一条，由 Claude Code 代为提交 |
 | **本地 Claude Code** | **唯一负责修改代码**（模拟器、benchmark、运行脚本、分析脚本）；跑实验；写 `STATUS.md` | 负责所有 git 提交和推送 |
-| **GitHub** | 两个仓库：代码仓库 `DX990307/WSC_datapath`（已有）；文档仓库 `isca27/`（新建，私有，见第 3 节） | — |
+| **GitHub** | 只用一个仓库 `DX990307/WSC_datapath`：代码在 `isca27/...` 任务分支上；文档（本目录，本地分支 `main`）推送到同一仓库的分支 **`isca27/docs`**（用户 10-13 决定，不新建仓库） | — |
 
 ## 2. 同步流程
 
@@ -23,7 +23,7 @@
 1. 更新 `STATUS.md`。
 2. 在本文件日志里追加一条 `[claude-code]`：改了哪些文件、代码 commit、结果目录。
 3. **代码仓库**：提交，然后 `git push origin <任务分支>`。**只推送任务分支**（`isca27/...`）；不推送 `main`/`mechanism_1` 等已有分支，不 force push。
-4. **文档仓库**：提交 `isca27/`，并推送。
+4. **文档仓库**：提交 `isca27/`，并推送到 `origin` 的 `isca27/docs` 分支。
 5. **实验结果**：`results/` 很大，不进 git；把每个实验的 `meta.json` 和 `summary.csv` 复制到 `isca27/results_index/<exp_id>/`，随文档仓库一起推送。
 6. 在日志条目里写上两个仓库推送后的 commit hash。
 
@@ -33,11 +33,11 @@
 3. 如果 Claude Code 改了任务文档（需要用户同意才能改），读这些改动。
 4. 根据读到的内容更新记录网页；改完文档之后在日志里追加一条 `[cowork]`。
 
-## 3. 文档仓库（首次设置，由 Claude Code 完成）
+## 3. 文档仓库（10-13 用户决定：作为代码仓库的一个分支）
 
-- 在 `~/Desktop/CuPath/isca27/` 里 `git init`，添加 `.gitignore`（例如 `.DS_Store`）。
-- 在 GitHub 上新建**私有**仓库（建议名字 `DX990307/cupath-isca27`；用户可以改名），设为 remote 并推送。
-- 不要把 `isca27/` 搬进代码仓库（否则文档会跟着代码分支分叉）。
+- `~/Desktop/CuPath/isca27/` 是独立的 git 仓库（本地分支 `main`），推送到 `DX990307/WSC_datapath` 的分支 `isca27/docs`。这个分支和代码分支的历史互不相关，不影响任何已有分支。
+- 首次推送需要用户在终端执行一次：`cd ~/Desktop/CuPath/isca27 && git remote add origin git@github.com:DX990307/WSC_datapath.git && git push -u origin main:isca27/docs`。之后 Claude Code 每个停点推送 `git push origin main:isca27/docs`。
+- 不要把 `isca27/` 搬进代码仓库的工作区。
 
 ---
 
@@ -82,3 +82,14 @@
 - 代码：`isca27/t13-mi300x` 在 `1b1e829`（已推送）。结果索引新增 4 个目录。
 - 文档仓库：分支 `isca27/docs` 仍未推送（需要用户手动推一次，见 STATUS）。
 
+
+### 2026-10-13 [cowork] 同步 Claude Code 的改动：文档备份方式、配置文件、T13 阶段 2；确认投稿版 Table II
+- 读了：SYNC 日志里 [claude-code] 的 6 条；STATUS 中 T13 阶段 2、配置文件、(a)(b) 核实的全部内容；`configs/hpca.json`、`configs/mi300x_eighth.json`。
+- 改了：`SYNC.md` 第 1、3 节（文档备份改为 WSC_datapath 的 `isca27/docs` 分支）；`CONFIG.md`（新增 10-13 更新说明：配置文件、不用 `-disable-servers`、新的基准 commit `1b1e829` 和 blob 表、两条检查方法）；`00_background.md`（投稿版 Table II 的事实，见下）。
+- **(a)(b) 的补充事实**：Cowork 手上有用户上传的投稿 PDF。投稿版 Table II 写的是“HBM 8 GB/GPM, four controllers, **0.375 TB/s**, BL4”和“Typed Filter: One shared array/L2 partition, **4K buckets**, four slots/bucket”；正文写每个 filter 42 KiB、每 GPM 168 KiB、规则阵列 2.561 mm²/GPM、占 L2 面积 **4.70%**。所以：投稿版的 HBM 带宽（0.375）和代码（0.128 TB/s/GPM）不一致；投稿版的 filter 容量和面积都是按 4K bucket 算的，而实际运行用的是 8K bucket（面积应按 336 KiB/GPM、6.86% 计）。新论文的 Table II 和面积数字要从代码和 meta 自动生成。
+
+### 2026-10-13 [cowork] 新增 T14（wafer 平台特征数据）和 prompt P07
+- 新建 `tasks/T14_wafer_platform_data.md`：第一档 7 项（延迟阶梯、带宽—CU 数、跳数延迟矩阵、单对远程带宽—在途请求数、incast、典型通信模式、kernel 边界开销）和 T13 阶段 3 一起跑，两套配置都测；第二、三档是提案。写明了 footprint 和测量方法的规则（指针追逐只走固定步数、先热身、页内/跨页两组、带宽测量的 footprint 规则）。
+- 改了：`README.md`（索引加 T14）、`tasks/T13_mi300x_config.md`（末尾补充“阶段 3 和 T14 一起跑”）。
+- 新建 `prompts/P07_T13_stage3_T14.md`。
+- 另外：`site/` 的 3 个页面更新为最新版（上一次同步时没能写到电脑上）。

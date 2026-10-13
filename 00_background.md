@@ -27,6 +27,7 @@
   - O4：17.7% 的远程 line 被复用
   - O5：L2 平均空闲 60.1%
   - O6：5–50% 的本地 miss 在 16 ns 内成对出现
+- **投稿版和代码不一致（10-13 核实）**：投稿版 Table II 写的 HBM 是每 GPM 0.375 TB/s，代码实际是 128 B/周期（0.128 TB/s）；投稿版写 filter 每分区 4K bucket、每 GPM 168 KiB、面积占 L2 的 4.70%，实际运行是每分区 8K bucket（336 KiB/GPM，按 CACTI 应为 6.86%）。新论文的配置表和面积数字要从代码和 meta 自动生成。
 - **硬件开销**：每个 filter 16K 个 21-bit 的槽，每 GPM 合计 168 KiB；全部结构合计 365 KiB/GPM，相对 L2 为 4.70%。
 - **workload**：14 个，来自 Hetero-Mark、AMDAPPSDK、SHOC、DNNMark。模拟预算有限，大 benchmark 只能截断运行，每个 CU 只执行前几个 WG。
 - **HDPAT [34]**（HPCA 2026）是本组的前作，研究的是地址翻译，同样用了 Cuckoo Filter 和这套 wafer 平台。审稿人 E 把它当成需要对比的 SOTA，新版论文里要讲清楚两者的区别。
