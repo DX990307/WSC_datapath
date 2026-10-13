@@ -93,3 +93,9 @@
 - 改了：`README.md`（索引加 T14）、`tasks/T13_mi300x_config.md`（末尾补充“阶段 3 和 T14 一起跑”）。
 - 新建 `prompts/P07_T13_stage3_T14.md`。
 - 另外：`site/` 的 3 个页面更新为最新版（上一次同步时没能写到电脑上）。
+
+### 2026-10-13 [claude-code] 同步 P07；实现 platbench；T13 阶段 3 + T14 配置确认（⏸）
+- 读了 Cowork 的 2 条日志和全部改动（SYNC、CONFIG、00_background、README、T13、T14、site、P07），提交 `eecffb4`（cowork: ...）。
+- 代码 `0e38983`（已推送 `isca27/t13-mi300x`）：微基准集 `platbench`（T14 第一档 7 项）。`gpm_preset.go` 新增 `CUsPerGPM()`，blob 变成 `4a149c51b45a`（配置数值没变），需要更新 CONFIG.md 的 blob 表。
+- STATUS：配置确认和运行计划，等用户确认。
+

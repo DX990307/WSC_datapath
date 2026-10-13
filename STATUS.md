@@ -25,7 +25,8 @@
 | T9 第二批 workload | `[提案]`，不要开始 | | |
 | T10 SPMD 通信套件 | `[提案]`，不要开始 | | |
 | T12 driver flush 修复 | 完成（用户已确认；10-13 15:17 补跑带 magic copy 的 R3，通过） | 10-13 15:17 | 修复 `9c30a89`；单元测试、R1、R2、R3 全部通过 |
-| T13 MI300X 配置 | 进行中 | 10-13 15:25 | 阶段 2 完成（预设 `f444076`、配置文件 `1b1e829`；旧配置回归全部一致），⏸ 等用户确认后进入阶段 3 |
+| T13 MI300X 配置 | 进行中 | 10-13 | 阶段 2 已确认；阶段 3 和 T14 第一档共用微基准 `platbench`（`0e38983`），⏸ 等用户确认配置和运行计划 |
+| T14 平台数据（第一档） | 进行中 | 10-13 | 微基准实现完成，冒烟测试 7 项都能跑；⏸ 等配置确认 |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
@@ -51,6 +52,8 @@
 - [ ] (同步) **用户 10-13 决定：不新建 GitHub 仓库，文档仓库作为代码仓库 `DX990307/WSC_datapath` 的新分支 `isca27/docs` 备份。** **代码仓库的三个任务分支已推送**（`isca27/t11-probe-placement-comm` `d6b765c`、`isca27/t12-driver-flush-fix` `36bde23`、`isca27/t13-mi300x` `f444076`）。**文档分支 `isca27/docs` 还没推**：在 `isca27/` 里加 remote 的操作被自动模式拦下，需要用户在终端运行一次：`cd ~/Desktop/CuPath/isca27 && git remote add origin git@github.com:DX990307/WSC_datapath.git && git push -u origin main:isca27/docs`。原问题：**GitHub 推送被本机的权限规则拦下，需要你处理**：① 这台机器没有安装 `gh`，没法用命令行在 GitHub 上建 `DX990307/cupath-isca27`；② `git push origin isca27/...` 被 Claude Code 的自动模式拦截（“Out-of-Place Publication”）。—— A：你在 GitHub 网页上新建空的私有仓库 `DX990307/cupath-isca27`（不要勾选 README），并允许我推送（例如在 `/permissions` 里允许 `Bash(git push origin isca27/*)` 和 `Bash(git push -u origin main)`，只在 isca27 目录），我来加 remote 并推送 / B：你自己在终端运行推送命令（见日志里的命令）。
 
 - [x] (T13) **用户 10-13 决定：配置放在专门的配置文件里，不再在命令行写一长串；配置文件可以保存多份、运行时读取不同的文件，方便做敏感性实验。** 另外**不再使用 `-disable-servers`**（用户担心它会带来 bug）。实现见日志。
+
+- [ ] (T13 阶段 3 + T14 第一档) **配置确认（CONFIG.md 第 3 节）**，详见日志 10-13“T13 阶段 3 + T14：配置确认”。两套配置 `hpca`、`mi300x_eighth`，代码 `0e38983`；运行计划 29 个进程/配置，预计约 1 小时（hopmatrix 最慢）。
 
 ## 规格与代码的差异
 
@@ -359,3 +362,42 @@
 - 阶段 2 的验收：`-gpm-preset` 默认值等于旧配置、旧配置回归完全一致 ✅；分析脚本里“L2 只有 4 个分区”的假设已检查（修了 `run_cupath_sensitivity.py`，`cost/run_full_cacti.py` 待以后另算面积）✅；所有运行都保留 `-magic-memory-copy` ✅。
 - 另外（用户要求）：监控网页 `exp web` 新增单个结果的配置和统计汇总、2–4 个结果的对比（关键结果、配置差异、统计是否完全一致及差异列表）。这是本机工具（`~/.local/share/exp/`），不在代码仓库里。
 - **下一步：⏸ 等用户确认阶段 2，然后进入阶段 3（校准）。** 阶段 3 运行前会按 CONFIG.md 第 3 节给出完整参数（现在是配置文件名 + benchmark 参数）和差异。
+
+### 2026-10-13 (T13 阶段 3 + T14 第一档) 同步、微基准实现、配置确认（⏸ 等用户确认）
+
+- **同步**：读了 SYNC 日志里 Cowork 的 2 条；`git diff` 读了 SYNC.md（第 1、3 节改为推送 `isca27/docs`）、CONFIG.md（10-13 更新：配置文件、基准 `1b1e829` 和 blob 表、两条检查方法）、00_background.md（投稿版 Table II：HBM 0.375 TB/s、4K bucket、168 KiB、4.70%）、README.md、T13 末尾补充、新文件 T14、site/、P07。以 `cowork: ...` 提交为 `eecffb4`。文档分支 `isca27/docs` 用户已推过一次（`c44d08f`），现已推到 `eecffb4`。
+- **理解到的规格变化**：配置确认改为“配置文件名 + `-config-out` + 和 hpca.json 的差异”；T14 第一档 7 项和 T13 阶段 3 共用运行，结论分开写；测量方法按 T14 的规则。
+- **微基准 `platbench`**（commit `0e38983`，已推送 `isca27/t13-mi300x`）：`mgpusim/benchmarks/microbench/platbench/`，`-benchmark platbench -plat-test <项>`；7 项的方法和参数写在 `akkalat/docs/ISCA27_TOOLS.md` 第 2.6 节。要点：
+  - 指针追逐：1 个线程、随机指针环（每个 cache line 一个节点），A 组页内集中、B 组每步跨页；≤ 8 MB 先完整走一遍热身；然后各发一次 0 步和 N 步的 kernel，延迟 = (t_N − t_0)/N（抵消 kernel 启动开销）。已确认 kernel 之间 L1 不会被清空、单个 WG 每次都落在同一个 CU（partition 分派器），所以 L1 热身有效（冒烟：16 KB ≈ 38–40 ns，1 MB ≈ 54 ns）。
+  - 带宽：每 CU 8 个 WG；启动“CU 数 × 8”个 WG，编号超出前 k 个 CU 的直接退出，从而只让 k 个 CU 干活。≥ 16 MB 视为 HBM（只读一遍），< 16 MB 视为 L2（热身后重复 4 遍）。
+  - **遇到模拟器不支持的指令**：`s_cmp_le_u32`（SOPC opcode 9，`mgpusim/emu/alusopc.go:32`）。没有改模拟器，而是把我自己 kernel 里的计数和比较改成有符号 int，重新编译后 hsaco 里已经没有这条指令。
+  - 每个点输出一行 `PLATCSV`，`isca27_run.sh` 抽成 `platform.csv`（统一列名，GPM 同时给 driver ID 和 `GPU[t]`）。
+  - mesh 路由是先 Y 后 X（`akita/noc/networking/mesh/mesh_routing_table.go:36-43`），中心 tile 上是一个交换机（driver/IOMMU 挂在上面），路由可以穿过它，不会绕路。**模拟器没有链路利用率的统计**，第 6 项的每条链路利用率只能按 YX 路由和每对的流量推算（标注为推算值）。
+  - `gpm_preset.go` 新增了 `CUsPerGPM()`（不改任何配置数值），所以它的 blob 变成 `4a149c51b45a`，和 CONFIG.md 表里的 `487bbd5e578d` 不同，需要 Cowork 更新表格。
+- **冒烟测试**（本机，hpca 为主，只用于检查能跑和估算时间，**不作为结果**）：7 项都能跑。看到的苗头：hpca HBM 读满 CU 约 57 B/周期（代码推算 64 B 请求下的有效峰值约 64）；mi300x HBM 约 236 B/周期（目标 315，−25%）；L2 读 hpca 414、mi300x 480 B/周期（目标 2 KB/周期，−77%，可能受每个 L1 只有 16 个在途请求限制）；单对远程读 64 个 WG 只有约 26 B/周期，正好是 RDMA 64 个 outstanding × 64 B ÷ 约 200 ns。正式结果出来后按规则报告。
+
+**配置确认**
+
+| 配置 | `-config-out` 的 flags（13 个） | 和 `hpca.json` 的差异 |
+|---|---|---|
+| `hpca` | bandwidth=48 gpm-preset=hpca l1v-max-concurrent-trans=16 l1v-mshr-entries=16 magic-memory-copy=true mmutlb-lookup-latency=80 num-memory-banks=4 rdma-max-outstanding=64 rdma-pipeline-latency=10 rdma-pipeline-width=8 report-all=true switch-latency=32 timing=true | 无 |
+| `mi300x_eighth` | 同上，但 gpm-preset=mi300x-eighth、num-memory-banks=16 | `-gpm-preset` hpca → mi300x-eighth；`-num-memory-banks` 4 → 16 |
+
+两套都保留 `-magic-memory-copy`，都不带 `-disable-servers`。其余命令行参数都是 benchmark 参数（`-benchmark platbench -plat-*`）。
+
+**运行计划**（每套配置 29 个进程；hpca 放 yss2、mi300x 放 yss3，各自并行；每个进程的模拟时间按冒烟测试的速度估算，mi300x 约慢 1.3–1.8 倍）
+
+| 项 | 进程（每套配置） | 规模 | 估算（hpca / mi300x） |
+|---|---|---|---|
+| 1 延迟（本地） | 2：≤ 8 MB、≥ 16 MB | 4K,8K,16K,24K,32K,48K,64K,128K,256K,512K,1M,2M,3M,4M,6M,8M（热身）；16M,32M,64M,128M,256M,512M,1G（不热身）；A、B 两组；20000 步 | 5 / 8 分钟；10 / 15 分钟（1 GB 那一点的主机内存约 1.2 GB） |
+| 1 延迟（远程） | 1 | 发起方 GPM 1，数据在 driver 2/4/7/48（1/3/6/12 跳）；1 MB（热身）、64 MB；A、B；20000 步 | 15 / 25 分钟 |
+| 2 带宽—CU 数 | 3：read、write、copy | 1 MB（L2，热身后 4 遍）、16 MB（HBM，一遍）；CU 1,2,4,8,16,24,32,(38) | 每个 8 / 12 分钟 |
+| 3 跳数矩阵 | 7 | 1 MB、10000 步；GPM 1 → 全部 47；全部 47 → GPM 1；另 5 个起点（角 7/43/48、中心左邻 24、上边中点 4）各到全部 47 个。共 329 对 | 每个约 40 / 60 分钟 ⚠️（最慢的项，mi300x 可能接近 1 小时） |
+| 4 单对远程带宽 | 4 | 1 跳（1→2）、6 跳（1→7）× 1 MB（远端 L2）、16 MB（远端 HBM）；WG 1,2,4,…,256 | 每个 15 / 20 分钟 |
+| 5 incast | 6（每个 k 一个） | owner = driver 25（中心右邻）；k = 1,2,4,8,16,47；shared、disjoint；1 MB | k=47 约 20 / 30 分钟，其余更短 |
+| 6 通信模式 | 5 | all-to-all 每个来源 16 KB（256 KB 时总流量 577 MB，要 3 小时，所以缩小）；neighbor、transpose、ring、snake 每个来源 256 KB | 每个 10 / 15 分钟 |
+| 7 kernel 开销 | 1 | 空 kernel：单 GPM、48 个 GPM 各一个 queue、统一 GPU（1 个 GPM / 全部 GPM），连续 10 个 | 1 / 1 分钟 |
+
+- 没有单个测量点超过 1 小时；单个进程最长的是 mi300x 的跳数矩阵（约 1 小时）。总共约 1 小时墙钟时间（两台服务器并行）。
+- exp_id：`1013_t14-<项>-<部分>_wafer48_<配置>_0e38983`。每个进程一个 tmux 会话（可以在监控网页上逐个看到并用心跳检测卡死）；为此会给 `exp` 加一个“只同步一次、启动多个任务”的用法。
+- 完成后：T13 阶段 3 的校准结论写进 T13 部分；T14 的平台数据摘要表（两套配置并排）写进 STATUS；CSV 放进 `results_index/platform/`。偏差超过 10% 按规则停下来报告。
