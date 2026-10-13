@@ -300,11 +300,25 @@ def write_experiment_metadata(
             ["git", *args], cwd=repo_root, text=True,
         ).strip()
 
+    # Servers get the tree synced without .git; the caller then passes the
+    # commit it checked to be clean (EXP_GIT_REVISION, EXP_GIT_STATUS).
+    git_source = "git"
+    try:
+        git_revision = git_output("rev-parse", "HEAD")
+        git_status = git_output("status", "--short")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        if not os.environ.get("EXP_GIT_REVISION"):
+            raise
+        git_source = "caller (EXP_GIT_REVISION; tree synced without .git)"
+        git_revision = os.environ["EXP_GIT_REVISION"]
+        git_status = os.environ.get("EXP_GIT_STATUS", "")
+
     metadata = {
         "version": 1,
         "created_at": datetime.now().isoformat(),
-        "git_revision": git_output("rev-parse", "HEAD"),
-        "git_status_porcelain": git_output("status", "--short"),
+        "git_revision": git_revision,
+        "git_status_porcelain": git_status,
+        "git_source": git_source,
         "experiment_count": len(exps),
         "launcher": dict(launcher or {}),
         "experiments": [

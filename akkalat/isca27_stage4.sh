@@ -31,6 +31,9 @@ ROOT="$(pwd)"
 RESERVE=30
 SCAN=10
 WORKERS=16
+# The synced tree has no .git; the paper scripts record this commit instead
+# (the caller checked that the local tree was clean at this commit).
+export EXP_GIT_REVISION="$COMMIT" EXP_GIT_STATUS=""
 export EXP_SLOT_DIR="$HOME/.isca27_slots" EXP_SLOT_COUNT=$WORKERS
 mkdir -p "$EXP_SLOT_DIR"
 # Longest first (paper campaign runtimes), so long runs do not become the tail.

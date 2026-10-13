@@ -1,10 +1,13 @@
 import io
+import os
+import subprocess
 import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 import runall2_process
 
@@ -182,6 +185,36 @@ class BinaryManifestTest(unittest.TestCase):
             json.loads(primary.read_text())["launcher"]["max_workers"], 1
         )
         self.assertEqual(json.loads(rerun.read_text())["experiment_count"], 1)
+
+    def test_metadata_uses_caller_revision_without_git(self):
+        runall2_process.set_output_dir(str(self.results))
+        exp = {
+            "target": "baseline",
+            "benchmark": "fir",
+            "config_name": "baseline",
+            "common_flags": [],
+            "flags": [],
+            "binary_path": str(self.binary),
+        }
+        no_git = Path(self.temp.name) / "nogit" / "akkalat"
+        no_git.mkdir(parents=True)
+        env = {"GIT_CEILING_DIRECTORIES": self.temp.name}
+        with mock.patch.object(runall2_process, "ROOT_DIR", str(no_git)), \
+                mock.patch.dict(os.environ, env):
+            os.environ.pop("EXP_GIT_REVISION", None)
+            with self.assertRaises(subprocess.CalledProcessError):
+                runall2_process.write_experiment_metadata([exp])
+            os.environ["EXP_GIT_REVISION"] = "abc1234"
+            os.environ["EXP_GIT_STATUS"] = ""
+            try:
+                path = runall2_process.write_experiment_metadata([exp])
+            finally:
+                os.environ.pop("EXP_GIT_REVISION", None)
+                os.environ.pop("EXP_GIT_STATUS", None)
+        data = json.loads(Path(path).read_text())
+        self.assertEqual(data["git_revision"], "abc1234")
+        self.assertEqual(data["git_status_porcelain"], "")
+        self.assertTrue(data["git_source"].startswith("caller"))
 
     def test_resume_reconstructs_exact_recorded_campaign(self):
         runall2_process.set_output_dir(str(self.results))
