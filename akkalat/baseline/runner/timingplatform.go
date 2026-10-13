@@ -37,6 +37,7 @@ type R9NanoPlatformBuilder struct {
 	tileWidth, tileHeight     int
 	numSAPerGPU               int
 	numCUPerSA                int
+	gpmPreset                 gpmPreset
 	useMagicMemoryCopy        bool
 	log2PageSize              uint64
 	bandwidth                 int
@@ -97,8 +98,9 @@ func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 		visTraceEndTime:           -1,
 		switchLatency:             20,
 		networkFlitSize:           16,
-		numSAPerGPU:               8,
-		numCUPerSA:                4,
+		numSAPerGPU:               hpcaGPMPreset.NumSA,
+		numCUPerSA:                hpcaGPMPreset.NumCUPerSA,
+		gpmPreset:                 hpcaGPMPreset,
 		maxNumHops:                -1,
 		l1vMSHREntries:            16,
 		l1vMaxConcurrentTrans:     16,
@@ -188,6 +190,14 @@ func (b R9NanoPlatformBuilder) WithPerfAnalyzer(
 ) R9NanoPlatformBuilder {
 	b.perfAnalysisFileName = Name
 	b.perfAnalyzingPeriod = Period
+	return b
+}
+
+// WithGPMPreset sets the GPM-internal configuration; see gpm_preset.go.
+func (b R9NanoPlatformBuilder) WithGPMPreset(p gpmPreset) R9NanoPlatformBuilder {
+	b.gpmPreset = p
+	b.numSAPerGPU = p.NumSA
+	b.numCUPerSA = p.NumCUPerSA
 	return b
 }
 
@@ -684,6 +694,7 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithNumCUPerShaderArray(b.numCUPerSA).
 		WithNumShaderArray(b.numSAPerGPU).
 		WithNumMemoryBank(numMemoryBank).
+		WithGPMPreset(b.gpmPreset).
 		WithL2CacheSize(b.l2CacheSize).
 		WithLog2MemoryBankInterleavingSize(
 			adaptivePairInterleavingLog2(b.l2AdaptivePairRegionLines)).
@@ -798,7 +809,7 @@ func (b *R9NanoPlatformBuilder) createGPU(
 		Build(name, uint64(index))
 	gpuDriver.RegisterGPU(gpu.Domain.GetPortByName("CommandProcessor"),
 		driver.DeviceProperties{
-			CUCount:  32,
+			CUCount:  b.numSAPerGPU * b.numCUPerSA,
 			DRAMSize: 8 * mem.GB,
 		})
 	gpu.CommandProcessor.(*cp.CommandProcessor).Driver =

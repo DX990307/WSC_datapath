@@ -63,6 +63,7 @@ type R9NanoGPUBuilder struct {
 	rdmaPipelineWidth              int
 	rdmaPipelineLatency            int
 	rdmaMaxOutstanding             int
+	gpmPreset                      gpmPreset
 
 	enableISADebugging bool
 	enableMemTracing   bool
@@ -140,6 +141,7 @@ func MakeR9NanoGPUBuilder() R9NanoGPUBuilder {
 		rdmaPipelineWidth:   8,
 		rdmaPipelineLatency: 10,
 		rdmaMaxOutstanding:  64,
+		gpmPreset:           hpcaGPMPreset,
 		remoteDataPath: rdma.RemoteDataPathConfig{
 			MaxBatchLines: 8,
 			MaxBatches:    64,
@@ -192,6 +194,13 @@ func (b R9NanoGPUBuilder) WithMemAddrOffset(
 // for the GPU.
 func (b R9NanoGPUBuilder) WithMMU(mmu *mmu.MMU) R9NanoGPUBuilder {
 	b.mmu = mmu
+	return b
+}
+
+// WithGPMPreset sets the GPM-internal configuration (L1/L2 organization and
+// DRAM channels); see gpm_preset.go.
+func (b R9NanoGPUBuilder) WithGPMPreset(p gpmPreset) R9NanoGPUBuilder {
+	b.gpmPreset = p
 	return b
 }
 
@@ -752,7 +761,8 @@ func (b *R9NanoGPUBuilder) buildSAs() {
 		withL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
 		withL1VMSHREntries(b.l1vMSHREntries).
 		withL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
-		withNumCU(b.numCUPerShaderArray)
+		withNumCU(b.numCUPerShaderArray).
+		withGPMPreset(b.gpmPreset)
 
 	if b.enableISADebugging {
 		saBuilder = saBuilder.withIsaDebugging()
@@ -783,8 +793,8 @@ func (b *R9NanoGPUBuilder) buildL2Caches() {
 		WithLog2BlockSize(b.log2CacheLineSize).
 		WithWayAssociativity(16).
 		WithByteSize(byteSize).
-		WithNumMSHREntry(64).
-		WithNumReqPerCycle(16).
+		WithNumMSHREntry(b.gpmPreset.L2MSHRPerBank).
+		WithNumReqPerCycle(b.gpmPreset.L2ReqPerCyclePerBank).
 		WithDirectoryLatency(10).
 		WithTypedFilter(
 			b.l2ResidentFilter || b.l2FilterPrefetch || b.l2AdaptivePair ||
@@ -948,15 +958,17 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 		panic("GPU memory size is not a multiple of the number of memory banks")
 	}
 
-	dramCol := 64
-	dramRow := 16384
-	// M1 evaluates the historical coarse-grain HBM organization: BL4 over the
-	// modeled 256-bit controller datapath forms one 128-B physical access unit.
-	dramDeviceWidth := 256
+	d := b.gpmPreset.DRAM
+	dramCol := d.NumCol
+	dramRow := d.NumRow
+	// The hpca preset is the historical coarse-grain HBM organization: BL4
+	// over the modeled 256-bit controller datapath forms one 128-B physical
+	// access unit. See gpm_preset.go for the mi300x-eighth channels.
+	dramDeviceWidth := d.DeviceWidth
 	dramBankSize := dramCol * dramRow * dramDeviceWidth
-	dramBank := 4
-	dramBankGroup := 4
-	dramBusWidth := 256
+	dramBank := d.NumBank
+	dramBankGroup := d.NumBankGrp
+	dramBusWidth := d.BusWidth
 	dramDevicePerRank := dramBusWidth / dramDeviceWidth
 	dramRankSize := dramBankSize * dramDevicePerRank * dramBank
 	dramRank := int(memBankSize * 8 / uint64(dramRankSize))
@@ -966,9 +978,9 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 
 	memCtrlBuilder := dram.MakeBuilder().
 		WithEngine(b.engine).
-		WithFreq(500 * sim.MHz).
+		WithFreq(d.Freq).
 		WithProtocol(dram.HBM).
-		WithBurstLength(4).
+		WithBurstLength(d.BurstLength).
 		WithDeviceWidth(dramDeviceWidth).
 		WithBusWidth(dramBusWidth).
 		WithNumChannel(1).
@@ -981,23 +993,23 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 		WithTransactionQueueSize(32).
 		WithAggregateContinuation(b.l2GranularityAdaptation).
 		WithRowContinuation(b.dramRowContinuation).
-		WithTCL(7).
-		WithTCWL(2).
-		WithTRCDRD(7).
-		WithTRCDWR(7).
-		WithTRP(7).
-		WithTRAS(17).
-		WithTREFI(1950).
-		WithTRRDS(2).
-		WithTRRDL(3).
-		WithTWTRS(3).
-		WithTWTRL(4).
-		WithTWR(8).
-		WithTCCDS(1).
-		WithTCCDL(1).
-		WithTRTRS(0).
-		WithTRTP(3).
-		WithTPPD(2)
+		WithTCL(d.TCL).
+		WithTCWL(d.TCWL).
+		WithTRCDRD(d.TRCDRD).
+		WithTRCDWR(d.TRCDWR).
+		WithTRP(d.TRP).
+		WithTRAS(d.TRAS).
+		WithTREFI(d.TREFI).
+		WithTRRDS(d.TRRDS).
+		WithTRRDL(d.TRRDL).
+		WithTWTRS(d.TWTRS).
+		WithTWTRL(d.TWTRL).
+		WithTWR(d.TWR).
+		WithTCCDS(d.TCCDS).
+		WithTCCDL(d.TCCDL).
+		WithTRTRS(d.TRTRS).
+		WithTRTP(d.TRTP).
+		WithTPPD(d.TPPD)
 
 	if b.visTracer != nil {
 		memCtrlBuilder = memCtrlBuilder.WithAdditionalTracer(b.visTracer)

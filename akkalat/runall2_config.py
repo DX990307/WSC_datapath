@@ -15,6 +15,8 @@ from runall2_constants import (
     BENCHMARKS_BY_TARGET,
     CONFIGS,
     DEFAULT_BENCHMARK_FLAGS,
+    DEFAULT_GPM_PRESET,
+    GPM_PRESET_FLAGS,
     DEFAULT_SAMPLED_SWEEP_GRANULARITIES,
     DEFAULT_SAMPLED_SWEEP_WARMUPS,
     QUICK_BENCHMARKS,
@@ -23,8 +25,16 @@ from runall2_constants import (
 )
 
 
+def apply_gpm_preset(flags, preset):
+    """Applies a GPM preset (T13) to a flag list built from BASE_COMMON_FLAGS."""
+    for flag in GPM_PRESET_FLAGS[preset]:
+        flags = replace_or_append_flag(flags, flag.split("=", 1)[0] + "=", flag)
+    return flags
+
+
 def build_common_flags(args):
-    common_flags = BASE_COMMON_FLAGS[:]
+    common_flags = apply_gpm_preset(
+        BASE_COMMON_FLAGS[:], getattr(args, "gpm_preset", DEFAULT_GPM_PRESET))
     if args.switch_latency > 0:
         common_flags = replace_or_append_flag(
             common_flags, "-switch-latency=", f"-switch-latency={args.switch_latency}")

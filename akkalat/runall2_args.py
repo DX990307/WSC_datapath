@@ -7,7 +7,9 @@ from runall2_constants import (
     DEFAULT_L1V_MSHR_ENTRIES,
     DEFAULT_MMUTLB_LOOKUP_LATENCY,
     DEFAULT_SAMPLED_PARALLEL_LIMIT,
+    DEFAULT_GPM_PRESET,
     DEFAULT_TIMEOUT_MINUTES,
+    GPM_PRESET_FLAGS,
     MAX_WORKERS,
 )
 
@@ -187,6 +189,13 @@ def parse_args():
         "--quick",
         action="store_true",
         help="Run a small Photon validation set.",
+    )
+    parser.add_argument(
+        "--gpm-preset",
+        dest="gpm_preset",
+        choices=sorted(GPM_PRESET_FLAGS),
+        default=DEFAULT_GPM_PRESET,
+        help="GPM-internal configuration preset (T13). Defaults to the HPCA submission configuration.",
     )
     parser.add_argument(
         "--max-wg",

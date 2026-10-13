@@ -28,9 +28,13 @@ from runall2_constants import (  # noqa: E402
     DEFAULT_MMUTLB_LOOKUP_LATENCY,
 )
 
+PRESET_REASON = ("T13 预设 mi300x-eighth：GPM 内部改为 1/8 MI300X（38 CU、16 个 L2/HBM channel）；"
+                 "带宽按 2.1 GHz 每周期等效，延迟保持纳秒值、不做每周期等效缩放")
+
 KNOWN_REASONS = {
     "-report-l2-source": "统计开关：L2 数据来源（本地/远程 × L2/DRAM）",
     "-max-wg=": "benchmark 截断参数（不算配置修改）",
+    "-gpm-preset=": PRESET_REASON,
 }
 
 
@@ -66,13 +70,25 @@ def paper_flags():
 def deviation(common, drops, bench):
     paper = paper_flags()
     out = []
+    preset_on = any(f.startswith("-gpm-preset=") and f != "-gpm-preset=hpca" for f in common)
+    replaced = {f.split("=", 1)[0] for f in common if "=" in f}
     for flag in paper:
         if flag not in common:
-            out.append({"flag": flag, "change": "removed",
-                        "reason": drops.get(flag, "未知，需要检查")})
+            name = flag.split("=", 1)[0]
+            if flag in drops:
+                reason = drops[flag]
+            elif preset_on and "=" in flag and name in replaced:
+                reason = PRESET_REASON
+            else:
+                reason = "未知，需要检查"
+            out.append({"flag": flag, "change": "removed", "reason": reason})
     for flag in common:
         if flag not in paper:
-            out.append({"flag": flag, "change": "added", "reason": reason_for(flag)})
+            name = flag.split("=", 1)[0]
+            reason = reason_for(flag)
+            if reason == "未知，需要检查" and preset_on and name == "-num-memory-banks":
+                reason = PRESET_REASON
+            out.append({"flag": flag, "change": "added", "reason": reason})
     for flag in bench:
         if flag.startswith("-"):
             out.append({"flag": flag, "change": "added",

@@ -76,10 +76,18 @@ with open(os.path.join(out, "stdout.log"), errors="replace") as f:
 with open(os.path.join(out, "summary.csv"), "w", newline="") as f:
     csv.writer(f).writerows(rows)
 
+preset = next((a.split("=", 1)[1] for a in args if a.startswith("-gpm-preset=")), "hpca")
+notes = []
+if preset == "mi300x-eighth":
+    notes.append("GPM 内部按 1/8 MI300X：L2、HBM 带宽按 MI300X 在 2.1 GHz 下的每周期等效值设置；"
+                 "延迟（DRAM 时序等）保持纳秒值，不做每周期等效缩放。HBM channel：64-bit、BL8、"
+                 "每次访问 64 B、DRAM 时钟 1.23 GHz。")
 json.dump({
     "exp_id": exp_id, "task": task, "commit": commit, "host": host,
     "go_version": gover, "mode": "timing", "verify": False,
     "config": "paper (95b4f46 BASE_COMMON_FLAGS via runall2 build_common_flags)",
+    "gpm_preset": preset,
+    "notes": notes,
     "config_deviation": json.loads(deviation),
     "start": start, "end": end, "exit_code": int(rc), "args": args,
 }, open(os.path.join(out, "meta.json"), "w"), indent=2, ensure_ascii=False)

@@ -18,6 +18,13 @@ HOT_PATHS = (
 )
 
 
+def hpca_gpm_preset_source():
+    """Source text of the default (HPCA submission) GPM preset."""
+    text = (ROOT / "akkalat/baseline/runner/gpm_preset.go").read_text(encoding="utf-8")
+    start = text.index("var hpcaGPMPreset = gpmPreset{")
+    return text[start:text.index("\n}\n", start)]
+
+
 class CuPathSourceInvariantTest(unittest.TestCase):
     def test_frozen_m2_m3_sources_match_audited_hashes(self):
         rdma_files = sorted((ROOT / "mgpusim/timing/rdma").glob("*.go"))
@@ -243,12 +250,17 @@ class CuPathSourceInvariantTest(unittest.TestCase):
             "l1vMSHREntries:                 16",
             "byteSize := b.l2CacheSize / uint64(b.numMemoryBank)",
             "WithWayAssociativity(16)",
-            "WithNumMSHREntry(64)",
-            "WithNumReqPerCycle(16)",
+            "WithNumMSHREntry(b.gpmPreset.L2MSHRPerBank)",
+            "WithNumReqPerCycle(b.gpmPreset.L2ReqPerCyclePerBank)",
             "WithDirectoryLatency(10)",
             "for i := 0; i < b.numMemoryBank; i++",
         ):
             self.assertIn(fragment, source)
+        # T13: the HPCA values now live in the default "hpca" GPM preset.
+        hpca = hpca_gpm_preset_source()
+        self.assertRegex(hpca, r"L2MSHRPerBank:\s+64,")
+        self.assertRegex(hpca, r"L2ReqPerCyclePerBank:\s+16,")
+        self.assertIn("gpmPreset:           hpcaGPMPreset,", source)
         self.assertIn("l2CacheSize:               4 * mem.MB", platform)
         self.assertIn("WithL2CacheSize(b.l2CacheSize)", platform)
         self.assertIn("WithL2CacheSizeMB(*l2CacheSizeMBFlag)", (
@@ -288,8 +300,12 @@ class CuPathSourceInvariantTest(unittest.TestCase):
         self.assertIn("WithAddress(base)", adapter)
         self.assertIn("bottomSender.Send(read)", adapter)
         self.assertIn("samePairedReadAggregate", source)
-        self.assertIn("dramBusWidth := 256", source)
-        self.assertIn("WithBurstLength(4)", source)
+        self.assertIn("dramBusWidth := d.BusWidth", source)
+        self.assertIn("WithBurstLength(d.BurstLength)", source)
+        # T13: the HPCA HBM organization is the default "hpca" GPM preset.
+        hpca = hpca_gpm_preset_source()
+        self.assertRegex(hpca, r"BusWidth:\s+256,")
+        self.assertRegex(hpca, r"BurstLength:\s+4,")
         self.assertIn("WithAggregateContinuation", source)
         self.assertIn("FilterGranularityPending", source)
         self.assertIn("pairProbeOnly", source)

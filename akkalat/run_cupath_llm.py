@@ -18,11 +18,13 @@ import sys
 
 import runall2_process
 from runall2 import run_all_experiments
-from runall2_config import build_remote_data_path_ablation_configs
+from runall2_config import apply_gpm_preset, build_remote_data_path_ablation_configs
 from runall2_constants import (
     BASE_COMMON_FLAGS,
     DEFAULT_BENCHMARK_FLAGS,
+    DEFAULT_GPM_PRESET,
     DEFAULT_MMUTLB_LOOKUP_LATENCY,
+    GPM_PRESET_FLAGS,
     ROOT_DIR,
 )
 import runllm_decomposed as llm
@@ -90,6 +92,12 @@ def parse_args(argv=None):
         type=int,
         default=0,
         help="Run only the first N operators per model; 0 runs all operators.",
+    )
+    parser.add_argument(
+        "--gpm-preset",
+        choices=sorted(GPM_PRESET_FLAGS),
+        default=DEFAULT_GPM_PRESET,
+        help="GPM-internal configuration preset (T13). Defaults to the HPCA submission configuration.",
     )
     parser.add_argument(
         "--max-wg",
@@ -245,7 +253,8 @@ def make_llm_args(args, model):
 
 
 def common_flags(args):
-    flags = BASE_COMMON_FLAGS[:] + [
+    flags = apply_gpm_preset(
+        BASE_COMMON_FLAGS[:], getattr(args, "gpm_preset", DEFAULT_GPM_PRESET)) + [
         f"-mmutlb-lookup-latency={DEFAULT_MMUTLB_LOOKUP_LATENCY}",
     ]
     if args.max_wg > 0:

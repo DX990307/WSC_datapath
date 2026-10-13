@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 from runall2 import run_all_experiments
 from runall2_config import (
+    apply_gpm_preset,
     build_remote_data_path_ablation_configs,
     expand_benchmark_selection,
     filter_missing_metric_exps,
@@ -28,6 +29,8 @@ from runall2_config import (
 from runall2_constants import (
     ALL_BENCHMARKS,
     BASE_COMMON_FLAGS,
+    DEFAULT_GPM_PRESET,
+    GPM_PRESET_FLAGS,
     DEFAULT_BENCHMARK_FLAGS,
     DEFAULT_MMUTLB_LOOKUP_LATENCY,
 )
@@ -45,6 +48,8 @@ from runall2_process import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SLOTS_PER_BUCKET = 4
+# One typed Filter per L2 partition. 4 in the default (HPCA) preset; set from
+# the selected GPM preset's -num-memory-banks by set_gpm_preset().
 FILTERS_PER_GPM = 4
 REFERENCE_FILTER_BUCKETS = 16 * 1024
 REFERENCE_L2_MB = 4
@@ -65,7 +70,8 @@ class SensitivityPoint:
     def filter_buckets_per_partition(self) -> int:
         if self.filter_buckets_per_gpm % FILTERS_PER_GPM:
             raise ValueError(
-                "Filter bucket count per GPM must be divisible by four"
+                "Filter bucket count per GPM must be divisible by "
+                f"{FILTERS_PER_GPM}"
             )
         return self.filter_buckets_per_gpm // FILTERS_PER_GPM
 
@@ -132,6 +138,18 @@ def round_robin_points(points: list[SensitivityPoint]) -> list[SensitivityPoint]
     return ordered
 
 
+def l2_partitions_for_preset(preset: str) -> int:
+    flags = apply_gpm_preset(BASE_COMMON_FLAGS[:], preset)
+    banks = [f for f in flags if f.startswith("-num-memory-banks=")]
+    return int(banks[-1].split("=", 1)[1])
+
+
+def set_gpm_preset(preset: str) -> None:
+    """Keeps Filter buckets/GPM fixed while the partition count follows the preset."""
+    global FILTERS_PER_GPM
+    FILTERS_PER_GPM = l2_partitions_for_preset(preset)
+
+
 def selected_points(args) -> list[SensitivityPoint]:
     dimensions = parse_dimensions(args.dimensions)
     points = [point for point in POINTS if point.dimension in dimensions]
@@ -176,7 +194,8 @@ def mechanism_flags() -> dict[str, list[str]]:
 
 
 def common_flags(args) -> list[str]:
-    flags = BASE_COMMON_FLAGS[:]
+    flags = apply_gpm_preset(
+        BASE_COMMON_FLAGS[:], getattr(args, "gpm_preset", DEFAULT_GPM_PRESET))
     flags.extend((
         "-disable-servers",
         f"-mmutlb-lookup-latency={DEFAULT_MMUTLB_LOOKUP_LATENCY}",
@@ -397,6 +416,8 @@ def parse_args():
     parser.add_argument("--memory-reserve-gib", type=float, default=50.0)
     parser.add_argument("--memory-scan-minutes", type=float, default=30.0)
     parser.add_argument("--max-wg", type=int, default=78600)
+    parser.add_argument("--gpm-preset", choices=sorted(GPM_PRESET_FLAGS),
+                        default=DEFAULT_GPM_PRESET)
     parser.add_argument("--timeout-minutes", type=float, default=0.0)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -429,6 +450,7 @@ def main():
     install_signal_handlers()
     atexit.register(terminate_all_processes)
     args = parse_args()
+    set_gpm_preset(getattr(args, "gpm_preset", DEFAULT_GPM_PRESET))
     points = selected_points(args)
 
     metadata = args.output_dir / "EXPERIMENT_METADATA.json"

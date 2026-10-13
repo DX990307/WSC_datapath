@@ -384,7 +384,14 @@ func (r *Runner) buildTimingPlatform() {
 		*l2CacheSizeMBFlag,
 		*l2AdaptivePairRegionLinesFlag,
 	)
+	gpmPreset := lookupGPMPreset(*gpmPresetFlag, *numMemBankFlag)
+	fmt.Printf(
+		"[Config] GPM preset=%s CUs=%d (%d SA x %d) L2 partitions=%d\n",
+		gpmPreset.Name, gpmPreset.NumCU(), gpmPreset.NumSA,
+		gpmPreset.NumCUPerSA, *numMemBankFlag,
+	)
 	b := MakeR9NanoBuilder().
+		WithGPMPreset(gpmPreset).
 		WithLog2PageSize(configuredLog2PageSize()).
 		WithBandwidth(*bandwidthFlag).
 		WithSwitchLatency(*switchLatencyFlag).

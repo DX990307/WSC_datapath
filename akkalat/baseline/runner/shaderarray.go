@@ -48,6 +48,7 @@ type shaderArrayBuilder struct {
 	l1vRemoteMaxInflight  int
 	l1vMSHREntries        int
 	l1vMaxConcurrentTrans int
+	l1Sizes               gpmPreset
 
 	isaDebugging  bool
 	visTracer     tracing.Tracer
@@ -65,7 +66,14 @@ func makeShaderArrayBuilder() shaderArrayBuilder {
 		log2PageSize:          12,
 		l1vMSHREntries:        16,
 		l1vMaxConcurrentTrans: 16,
+		l1Sizes:               hpcaGPMPreset,
 	}
+	return b
+}
+
+// withGPMPreset sets the L1V/L1I/L1S sizes and associativities.
+func (b shaderArrayBuilder) withGPMPreset(p gpmPreset) shaderArrayBuilder {
+	b.l1Sizes = p
 	return b
 }
 
@@ -385,11 +393,11 @@ func (b *shaderArrayBuilder) buildL1VCaches(sa *shaderArray) {
 		WithBankLatency(10).
 		WithNumBanks(1).
 		WithLog2BlockSize(b.log2CacheLineSize).
-		WithWayAssociativity(4).
+		WithWayAssociativity(b.l1Sizes.L1VWays).
 		WithNumMSHREntry(b.l1vMSHREntries).
 		WithMaxNumConcurrentTrans(b.l1vMaxConcurrentTrans).
 		WithMaxRemoteBottomTrans(b.l1vRemoteMaxInflight).
-		WithTotalByteSize(16 * mem.KB)
+		WithTotalByteSize(b.l1Sizes.L1VBytes)
 
 	if b.visTracer != nil {
 		builder = builder.WithVisTracer(b.visTracer)
@@ -465,7 +473,7 @@ func (b *shaderArrayBuilder) buildL1SCache(sa *shaderArray) {
 		WithLog2BlockSize(b.log2CacheLineSize).
 		WithWayAssociativity(4).
 		WithNumMSHREntry(16).
-		WithTotalByteSize(16 * mem.KB)
+		WithTotalByteSize(b.l1Sizes.L1SBytes)
 
 	name := fmt.Sprintf("%s.L1SCache", b.name)
 	cache := builder.Build(name)
@@ -537,9 +545,9 @@ func (b *shaderArrayBuilder) buildL1ICache(sa *shaderArray) {
 		WithBankLatency(1).
 		WithNumBanks(1).
 		WithLog2BlockSize(b.log2CacheLineSize).
-		WithWayAssociativity(4).
+		WithWayAssociativity(b.l1Sizes.L1IWays).
 		WithNumMSHREntry(16).
-		WithTotalByteSize(32 * mem.KB).
+		WithTotalByteSize(b.l1Sizes.L1IBytes).
 		WithNumReqsPerCycle(4)
 
 	name := fmt.Sprintf("%s.L1ICache", b.name)
