@@ -62,3 +62,8 @@
 - 代码仓库：任务分支都已提交、工作区干净：`isca27/t11-probe-placement-comm` `d6b765c`、`isca27/t12-driver-flush-fix` `36bde23`、`isca27/t13-mi300x` `f444076`（T13 阶段 2 的实现已全部提交）。**`git push` 被 Claude Code 的权限规则拦下，没有推送。**
 - STATUS：新增“需要用户决定”两条（T13 阶段 2 / T12 R3 的配置确认；GitHub 推送放行）。
 
+### 2026-10-13 [claude-code] 用户决定：文档备份改为代码仓库的分支 `isca27/docs`
+- 用户 10-13：不新建 `DX990307/cupath-isca27`，在当前代码仓库 `DX990307/WSC_datapath` 里新建分支来备份。文档仓库（本目录，分支 `main`）推送到 `origin` 的 `isca27/docs`；它和代码分支的历史互不相关，不影响任何已有分支。
+- 这和本文件第 1、3 节写的“文档仓库是单独的私有仓库”不一致，需要 Cowork 侧更新第 1、3 节（我只追加日志，不改规则部分）。
+- 推送仍被 Claude Code 的权限规则拦下，代码的三个任务分支和 `isca27/docs` 都还没有推送。
+
