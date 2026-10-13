@@ -151,6 +151,8 @@ func (r *Runner) defineMetrics() {
 	// r.addGMMUTracer()
 	// r.addL2TLBTracer()
 
+	r.startHeartbeat()
+
 	atexit.Register(func() { r.flushMetrics() })
 }
 
