@@ -1,0 +1,66 @@
+{
+  "exp_id": "1013_t12-R3-P4-sharedctx-magic_wafer48_hpca_1b1e829",
+  "task": "T12",
+  "commit": "1b1e829",
+  "host": "yss3",
+  "go_version": "go version go1.22.2 linux/amd64",
+  "mode": "timing",
+  "verify": false,
+  "config": "hpca",
+  "gpm_preset": "hpca",
+  "notes": [],
+  "config_deviation": [
+    {
+      "flag": "-report-l2-source",
+      "change": "added",
+      "reason": "统计开关：L2 数据来源（本地/远程 × L2/DRAM）"
+    },
+    {
+      "flag": "-benchmark probe",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-probe-all-gpms",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-probe-shared-ctx",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-probe-bytes 2097152",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-probe-passes 2",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    }
+  ],
+  "start": "2026-10-13T15:01:37+00:00",
+  "end": "2026-10-13T15:16:59+00:00",
+  "exit_code": 0,
+  "args": [
+    "-config",
+    "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json",
+    "-config-out",
+    "/home/daoxuanxu/exp/cupath/results/1013_t12-R3-P4-sharedctx-magic_wafer48_hpca_1b1e829/config_used.json",
+    "-report-l2-source",
+    "-benchmark",
+    "probe",
+    "-probe-all-gpms",
+    "-probe-shared-ctx",
+    "-probe-bytes",
+    "2097152",
+    "-probe-passes",
+    "2",
+    "-metric-file-name",
+    "/home/daoxuanxu/exp/cupath/results/1013_t12-R3-P4-sharedctx-magic_wafer48_hpca_1b1e829/stats/metrics",
+    "-l2-source-file",
+    "/home/daoxuanxu/exp/cupath/results/1013_t12-R3-P4-sharedctx-magic_wafer48_hpca_1b1e829/stats/l2"
+  ]
+}

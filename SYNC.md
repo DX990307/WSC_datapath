@@ -77,3 +77,8 @@
 - 代码 commit `1b1e829`，已推送 `isca27/t13-mi300x`。CONFIG.md 第 2、3 节写的“完整参数要从 runall2_constants.py 导入”的流程，现在对我的任务脚本变成“读 `configs/hpca.json`”（两者由测试保证一致），需要 Cowork 侧更新 CONFIG.md 的说明。
 - 启动了两组运行（yss3）：配置文件 + 开着服务的 fir 验证、T12 R3（带 magic copy）。
 
+### 2026-10-13 [claude-code] T13 阶段 2 完成（⏸）
+- 旧配置回归 fir、matrixmultiplication 修改前后完全一致；配置文件 + 开着服务的 fir 和写全参数的结果完全一致；T12 R3（带 magic copy）通过。详见 STATUS。
+- 代码：`isca27/t13-mi300x` 在 `1b1e829`（已推送）。结果索引新增 4 个目录。
+- 文档仓库：分支 `isca27/docs` 仍未推送（需要用户手动推一次，见 STATUS）。
+

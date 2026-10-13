@@ -1,0 +1,47 @@
+{
+  "exp_id": "1013_t13-reg-matrixmultiplication-maxwg4096_wafer48_hpca_f444076",
+  "task": "T13",
+  "commit": "f444076",
+  "host": "yss2",
+  "go_version": "go version go1.22.2 linux/amd64",
+  "mode": "timing",
+  "verify": false,
+  "config": "paper (95b4f46 BASE_COMMON_FLAGS via runall2 build_common_flags)",
+  "gpm_preset": "hpca",
+  "notes": [],
+  "config_deviation": [
+    {
+      "flag": "-max-wg=4096",
+      "change": "added",
+      "reason": "benchmark 截断参数（不算配置修改）"
+    },
+    {
+      "flag": "-benchmark matrixmultiplication",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    }
+  ],
+  "start": "2026-10-13T14:37:41+00:00",
+  "end": "2026-10-13T15:22:33+00:00",
+  "exit_code": 0,
+  "args": [
+    "-timing",
+    "-num-memory-banks=4",
+    "-l1v-mshr-entries=16",
+    "-l1v-max-concurrent-trans=16",
+    "-bandwidth=48",
+    "-switch-latency=32",
+    "-rdma-pipeline-width=8",
+    "-rdma-pipeline-latency=10",
+    "-rdma-max-outstanding=64",
+    "-magic-memory-copy",
+    "-report-all",
+    "-disable-servers",
+    "-mmutlb-lookup-latency=80",
+    "-max-wg=4096",
+    "-benchmark",
+    "matrixmultiplication",
+    "-metric-file-name",
+    "/home/daoxuanxu/exp/cupath/results/1013_t13-reg-matrixmultiplication-maxwg4096_wafer48_hpca_f444076/stats/metrics"
+  ]
+}

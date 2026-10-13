@@ -24,8 +24,8 @@
 | T8 机制 2 | `[提案]`，不要开始 | | |
 | T9 第二批 workload | `[提案]`，不要开始 | | |
 | T10 SPMD 通信套件 | `[提案]`，不要开始 | | |
-| T12 driver flush 修复 | 完成（用户已确认） | 10-13 13:55 | 修复 `9c30a89`；单元测试、R1、R2、R3 全部通过 |
-| T13 MI300X 配置 | 进行中 | 10-13 | 阶段 1 已确认；阶段 2 预设已实现（`f444076`），旧配置回归运行中 |
+| T12 driver flush 修复 | 完成（用户已确认；10-13 15:17 补跑带 magic copy 的 R3，通过） | 10-13 15:17 | 修复 `9c30a89`；单元测试、R1、R2、R3 全部通过 |
+| T13 MI300X 配置 | 进行中 | 10-13 15:25 | 阶段 2 完成（预设 `f444076`、配置文件 `1b1e829`；旧配置回归全部一致），⏸ 等用户确认后进入阶段 3 |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
@@ -345,3 +345,17 @@
   - T12 R3（带 magic copy）：`isca27_run.sh 1013_t12-R3-P4-sharedctx-magic_wafer48_hpca_1b1e829 1b1e829 T12 hpca -report-l2-source -benchmark probe -probe-all-gpms -probe-shared-ctx -probe-bytes 2097152 -probe-passes 2`。
   - 两个都已确认读到了 `hpca.json`，`disable-servers=false`、`magic-memory-copy=true`、`bandwidth=48`。
 - 旧配置回归：fir 已通过（见阶段 2 日志）；matrixmultiplication 还在跑。
+
+### 2026-10-13 15:25 (T13) 阶段 2 完成（⏸ 等用户确认）
+
+| 检查 | 修改前（基准） | 修改后 | 结论 |
+|---|---|---|---|
+| 旧配置回归 fir（`-max-wg=4096`） | T12 R1 `9c30a89`（yss2）：total_time 26,662 ns | `f444076`（yss2，默认预设 hpca）：26,662 ns | ✅ 100,477 项统计排序后完全一致 |
+| 旧配置回归 matrixmultiplication（`-max-wg=4096`） | T12 R1 `9c30a89`：378,553 ns | `f444076`：378,553 ns | ✅ 105,952 项统计排序后完全一致 |
+| 配置文件 + 开着服务 = 写全参数 + `-disable-servers` | T13 回归 fir（写全参数，`-disable-servers`，yss2） | `1b1e829`，`-config hpca.json`，不带 `-disable-servers`（yss3） | ✅ 100,477 项完全一致；同时说明两台服务器的结果可以完全复现 |
+| T12 R3（带 magic copy，48 个 GPM 共用一个 Context，按 T12 文档的新要求） | — | `1b1e829`，`-config hpca.json`（yss3） | ✅ 48 个 GPM 都有指令，两遍都完成（96 个 kernel），第 1 遍 37,602 ns、第 2 遍 6,803 ns，exit 0，没有卡死 |
+
+- 结果目录：本机 `results/1013_t13-*`、`results/1013_t12-R3-P4-sharedctx-magic_*`；`results_index/` 已收录 meta.json、summary.csv、config_used.json。
+- 阶段 2 的验收：`-gpm-preset` 默认值等于旧配置、旧配置回归完全一致 ✅；分析脚本里“L2 只有 4 个分区”的假设已检查（修了 `run_cupath_sensitivity.py`，`cost/run_full_cacti.py` 待以后另算面积）✅；所有运行都保留 `-magic-memory-copy` ✅。
+- 另外（用户要求）：监控网页 `exp web` 新增单个结果的配置和统计汇总、2–4 个结果的对比（关键结果、配置差异、统计是否完全一致及差异列表）。这是本机工具（`~/.local/share/exp/`），不在代码仓库里。
+- **下一步：⏸ 等用户确认阶段 2，然后进入阶段 3（校准）。** 阶段 3 运行前会按 CONFIG.md 第 3 节给出完整参数（现在是配置文件名 + benchmark 参数）和差异。
