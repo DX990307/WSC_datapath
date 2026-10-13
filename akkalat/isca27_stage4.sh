@@ -7,9 +7,12 @@
 #   akkalat/isca27_stage4.sh <commit> <plan>
 #
 # Plans (one per server, 16 concurrent simulations, 30 GiB memory reserve):
-#   yss2: hpca T11 probes -> hpca main + filter audit -> sensitivity (filter)
-#   yss3: mi300x T11 probes -> mi300x main + filter audit -> LLM
+#   yss2: hpca T11 probes -> hpca main + filter audit -> LLM (mi300x)
+#         -> sensitivity (filter, with the reference point)
+#   yss3: mi300x T11 probes -> mi300x main + filter audit
 #         -> sensitivity (l2, row)
+# The mi300x LLM campaign runs on yss2 so both servers finish at about the
+# same time (yss3 carries the longer mi300x main campaign).
 # The main campaign (12 workers) and the filter audit (4 workers) run side by
 # side so that their long kmeans runs overlap. Results go to
 # results/1013_t13s4-<part>_wafer48_<preset>_<commit>/.
@@ -120,12 +123,12 @@ case "$PLAN" in
   yss2)
     probes hpca hpca
     main_and_audit hpca hpca
+    llm
     sensitivity filter filter --include-reference
     ;;
   yss3)
     probes mi300x_eighth mi300x
     main_and_audit mi300x-eighth mi300x
-    llm
     sensitivity l2,row l2-row
     ;;
   *)
