@@ -599,3 +599,14 @@
 
 - 来源：[AMD CDNA2 白皮书](https://www.amd.com/content/dam/amd/en/documents/instinct-business-docs/white-papers/amd-cdna2-white-paper.pdf)、[AMD Instinct MI250 文档](https://instinct.docs.amd.com/projects/system-acceptance/en/latest/_sources/gpus/mi250.md)、[ROCm L2 文档](https://rocm.docs.amd.com/projects/rocprofiler-compute/en/docs-7.2.4/conceptual/l2-cache.html)、[Intel HBM2E 控制器文档（伪通道 BL4、32 B）](https://www.intel.com/content/www/us/en/docs/programmable/773264/24-3/hbm2e-features.html)。DRAM 时序的具体出处在实现时补上。
 - **实现计划**：DRAM 四项改动（每项带单元测试，hpca、mi300x 的统计必须逐项不变）→ mi200 预设和 `configs/mi200.json` → 调度脚本加启动限速、有暂停的模拟时不启动、全部停住时报警 → 本机小规模回归 → 提交 → 服务器上先跑 T14 平台测量（只看特性，不做校准），再跑阶段 4。
+
+### 2026-10-14 (清理) 按用户要求删除作废的结果目录
+
+- **用户 10-14 决定**：作废或被取代的结果目录**直接删除**（不同于此前“旧结果不删”的规则，这次是用户明确要求）；本机 `remote/`（exp pull 的镜像，2 GB）也删掉。
+- **删除**（服务器 `~/exp/cupath/results/`；yss2 60 个、yss3 51 个，本机 `results/` 没有匹配的）：
+  - T12 修复前的探针：`1012_probe-*`（`a097f31`、`0ca173f`）、`1013_probe-*_d1f6d8c`；
+  - 阶段 4 第一次启动 `*_9220740`（只跑了 T11 探针）；
+  - 阶段 4 第二次启动 `*_8b4040e`（git bug，campaign 没起来）；
+  - T14 错误指针追逐的 `1013_t14-{lat,hop}-*_0e38983`（已用 `ca7ea0b` 重跑）；
+  - 阶段 4 未开始的 `1013_t13s4-{llm,sens-*}_*_260ce73`（没有任何结果）。
+- **保留**：T11 `*_f7b9eef`、T12、T13 回归、T14 有效结果（`0e38983` 的 bw/rbw/inc/pat/kernel 与 `ca7ea0b` 的 lat/hop）、`260ce73` 的主结果和 filter 统计（含 24 个可保留的结果）。`isca27/results_index/` 和本机 `akkalat/results/`（7 月论文结果）都没有动。删除后：yss2 剩 72 个目录 1.2 GB，yss3 剩 52 个 2.3 GB。
