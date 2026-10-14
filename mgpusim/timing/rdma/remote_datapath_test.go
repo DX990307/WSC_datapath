@@ -1422,3 +1422,52 @@ func TestRemoteDataPathDrainIncludesBatchAndFanoutState(t *testing.T) {
 		t.Fatal("completed remote read prevented RDMA drain")
 	}
 }
+
+func TestBitmapResponseQueuesReturnedLinesInLineOrder(t *testing.T) {
+	// A bitmap response carries its lines in a Go map; the requester must not
+	// let map iteration order decide which waiting request gets data first.
+	for trial := 0; trial < 20; trial++ {
+		c, toL1, _, toOutside, _ := newRemoteDataPathTestComp(t,
+			RemoteDataPathConfig{
+				Enabled:            true,
+				DisableRequesterL2: true,
+				MaxBatchLines:      8,
+				MaxBatches:         8,
+			})
+		l1 := &remoteTestPort{name: "L1"}
+		for i := uint64(0); i < 8; i++ {
+			toL1.inbox = append(toL1.inbox, remoteTestRead(l1, 0x6000+i*0x40))
+		}
+		for i := 0; i < 8; i++ {
+			c.processFromL1(1)
+		}
+		for i := 0; i < 8; i++ {
+			c.processRemotePendingBatches(2)
+		}
+		c.processRemoteBatches(2, false)
+		req := toOutside.sent[0].(*BitmapReadReq)
+
+		lines := map[uint64][]byte{}
+		for i := uint64(0); i < 8; i++ {
+			lines[i] = make([]byte, remoteLineBytes)
+		}
+		rsp := &BitmapReadRsp{
+			MsgMeta:   sim.MsgMeta{Dst: toOutside},
+			RespondTo: req.ID,
+			LineData:  lines,
+		}
+		toOutside.inbox = append(toOutside.inbox, rsp)
+		if !c.processBitmapRspFromOutside(3, rsp) {
+			t.Fatal("bitmap response was rejected")
+		}
+		if len(c.remoteReady) != 8 {
+			t.Fatalf("queued %d ready lines, want 8", len(c.remoteReady))
+		}
+		for i, entry := range c.remoteReady {
+			if want := uint64(0x6000 + i*0x40); entry.key.lineAddr != want {
+				t.Fatalf("trial %d: ready[%d] is 0x%x, want 0x%x",
+					trial, i, entry.key.lineAddr, want)
+			}
+		}
+	}
+}

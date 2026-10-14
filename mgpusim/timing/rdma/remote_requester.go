@@ -1449,9 +1449,17 @@ func (c *Comp) processBitmapRspFromOutside(
 	if batch == nil {
 		panic("bitmap response has no matching requester batch")
 	}
-	for line, data := range rsp.LineData {
+	for line := range rsp.LineData {
 		if line >= 64 {
 			panic(fmt.Sprintf("bitmap response line %d is outside the page", line))
+		}
+	}
+	// Visit returned lines in ascending line order. Ranging over the map
+	// directly would enqueue ready lines in Go's randomized map order.
+	for line := uint64(0); line < 64; line++ {
+		data, returned := rsp.LineData[line]
+		if !returned {
+			continue
 		}
 		lineBit := uint64(1) << line
 		entry := batch.lines[line]
