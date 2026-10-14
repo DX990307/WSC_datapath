@@ -541,3 +541,14 @@
 - **新发现（更要紧）**：子代理把 Complete + `-report-all` + filter 统计的同一配置用同一个二进制连跑两次，84k 行统计里约 33k 行不同，`total_time` 相差约 0.5%。阶段 2 时 baseline 配置跑两次、跨服务器都完全一致，所以很可能是 CuPath 机制代码里有依赖 Go map 遍历顺序之类的不确定性。这会影响论文里差别只有几个百分点的对比，也影响阶段 4 正在跑的 Complete、m1、m2、m3 结果。
 - **用户 10-14 决定**：阶段 4 照跑不动；先核实不确定性（哪种配置、哪段代码），把结论和修复方案（内存泄漏 + 不确定性）一起拿给用户，再决定要不要停下来用修好的代码重跑。核实交给同一个子代理。
 - 更正：此前用“模拟是确定性的”来论证 yss2 崩溃不是代码问题，这个前提对 m1 这类配置不完全成立；yss2 内存条坏了的结论主要靠硬件证据（EDAC 不可纠正错误计数、`HardwareCorrupted`、SIGBUS code 4、整页对齐的出错地址），不受影响。
+
+### 2026-10-14 16:30 (T13 阶段 4) 两台服务器卡死约 13 小时；修复 bug 后停掉阶段 4
+
+- **卡死**：约 02:30 到 16:00，两台服务器上的模拟全部处于暂停状态（yss2 13 个、yss3 12 个），可用内存只有约 9 GB，低于守护进程“一个都没在跑时强制恢复”的 10 GB 门槛，形成死锁，进度停在 hpca 主结果 33/70、mi300x 主结果 23/70。本机监视把暂停的也算进“模拟个数”，所以“没有模拟在跑”的提醒从未触发，**这是我的失误**。
+- **用户 10-14 决定**：先修复 bug，再停掉实验。
+- **修复**（代码分支 `isca27/t13-mi300x` 推到 `756f214`）：
+  - `f1ef3f0`：远程批量读按 line 号顺序处理响应（`mgpusim/timing/rdma/remote_requester.go` `processBitmapRspFromOutside`），消除 m2 / Complete 每次运行结果不同的问题。新增单元测试 `TestBitmapResponseQueuesReturnedLinesInLineOrder`（重复 20 次检查顺序；撤掉修复时第一次就失败）。
+  - `756f214`：四处内存泄漏（DRAM 追踪器只记 `req_in`；cache/TLB 命中率追踪器只收 `req_in`；L2 MSHR 步骤名不再带地址；typed filter 定期清理已可见的 `scheduledVisibility`）。新增单元测试 `TestTypedFilterPruningExpiredVisibilityDoesNotChangeLookups`、`TestDramTracerIgnoresSubTransactionTasks`。writeback、dram、tracing、rdma、runner 包的全部测试通过。
+  - 子代理此前在本机验证（与提交的代码逐文件一致，只差删掉一个无用的 `fmt` import）：修复后每种配置跑两次结果完全一致；在此基础上加上内存修复，所有统计（含 `total_time`）不变；内存增长降到原来的 1/3–1/10，模拟快 1.8–2.3 倍。
+- **停掉阶段 4**（16:20）：两台服务器的 `t13s4c-*`、内存守护进程、yss3 上等待中的诊断运行全部停掉，残留模拟强制结束；已跑完的结果都保留在 `results/1013_t13s4-*_260ce73/`。已完成：T11 探针两套各 16 个；hpca 主结果 33/70（失败 1）；mi300x 主结果 23/70（失败 9）；mi300x filter 统计 13/14（失败 1）；LLM、敏感性未开始。
+- **重启前要定的事**：（1）已跑完的 baseline / m1 / m3 结果是否保留（它们是确定的，修复不改变结果）；（2）DRAM 模型的问题（见内存控制器审查）是否要先改配置——如果要改，阶段 4 要整体重跑，现在重启会白跑。

@@ -118,3 +118,8 @@
 ### 2026-10-13 [claude-code] T13 阶段 4 重启（每台 16 个位置一直占满）
 - 代码：`isca27/t13-mi300x` 推到 `260ce73`（`slot_pool.py` 共享位置；`runall2.py` 调度器可选接入；`runall2_process.py` 在没有 `.git` 时接受调用方的 commit）。
 - 文档：本条所在的提交（推到 `isca27/docs`）。只改了 `STATUS.md`、`SYNC.md`。
+
+### 2026-10-14 [claude-code] 修复不确定性和内存泄漏；阶段 4 停止
+- 代码：`isca27/t13-mi300x` 推到 `756f214`（`f1ef3f0` 远程批量读按顺序处理；`756f214` 四处内存泄漏）。
+- 文档：本条所在的提交（推到 `isca27/docs`）。只改了 `STATUS.md`、`SYNC.md`。
+- STATUS：阶段 4 卡死约 13 小时的经过、修复、停止；重启前待定事项。另外 STATUS 里有内存控制器审查和 Local Pairing 相关发现，涉及论文 Table II、DRAM 模型和 Local Pairing 的论述，可能需要更新 CONFIG.md 和任务文档。
