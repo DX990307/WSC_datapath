@@ -581,3 +581,21 @@
 - **mi300x 预测次数少 5 倍的原因**：预测器正常（置信度一直满，没有白取）；是一个 wavefront 同时请求 128 B 区域里的两条 line，99.9% 的配对在 2 ns 内到达 L2，第二条已占 MSHR，配对被过滤掉。把已在等的那条合进配对读（临时试验，正确性未验证）：mi300x 预测涨 4.7 倍但没有加速；hpca bitonicsort 1.96→2.75 倍，但仍是 128 B 访问单位的效果。
 - **DRAM 地址映射问题**：控制器内部直接用全局地址，没去掉选 L2 分区的位，mi300x 每个控制器只用到 1/4 的 bank group、每行 8 列里的 2 列。
 - **含义**：Local Pairing 不能再按“减少 DRAM 访问、利用行局部性”来论述；能站得住的是对不规则访问的延迟隐藏（spmv）。DRAM 模型（地址映射、关页、无刷新/tFAW）要不要改、Local Pairing 怎么定位，需要用户决定后再重启阶段 4。
+
+### 2026-10-14 (T13) 改用 MI200 配置：用户决定和配置表（实现进行中）
+
+- **用户 10-14 决定**：（1）GPM 改按 MI200（MI250X 的一个 GCD）配置，作为折中（MI300X 的 Infinity Cache、IOD 等结构模拟器没有建模）；（2）**每个 tile 不超过 30 个 CU**（否则实验太大）；（3）**不做校准**（手里没有 MI200），只要求配置和公开规格一致；（4）**L2 line 先用 64 B**（MI200 是 128 B，作为偏离注明）；（5）DRAM 的伪通道、同一条 line 连读同一行、刷新、tFAW、地址映射修正**全部做**，只在 mi200 配置下生效。
+- **配置表（一个 GPM = 1/4 个 MI250X GCD；时钟仍 1 GHz，带宽按 1.7 GHz 换算成每周期等效值，延迟保持纳秒）**：
+
+| 参数 | MI250X 一个 GCD | mi200 每 GPM | hpca | mi300x-eighth | 实现方式 |
+|---|---|---|---|---|---|
+| CU | 110 | 28（14 × 2） | 32 | 38 | 预设字段 |
+| L1V / L1I / L1S | 16 KB/CU；L1I、标量 cache 每 2 CU 共享 | 16 KB；64 KB 8 路 / 16 KB 每 2 CU | 16 KB；每 4 CU 共享 | 32 KB；同 mi200 | 预设字段 |
+| L2 | 8 MB、16 路、32 slice、每 slice 128 B/周期、line 128 B | 2 MB、16 路、8 slice × 256 KB、每 slice 2 请求/周期（1 KB/周期）、32 MSHR/slice、**line 64 B（偏离）** | 4 MB、4 分区 | 4 MB、16 通道 | 预设字段 + `-l2-cache-size-mb=2` |
+| HBM | 4 个 HBM2e stack、4096 位、3.2 Gbps、1.6 TB/s | 1 stack、409.6 GB/s → 241 B/周期 | 128（实测 59） | 315 | — |
+| 内存控制器 | 每 stack 8 通道 × 2 伪通道 | 8 个（与 8 个 L2 slice 一一对应），每个 2 个 64 位伪通道、BL4、每次 32 B，时钟 941 MHz | 4 个 256 位 BL4 | 16 个 64 位 BL8 | 改代码（伪通道） |
+| 行策略 / 刷新 / tFAW / 地址映射 | 真实控制器有 | 同一条 line 的两次 32 B 访问连读同一行；全 bank 刷新；tFAW；去掉选 slice 的地址位 | 无 | 无 | 改代码（只在 mi200 生效） |
+| 网络、RDMA、TLB | — | 不变 | — | — | — |
+
+- 来源：[AMD CDNA2 白皮书](https://www.amd.com/content/dam/amd/en/documents/instinct-business-docs/white-papers/amd-cdna2-white-paper.pdf)、[AMD Instinct MI250 文档](https://instinct.docs.amd.com/projects/system-acceptance/en/latest/_sources/gpus/mi250.md)、[ROCm L2 文档](https://rocm.docs.amd.com/projects/rocprofiler-compute/en/docs-7.2.4/conceptual/l2-cache.html)、[Intel HBM2E 控制器文档（伪通道 BL4、32 B）](https://www.intel.com/content/www/us/en/docs/programmable/773264/24-3/hbm2e-features.html)。DRAM 时序的具体出处在实现时补上。
+- **实现计划**：DRAM 四项改动（每项带单元测试，hpca、mi300x 的统计必须逐项不变）→ mi200 预设和 `configs/mi200.json` → 调度脚本加启动限速、有暂停的模拟时不启动、全部停住时报警 → 本机小规模回归 → 提交 → 服务器上先跑 T14 平台测量（只看特性，不做校准），再跑阶段 4。
