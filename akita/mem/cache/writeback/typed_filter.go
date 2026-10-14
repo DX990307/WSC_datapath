@@ -179,6 +179,21 @@ type TypedCuckooFilter struct {
 	// become visible through the modeled filter array. A lookup to such a key
 	// fails open until the shared update port and latency have elapsed.
 	scheduledVisibility map[TypedFilterKey]sim.VTimeInSec
+	visibilitySweepAt   int
+}
+
+// pruneScheduledVisibility drops entries whose visibility time has passed.
+// Such entries are indistinguishable from absent ones for every reader.
+func (f *TypedCuckooFilter) pruneScheduledVisibility(now sim.VTimeInSec) {
+	if len(f.scheduledVisibility) < f.visibilitySweepAt {
+		return
+	}
+	for key, visibleAt := range f.scheduledVisibility {
+		if visibleAt <= now {
+			delete(f.scheduledVisibility, key)
+		}
+	}
+	f.visibilitySweepAt = 2*len(f.scheduledVisibility) + 4096
 }
 
 // lineMembershipFilter preserves the small cache-local API while RESIDENT
@@ -437,6 +452,7 @@ func (f *TypedCuckooFilter) ScheduleUpdate(
 	f.updateUsed++
 	readyAt := f.config.Freq.NCyclesLater(
 		f.config.UpdateLatencyCycles, f.updateCycle)
+	f.pruneScheduledVisibility(now)
 	if previous := f.scheduledVisibility[key]; readyAt > previous {
 		f.scheduledVisibility[key] = readyAt
 	}
@@ -479,6 +495,7 @@ func (f *TypedCuckooFilter) TryScheduleUpdate(
 	f.updateUsed++
 	readyAt := f.config.Freq.NCyclesLater(
 		f.config.UpdateLatencyCycles, now)
+	f.pruneScheduledVisibility(now)
 	if previous := f.scheduledVisibility[key]; readyAt > previous {
 		f.scheduledVisibility[key] = readyAt
 	}

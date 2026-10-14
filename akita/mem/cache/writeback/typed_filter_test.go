@@ -512,3 +512,46 @@ func TestTypedFilterRejectsUnsupportedSensitivityPoints(t *testing.T) {
 		}()
 	}
 }
+
+func TestTypedFilterPruningExpiredVisibilityDoesNotChangeLookups(t *testing.T) {
+	newFilter := func() *TypedCuckooFilter {
+		return NewTypedCuckooFilter(TypedFilterConfig{
+			Capacity: 64, Mode: TypedFilterCuckoo,
+			LookupLatencyCycles: 0, LookupWidth: 8,
+			UpdateLatencyCycles: 2, UpdateWidth: 1,
+			Freq: 1 * sim.GHz,
+		})
+	}
+	pruned, kept := newFilter(), newFilter()
+	keys := []TypedFilterKey{
+		{PID: 1, Address: 0x1000, Type: FilterResident},
+		{PID: 1, Address: 0x1040, Type: FilterResident},
+		{PID: 1, Address: 0x2000, Type: FilterPending},
+	}
+	for _, f := range []*TypedCuckooFilter{pruned, kept} {
+		for _, k := range keys {
+			f.ScheduleUpdate(0, k, false)
+		}
+	}
+	// keys[0] and keys[1] are visible by 3 ns; keys[2] (third on the
+	// width-1 port) only at 4 ns, so pruning at 3 ns must keep it.
+	pruned.visibilitySweepAt = 0
+	pruned.pruneScheduledVisibility(3e-9)
+	if len(pruned.scheduledVisibility) != 1 {
+		t.Fatalf("pruning kept %d entries, want 1", len(pruned.scheduledVisibility))
+	}
+	if _, pending := pruned.scheduledVisibility[keys[2]]; !pending {
+		t.Fatal("pruning dropped an entry that is not visible yet")
+	}
+	for _, now := range []sim.VTimeInSec{3e-9, 4e-9} {
+		for _, k := range keys {
+			la, _ := pruned.StartLookup(now, k)
+			lb, _ := kept.StartLookup(now, k)
+			pa, ra, ya := pruned.CompleteLookup(now, la)
+			pb, rb, yb := kept.CompleteLookup(now, lb)
+			if pa != pb || ra != rb || ya != yb {
+				t.Fatalf("lookup of %v at %v differs after pruning", k, now)
+			}
+		}
+	}
+}

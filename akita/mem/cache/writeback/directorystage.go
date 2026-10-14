@@ -1,8 +1,6 @@
 package writeback
 
 import (
-	"fmt"
-
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
@@ -894,7 +892,7 @@ func (ds *directoryStage) fetch(
 	tracing.AddTaskStep(
 		tracing.MsgIDAtReceiver(req, ds.cache),
 		ds.cache,
-		fmt.Sprintf("add-mshr-entry-0x%x-0x%x", mshrEntry.Address, block.Tag),
+		"add-mshr-entry",
 	)
 
 	ds.buf.Pop()

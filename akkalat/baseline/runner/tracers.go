@@ -357,7 +357,7 @@ func (r *Runner) addCacheHitRateTracer() {
 				continue
 			}
 			tracer := tracing.NewStepCountTracer(
-				func(task tracing.Task) bool { return true })
+				func(task tracing.Task) bool { return task.Kind == "req_in" })
 			r.cacheHitRateTracers = append(r.cacheHitRateTracers,
 				cacheHitRateTracer{tracer: tracer, cache: cache})
 			tracing.CollectTrace(cache, tracer)
@@ -368,7 +368,7 @@ func (r *Runner) addCacheHitRateTracer() {
 				continue
 			}
 			tracer := tracing.NewStepCountTracer(
-				func(task tracing.Task) bool { return true })
+				func(task tracing.Task) bool { return task.Kind == "req_in" })
 			r.cacheHitRateTracers = append(r.cacheHitRateTracers,
 				cacheHitRateTracer{tracer: tracer, cache: cache})
 			tracing.CollectTrace(cache, tracer)
@@ -379,7 +379,7 @@ func (r *Runner) addCacheHitRateTracer() {
 				continue
 			}
 			tracer := tracing.NewStepCountTracer(
-				func(task tracing.Task) bool { return true })
+				func(task tracing.Task) bool { return task.Kind == "req_in" })
 			r.cacheHitRateTracers = append(r.cacheHitRateTracers,
 				cacheHitRateTracer{tracer: tracer, cache: cache})
 			tracing.CollectTrace(cache, tracer)
@@ -390,7 +390,7 @@ func (r *Runner) addCacheHitRateTracer() {
 				continue
 			}
 			tracer := tracing.NewStepCountTracer(
-				func(task tracing.Task) bool { return true })
+				func(task tracing.Task) bool { return task.Kind == "req_in" })
 			r.cacheHitRateTracers = append(r.cacheHitRateTracers,
 				cacheHitRateTracer{tracer: tracer, cache: cache})
 			tracing.CollectTrace(cache, tracer)
@@ -486,7 +486,7 @@ func (r *Runner) addTLBHitRateTracer() {
 				continue
 			}
 			tracer := tracing.NewStepCountTracer(
-				func(task tracing.Task) bool { return true })
+				func(task tracing.Task) bool { return task.Kind == "req_in" })
 			r.tlbHitRateTracers = append(r.tlbHitRateTracers,
 				tlbHitRateTracer{tracer: tracer, tlb: tlb})
 			tracing.CollectTrace(tlb, tracer)
@@ -497,7 +497,7 @@ func (r *Runner) addTLBHitRateTracer() {
 				continue
 			}
 			tracer := tracing.NewStepCountTracer(
-				func(task tracing.Task) bool { return true })
+				func(task tracing.Task) bool { return task.Kind == "req_in" })
 			r.tlbHitRateTracers = append(r.tlbHitRateTracers,
 				tlbHitRateTracer{tracer: tracer, tlb: tlb})
 			tracing.CollectTrace(tlb, tracer)
@@ -508,7 +508,7 @@ func (r *Runner) addTLBHitRateTracer() {
 				continue
 			}
 			tracer := tracing.NewStepCountTracer(
-				func(task tracing.Task) bool { return true })
+				func(task tracing.Task) bool { return task.Kind == "req_in" })
 			r.tlbHitRateTracers = append(r.tlbHitRateTracers,
 				tlbHitRateTracer{tracer: tracer, tlb: tlb})
 			tracing.CollectTrace(tlb, tracer)
@@ -530,7 +530,7 @@ func (r *Runner) addL2TLBHitRateTracer() {
 			continue
 		}
 		tracer := tracing.NewStepCountTracer(
-			func(task tracing.Task) bool { return true })
+			func(task tracing.Task) bool { return task.Kind == "req_in" })
 		r.l2TLBHitRateTracers = append(
 			r.l2TLBHitRateTracers,
 			l2TLBHitRateTracer{
