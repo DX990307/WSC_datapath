@@ -648,3 +648,11 @@
   - D（yss2，30 个）：机制归因：mi300x，pagerank、fir、bitonicsort、relu、fastwalshtransform（`-max-wg 32768`）和 spmv（1536）× baseline、m1、m2、m3、Complete，用 `runall2.py --remote-ablation`。
 - 第一次启动 yss2 的 platbench 批处理时，yss2 上没有 `~/isca27_diag` 目录，脚本找不到（exit 127），补建后用新会话名重新启动。
 - mi200 实现、监控整理和出图功能都还在本机开发，没有同步到服务器。
+
+### 2026-10-14 22:00 yss2 内存条继续恶化；用户决定继续用 yss2、失败的到 yss3 重跑
+
+- 今天 yss2 上的诊断实验有 3 个失败，**全部是硬件内存错误**（SIGBUS code 4）：归因 campaign 的 `bitonicsort_baseline`、`fir_complete`，platbench 的 `1014_diag-rbw-d2-rdma256_wafer48_hpca`。yss2 的 `HardwareCorrupted` 从 4 kB 涨到 **16 kB**（又下线了 3 页），EDAC mc1 不可纠正错误计数仍是 6。
+- 同时，yss3 上用同一个二进制重跑 yss2 崩溃的 hpca matrixtranspose m1（`diag3-mt-m1-yss3`），已经远远越过原来崩溃的位置（原来在第 97 条进度输出时崩溃，现在已到第 1109 条），进一步说明那次崩溃是 yss2 的硬件问题。
+- **用户 10-14 决定**：继续用 yss2，在 yss2 上因硬件错误失败的运行挪到 yss3 重跑。单个运行直接在 yss3 上用同样的命令重跑；campaign 里失败的格子，等 campaign 跑完后把整个目录连同冻结的二进制复制到 yss3，用 `runall2.py --rerun-missing` 补跑再合回去，二进制不变。已在 yss3 上重跑 `1014_diag-rbw-d2-rdma256_wafer48_hpca`。
+- kmeans 诊断（yss3，修复后的二进制，hpca baseline）：第一个 kernel 的 24,576 个 WG 全部完成，进入后续 kernel，一直在推进，确认没有卡死。
+- 监控网页已清理：阶段 4 重启之前的组全部归档（yss2 68 个会话、72 个结果目录；yss3 62 个会话、51 个结果目录），网页默认只显示今天的诊断。用 `exp unarchive` 或网页上的“显示已归档”可以看回旧的。
