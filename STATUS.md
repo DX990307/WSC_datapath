@@ -529,3 +529,15 @@
 - **状况**：两台服务器都只剩 1 个模拟在算（yss2 暂停 12 个、yss3 暂停 11 个），暂停的模拟一直占着内存（yss2 约 210 GB）。模拟的内存随进度一直涨，例如 hpca kmeans Complete 跑了 7.3 CPU 小时已经 27 GB。进度：hpca 主结果 33/70（失败 1）；mi300x 主结果 23/70（失败 9，都在补跑清单里）；mi300x filter 统计 13/14（失败 1）；其余部分没开始。
 - **用户 10-14 决定**：不停掉已经开始的模拟（方案 B，慢慢跑）；同时排查模拟器内存为什么一直涨（只读代码，本机小规模测量；要改代码先问用户）。排查交给子代理，结果出来后写在这里。
 - **yss2 硬件内存错误的验证**：在 yss3 上用同一个冻结二进制（`a5047fc8…`）、同样的参数重跑崩溃的 hpca m1 `matrixtranspose`（结果在 `~/isca27_diag/`，不进正式结果）。第一次启动时 yss3 可用内存降到 6.6 GB，跑了约 1 分钟就停掉了；改为等 yss3 没有暂停的模拟、可用内存连续 3 分钟高于 45 GB 时自动开始（`exp` 会话 `diag2-mt-m1-yss3`）。补充证据：崩溃日志没有栈溢出字样；出错地址整页对齐（0xc22fe6e000），不在栈上；`HardwareCorrupted: 4 kB`；4 次不可纠正错误全部在 `mc#1csrow#2channel#4`，其余 63 个 rank 都是 0。
+
+### 2026-10-14 (T13 阶段 4) 内存增长的原因；发现 Complete 配置每次运行结果不同
+
+- **内存增长**（子代理在本机复现，仓库没动；材料在 scratch 的 `memprobe/`）：四处只增不减的数据结构。
+  1. DRAM 统计追踪器：子事务在控制器上开始、在 bank 上结束，记录永远删不掉（`akkalat/baseline/runner/dramtracer.go:40`；`akita/mem/dram/memcontroller.go:222` 与 `internal/org/bankimpl.go:87`）。只在 `-report-all` 时存在。
+  2. L2 命中率统计的步骤名带 line 地址，每次未命中都是新名字（`akita/mem/cache/writeback/directorystage.go:894-898`，`akita/tracing/stepcounttracer.go:69-83`）。只在 `-report-all` 时存在。
+  3. L2TLB 统计：EvictTest 等任务只开始不结束（`akita/mem/vm/l2tlb/l2tlb.go:184-186,211-213,266-268,285`）。只在 `-report-all` 时存在。
+  4. typed filter 的 `scheduledVisibility`：只有同一 key 被再次查询才删除，顺序访问永远不删（`akita/mem/cache/writeback/typed_filter.go:441,483,376`）。Complete 配置一定有，是机制代码里的泄漏。
+  - 本机测量：四处都修好后，内存增长降到原来的 1/3–1/10，模拟快 1.8–2.3 倍（GC 不再扫描大表）。按代码分析只影响统计记账，不改变时序。
+- **新发现（更要紧）**：子代理把 Complete + `-report-all` + filter 统计的同一配置用同一个二进制连跑两次，84k 行统计里约 33k 行不同，`total_time` 相差约 0.5%。阶段 2 时 baseline 配置跑两次、跨服务器都完全一致，所以很可能是 CuPath 机制代码里有依赖 Go map 遍历顺序之类的不确定性。这会影响论文里差别只有几个百分点的对比，也影响阶段 4 正在跑的 Complete、m1、m2、m3 结果。
+- **用户 10-14 决定**：阶段 4 照跑不动；先核实不确定性（哪种配置、哪段代码），把结论和修复方案（内存泄漏 + 不确定性）一起拿给用户，再决定要不要停下来用修好的代码重跑。核实交给同一个子代理。
+- 更正：此前用“模拟是确定性的”来论证 yss2 崩溃不是代码问题，这个前提对 m1 这类配置不完全成立；yss2 内存条坏了的结论主要靠硬件证据（EDAC 不可纠正错误计数、`HardwareCorrupted`、SIGBUS code 4、整页对齐的出错地址），不受影响。
