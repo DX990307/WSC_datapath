@@ -511,7 +511,7 @@
 ### 2026-10-14 00:40 (T13 阶段 4) yss3 内存差点耗尽；停掉 7 个刚启动的模拟；监控和守护进程的改进
 
 - **经过**：00:34 我重启内存守护进程时，有几秒钟没有进程占住空位，加上旧版在可用内存高于 50 GB 时会一次放开所有空位，`runall2` 在 yss3 上同时启动了 9 个新模拟，新模拟起步时每分钟涨 4–5 GB，可用内存降到 1.6 GB（swap 也在用）。暂停不能还回内存，所以停掉（kill）了其中 7 个刚跑了约 2 分钟的模拟，可用内存回到 52 GB。
-- **需要补跑**（mi300x 主结果 `1013_t13s4-main_wafer48_mi300x_260ce73`，主结果跑完后用 `runall2.py --rerun-missing` 补）：Complete 的 `fft`、`floydwarshall`（10-13 21:00 停掉的）；baseline 的 `matrixmultiplication`、`aes`、`pagerank`、`fir`、`fft`、`im2col`、`matrixtranspose`。
+- **需要补跑**（mi300x 主结果 `1013_t13s4-main_wafer48_mi300x_260ce73`，主结果跑完后用 `runall2.py --rerun-missing` 补）：Complete 的 `fft`、`floydwarshall`（10-13 21:00 停掉的）；baseline 的 `matrixmultiplication`、`aes`、`pagerank`、`fir`、`fft`、`im2col`、`matrixtranspose`。另外，mi300x filter 统计（`1013_t13s4-filter-audit_wafer48_mi300x_260ce73`）的 Complete `kmeans` 在 00:40:31 被系统 OOM killer 杀掉（返回码 −9，已经跑了 5 小时 4 分），也要补跑。
 - **守护进程现在的规则**（`memgov10-*`，参数 20 25 50 15）：可用内存低于 20 GB 且还在跑的模拟一分钟内一共涨了 0.2 GB 以上（低于 15 GB 时 0.05 GB）就暂停涨得最快的；高于 25 GB，或者一个模拟都没在跑时，按顺序恢复；低于 50 GB 时占住所有空位，不让启动新模拟，高于 50 GB 时每分钟最多放开一个。以后重启守护进程前先用临时进程占住空位。
 - **监控网页**（用户要求）：一个会话里有多个模拟时，列出每个模拟（campaign、benchmark、配置、运行或暂停、时长、CPU、内存）；新增 “Campaign 进度”（已结束 / 总数 / 失败）。本机的监视改为没有时限的后台任务，一直跑到阶段 4 结束。
 - **进度**（00:40）：hpca 主结果 21/70；mi300x 主结果 8/70；mi300x filter 统计 10/14；其余部分还没开始或刚开始。
