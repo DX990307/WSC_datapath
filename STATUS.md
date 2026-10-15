@@ -686,3 +686,12 @@
 - **启动时的两个问题**：(a) `exp run` 同步时把本机一个 10-12 的旧 Linux 二进制（不认识 `-gpm-preset`）推到了服务器，覆盖了刚编好的，第一次启动全部 rc=2；已把本机这个（被 gitignore 的）文件换成 67f1c03 的版本，清掉错误的结果目录后重新启动。(b) yss2 上 bw-write 又一次 SIGBUS（"unexpected fault address"），`HardwareCorrupted` 20 → **24 kB**，仍是那根内存条。
 - **已知问题**：敏感性脚本每个点都传 `-l2-cache-size-mb`（参考点 4 MB），mi200 预设会拒绝。阶段 4 的敏感性在 mi200 上要先把参考点改成 2 MB（档位如 1/2/4 MB），改之前会先问用户。
 - kmeans 诊断（yss3，hpca baseline，修复后的二进制）已跑完：`total_time` 9,561,046 ns，和 7 月论文的结果完全一致，约用 12 小时。
+
+### 2026-10-15 20:00 (T13) mi200 HBM 读带宽只有峰值 31%：诊断结果；用户决定保持现状
+
+- **现象**：mi200 的 T14 测量里，HBM 读带宽在 2 个 WG 以后就不再上升，最高 75 B/cycle，理论峰值 241 B/cycle，只到 **31%**（写约 120 B/cycle，50%）。对比：mi300x-eighth 231 B/cycle，hpca 57 B/cycle；真实 MI250X 实测一般为峰值的 75–85%。
+- **诊断**（yss3，临时诊断版本，只改一项，不提交；HBM 读，28 WG，单位 B/cycle）：现状 74；L2 MSHR 32→128 为 111；DRAM 队列加大为 73；关 refresh 为 129；关行保持为 52；MSHR 128 加队列加大为 111；在此基础上再关 refresh 为 135。另外 `-dram-row-continuation-enable=true` 没有效果（75.7），tFAW 从未拦下激活。
+- **结论**（三层瓶颈）：(1) 每个 L2 slice 只有 32 个 MSHR，不够覆盖约 200 ns 的 HBM 延迟（要跑满约需 94 个）；一个 pseudo channel 刷新时，发给它的请求占满 MSHR，另一个 pseudo channel 也跟着空等，refresh 的损失因此从约 12% 放大到约 40%。(2) DRAM 的结构上限约 57%：每个 64 B 请求都要激活一行、读完就关，连续地址又被分到不同的 bank，没有跨请求的行命中，每个 pseudo channel 最多每个 tRRD_S（约 7.4 ns）激活一次，上限约 138 B/cycle。(3) refresh 本身约 12–18%。refresh 的实现本身没有问题。"每个 slice 32 个 MSHR"是配置时自己定的数，没有公开来源。
+- **用户 10-15 决定：保持现状**，等这批 mi200 实验跑完再说。在此之前不改 mi200 的数值；如果之后要改，可选的方向：MSHR 改为 128（约 46%），或再改为开行策略并调整地址映射（可能到 75–80%，也会改变 Local Pairing 的表现）。
+- 服务器上旧配置不受影响的检查也已通过：yss2 上 hpca matrixtranspose 的 baseline 为 12,747.6 µs，和论文 hpca 的 baseline 完全一致。
+- 进度（19:50 UTC）：yss3 mi200 已完成 59/70，yss2 hpca 已完成 56/70，全部成功。目前的几何平均（短片段，kmeans 和部分 m3 未完成）：mi200 的 m1/m2/m3/Complete 为 1.03/1.16/1.00/1.20，hpca 为 1.19/1.18/1.02/1.42。
