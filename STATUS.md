@@ -674,3 +674,15 @@
 - yss3 上用同一个冻结二进制（`a5047fc8…`，`260ce73`）、同样的参数重跑 hpca 主结果的 matrixtranspose m1（`diag3-mt-m1-yss3`，结果在 yss3 `~/isca27_diag/`）：**正常跑完**，退出码 0，无任何崩溃信息，32,400 个 WG 全部完成（在 yss2 上第 97 条进度输出时崩溃，这次共 2,397 条）。`total_time` = 12,695.8 µs，相对 hpca baseline（12,747.6 µs）加速 1.004（论文 m1 为 1.005）。m1 是确定的，修复也不改变它，这个结果可以补进 hpca 主结果缺的那一格。
 - 结论：10-14 01:18 那次崩溃（以及今天 yss2 上 3 次 SIGBUS）是 yss2 内存条的硬件错误。yss2 `HardwareCorrupted` 继续上升：4 kB → 16 kB → **20 kB**。建议尽快请管理员更换 `mc#1csrow#2channel#4`。
 - 另：监控网页的图表功能已上线（Campaign 进度里的“画图”“加入对比”）；论文画图脚本 `akkalat/isca27_plot.py` 已提交（`313a141`，44 个单元测试；加速比和 7 月论文脚本的 165 个数值逐个一致）。
+
+### 2026-10-15 15:05 (T13) mi200 实现已提交；验证实验已在两台服务器上启动
+
+- **提交**（分支 `isca27/t13-mi300x`，已推送）：`3aa570e` DRAM 建模（pseudo-channel、同请求行保持、all-bank refresh、tFAW、HBM2 写时序、地址映射修正；全部默认关闭，只有 mi200 打开，旧配置的 golden 回归测试通过）；`0b60da8` mi200 预设和 `configs/mi200.json`；`67f1c03` runall2 的启动间隔、暂停子进程时不启动新运行、STALL 提示，`isca27_stage4.sh` 增加 mi200 计划。
+- **配置更正**：L1I 改为 32 KB 4-way（与 CDNA2 白皮书一致）。之前表里写的 64 KB 是我列表时的错误，不是用户的决定，`_deviation-l1i` 已删除。
+- **验证清单进度**：(1) 旧配置不受影响：本机 hpca fir 与 756f214 统计排序后完全一致（100,477 项）；hpca matrixtranspose、mi300x fir 仍在本机比对。(2) yss3 上 mi200 fir 冒烟测试：rc=0，`total_time` 20,917 ns（hpca 21,195 ns），config 行显示 28 CU、8 个 L2 slice、2 MB L2、DRAM 各项特性都已打开。
+- **10-15 15:00 启动**（exp 组 `t13-mi200-1015`，二进制 `67f1c03`）：
+  - yss3：mi200 短片段 ablation，13 个 workload × baseline/m1/m2/m3/Complete（`-max-wg 32768`），spmv 单独用 1536；fir、pagerank 的 baseline 和 Complete 各再跑一遍做可复现性检查（结果目录 `1015_determinism_…`）。
+  - yss2：mi200 T14 平台测量 29 项（带宽测试的 CU 档位为 1、2、4、8、16、24、28）；hpca 同样设置的短片段 ablation 作对照。
+- **启动时的两个问题**：(a) `exp run` 同步时把本机一个 10-12 的旧 Linux 二进制（不认识 `-gpm-preset`）推到了服务器，覆盖了刚编好的，第一次启动全部 rc=2；已把本机这个（被 gitignore 的）文件换成 67f1c03 的版本，清掉错误的结果目录后重新启动。(b) yss2 上 bw-write 又一次 SIGBUS（"unexpected fault address"），`HardwareCorrupted` 20 → **24 kB**，仍是那根内存条。
+- **已知问题**：敏感性脚本每个点都传 `-l2-cache-size-mb`（参考点 4 MB），mi200 预设会拒绝。阶段 4 的敏感性在 mi200 上要先把参考点改成 2 MB（档位如 1/2/4 MB），改之前会先问用户。
+- kmeans 诊断（yss3，hpca baseline，修复后的二进制）已跑完：`total_time` 9,561,046 ns，和 7 月论文的结果完全一致，约用 12 小时。
