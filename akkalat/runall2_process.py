@@ -128,6 +128,12 @@ def unregister_process(process):
         running_processes.discard(process)
 
 
+def running_process_pids():
+    """Returns the PIDs of the simulator children started by this process."""
+    with running_processes_lock:
+        return [process.pid for process in running_processes]
+
+
 def terminate_process(process, grace_seconds=10):
     if process.poll() is not None:
         return
@@ -348,6 +354,10 @@ def exp_file_stem(exp):
         output_dir,
         f'{exp["target"]}_{exp["benchmark"]}_{exp["config_name"]}',
     )
+
+
+def exp_stdout_path(exp):
+    return exp_file_stem(exp) + "_out.stdout"
 
 
 def cell_result_path(exp):
@@ -614,7 +624,7 @@ def run_exp(exp):
 
     file_stem = exp_file_stem(exp)
     metric_file_name = f"{file_stem}_metrics"
-    out_file_name = f"{file_stem}_out.stdout"
+    out_file_name = exp_stdout_path(exp)
 
     with open(out_file_name, "w") as out_file:
         out_file.write(f"Executing {cmd_str}\n")

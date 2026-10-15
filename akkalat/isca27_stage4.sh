@@ -11,13 +11,24 @@
 #         sensitivity (filter, with the reference point)
 #   yss3: mi300x T11 probes, mi300x main + filter audit,
 #         sensitivity (l2, row)
+#   mi200-yss2: mi200 T11 probes, mi200 filter audit, LLM (mi200)
+#   mi200-yss3: mi200 main
 # The mi300x LLM campaign runs on yss2 so both servers finish at about the
-# same time (yss3 carries the longer mi300x main campaign).
+# same time (yss3 carries the longer mi300x main campaign); the mi200 plans
+# split the same way. mi200 has no sensitivity part: the preset fixes the L2
+# at 2 MB, and every sensitivity point passes -l2-cache-size-mb (4 MB at the
+# reference point), which the simulator rejects with -gpm-preset=mi200.
 # All parts start at once and share 16 simulation slots per server through
 # slot_pool.py; a free slot goes to the part with the lowest priority number
 # that still has runs to launch (probes 1, main and audit 2, LLM 4,
 # sensitivity 5), so later parts fill the slots left by the long tail of
-# earlier ones. Launches also wait while MemAvailable is below 30 GiB.
+# earlier ones. The campaign parts (main, audit, LLM, sensitivity; not the
+# T11 probes, which only take a slot) also wait to launch while MemAvailable
+# is below 30 GiB, while any of the part's simulators is stopped (state T),
+# and until 180 s after the part's previous launch, so each launch sees the
+# memory of the previous one. A campaign part prints a STALL line when its
+# simulators have all been stopped, or none has written output, for 30
+# minutes.
 # Results go to results/1013_t13s4-<part>_wafer48_<preset>_<commit>/.
 set -euo pipefail
 
@@ -31,6 +42,8 @@ ROOT="$(pwd)"
 RESERVE=30
 SCAN=10
 WORKERS=16
+LAUNCH_INTERVAL=180
+STALL_ALERT=30
 # The synced tree has no .git; the paper scripts record this commit instead
 # (the caller checked that the local tree was clean at this commit).
 export EXP_GIT_REVISION="$COMMIT" EXP_GIT_STATUS=""
@@ -97,7 +110,8 @@ main() { # preset label
   python3 akkalat/runall2.py --remote-ablation --configs=all \
     --benchmarks="$BENCHMARKS" --max-wg=78600 --gpm-preset="$preset" \
     --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
-    --memory-scan-minutes="$SCAN" --skip-build \
+    --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
+    --stall-alert-minutes=$STALL_ALERT --skip-build \
     --output-dir="$(out main "$label")" || log "main ($preset) rc=$?"
   log "main ($preset) done"
 }
@@ -109,19 +123,22 @@ audit() { # preset label
     --benchmarks="$BENCHMARKS" --max-wg=78600 --gpm-preset="$preset" \
     --extra-benchmark-flags='-typed-filter-authoritative-audit=true' \
     --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
-    --memory-scan-minutes="$SCAN" --skip-build \
+    --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
+    --stall-alert-minutes=$STALL_ALERT --skip-build \
     --output-dir="$(out filter-audit "$label")" || log "filter audit ($preset) rc=$?"
   log "filter audit ($preset) done"
 }
 
-llm() {
-  log "LLM (mi300x-eighth)"
+llm() { # preset label cu-per-gpu (the preset's CUs per GPM)
+  local preset=$1 label=$2 cu=$3
+  log "LLM ($preset)"
   python3 akkalat/CuPathLLM.py --configs=baseline,complete \
-    --gpm-preset=mi300x-eighth --cu-per-gpu=38 \
+    --gpm-preset="$preset" --cu-per-gpu="$cu" \
     --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
-    --memory-scan-minutes="$SCAN" --skip-build \
-    --output-dir="$(out llm mi300x)" || log "LLM rc=$?"
-  log "LLM done"
+    --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
+    --stall-alert-minutes=$STALL_ALERT --skip-build \
+    --output-dir="$(out llm "$label")" || log "LLM ($preset) rc=$?"
+  log "LLM ($preset) done"
 }
 
 sensitivity() { # dimensions label-suffix [--include-reference]
@@ -131,7 +148,8 @@ sensitivity() { # dimensions label-suffix [--include-reference]
   python3 akkalat/run_cupath_sensitivity.py --dimensions="$dims" "$@" \
     --gpm-preset=mi300x-eighth --binary="$ROOT/akkalat/baseline/baseline" \
     --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
-    --memory-scan-minutes="$SCAN" \
+    --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
+    --stall-alert-minutes=$STALL_ALERT \
     --output-dir="$(out "sens-$part" mi300x)" || log "sensitivity rc=$?"
   log "sensitivity ($dims) done"
 }
@@ -148,7 +166,7 @@ case "$PLAN" in
     part 1 probes hpca hpca
     part 2 main hpca hpca
     part 2 audit hpca hpca
-    part 4 llm
+    part 4 llm mi300x-eighth mi300x 38
     part 5 sensitivity filter filter --include-reference
     ;;
   yss3)
@@ -156,6 +174,14 @@ case "$PLAN" in
     part 2 main mi300x-eighth mi300x
     part 2 audit mi300x-eighth mi300x
     part 5 sensitivity l2,row l2-row
+    ;;
+  mi200-yss2)
+    part 1 probes mi200 mi200
+    part 2 audit mi200 mi200
+    part 4 llm mi200 mi200 28
+    ;;
+  mi200-yss3)
+    part 2 main mi200 mi200
     ;;
   *)
     echo "unknown plan: $PLAN" >&2

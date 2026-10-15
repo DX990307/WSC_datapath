@@ -1,5 +1,6 @@
 import atexit
 import concurrent.futures
+from datetime import datetime
 import os
 import shlex
 import json
@@ -20,15 +21,22 @@ from runall2_process import (
     build_targets,
     create_output_dir,
     dry_run_commands,
+    exp_stdout_path,
     freeze_experiment_binaries,
     install_signal_handlers,
     load_experiments_from_metadata,
     run_exp,
+    running_process_pids,
     set_output_dir,
     terminate_all_processes,
     verify_or_write_binary_manifest,
     write_experiment_metadata,
 )
+
+# While a simulator child is stopped, launches are held and retried this often.
+STOPPED_POLL_SECONDS = 15.0
+# The stall watchdog samples the children at most this far apart.
+WATCHDOG_POLL_SECONDS = 60.0
 
 
 def main():
@@ -90,6 +98,8 @@ def main():
                 args, "mem_available_gib_at_launch", None
             ),
             "memory_worker_cap": getattr(args, "memory_worker_cap", None),
+            "launch_interval_seconds": args.launch_interval_seconds,
+            "stall_alert_minutes": args.stall_alert_minutes,
             "timeout_minutes": args.timeout_minutes,
             "skip_build": args.skip_build,
             "rerun_missing": False,
@@ -103,6 +113,8 @@ def main():
         initial_workers=initial_workers,
         memory_reserve_gib=args.memory_reserve_gib,
         memory_scan_seconds=args.memory_scan_minutes * 60,
+        launch_interval_seconds=args.launch_interval_seconds,
+        stall_alert_seconds=args.stall_alert_minutes * 60,
     )
 
 
@@ -164,6 +176,8 @@ def run_missing_experiments(args):
                 args, "mem_available_gib_at_launch", None
             ),
             "memory_worker_cap": getattr(args, "memory_worker_cap", None),
+            "launch_interval_seconds": args.launch_interval_seconds,
+            "stall_alert_minutes": args.stall_alert_minutes,
             "timeout_minutes": args.timeout_minutes,
             "skip_build": args.skip_build,
             "rerun_missing": True,
@@ -179,6 +193,8 @@ def run_missing_experiments(args):
         initial_workers=initial_workers,
         memory_reserve_gib=args.memory_reserve_gib,
         memory_scan_seconds=args.memory_scan_minutes * 60,
+        launch_interval_seconds=args.launch_interval_seconds,
+        stall_alert_seconds=args.stall_alert_minutes * 60,
     )
 
 
@@ -267,6 +283,11 @@ def choose_max_workers(args, exp_count, mem_available_gib=None):
         raise ValueError("memory budgets must not be negative")
     if args.memory_scan_minutes <= 0:
         raise ValueError("--memory-scan-minutes must be greater than 0")
+    if args.launch_interval_seconds < 0 or args.stall_alert_minutes < 0:
+        raise ValueError(
+            "--launch-interval-seconds and --stall-alert-minutes must not "
+            "be negative"
+        )
 
     max_workers = min(args.max_workers, exp_count)
     extra_flags = set(shlex.split(args.extra_benchmark_flags or ""))
@@ -397,6 +418,109 @@ def print_launch_summary(
             f"reserve={args.memory_reserve_gib:.1f} GiB, "
             f"scan_interval={args.memory_scan_minutes:g} minutes"
         )
+    if args.launch_interval_seconds > 0:
+        print(
+            "Launch pacing: at most one launch every "
+            f"{args.launch_interval_seconds:g} seconds"
+        )
+    if args.stall_alert_minutes > 0:
+        print(f"Stall alert after {args.stall_alert_minutes:g} minutes")
+
+
+def read_process_state(pid, proc_root="/proc"):
+    """Returns the state letter of pid from /proc/<pid>/stat, or None."""
+    try:
+        with open(os.path.join(proc_root, str(pid), "stat"),
+                  encoding="utf-8", errors="replace") as stream:
+            stat = stream.read()
+    except OSError:
+        return None
+    # The command name is in parentheses and may contain spaces or
+    # parentheses itself; the state is the first field after the last ")".
+    fields = stat[stat.rfind(")") + 1:].split()
+    return fields[0] if fields else None
+
+
+def count_child_states(pids=None, state_fn=read_process_state):
+    """Returns (running, stopped) counts of this campaign's simulators.
+
+    Stopped means state T (stopped by SIGSTOP or a similar signal). A child
+    whose state cannot be read (it just exited, or the host has no /proc)
+    counts as running, so it never holds launches back.
+    """
+    if pids is None:
+        pids = running_process_pids()
+    stopped = sum(state_fn(pid) == "T" for pid in pids)
+    return len(pids) - stopped, stopped
+
+
+def child_stdout_sizes(exps):
+    """Maps the stdout file of each active experiment to its size."""
+    sizes = {}
+    for exp in exps:
+        path = exp_stdout_path(exp)
+        try:
+            sizes[path] = os.path.getsize(path)
+        except OSError:  # not created yet
+            continue
+    return sizes
+
+
+class StallWatchdog:
+    """Notices a campaign whose simulators have stopped making progress.
+
+    A stall is every child stopped, or no child's stdout growing, for
+    alert_seconds; check() then returns one alert line per alert_seconds
+    until progress resumes. A campaign without children is waiting for
+    admission (memory or shared slots), which is not a stall.
+    """
+
+    def __init__(self, alert_seconds, now):
+        self.alert_seconds = alert_seconds
+        self.sizes = {}
+        self.last_growth = now
+        self.all_stopped_since = None
+        self.last_alert = None
+
+    def progress(self, now):
+        """Records progress that stdout does not show (a finished child)."""
+        self.last_growth = now
+
+    def check(self, now, sizes, running, stopped):
+        """sizes maps each active child's stdout path to its size."""
+        if any(size > self.sizes.get(path, -1)
+               for path, size in sizes.items()):
+            self.last_growth = now
+        self.sizes = dict(sizes)
+        if not sizes and not running and not stopped:
+            self.last_growth = now
+            self.all_stopped_since = None
+            self.last_alert = None
+            return None
+        if stopped and not running:
+            if self.all_stopped_since is None:
+                self.all_stopped_since = now
+        else:
+            self.all_stopped_since = None
+
+        if (self.all_stopped_since is not None and
+                now - self.all_stopped_since >= self.alert_seconds):
+            minutes = (now - self.all_stopped_since) / 60
+            reason = (f"all {stopped} simulator children stopped (state T) "
+                      f"for {minutes:.1f} minutes")
+        elif now - self.last_growth >= self.alert_seconds:
+            minutes = (now - self.last_growth) / 60
+            reason = f"no simulator stdout grew for {minutes:.1f} minutes"
+        else:
+            self.last_alert = None
+            return None
+        if (self.last_alert is not None and
+                now - self.last_alert < self.alert_seconds):
+            return None
+        self.last_alert = now
+        stamp = datetime.now().isoformat(timespec="seconds")
+        return (f"*** STALL {stamp}: {reason}; children running={running}, "
+                f"stopped={stopped} ***")
 
 
 def run_all_experiments(
@@ -406,6 +530,9 @@ def run_all_experiments(
     memory_reserve_gib=0.0,
     memory_scan_seconds=1800.0,
     mem_available_fn=read_mem_available_gib,
+    launch_interval_seconds=0.0,
+    stall_alert_seconds=0.0,
+    child_states_fn=count_child_states,
 ):
     dynamic = memory_reserve_gib > 0
     if initial_workers is None or not dynamic:
@@ -414,11 +541,17 @@ def run_all_experiments(
         raise ValueError("initial_workers must be between 1 and max_workers")
     if dynamic and memory_scan_seconds <= 0:
         raise ValueError("memory_scan_seconds must be greater than 0")
+    if launch_interval_seconds < 0 or stall_alert_seconds < 0:
+        raise ValueError(
+            "launch_interval_seconds and stall_alert_seconds must not be "
+            "negative"
+        )
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
     pending = iter(exps)
     pending_exhausted = False
     futures = set()
+    future_exps = {}
     # Optional cross-campaign cap (EXP_SLOT_DIR, see slot_pool.py): every
     # launch also needs a shared slot; slots[future] holds it until the end.
     pool = slot_pool.SlotPool.from_env()
@@ -427,12 +560,23 @@ def run_all_experiments(
     failures = []
     admitted_concurrency = initial_workers
     next_scan = time.monotonic() + memory_scan_seconds
+    # Launch pacing: a new simulator takes minutes to reach its working set,
+    # so MemAvailable read right after a launch overstates the free memory.
+    # Spacing launches lets each admission see its predecessors' memory.
+    last_launch = None
+    holding_for_stopped = False
+    watchdog = None
+    next_watch = None
+    if stall_alert_seconds > 0:
+        watchdog = StallWatchdog(stall_alert_seconds, time.monotonic())
+        watch_period = min(WATCHDOG_POLL_SECONDS, stall_alert_seconds)
+        next_watch = time.monotonic()
 
     def memory_allows_launch():
         if not dynamic:
-            return True
+            return True, None
         available = mem_available_fn()
-        return available > memory_reserve_gib
+        return available > memory_reserve_gib, available
 
     def next_exp():
         nonlocal pending_exhausted
@@ -444,13 +588,49 @@ def run_all_experiments(
             pending_exhausted = True
             return None
 
+    def has_pending():
+        # Peeks without consuming: a held launch keeps its place in line.
+        exp = next_exp()
+        if exp is None:
+            return False
+        held_back.append(exp)
+        return True
+
     def fill_available_slots():
+        """Launches what is admitted; returns when to retry a held launch."""
+        nonlocal last_launch, holding_for_stopped
         # Registered as waiting only while this campaign could launch now but
         # every shared slot is taken, so lower-priority campaigns are held
         # back only when they would otherwise take a slot this one can use.
         waiting = False
+        retry_at = None
         while len(futures) < admitted_concurrency and not pending_exhausted:
-            if not memory_allows_launch():
+            # A stopped child keeps its memory and may be resumed at any
+            # time, so nothing is launched beside it.
+            running, stopped = child_states_fn()
+            if stopped:
+                if has_pending():
+                    if not holding_for_stopped:
+                        print(
+                            "Holding launches: simulator children stopped: "
+                            f"running={running}, stopped={stopped}",
+                            flush=True,
+                        )
+                    holding_for_stopped = True
+                    retry_at = time.monotonic() + STOPPED_POLL_SECONDS
+                break
+            if holding_for_stopped:
+                print("No simulator child is stopped; launches resume.",
+                      flush=True)
+                holding_for_stopped = False
+            if launch_interval_seconds > 0 and last_launch is not None:
+                ready_at = last_launch + launch_interval_seconds
+                if time.monotonic() < ready_at:
+                    if has_pending():
+                        retry_at = ready_at
+                    break
+            allowed, available = memory_allows_launch()
+            if not allowed:
                 break
             exp = next_exp()
             if exp is None:
@@ -464,23 +644,43 @@ def run_all_experiments(
                     break
             future = executor.submit(run_exp, exp)
             futures.add(future)
+            future_exps[future] = exp
             if slot is not None:
                 slots[future] = slot
+            last_launch = time.monotonic()
+            if launch_interval_seconds > 0:
+                memory = ("" if available is None
+                          else f"MemAvailable={available:.1f} GiB, ")
+                print(
+                    f"Paced launch: {memory}"
+                    f"active={len(futures)}/{admitted_concurrency}, "
+                    f"next launch in >= {launch_interval_seconds:g} s",
+                    flush=True,
+                )
         if pool:
             pool.set_waiting(waiting)
+        return retry_at
+
+    def remaining(deadline):
+        return max(0.0, deadline - time.monotonic())
 
     try:
         while futures or not pending_exhausted:
             now = time.monotonic()
             if dynamic and now >= next_scan:
                 available = mem_available_fn()
-                if (available > memory_reserve_gib and
+                running, stopped = child_states_fn()
+                children = f"children running={running}, stopped={stopped}"
+                # Stopped children may resume and need their memory back,
+                # so a scan does not admit more while any is stopped.
+                if (available > memory_reserve_gib and not stopped and
                         admitted_concurrency < max_workers):
                     admitted_concurrency += 1
                     print(
                         "Memory scan admitted one additional experiment: "
                         f"MemAvailable={available:.1f} GiB, "
-                        f"concurrency={admitted_concurrency}/{max_workers}",
+                        f"concurrency={admitted_concurrency}/{max_workers}, "
+                        f"{children}",
                         flush=True,
                     )
                 else:
@@ -488,19 +688,37 @@ def run_all_experiments(
                         "Memory scan kept current concurrency: "
                         f"MemAvailable={available:.1f} GiB, "
                         f"reserve={memory_reserve_gib:.1f} GiB, "
-                        f"concurrency={admitted_concurrency}/{max_workers}",
+                        f"concurrency={admitted_concurrency}/{max_workers}, "
+                        f"{children}",
                         flush=True,
                     )
                 next_scan = now + memory_scan_seconds
 
-            fill_available_slots()
+            if watchdog and now >= next_watch:
+                running, stopped = child_states_fn()
+                alert = watchdog.check(
+                    now, child_stdout_sizes(future_exps.values()),
+                    running, stopped,
+                )
+                if alert:
+                    print(alert, flush=True)
+                next_watch = now + watch_period
+
+            retry_at = fill_available_slots()
+            wake_at = min(
+                (t for t in (retry_at, next_watch) if t is not None),
+                default=None,
+            )
             if not futures:
                 if pending_exhausted:
                     break
                 if pool:
-                    time.sleep(slot_pool.POLL_SECONDS)
+                    delay = slot_pool.POLL_SECONDS
                 else:
-                    time.sleep(max(0.0, next_scan - time.monotonic()))
+                    delay = max(0.0, next_scan - time.monotonic())
+                if wake_at is not None:
+                    delay = min(delay, remaining(wake_at))
+                time.sleep(delay)
                 continue
 
             timeout = None
@@ -509,6 +727,9 @@ def run_all_experiments(
             if pool:
                 timeout = (slot_pool.POLL_SECONDS if timeout is None
                            else min(timeout, slot_pool.POLL_SECONDS))
+            if wake_at is not None:
+                timeout = (remaining(wake_at) if timeout is None
+                           else min(timeout, remaining(wake_at)))
             done, _ = concurrent.futures.wait(
                 futures,
                 timeout=timeout,
@@ -516,6 +737,9 @@ def run_all_experiments(
             )
             for future in done:
                 futures.remove(future)
+                future_exps.pop(future, None)
+                if watchdog:
+                    watchdog.progress(time.monotonic())
                 if future in slots:
                     slots.pop(future).close()
                 result = future.result()

@@ -352,6 +352,8 @@ def run_queue(args, experiments, preserve_metadata=False):
             "dynamic_memory_admission": args.memory_reserve_gib > 0,
             "memory_reserve_gib": args.memory_reserve_gib,
             "memory_scan_minutes": args.memory_scan_minutes,
+            "launch_interval_seconds": args.launch_interval_seconds,
+            "stall_alert_minutes": args.stall_alert_minutes,
             "timeout_minutes": args.timeout_minutes,
             "rerun_missing": preserve_metadata,
         },
@@ -362,6 +364,8 @@ def run_queue(args, experiments, preserve_metadata=False):
         initial_workers=initial,
         memory_reserve_gib=args.memory_reserve_gib,
         memory_scan_seconds=args.memory_scan_minutes * 60,
+        launch_interval_seconds=args.launch_interval_seconds,
+        stall_alert_seconds=args.stall_alert_minutes * 60,
     )
 
 
@@ -412,6 +416,21 @@ def parse_args():
     parser.add_argument("--initial-workers", type=int, default=1)
     parser.add_argument("--memory-reserve-gib", type=float, default=50.0)
     parser.add_argument("--memory-scan-minutes", type=float, default=30.0)
+    parser.add_argument(
+        "--launch-interval-seconds",
+        type=float,
+        default=0.0,
+        help="at most one launch per this many seconds; 0 disables pacing",
+    )
+    parser.add_argument(
+        "--stall-alert-minutes",
+        type=float,
+        default=0.0,
+        help=(
+            "print a STALL line after this many minutes without progress; "
+            "0 disables it"
+        ),
+    )
     parser.add_argument("--max-wg", type=int, default=78600)
     parser.add_argument("--gpm-preset", choices=sorted(GPM_PRESET_FLAGS),
                         default=DEFAULT_GPM_PRESET)
@@ -424,6 +443,8 @@ def parse_args():
         parser.error("--initial-workers cannot exceed --max-workers")
     if args.memory_reserve_gib < 0 or args.memory_scan_minutes <= 0:
         parser.error("invalid memory admission settings")
+    if args.launch_interval_seconds < 0 or args.stall_alert_minutes < 0:
+        parser.error("launch interval and stall alert cannot be negative")
     if args.max_wg < 0 or args.timeout_minutes < 0:
         parser.error("WG and timeout limits cannot be negative")
     try:

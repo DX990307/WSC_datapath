@@ -86,6 +86,27 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--launch-interval-seconds",
+        dest="launch_interval_seconds",
+        type=float,
+        default=0.0,
+        help=(
+            "Launch at most one experiment per this many seconds, re-reading "
+            "MemAvailable before each launch. 0 disables pacing."
+        ),
+    )
+    parser.add_argument(
+        "--stall-alert-minutes",
+        dest="stall_alert_minutes",
+        type=float,
+        default=0.0,
+        help=(
+            "Print a STALL line when every simulator child has been stopped, "
+            "or no child's stdout has grown, for this many minutes "
+            "(repeated each interval). 0 disables the watchdog."
+        ),
+    )
+    parser.add_argument(
         "--memory-per-worker-gib",
         dest="memory_per_worker_gib",
         type=float,

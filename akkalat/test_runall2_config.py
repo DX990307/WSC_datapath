@@ -176,6 +176,8 @@ class HostMemoryWorkerLimitTest(unittest.TestCase):
             "memory_per_worker_gib": 32.0,
             "initial_workers": 6,
             "memory_scan_minutes": 30.0,
+            "launch_interval_seconds": 0.0,
+            "stall_alert_minutes": 0.0,
         }
         values.update(overrides)
         return SimpleNamespace(**values)
@@ -208,6 +210,18 @@ class HostMemoryWorkerLimitTest(unittest.TestCase):
                 exp_count=70,
                 mem_available_gib=251.0,
             )
+
+    def test_negative_launch_interval_or_stall_alert_is_rejected(self):
+        for overrides in (
+            {"launch_interval_seconds": -1.0},
+            {"stall_alert_minutes": -1.0},
+        ):
+            with self.assertRaisesRegex(ValueError, "must not be negative"):
+                runall2.choose_max_workers(
+                    self.args(**overrides),
+                    exp_count=70,
+                    mem_available_gib=251.0,
+                )
 
 
 class DynamicAdmissionSchedulerTest(unittest.TestCase):

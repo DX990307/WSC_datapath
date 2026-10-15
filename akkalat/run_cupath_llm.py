@@ -113,6 +113,21 @@ def parse_args(argv=None):
     parser.add_argument("--memory-reserve-gib", type=float, default=50.0)
     parser.add_argument("--memory-scan-minutes", type=float, default=30.0)
     parser.add_argument(
+        "--launch-interval-seconds",
+        type=float,
+        default=0.0,
+        help="At most one launch per this many seconds; 0 disables pacing.",
+    )
+    parser.add_argument(
+        "--stall-alert-minutes",
+        type=float,
+        default=0.0,
+        help=(
+            "Print a STALL line after this many minutes without progress; "
+            "0 disables it."
+        ),
+    )
+    parser.add_argument(
         "--timeout-minutes",
         type=float,
         default=0.0,
@@ -191,6 +206,10 @@ def validate_args(args):
         raise ValueError("memory reserve and timeout must be non-negative")
     if args.memory_reserve_gib > 0 and args.memory_scan_minutes <= 0:
         raise ValueError("--memory-scan-minutes must be positive")
+    if args.launch_interval_seconds < 0 or args.stall_alert_minutes < 0:
+        raise ValueError(
+            "launch interval and stall alert must be non-negative"
+        )
     if args.sampled_warmup < 0 or args.sampled_granularity <= 0:
         raise ValueError("sampling controls are invalid")
 
@@ -696,6 +715,8 @@ def main(argv=None):
             "initial_workers": args.initial_workers,
             "memory_reserve_gib": args.memory_reserve_gib,
             "memory_scan_minutes": args.memory_scan_minutes,
+            "launch_interval_seconds": args.launch_interval_seconds,
+            "stall_alert_minutes": args.stall_alert_minutes,
             "timeout_minutes": args.timeout_minutes,
             "photon": args.photon,
             "max_wg": args.max_wg,
@@ -712,6 +733,8 @@ def main(argv=None):
         initial_workers=min(args.initial_workers, len(exps)),
         memory_reserve_gib=args.memory_reserve_gib,
         memory_scan_seconds=args.memory_scan_minutes * 60,
+        launch_interval_seconds=args.launch_interval_seconds,
+        stall_alert_seconds=args.stall_alert_minutes * 60,
     )
     if args.summarize:
         summarize(output_dir, model_ops)
