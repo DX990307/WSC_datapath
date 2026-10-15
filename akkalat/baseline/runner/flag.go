@@ -184,7 +184,8 @@ var maxNumHopsFlag = flag.Int("max-num-hops", -1,
 var numMemBankFlag = flag.Int("num-memory-banks", 16,
 	"The maximum number of hops in the network")
 var gpmPresetFlag = flag.String("gpm-preset", "hpca",
-	"GPM-internal configuration: hpca (HPCA submission, default) or mi300x-eighth (1/8 MI300X; requires -num-memory-banks=16). See gpm_preset.go.")
+	"GPM-internal configuration: hpca (HPCA submission, default), mi300x-eighth (1/8 MI300X; requires -num-memory-banks=16), "+
+		"or mi200 (1/4 MI250X GCD; requires -num-memory-banks=8 -l2-cache-size-mb=2). See gpm_preset.go.")
 var analyszerNameFlag = flag.String("analyzer-Name", "",
 	"The name of the analyzer to use.")
 var analyszerPeriodFlag = flag.Float64("analyzer-period", 0.0,

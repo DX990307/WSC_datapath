@@ -931,7 +931,7 @@ func (b *R9NanoGPUBuilder) buildDRAMControllers() {
 
 	for i := 0; i < b.numMemoryBank; i++ {
 		dramName := fmt.Sprintf("%s.DRAM[%d]", b.gpuName, i)
-		dram := memCtrlBuilder.Build(dramName)
+		dram := b.dramControllerBuilderAt(memCtrlBuilder, i).Build(dramName)
 		// dram := idealmemcontroller.New(
 		// 	fmt.Sprintf("%s.DRAM[%d]", b.gpuName, i),
 		// 	b.engine, 512*mem.MB)
@@ -963,7 +963,8 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 	dramRow := d.NumRow
 	// The hpca preset is the historical coarse-grain HBM organization: BL4
 	// over the modeled 256-bit controller datapath forms one 128-B physical
-	// access unit. See gpm_preset.go for the mi300x-eighth channels.
+	// access unit. See gpm_preset.go for the mi300x-eighth and mi200
+	// channels.
 	dramDeviceWidth := d.DeviceWidth
 	dramBankSize := dramCol * dramRow * dramDeviceWidth
 	dramBank := d.NumBank
@@ -971,9 +972,26 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 	dramBusWidth := d.BusWidth
 	dramDevicePerRank := dramBusWidth / dramDeviceWidth
 	dramRankSize := dramBankSize * dramDevicePerRank * dramBank
-	dramRank := int(memBankSize * 8 / uint64(dramRankSize))
+	// Without an explicit organization, the ranks fill the controller's
+	// share of the GPU memory. The formula omits bank groups; it is kept so
+	// that the hpca and mi300x-eighth results stay reproducible.
+	dramRank := d.NumRank
+	if dramRank == 0 {
+		dramRank = int(memBankSize * 8 / uint64(dramRankSize))
+	}
 	if dramRank == 0 {
 		panic("DRAMRank is 0")
+	}
+
+	dramChannel, cmdQueueSize, transQueueSize := 1, 8, 32
+	if d.NumChannel > 0 {
+		dramChannel = d.NumChannel
+	}
+	if d.CmdQueueSize > 0 {
+		cmdQueueSize = d.CmdQueueSize
+	}
+	if d.TransQueueSize > 0 {
+		transQueueSize = d.TransQueueSize
 	}
 
 	memCtrlBuilder := dram.MakeBuilder().
@@ -983,14 +1001,14 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 		WithBurstLength(d.BurstLength).
 		WithDeviceWidth(dramDeviceWidth).
 		WithBusWidth(dramBusWidth).
-		WithNumChannel(1).
+		WithNumChannel(dramChannel).
 		WithNumRank(dramRank).
 		WithNumBankGroup(dramBankGroup).
 		WithNumBank(dramBank).
 		WithNumCol(dramCol).
 		WithNumRow(dramRow).
-		WithCommandQueueSize(8).
-		WithTransactionQueueSize(32).
+		WithCommandQueueSize(cmdQueueSize).
+		WithTransactionQueueSize(transQueueSize).
 		WithAggregateContinuation(b.l2GranularityAdaptation).
 		WithRowContinuation(b.dramRowContinuation).
 		WithTCL(d.TCL).
@@ -1010,6 +1028,7 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 		WithTRTRS(d.TRTRS).
 		WithTRTP(d.TRTP).
 		WithTPPD(d.TPPD)
+	memCtrlBuilder = b.withDRAMModelFeatures(memCtrlBuilder, d)
 
 	if b.visTracer != nil {
 		memCtrlBuilder = memCtrlBuilder.WithAdditionalTracer(b.visTracer)
@@ -1020,6 +1039,78 @@ func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 	}
 
 	return memCtrlBuilder
+}
+
+// withDRAMModelFeatures adds the optional akita DRAM-model features of the
+// GPM preset. Every call is gated by its preset field, so presets that leave
+// the fields unset (hpca, mi300x-eighth) build the same controllers as
+// before.
+func (b *R9NanoGPUBuilder) withDRAMModelFeatures(
+	m dram.Builder,
+	d dramPreset,
+) dram.Builder {
+	if d.StripSliceInterleave {
+		// Same interleaving as the L2 slices in front of the controllers
+		// (connectL1ToL2, buildL2Caches).
+		m = m.WithMappingInterleaveStrip(
+			1<<b.log2MemoryBankInterleavingSize, b.numMemoryBank)
+	}
+
+	if d.AddrLayout != (dram.AddressLayout{}) {
+		m = m.WithAddressLayout(d.AddrLayout)
+	}
+
+	if d.DualCommandBus {
+		m = m.WithDualCommandBus(true)
+	}
+
+	if d.ActCmdCycles > 0 {
+		m = m.WithActivateCommandCycles(d.ActCmdCycles)
+	}
+
+	if d.HBM2Turnaround {
+		m = m.WithHBM2Turnaround(true)
+	}
+
+	if d.RowHold {
+		m = m.WithTransactionRowHold(true)
+	}
+
+	if d.PipelinedColumns {
+		m = m.WithPipelinedColumnCommands(true)
+	}
+
+	if d.TRFC > 0 {
+		m = m.WithRFC(d.TRFC)
+	}
+
+	if d.AllBankRefresh {
+		m = m.WithAllBankRefresh(true)
+	}
+
+	if d.TFAW > 0 {
+		m = m.WithTFAW(d.TFAW)
+	}
+
+	if d.CrossRankTRRD {
+		m = m.WithCrossRankTRRD(true)
+	}
+
+	return m
+}
+
+// dramControllerBuilderAt returns the builder of memory controller i. With
+// all-bank refresh, each controller takes its own stagger slot, so that the
+// channels of a GPM do not all refresh at the same time.
+func (b *R9NanoGPUBuilder) dramControllerBuilderAt(
+	m dram.Builder,
+	i int,
+) dram.Builder {
+	if b.gpmPreset.DRAM.AllBankRefresh {
+		m = m.WithRefreshStagger(i, b.numMemoryBank)
+	}
+
+	return m
 }
 
 func (b *R9NanoGPUBuilder) buildSA(

@@ -515,7 +515,33 @@ func (r *Runner) reportDRAMRowContinuationStats() {
 			r.metricsCollector.Collect(where,
 				"dram_row_max_queue_age_cycles",
 				float64(stats.MaxQueueAgeCycles))
+			r.reportDRAMModelStats(where, controller.GetDRAMModelStats())
 		}
+	}
+}
+
+// reportDRAMModelStats reports the counters of the optional DRAM-model
+// features (mi200 preset). A controller without them (hpca, mi300x-eighth)
+// reports no rows, so that its metric file stays unchanged.
+func (r *Runner) reportDRAMModelStats(where string, stats dram.DRAMModelStats) {
+	if !stats.Enabled {
+		return
+	}
+	for _, m := range []struct {
+		what  string
+		value uint64
+	}{
+		{"dram_row_hold_auto_precharge_stops", stats.RowHoldAutoPrechargeStops},
+		{"dram_dual_issue_ticks", stats.DualIssueTicks},
+		{"dram_row_bus_busy_ticks", stats.RowBusBusyTicks},
+		{"dram_refresh_commands", stats.RefreshCommands},
+		{"dram_refresh_retroactive", stats.RefreshRetroactive},
+		{"dram_refresh_wait_cycles", stats.RefreshWaitCycles},
+		{"dram_refresh_max_wait_cycles", stats.RefreshMaxWaitCycles},
+		{"dram_refresh_forced_precharges", stats.RefreshForcedPrecharges},
+		{"dram_faw_denied_activates", stats.FAWDeniedActivates},
+	} {
+		r.metricsCollector.Collect(where, m.what, float64(m.value))
 	}
 }
 

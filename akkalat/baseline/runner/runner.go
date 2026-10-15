@@ -384,12 +384,16 @@ func (r *Runner) buildTimingPlatform() {
 		*l2CacheSizeMBFlag,
 		*l2AdaptivePairRegionLinesFlag,
 	)
-	gpmPreset := lookupGPMPreset(*gpmPresetFlag, *numMemBankFlag)
+	gpmPreset := lookupGPMPreset(
+		*gpmPresetFlag, *numMemBankFlag, *l2CacheSizeMBFlag)
 	fmt.Printf(
 		"[Config] GPM preset=%s CUs=%d (%d SA x %d) L2 partitions=%d\n",
 		gpmPreset.Name, gpmPreset.NumCU(), gpmPreset.NumSA,
 		gpmPreset.NumCUPerSA, *numMemBankFlag,
 	)
+	if features := gpmPreset.DRAM.modelFeatures(); len(features) > 0 {
+		fmt.Printf("[Config] DRAM model: %s\n", strings.Join(features, " "))
+	}
 	b := MakeR9NanoBuilder().
 		WithGPMPreset(gpmPreset).
 		WithLog2PageSize(configuredLog2PageSize()).

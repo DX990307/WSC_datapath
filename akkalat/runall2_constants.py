@@ -182,15 +182,25 @@ DEFAULT_MMUTLB_LOOKUP_LATENCY = 80
 # GPM-internal configuration presets (ISCA'27 task T13), selected with the
 # simulator's -gpm-preset flag. "hpca" adds nothing, so BASE_COMMON_FLAGS
 # alone still reproduces the HPCA submission configuration. Preset flags
-# replace a BASE_COMMON_FLAGS entry with the same name (-num-memory-banks).
+# replace a BASE_COMMON_FLAGS entry with the same name (-num-memory-banks)
+# and are appended otherwise (-l2-cache-size-mb).
 MI300X_EIGHTH_FLAGS = [
     "-gpm-preset=mi300x-eighth",
     "-num-memory-banks=16",
+]
+# 1/4 MI250X GCD: 8 L2 slices of 256 KB, one HBM2e channel (2 pseudo
+# channels) behind each. The simulator rejects any other bank count or L2
+# size with this preset.
+MI200_FLAGS = [
+    "-gpm-preset=mi200",
+    "-num-memory-banks=8",
+    "-l2-cache-size-mb=2",
 ]
 DEFAULT_GPM_PRESET = "hpca"
 GPM_PRESET_FLAGS = {
     "hpca": [],
     "mi300x-eighth": MI300X_EIGHTH_FLAGS,
+    "mi200": MI200_FLAGS,
 }
 DEFAULT_TIMEOUT_MINUTES = 0
 DEFAULT_SAMPLED_SWEEP_WARMUPS = [64, 128, 256, 512, 1024, 2048, 4096]

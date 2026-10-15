@@ -6,9 +6,9 @@
 #   akkalat/isca27_run.sh <exp_id> <commit> <task> <configs> [benchmark args ...]
 #
 # <configs> is a comma-separated list of config files; a bare name such as
-# "hpca" or "mi300x_eighth" means akkalat/configs/<name>.json. The simulator
-# reads them with -config (later files override earlier ones), so no
-# configuration flag is written here.
+# "hpca", "mi300x_eighth" or "mi200" means akkalat/configs/<name>.json. The
+# simulator reads them with -config (later files override earlier ones), so
+# no configuration flag is written here.
 # Output: results/<exp_id>/{meta.json,summary.csv,config_used.json,stats/,stdout.log,stderr.log}
 set -euo pipefail
 
@@ -108,6 +108,13 @@ if preset == "mi300x-eighth":
     notes.append("GPM 内部按 1/8 MI300X：L2、HBM 带宽按 MI300X 在 2.1 GHz 下的每周期等效值设置；"
                  "延迟（DRAM 时序等）保持纳秒值，不做每周期等效缩放。HBM channel：64-bit、BL8、"
                  "每次访问 64 B、DRAM 时钟 1.23 GHz。")
+elif preset == "mi200":
+    notes.append("GPM 内部按 1/4 MI250X GCD（按公开规格设置，未校准）：28 CU，8 个 256 KB L2 slice"
+                 "（64 B 行，MI200 实际为 128 B），每个 slice 对应一个 HBM2e channel；L2、HBM2e 带宽按 "
+                 "MI250X 在 1.7 GHz 下的每周期等效值设置（每 GPM 241 B/cycle）；访问延迟（tCL、tRCD、"
+                 "tRP、tRAS、tRFC 等）保持纳秒值，限制带宽的间隔（tCCD、tRRD、tFAW、tWTR）保持 1.6 GHz "
+                 "器件的时钟数。HBM2e channel：2 个 pseudo-channel，各 64-bit、BL4、每次访问 32 B、"
+                 "DRAM 时钟 1.6 GHz / 1.7 = 941 MHz；含 all-bank refresh、tFAW、同请求行保持。")
 json.dump({
     "exp_id": exp_id, "task": task, "commit": commit, "host": host,
     "go_version": gover, "mode": "timing", "verify": False,

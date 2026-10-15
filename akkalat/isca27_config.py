@@ -17,15 +17,32 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, ROOT)
+
+from runall2_constants import GPM_PRESET_FLAGS  # noqa: E402
+
 PAPER_CONFIG = os.path.join(ROOT, "configs", "hpca.json")
 
-PRESET_REASON = ("T13 预设 mi300x-eighth：GPM 内部改为 1/8 MI300X（38 CU、16 个 L2/HBM channel）；"
-                 "带宽按 2.1 GHz 每周期等效，延迟保持纳秒值、不做每周期等效缩放")
+# Why a GPM preset changes the paper configuration, keyed by -gpm-preset.
+# isca27_flags.py reports the same reasons.
+PRESET_REASON = {
+    "mi300x-eighth": ("T13 预设 mi300x-eighth：GPM 内部改为 1/8 MI300X（38 CU、16 个 L2/HBM channel）；"
+                      "带宽按 2.1 GHz 每周期等效，延迟保持纳秒值、不做每周期等效缩放"),
+    "mi200": ("T13 预设 mi200：GPM 内部改为 1/4 MI250X GCD（28 CU、8 个 L2 slice/HBM2e channel，"
+              "每个 channel 2 个 pseudo-channel）；带宽按 1.7 GHz 每周期等效，延迟保持纳秒值、"
+              "不做每周期等效缩放"),
+}
+UNKNOWN_REASON = "未知，需要检查"
 STAT_FLAGS = {
     "-report-l2-source": "统计开关：L2 数据来源（本地/远程 × L2/DRAM）",
     "-l2-source-tile-width": "统计开关的参数：7×7 mesh 宽度，用来算跳数",
     "-heartbeat-file": "运行监控：心跳文件",
 }
+
+
+def preset_keys(preset):
+    """Flag names the preset sets (gpm-preset, num-memory-banks, ...)."""
+    return {f.lstrip("-").split("=", 1)[0] for f in GPM_PRESET_FLAGS.get(preset, [])}
 
 
 def load(path, seen=()):
@@ -61,13 +78,16 @@ def merged(config_list):
 
 def deviation(config_list, bench):
     paper, used = load(PAPER_CONFIG), merged(config_list)
-    preset_on = used.get("gpm-preset", "hpca") != "hpca"
-    preset_keys = {"gpm-preset", "num-memory-banks"}
+    preset = used.get("gpm-preset", "hpca")
+    keys = preset_keys(preset)
     out = []
     for name in sorted(set(paper) | set(used)):
         if paper.get(name) == used.get(name):
             continue
-        reason = PRESET_REASON if preset_on and name in preset_keys else f"配置文件 {config_list}"
+        if name in keys:
+            reason = PRESET_REASON.get(preset, UNKNOWN_REASON)
+        else:
+            reason = f"配置文件 {config_list}"
         out.append({"flag": f"-{name}", "change": "changed" if name in paper and name in used
                     else ("added" if name in used else "removed"),
                     "paper": paper.get(name), "value": used.get(name), "reason": reason})
