@@ -17,28 +17,22 @@ func (c *MemController) installPhysicalObserverHooks() {
 		}
 	}
 
-	channel, ok := c.channel.(*org.ChannelImpl)
+	channel, ok := c.channel.(org.BankVisitor)
 	if !ok {
 		return
 	}
-	ranks, bankGroups, banks := channel.Banks.GetSize()
-	for rank := uint64(0); rank < ranks; rank++ {
-		for bankGroup := uint64(0); bankGroup < bankGroups; bankGroup++ {
-			for bank := uint64(0); bank < banks; bank++ {
-				impl, ok := channel.Banks.
-					GetBank(rank, bankGroup, bank).(*org.BankImpl)
-				if !ok {
-					continue
-				}
-				if c.physicalObserver == nil {
-					impl.SetCommandCompletedObserver(nil)
-				} else {
-					impl.SetCommandCompletedObserver(
-						c.observePhysicalCommandComplete)
-				}
-			}
+	channel.ForEachBank(func(bank org.Bank) {
+		impl, ok := bank.(*org.BankImpl)
+		if !ok {
+			return
 		}
-	}
+		if c.physicalObserver == nil {
+			impl.SetCommandCompletedObserver(nil)
+		} else {
+			impl.SetCommandCompletedObserver(
+				c.observePhysicalCommandComplete)
+		}
+	})
 }
 
 func (c *MemController) observePhysicalCommandEnqueue(
@@ -135,12 +129,12 @@ func (c *MemController) fillPhysicalOpenRowObservation(
 	e *PhysicalDRAMEvent,
 	cmd *signal.Command,
 ) {
-	channel, ok := c.channel.(*org.ChannelImpl)
+	channel, ok := c.channel.(org.BankStateObserver)
 	if !ok {
 		return
 	}
-	e.OpenRowValid, e.OpenRow = channel.ObservationBankState(
-		cmd.Rank, cmd.BankGroup, cmd.Bank)
+	e.OpenRowValid, e.OpenRow = channel.ObservationBankStateIn(
+		cmd.Channel, cmd.Rank, cmd.BankGroup, cmd.Bank)
 	if !e.OpenRowValid {
 		return
 	}

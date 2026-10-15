@@ -23,6 +23,9 @@ type Builder struct {
 	storage          *mem.Storage
 	addrConverter    mem.AddressConverter
 
+	mapStripGranularity uint64
+	mapStripUnits       int
+
 	protocol              Protocol
 	transactionQueueSize  int
 	commandQueueSize      int
@@ -37,6 +40,16 @@ type Builder struct {
 	numBank               int
 	numRow                int
 	numCol                int
+	addressLayout         AddressLayout
+	dualCommandBus        bool
+	activateCommandCycles int
+	transactionRowHold    bool
+	pipelinedColumns      bool
+	allBankRefresh        bool
+	refreshSlot           int
+	refreshSlots          int
+	crossRankTRRD         bool
+	hbm2Turnaround        bool
 
 	burstCycle int
 	tAL        int
@@ -60,6 +73,7 @@ type Builder struct {
 	tRC        int
 	tRRDL      int
 	tRRDS      int
+	tFAW       int
 	tRCDRD     int
 	tRCDWR     int
 	tREFI      int
@@ -165,6 +179,52 @@ func (b Builder) WithInterleavingAddrConversion(
 	return b
 }
 
+// WithMappingInterleaveStrip removes the controller-select bits of an
+// interleaved address space before DRAM address mapping. Addresses are
+// interleaved across numUnits controllers every granularity bytes; the
+// mapper sees addr/(granularity*numUnits)*granularity + addr%granularity.
+// Only the mapping changes: storage keeps using the request address, so the
+// option works with a global storage. Unset keeps mapping the raw address.
+//
+// The granularity must be a multiple of the physical access unit
+// (BusWidth/8*BurstLength bytes), and the option cannot be combined with
+// WithInterleavingAddrConversion.
+func (b Builder) WithMappingInterleaveStrip(
+	granularity uint64,
+	numUnits int,
+) Builder {
+	if granularity == 0 || numUnits <= 0 {
+		panic(fmt.Sprintf(
+			"invalid mapping interleave strip: granularity %d, %d units",
+			granularity, numUnits))
+	}
+
+	b.mapStripGranularity = granularity
+	b.mapStripUnits = numUnits
+	return b
+}
+
+// interleaveStrip converts an address of an interleaved address space to the
+// dense address of one unit by removing the unit-select digits. It accepts
+// addresses of any unit; addresses of different units at the same position
+// map to the same dense address.
+type interleaveStrip struct {
+	granularity uint64
+	units       uint64
+}
+
+// ConvertExternalToInternal removes the unit-select digits.
+func (s interleaveStrip) ConvertExternalToInternal(external uint64) uint64 {
+	return external/(s.granularity*s.units)*s.granularity +
+		external%s.granularity
+}
+
+// ConvertInternalToExternal is not supported, because the unit index is
+// lost.
+func (s interleaveStrip) ConvertInternalToExternal(internal uint64) uint64 {
+	panic("interleave strip cannot convert an internal address back")
+}
+
 // WithProtocol sets the protocol of the memory controller.
 func (b Builder) WithProtocol(protocol Protocol) Builder {
 	b.protocol = protocol
@@ -265,6 +325,151 @@ func (b Builder) WithNumRow(n int) Builder {
 // WithNumCol sets the number of columns in each DRAM array.
 func (b Builder) WithNumCol(n int) Builder {
 	b.numCol = n
+	return b
+}
+
+// AddressField names a field of a DRAM location in an explicit address
+// layout.
+type AddressField int
+
+// A list of address fields. The zero value marks an unused layout entry.
+const (
+	AddressFieldNone AddressField = iota
+	AddressFieldChannel
+	AddressFieldRank
+	AddressFieldBankGroup
+	AddressFieldBank
+	AddressFieldRow
+	AddressFieldColumn
+)
+
+// AddressFieldBits places Bits bits of one address field.
+type AddressFieldBits struct {
+	Field AddressField
+	Bits  int
+}
+
+// AddressLayout lists the address fields from the bit right above the
+// access-unit offset upward. A field may appear more than once, in which case
+// its lower bits come first. The widths of each field must add up to the
+// log2 of its count (for the column: log2(NumCol)-log2(BurstLength)). Unused
+// entries are zero. The zero layout keeps the default mapping, which is, from
+// low to high, column, bank group, bank, rank, channel, row. AddressLayout is
+// an array, so configurations that hold one stay comparable.
+type AddressLayout [8]AddressFieldBits
+
+var addressFieldItems = map[AddressField]addressmapping.LocationItem{
+	AddressFieldChannel:   addressmapping.LocationItemChannel,
+	AddressFieldRank:      addressmapping.LocationItemRank,
+	AddressFieldBankGroup: addressmapping.LocationItemBankGroup,
+	AddressFieldBank:      addressmapping.LocationItemBank,
+	AddressFieldRow:       addressmapping.LocationItemRow,
+	AddressFieldColumn:    addressmapping.LocationItemColumn,
+}
+
+func (l AddressLayout) fieldBits() []addressmapping.FieldBits {
+	var fields []addressmapping.FieldBits
+
+	for _, f := range l {
+		if f == (AddressFieldBits{}) {
+			continue
+		}
+
+		item, ok := addressFieldItems[f.Field]
+		if !ok {
+			panic(fmt.Sprintf("address layout: invalid field %d", f.Field))
+		}
+
+		fields = append(fields,
+			addressmapping.FieldBits{Item: item, Bits: f.Bits})
+	}
+
+	return fields
+}
+
+// WithAddressLayout sets an explicit address layout. For example, an HBM2
+// channel in pseudo-channel mode can place the pseudo channel (channel) right
+// above the first column bit, so that the two 32-B halves of a 64-B line stay
+// in one bank and row while consecutive lines alternate between the pseudo
+// channels. The zero layout keeps the default mapping.
+func (b Builder) WithAddressLayout(l AddressLayout) Builder {
+	b.addressLayout = l
+	return b
+}
+
+// WithDualCommandBus issues up to one row command (activate, precharge) and
+// one column command (read, write) per cycle, as HBM's separate row and
+// column command interfaces allow (JESD235A section 3.2.2). Off issues one
+// command per cycle.
+func (b Builder) WithDualCommandBus(enabled bool) Builder {
+	b.dualCommandBus = enabled
+	return b
+}
+
+// WithActivateCommandCycles sets the number of cycles an activate occupies
+// the row command bus (2 for HBM2). It requires WithDualCommandBus(true).
+// Unset, every command occupies its bus for one cycle.
+func (b Builder) WithActivateCommandCycles(cycles int) Builder {
+	b.activateCommandCycles = cycles
+	return b
+}
+
+// WithTransactionRowHold keeps a bank open for all the access units of one
+// transaction that use the same row, such as the two 32-B halves of a 64-B
+// line: the first issues a read (write) and the last a read (write) with
+// auto-precharge, so that they share one activate. The bank is reserved for
+// the transaction from its activate on. With WithRowContinuation or
+// WithAggregateContinuation, the transaction's last access unit can hand the
+// open row to the next queued same-row command. The sub-transactions of a
+// transaction are then moved to the command queue together. Off issues every
+// access unit with auto-precharge.
+func (b Builder) WithTransactionRowHold(enabled bool) Builder {
+	b.transactionRowHold = enabled
+	return b
+}
+
+// WithPipelinedColumnCommands lets the read and write commands of a bank
+// overlap, as their data transfers do in a real device. A column command then
+// does not occupy the bank until its data transfer ends: two reads of the
+// open row are max(tCCDL, BL/2) apart, and a read or write with
+// auto-precharge completes when its data transfer ends, while the timing
+// tables enforce the precharge time. Off lets a bank execute one command at a
+// time.
+//
+// On HBM, it needs WithHBM2Turnaround(true), which times write data from the
+// write latency (tWL + BL/2), as pipelined writes complete at that time;
+// Build panics otherwise.
+func (b Builder) WithPipelinedColumnCommands(enabled bool) Builder {
+	b.pipelinedColumns = enabled
+	return b
+}
+
+// WithAllBankRefresh refreshes all the banks of each channel every tREFI
+// cycles (WithTREFI). A refresh starts once every bank of the channel is
+// precharged and idle, and blocks activates for tRFC cycles (WithRFC; the
+// default is a DDR3 value). While a refresh waits, the channel issues no
+// activate and the scheduler stops keeping rows open, so that the open rows
+// drain. The refresh takes no command-bus slot. The channels of a controller
+// refresh at evenly staggered times; see WithRefreshStagger. Off models no
+// refresh.
+func (b Builder) WithAllBankRefresh(enabled bool) Builder {
+	b.allBankRefresh = enabled
+	return b
+}
+
+// WithRefreshStagger places the controller at slot of numSlots controllers
+// that share one refresh schedule, such as the memory controllers of a GPU.
+// The refreshes of all their channels are then spread evenly over tREFI
+// instead of blocking every channel at the same time. Unset, the controller
+// takes slot 0 of 1. It requires WithAllBankRefresh(true).
+func (b Builder) WithRefreshStagger(slot, numSlots int) Builder {
+	if numSlots <= 0 || slot < 0 || slot >= numSlots {
+		panic(fmt.Sprintf("invalid refresh stagger: slot %d of %d",
+			slot, numSlots))
+	}
+
+	b.refreshSlot = slot
+	b.refreshSlots = numSlots
 	return b
 }
 
@@ -377,6 +582,42 @@ func (b Builder) WithTRRDS(cycle int) Builder {
 	return b
 }
 
+// WithTFAW sets the four-activate window (tFAW) in cycles: a channel starts
+// at most four activates in any window of that many cycles, counting the
+// activates of all its ranks. With several channels (WithNumChannel), such
+// as the pseudo channels of an HBM2 channel, each channel has its own
+// window, which counts the activates of both stack IDs. The default, 0,
+// models no window.
+func (b Builder) WithTFAW(cycle int) Builder {
+	if cycle < 0 {
+		panic(fmt.Sprintf("invalid tFAW: %d cycles", cycle))
+	}
+
+	b.tFAW = cycle
+	return b
+}
+
+// WithCrossRankTRRD keeps activates to different ranks of a channel tRRDS
+// (WithTRRDS) apart. HBM2 applies tRRD per pseudo channel (JESD235A section
+// 3.2.1), so activates to its two stack IDs, modeled as ranks, must be
+// spaced too. Off leaves activates to different ranks unspaced.
+func (b Builder) WithCrossRankTRRD(enabled bool) Builder {
+	b.crossRankTRRD = enabled
+	return b
+}
+
+// WithHBM2Turnaround times write data from the write latency (tWL + BL/2)
+// instead of the read latency, and applies the write-to-read and
+// read-to-write turnarounds at pseudo-channel scope, that is, across stack
+// IDs, as JESD235 and Ramulator 2 do. The ranks of a channel are then the
+// stack IDs of an HBM2 pseudo channel, which share its data bus. Off keeps
+// the historical formulas, which time write data from tRL and space column
+// commands to different ranks only by the data-bus burst.
+func (b Builder) WithHBM2Turnaround(enabled bool) Builder {
+	b.hbm2Turnaround = enabled
+	return b
+}
+
 // WithTRCDRD sets the activate to read latency in cycles. It only works for
 // GDDR DRAMs.
 func (b Builder) WithTRCDRD(cycle int) Builder {
@@ -430,19 +671,28 @@ func (b Builder) Build(name string) *MemController {
 		WithNumBank(b.numBank).
 		WithNumCol(b.numCol).
 		WithNumRow(b.numRow).
+		WithLayoutLowToHigh(b.addressLayout.fieldBits()).
 		Build()
 
 	numAccessUnitBit, _ := log2(uint64(b.busWidth / 8 * b.burstLength))
 	m.physicalAccessBytes = uint64(b.busWidth / 8 * b.burstLength)
 	m.subTransSplitter = trans.NewSubTransSplitter(numAccessUnitBit)
-	m.cmdQueue = &cmdq.CommandQueueImpl{
+	b.buildMappingConverter(m)
+	cmdQueue := &cmdq.CommandQueueImpl{
 		Queues:                make([]cmdq.Queue, b.numChannel*b.numRank),
 		CapacityPerQueue:      b.commandQueueSize,
 		Channel:               m.channel,
 		RowContinuation:       b.rowContinuation,
 		AggregateContinuation: b.aggregateContinuation,
+		RowHold:               b.transactionRowHold,
 		Freq:                  b.freq,
 	}
+	if b.numChannel > 1 {
+		cmdQueue.RanksPerChannel = b.numRank
+	}
+	m.cmdQueue = cmdQueue
+	b.buildCommandBus(m)
+	m.dramModelFeatures = b.usesDRAMModelFeatures()
 	cmdCreator := trans.CommandCreator(&trans.ClosePageCommandCreator{
 		AddrMapper: m.addrMapper,
 	})
@@ -450,6 +700,8 @@ func (b Builder) Build(name string) *MemController {
 		Capacity:   b.transactionQueueSize,
 		CmdQueue:   m.cmdQueue,
 		CmdCreator: cmdCreator,
+		// The hold needs every access unit of a transaction queued.
+		BatchByTransaction: b.transactionRowHold,
 	}
 
 	if b.useGlobalStorage {
@@ -468,28 +720,176 @@ func (b Builder) Build(name string) *MemController {
 	return m
 }
 
+// buildMappingConverter installs the mapping-only interleave strip. Without
+// WithMappingInterleaveStrip the converter stays nil and sub-transactions are
+// mapped at their request address.
+func (b Builder) buildMappingConverter(m *MemController) {
+	if b.mapStripUnits == 0 {
+		return
+	}
+
+	if b.addrConverter != nil {
+		// The physical observer would convert the stripped address a second
+		// time.
+		panic("WithMappingInterleaveStrip cannot be combined with " +
+			"WithInterleavingAddrConversion")
+	}
+
+	if b.mapStripGranularity%m.physicalAccessBytes != 0 {
+		panic(fmt.Sprintf(
+			"mapping interleave granularity %d is not a multiple of "+
+				"the %d-byte access unit",
+			b.mapStripGranularity, m.physicalAccessBytes))
+	}
+
+	m.mappingConverter = interleaveStrip{
+		granularity: b.mapStripGranularity,
+		units:       uint64(b.mapStripUnits),
+	}
+}
+
+// usesDRAMModelFeatures reports whether any optional DRAM-model feature is
+// on. Only then does the controller report DRAMModelStats, so that the
+// reports of the historical configurations stay unchanged.
+func (b Builder) usesDRAMModelFeatures() bool {
+	return b.mapStripUnits != 0 ||
+		b.addressLayout != (AddressLayout{}) ||
+		b.numChannel > 1 ||
+		b.dualCommandBus ||
+		b.transactionRowHold ||
+		b.pipelinedColumns ||
+		b.allBankRefresh ||
+		b.tFAW > 0 ||
+		b.crossRankTRRD ||
+		b.hbm2Turnaround
+}
+
+// buildCommandBus configures the dual row/column command bus. Without
+// WithDualCommandBus the controller issues one command per cycle.
+func (b Builder) buildCommandBus(m *MemController) {
+	if b.activateCommandCycles < 0 ||
+		(b.activateCommandCycles > 1 && !b.dualCommandBus) {
+		panic(fmt.Sprintf(
+			"%d activate command cycles need WithDualCommandBus(true)",
+			b.activateCommandCycles))
+	}
+
+	if !b.dualCommandBus {
+		return
+	}
+
+	m.dualCommandBus = true
+	m.activateCommandCycles = max(1, b.activateCommandCycles)
+}
+
 func (b Builder) attachTracers(hookable tracing.NamedHookable) {
 	for _, tracer := range b.tracers {
 		tracing.CollectTrace(hookable, tracer)
 	}
 }
 
+// buildChannel builds the banks. A controller with several channels, such as
+// the pseudo channels of an HBM2 channel, gets one ChannelImpl per channel,
+// with bank names X.Channel[c].Bank[r][g][b]; the channels share the timing
+// tables but no bank state.
 func (b Builder) buildChannel(name string, m *MemController) {
 	timing := b.generateTiming()
-	channel := &org.ChannelImpl{
-		Timing: timing,
+	b.checkColumnPipelining()
+	b.checkRefresh()
+
+	if b.numChannel <= 1 {
+		channel := &org.ChannelImpl{
+			Banks:  b.buildBanks(name),
+			Timing: timing,
+		}
+		b.buildRefresh(channel, 0)
+		b.buildFAW(channel)
+		m.channel = channel
+		return
 	}
 
-	channel.Banks = make(org.Banks, b.numRank)
+	channel := &org.MultiChannel{}
+	for c := 0; c < b.numChannel; c++ {
+		pseudoChannel := &org.ChannelImpl{
+			Banks:  b.buildBanks(fmt.Sprintf("%s.Channel[%d]", name, c)),
+			Timing: timing,
+		}
+		b.buildRefresh(pseudoChannel, c)
+		b.buildFAW(pseudoChannel)
+		channel.Channels = append(channel.Channels, pseudoChannel)
+	}
+	m.channel = channel
+}
+
+// buildFAW gives a channel its tFAW window and the clock that times it.
+// Without WithTFAW the channel has no window.
+func (b Builder) buildFAW(channel *org.ChannelImpl) {
+	if b.tFAW == 0 {
+		return
+	}
+
+	channel.Freq = b.freq
+	channel.FAW = b.tFAW
+}
+
+// checkRefresh rejects refresh settings that cannot work: tRFC must be
+// positive and shorter than tREFI, and a stagger needs refresh.
+func (b Builder) checkRefresh() {
+	if !b.allBankRefresh {
+		if b.refreshSlots != 0 {
+			panic("WithRefreshStagger needs WithAllBankRefresh(true)")
+		}
+		return
+	}
+
+	if b.tRFC <= 0 || b.tRFC >= b.tREFI {
+		panic(fmt.Sprintf(
+			"all-bank refresh needs 0 < tRFC (%d) < tREFI (%d)",
+			b.tRFC, b.tREFI))
+	}
+}
+
+// buildRefresh gives channel c of the controller its all-bank refresh, with
+// the phase of its stagger slot. Without WithAllBankRefresh the channel has
+// neither a refresh nor a clock.
+func (b Builder) buildRefresh(channel *org.ChannelImpl, c int) {
+	if !b.allBankRefresh {
+		return
+	}
+
+	slot, numSlots := b.refreshSlot, max(1, b.refreshSlots)
+	channel.Freq = b.freq
+	channel.Refresh = &org.AllBankRefresh{
+		Interval: b.tREFI,
+		Duration: b.tRFC,
+		Phase: org.StaggerRefreshPhase(
+			slot, numSlots, c, max(1, b.numChannel), b.tREFI),
+	}
+}
+
+// checkColumnPipelining rejects pipelined column commands on HBM without
+// WithHBM2Turnaround, because a pipelined write completes at writeDelay,
+// which only that option times from the write latency.
+func (b Builder) checkColumnPipelining() {
+	if !b.pipelinedColumns || !b.protocol.isHBM() || b.hbm2Turnaround {
+		return
+	}
+
+	panic("pipelined column commands on HBM need WithHBM2Turnaround(true), " +
+		"which times write data from the write latency (tWL + BL/2)")
+}
+
+func (b Builder) buildBanks(prefix string) org.Banks {
+	banks := make(org.Banks, b.numRank)
 	for i := 0; i < b.numRank; i++ {
-		channel.Banks[i] = make([][]org.Bank, b.numBankGroup)
+		banks[i] = make([][]org.Bank, b.numBankGroup)
 
 		for j := 0; j < b.numBankGroup; j++ {
-			channel.Banks[i][j] = make([]org.Bank, b.numBank)
+			banks[i][j] = make([]org.Bank, b.numBank)
 
 			for k := 0; k < b.numBank; k++ {
 				bankName := fmt.Sprintf("%s.Bank[%d][%d][%d]",
-					name, i, j, k)
+					prefix, i, j, k)
 				bank := org.NewBankImpl(bankName)
 				bank.CmdCycles = [signal.NumCmdKind]int{
 					signal.CmdKindRead:           b.readDelay,
@@ -508,13 +908,23 @@ func (b Builder) buildChannel(name string, m *MemController) {
 					bank.CmdCycles[signal.CmdKindActivate] = b.tRCDRD - b.tAL
 				}
 
-				channel.Banks[i][j][k] = bank
+				if b.pipelinedColumns {
+					// The command ends with its data transfer; the
+					// precharge time is in the timing tables.
+					bank.PipelineColumnCommands = true
+					bank.CmdCycles[signal.CmdKindReadPrecharge] = b.readDelay
+					bank.CmdCycles[signal.CmdKindWritePrecharge] =
+						b.writeDelay
+				}
+
+				banks[i][j][k] = bank
 
 				b.attachTracers(bank)
 			}
 		}
 	}
-	m.channel = channel
+
+	return banks
 }
 
 //nolint:gocyclo,funlen,govet
@@ -532,6 +942,10 @@ func (b *Builder) generateTiming() org.Timing {
 	b.tWL = b.tAL + b.tCWL
 	b.readDelay = b.tRL + b.burstCycle
 	b.writeDelay = b.tRL + b.burstCycle
+	if b.hbm2Turnaround {
+		// Write data starts tWL after the write command (JESD235).
+		b.writeDelay = b.tWL + b.burstCycle
+	}
 	b.tRC = b.tRAS + b.tRP
 
 	readToReadL := max(b.burstCycle, b.tCCDL)
@@ -547,6 +961,14 @@ func (b *Builder) generateTiming() org.Timing {
 	writeToReadS := b.writeDelay + b.tWTRS
 	writeToReadO := b.writeDelay + b.burstCycle +
 		b.tRTRS - b.readDelay
+	if b.hbm2Turnaround {
+		// The stack IDs of a pseudo channel share its data bus, so the
+		// turnarounds hold across them as within one stack ID (Ramulator 2
+		// HBM2: nRTW and nCWL + nBL + nWTRS at pseudo-channel scope). As
+		// there, read to write has one value for both stack IDs.
+		readToWriteO = readToWrite
+		writeToReadO = b.tWL + b.burstCycle + b.tWTRS
+	}
 	writeToWriteL := max(b.burstCycle, b.tCCDL)
 	writeToWriteS := max(b.burstCycle, b.tCCDS)
 	writeToWriteO := b.burstCycle
@@ -711,6 +1133,14 @@ func (b *Builder) generateTiming() org.Timing {
 		[]org.TimeTableEntry{
 			{signal.CmdKindActivate, activateToActivateS},
 			{signal.CmdKindRefreshBank, activateToRefresh}}
+
+	if b.crossRankTRRD {
+		// The ranks are the stack IDs of an HBM2 pseudo channel, which
+		// applies tRRD across them.
+		t.OtherRanks[signal.CmdKindActivate] =
+			[]org.TimeTableEntry{
+				{signal.CmdKindActivate, activateToActivateS}}
+	}
 
 	// command PRECHARGE
 	t.SameBank[signal.CmdKindPrecharge] =

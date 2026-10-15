@@ -46,11 +46,25 @@ type MemController struct {
 
 	storage             *mem.Storage
 	addrConverter       mem.AddressConverter
+	mappingConverter    mem.AddressConverter
 	subTransSplitter    trans.SubTransSplitter
 	addrMapper          addressmapping.Mapper
 	subTransactionQueue trans.SubTransactionQueue
 	cmdQueue            cmdq.CommandQueue
 	channel             org.Channel
+
+	// dualCommandBus issues a row and a column command in the same cycle;
+	// an activate keeps the row bus busy for activateCommandCycles cycles,
+	// until cycle rowBusFreeAt.
+	dualCommandBus        bool
+	activateCommandCycles int
+	rowBusFreeAt          uint64
+
+	// dramModelFeatures records whether any optional DRAM-model feature is
+	// on; only then does GetDRAMModelStats report counters.
+	dramModelFeatures bool
+	dualIssueTicks    uint64
+	rowBusBusyTicks   uint64
 
 	inflightTransactions []*signal.Transaction
 
@@ -94,6 +108,89 @@ func (c *MemController) GetRowContinuationStats() cmdq.RowContinuationStats {
 	return cmdq.RowContinuationStats{}
 }
 
+// DRAMModelStats counts the work of the optional DRAM-model features: row
+// hold, the dual command bus, all-bank refresh, and the tFAW window. A
+// controller that uses none of the features reports the zero value.
+type DRAMModelStats struct {
+	// Enabled reports whether any DRAM-model feature is on: the mapping
+	// interleave strip, an address layout, several channels, the dual
+	// command bus, row hold, pipelined column commands, all-bank refresh,
+	// tFAW, cross-rank tRRD, or the HBM2 turnaround.
+	Enabled bool
+
+	// RowHoldAutoPrechargeStops counts the column commands issued without
+	// auto-precharge because their transaction uses the open row again.
+	RowHoldAutoPrechargeStops uint64
+
+	// DualIssueTicks counts the cycles in which the dual command bus issued
+	// a row and a column command together.
+	DualIssueTicks uint64
+	// RowBusBusyTicks counts the cycles in which an activate still held the
+	// row command bus, so that only a column command could issue.
+	RowBusBusyTicks uint64
+
+	// The refresh counters sum the org.RefreshStats of the channels, and
+	// RefreshMaxWaitCycles is the longest wait of any channel. A refresh
+	// that fell due after the controller's last tick is not counted.
+	RefreshCommands         uint64
+	RefreshRetroactive      uint64
+	RefreshWaitCycles       uint64
+	RefreshMaxWaitCycles    uint64
+	RefreshForcedPrecharges uint64
+
+	// FAWDeniedActivates counts, over the channels, the queries that found
+	// an activate ready but refused it because the tFAW window was full. A
+	// waiting activate counts once per query.
+	FAWDeniedActivates uint64
+}
+
+// GetDRAMModelStats returns the counters of the optional DRAM-model
+// features without changing DRAM timing or scheduling.
+func (c *MemController) GetDRAMModelStats() DRAMModelStats {
+	if !c.dramModelFeatures {
+		return DRAMModelStats{}
+	}
+
+	stats := DRAMModelStats{
+		Enabled: true,
+		RowHoldAutoPrechargeStops: c.GetRowContinuationStats().
+			RowHoldAutoPrechargeStops,
+		DualIssueTicks:  c.dualIssueTicks,
+		RowBusBusyTicks: c.rowBusBusyTicks,
+	}
+
+	for _, channel := range c.channelImpls() {
+		stats.FAWDeniedActivates += channel.FAWDeniedActivates
+		if channel.Refresh == nil {
+			continue
+		}
+
+		refresh := channel.Refresh.Stats
+		stats.RefreshCommands += refresh.Commands
+		stats.RefreshRetroactive += refresh.Retroactive
+		stats.RefreshWaitCycles += refresh.WaitCycles
+		if refresh.MaxWaitCycles > stats.RefreshMaxWaitCycles {
+			stats.RefreshMaxWaitCycles = refresh.MaxWaitCycles
+		}
+		stats.RefreshForcedPrecharges += refresh.ForcedPrecharges
+	}
+
+	return stats
+}
+
+// channelImpls returns the channels of the controller: its only channel, or
+// the pseudo channels of a MultiChannel.
+func (c *MemController) channelImpls() []*org.ChannelImpl {
+	switch channel := c.channel.(type) {
+	case *org.ChannelImpl:
+		return []*org.ChannelImpl{channel}
+	case *org.MultiChannel:
+		return channel.Channels
+	default:
+		return nil
+	}
+}
+
 // PhysicalAccessBytes returns the bytes transferred by one DRAM column
 // command. Requests smaller than this unit still consume one full access.
 func (c *MemController) PhysicalAccessBytes() uint64 {
@@ -121,8 +218,21 @@ func (c *MemController) GetPhysicalAccessStats() PhysicalAccessStats {
 // CanAcceptPhysicalAccesses exposes a read-only, best-effort admission hint
 // to an upstream paired-read producer. Correctness never depends on this
 // hint: a later race is still handled by the controller's normal backpressure.
+// The count is in 64-B lines; an access unit smaller than 64 B needs several
+// sub-transactions per line.
 func (c *MemController) CanAcceptPhysicalAccesses(count int) bool {
-	return count > 0 && c.subTransactionQueue.CanPush(count)
+	return count > 0 &&
+		c.subTransactionQueue.CanPush(count*c.physicalAccessesPerLine())
+}
+
+// physicalAccessesPerLine returns the number of access units that one 64-B
+// line occupies: 1 for 64-B and 128-B units, 2 for 32-B units.
+func (c *MemController) physicalAccessesPerLine() int {
+	if c.physicalAccessBytes == 0 || c.physicalAccessBytes >= 64 {
+		return 1
+	}
+
+	return int(64 / c.physicalAccessBytes)
 }
 
 // Tick updates memory controller's internal state.
@@ -164,6 +274,7 @@ func (c *MemController) parseTop(now sim.VTimeInSec) (madeProgress bool) {
 	for _, trans := range transactions {
 		c.assignTransInternalAddress(trans)
 		c.subTransSplitter.Split(trans)
+		c.convertSubTransMappingAddress(trans)
 		totalPhysicalAccesses += len(trans.SubTransactions)
 	}
 	if !c.subTransactionQueue.CanPush(totalPhysicalAccesses) {
@@ -254,17 +365,103 @@ func (c *MemController) assignTransInternalAddress(trans *signal.Transaction) {
 	trans.InternalAddress = trans.GlobalAddress()
 }
 
+// convertSubTransMappingAddress rewrites the sub-transaction addresses into
+// the domain of the DRAM address mapper. The transaction's InternalAddress,
+// and therefore the storage access, is left unchanged.
+func (c *MemController) convertSubTransMappingAddress(
+	trans *signal.Transaction,
+) {
+	if c.mappingConverter == nil {
+		return
+	}
+
+	for _, st := range trans.SubTransactions {
+		st.Address = c.mappingConverter.ConvertExternalToInternal(st.Address)
+	}
+}
+
 func (c *MemController) issue(now sim.VTimeInSec) (madeProgress bool) {
+	if c.dualCommandBus {
+		return c.issueOnDualCommandBus(now)
+	}
+
 	cmd := c.cmdQueue.GetCommandToIssue(now)
 	if cmd == nil {
 		return false
 	}
 
+	c.startCommand(now, cmd)
+
+	return true
+}
+
+func (c *MemController) startCommand(now sim.VTimeInSec, cmd *signal.Command) {
 	c.observePhysicalCommandIssue(now, cmd)
 	c.channel.StartCommand(now, cmd)
 	c.channel.UpdateTiming(now, cmd)
+}
+
+// busAwareQueue is a command queue that can restrict its selection to the
+// commands of one command bus.
+type busAwareQueue interface {
+	GetCommandToIssueOn(now sim.VTimeInSec, bus cmdq.Bus) *signal.Command
+}
+
+var _ busAwareQueue = (*cmdq.CommandQueueImpl)(nil)
+
+// issueOnDualCommandBus issues up to one row command and one column command
+// in the same cycle. The second command is selected after the first one has
+// started, so it sees the first command's effect on banks and timing.
+func (c *MemController) issueOnDualCommandBus(
+	now sim.VTimeInSec,
+) (madeProgress bool) {
+	queue, ok := c.cmdQueue.(busAwareQueue)
+	if !ok {
+		panic("the dual command bus needs a bus-aware command queue")
+	}
+
+	nowCycle := c.Freq.Cycle(now)
+	rowBusFree := nowCycle >= c.rowBusFreeAt
+	first := cmdq.AnyBus
+	if !rowBusFree {
+		c.rowBusBusyTicks++
+		first = cmdq.ColumnBus
+	}
+
+	cmd := queue.GetCommandToIssueOn(now, first)
+	if cmd == nil {
+		// Keep ticking while an activate holds the row bus, so that a
+		// waiting row command is not left to a sleeping ticker.
+		return !rowBusFree
+	}
+	c.startCommand(now, cmd)
+	c.occupyRowBus(nowCycle, cmd)
+
+	second := cmdq.ColumnBus
+	if cmdq.BusOf(cmd.Kind) == cmdq.ColumnBus {
+		if !rowBusFree {
+			return true
+		}
+		second = cmdq.RowBus
+	}
+
+	if cmd2 := queue.GetCommandToIssueOn(now, second); cmd2 != nil {
+		c.startCommand(now, cmd2)
+		c.occupyRowBus(nowCycle, cmd2)
+		c.dualIssueTicks++
+	}
 
 	return true
+}
+
+func (c *MemController) occupyRowBus(nowCycle uint64, cmd *signal.Command) {
+	switch {
+	case cmdq.BusOf(cmd.Kind) != cmdq.RowBus:
+	case cmd.Kind == signal.CmdKindActivate:
+		c.rowBusFreeAt = nowCycle + uint64(c.activateCommandCycles)
+	default:
+		c.rowBusFreeAt = nowCycle + 1
+	}
 }
 
 func (c *MemController) respond(now sim.VTimeInSec) (madeProgress bool) {
