@@ -71,6 +71,48 @@ __kernel void gather(__global const ulong* table, __global const uint* srcs,
   }
 }
 
+// T16 remote-fraction sweep. Every wavefront reads iters 1-KB chunks (one
+// float4 per lane, 16 cache lines). For each chunk a hash of (rank, wavefront,
+// iteration) decides whether it is remote, with probability fthr / 65536: a
+// remote chunk comes from a uniformly random other rank's shard (all-to-all),
+// a local chunk from this rank's own shard; the chunk index within the shard
+// is uniformly random too. The shard holds (chunk_mask + 1) chunks (a power of
+// two), reached through table[rank]. Only shifts, xor, multiply and signed
+// compares are used (the simulator lacks s_cmp_le_u32).
+uint t16_hash(uint h) {
+  h ^= h >> 16;
+  h *= 0x7feb352dU;
+  h ^= h >> 15;
+  h *= 0x846ca68bU;
+  h ^= h >> 16;
+  return h;
+}
+
+__kernel void mixread(__global const ulong* table, __global float* sink,
+                      const int me, const int nranks, const int chunk_mask,
+                      const int iters, const int fthr, const int seed) {
+  int lid = (int)get_local_id(0);
+  int wfPerWG = ((int)get_local_size(0) + 63) >> 6;
+  uint wf = (uint)((int)get_group_id(0) * wfPerWG + (lid >> 6));
+  int lane = lid & 63;
+  uint base = (uint)seed ^ ((uint)me * 0x9e3779b9U) ^ (wf * 0x85ebca6bU);
+  float4 acc = (float4)(0.0f);
+  for (int it = 0; it < iters; it++) {
+    uint h = t16_hash(base ^ ((uint)it * 0xc2b2ae35U));
+    int dst = me;
+    if ((int)(h & 0xffffU) < fthr) {
+      int k = (int)(((h >> 16) * (uint)(nranks - 1)) >> 16);
+      dst = k >= me ? k + 1 : k;
+    }
+    int chunk = (int)(t16_hash(h + 0x27d4eb2dU) & (uint)chunk_mask);
+    __global const float4* p = (__global const float4*)(table[dst]);
+    acc += p[chunk * 64 + lane];
+  }
+  if (acc.x == 12345.0f) {
+    sink[0] = acc.x + acc.y + acc.z + acc.w;
+  }
+}
+
 __kernel void empty(__global float* sink) {
   if (get_global_id(0) == 0x7fffffff) {
     sink[0] = 1.0f;

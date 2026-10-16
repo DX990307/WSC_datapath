@@ -11,7 +11,7 @@ import (
 )
 
 var platTestFlag = flag.String("plat-test", "latency",
-	"platbench item: latency, bandwidth, hopmatrix, remotebw, incast, patterns, kernel")
+	"platbench item: latency, bandwidth, hopmatrix, remotebw, incast, patterns, kernel, remotefrac")
 var platSrcFlag = flag.Int("plat-src", 1, "platbench: driver GPU ID that runs the kernel")
 var platDstsFlag = flag.String("plat-dsts", "1",
 	"platbench: driver GPU IDs that hold the data (0 = all GPMs, hopmatrix)")
@@ -34,12 +34,32 @@ var platKsFlag = flag.String("plat-ks", "1,2,4,8,16,47", "platbench incast: numb
 var platPatternsFlag = flag.String("plat-patterns", "alltoall,neighbor,transpose,ring,snake",
 	"platbench patterns")
 var platChunkFlag = flag.String("plat-chunk", "256K", "platbench patterns: bytes read from each source")
+var platFractionsFlag = flag.String("plat-fractions", "0,0.1,0.25,0.5,1",
+	"platbench remotefrac (T16): remote fractions f, one SPMD phase each")
+var platMixItersFlag = flag.Int("plat-mix-iters", 64,
+	"platbench remotefrac: 1-KB chunks read per wavefront per phase")
+var platMixWGsFlag = flag.Int("plat-mix-wgs", 0,
+	"platbench remotefrac: work-groups per GPM (0 = CUs per GPM x 8)")
 
 func parseInts(s string) []int {
 	var out []int
 	for _, f := range strings.Split(s, ",") {
 		if f = strings.TrimSpace(f); f != "" {
 			v, err := strconv.Atoi(f)
+			if err != nil {
+				panic(err)
+			}
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func parseFloats(s string) []float64 {
+	var out []float64
+	for _, f := range strings.Split(s, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			v, err := strconv.ParseFloat(f, 64)
 			if err != nil {
 				panic(err)
 			}
@@ -105,5 +125,8 @@ func newPlatbench(d *driver.Driver) *platbench.Benchmark {
 	b.Ks = parseInts(*platKsFlag)
 	b.Patterns = parseStrings(*platPatternsFlag)
 	b.ChunkBytes = parseSize(*platChunkFlag)
+	b.Fractions = parseFloats(*platFractionsFlag)
+	b.MixIters = *platMixItersFlag
+	b.MixWGs = *platMixWGsFlag
 	return b
 }
