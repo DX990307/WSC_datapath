@@ -314,8 +314,14 @@ func (r *Runner) configureRemoteOriginTrace() {
 }
 
 func (r *Runner) buildEmuPlatform() {
+	// GPUIDs is only set by createUnifiedGPUs (after the platform is built);
+	// build the same 48 GPMs it unifies.
+	numGPU := 48
+	if len(r.GPUIDs) > 0 {
+		numGPU = r.GPUIDs[len(r.GPUIDs)-1]
+	}
 	b := MakeEmuBuilder().
-		WithNumGPU(r.GPUIDs[len(r.GPUIDs)-1]).
+		WithNumGPU(numGPU).
 		WithLog2PageSize(configuredLog2PageSize())
 
 	if r.Parallel {
