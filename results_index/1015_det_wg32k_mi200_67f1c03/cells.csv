@@ -1,0 +1,5 @@
+workload,variant,config,status,total_time_s,wgs,reason
+fir,,complete,ok,0.000112416,32768,
+pagerank,,complete,ok,0.002306619,32768,
+fir,,baseline,ok,0.000112588,32768,
+pagerank,,baseline,ok,0.002362841,32768,

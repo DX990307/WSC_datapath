@@ -1,0 +1,10 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi200,remotebw,remoteL2,read,1,0,7,6,6,1048576,256,1,,,1,,,1048576,536767,,1.9535
+mi200,remotebw,remoteL2,read,1,0,7,6,6,1048576,512,2,,,1,,,1048576,268684,,3.90264
+mi200,remotebw,remoteL2,read,1,0,7,6,6,1048576,1024,4,,,1,,,1048576,136308,,7.6927
+mi200,remotebw,remoteL2,read,1,0,7,6,6,1048576,2048,8,,,1,,,1048576,131981,,7.9449
+mi200,remotebw,remoteL2,read,1,0,7,6,6,1048576,4096,16,,,1,,,1048576,131870,,7.95159
+mi200,remotebw,remoteL2,read,1,0,7,6,6,1048576,8192,32,,,1,,,1048576,132682,,7.90293
+mi200,remotebw,remoteL2,read,1,0,7,6,6,1048576,16384,64,,,1,,,1048576,132694,,7.90221
+mi200,remotebw,remoteL2,read,1,0,7,6,6,1048576,32768,128,,,1,,,1048576,133079,,7.87935
+mi200,remotebw,remoteL2,read,1,0,7,6,6,1048576,65536,256,,,1,,,1048576,132186,,7.93258

@@ -1,0 +1,5 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi200,kernel,,,,,,,,,,1,,,10,1,one-gpm,,905,977.6,
+mi200,kernel,,,,,,,,,,1,,,10,48,all-gpms-per-gpm-queues,,951,984.3,
+mi200,kernel,,,,,,,,,,28,,,10,1,unified-1-gpm,,932,968.7,
+mi200,kernel,,,,,,,,,,1344,,,10,48,unified-all-gpms,,1123,1279.7,

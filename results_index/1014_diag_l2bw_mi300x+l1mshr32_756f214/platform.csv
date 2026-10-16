@@ -1,0 +1,7 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,2048,8,1,,4,,,4194304,47067,,89.1135
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,4096,16,2,,4,,,4194304,25093,,167.15
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,8192,32,4,,4,,,4194304,13853,,302.772
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,16384,64,8,,4,,,4194304,8488,,494.145
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,32768,128,16,,4,,,4194304,7468,,561.637
+mi300x-eighth,bandwidth,L2,read,1,0,1,0,0,1048576,65536,256,32,,4,,,4194304,8687,,482.825

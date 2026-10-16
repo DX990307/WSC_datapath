@@ -1,0 +1,13 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi200,incast,remoteL2,shared,19,18,25,25,1,1048576,,3584,,,,16,,16777216,150119,,111.759
+mi200,incast,remoteL2,disjoint,19,18,25,25,1,1048576,,3584,,,,16,,1048576,10762,,97.4332
+mi200,incast,remoteL2,shared,19,18,25,25,1,1048576,,224,,,,1,,1048576,41292,,25.3942
+mi200,incast,remoteL2,disjoint,19,18,25,25,1,1048576,,224,,,,1,,1048576,39141,,26.7897
+mi200,incast,remoteL2,shared,19,18,25,25,1,1048576,,448,,,,2,,2097152,41462,,50.5801
+mi200,incast,remoteL2,disjoint,19,18,25,25,1,1048576,,448,,,,2,,1048576,20807,,50.3953
+mi200,incast,remoteL2,shared,19,18,25,25,1,1048576,,10528,,,,47,,49283072,434299,,113.477
+mi200,incast,remoteL2,disjoint,19,18,25,25,1,1048576,,10528,,,,47,,1046784,11300,,92.6358
+mi200,incast,remoteL2,shared,19,18,25,25,1,1048576,,896,,,,4,,4194304,59530,,70.457
+mi200,incast,remoteL2,disjoint,19,18,25,25,1,1048576,,896,,,,4,,1048576,16114,,65.0724
+mi200,incast,remoteL2,shared,19,18,25,25,1,1048576,,1792,,,,8,,8388608,77563,,108.152
+mi200,incast,remoteL2,disjoint,19,18,25,25,1,1048576,,1792,,,,8,,1048576,10795,,97.1353

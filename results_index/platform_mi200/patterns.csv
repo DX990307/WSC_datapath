@@ -1,0 +1,6 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi200,patterns,,read,,,,,4.716,16384,,10752,,,,2256,alltoall,36962304,109419,,337.805
+mi200,patterns,,read,,,,,1.000,262144,,10752,,,,160,neighbor,41943040,49534,,846.753
+mi200,patterns,,read,,,,,2.000,262144,,10752,,,,48,ring,12582912,73775,,170.558
+mi200,patterns,,read,,,,,1.250,262144,,10752,,,,48,snake,12582912,73556,,171.066
+mi200,patterns,,read,,,,,5.333,262144,,9408,,,,42,transpose,11010048,74298,,148.188

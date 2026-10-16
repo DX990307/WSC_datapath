@@ -1,0 +1,72 @@
+{
+  "exp_id": "1014_diag-l2bw-l1mshr32_wafer48_hpca_756f214",
+  "task": "T13-diag",
+  "commit": "756f214",
+  "host": "yss2",
+  "go_version": "go version go1.22.2 linux/amd64",
+  "mode": "timing",
+  "verify": false,
+  "config": "hpca",
+  "gpm_preset": "hpca",
+  "notes": [],
+  "config_deviation": [
+    {
+      "flag": "-benchmark platbench",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-test bandwidth",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-modes read",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-footprints 1M",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-plat-cus 1,2,4,8,16,32",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-l1v-mshr-entries 32",
+      "change": "added",
+      "reason": "命令行覆盖配置文件"
+    },
+    {
+      "flag": "-l1v-max-concurrent-trans 32",
+      "change": "added",
+      "reason": "命令行覆盖配置文件"
+    }
+  ],
+  "start": "2026-10-14T21:39:46+00:00",
+  "end": "2026-10-14T21:40:29+00:00",
+  "exit_code": 0,
+  "args": [
+    "-config",
+    "/home/daoxuanxu/exp/cupath/akkalat/configs/hpca.json",
+    "-config-out",
+    "/home/daoxuanxu/exp/cupath/results/1014_diag_l2bw_hpca+l1mshr32_756f214/config_used.json",
+    "-benchmark",
+    "platbench",
+    "-plat-test",
+    "bandwidth",
+    "-plat-modes",
+    "read",
+    "-plat-footprints",
+    "1M",
+    "-plat-cus",
+    "1,2,4,8,16,32",
+    "-l1v-mshr-entries=32",
+    "-l1v-max-concurrent-trans=32",
+    "-metric-file-name",
+    "/home/daoxuanxu/exp/cupath/results/1014_diag_l2bw_hpca+l1mshr32_756f214/stats/metrics"
+  ]
+}

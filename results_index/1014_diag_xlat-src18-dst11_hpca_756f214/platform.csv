@@ -1,0 +1,3 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+hpca,latency,A,cold,18,17,11,10,1,67108864,1,1,,20000,,,,,6.17668e+06,308.834,
+hpca,latency,B,cold,18,17,11,10,1,67108864,1,1,,20000,,,,,1.72774e+07,863.87,

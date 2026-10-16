@@ -1,0 +1,2 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi200,patterns,,read,,,,,4.716,16384,,10752,,,,2256,alltoall,36962304,109419,,337.805

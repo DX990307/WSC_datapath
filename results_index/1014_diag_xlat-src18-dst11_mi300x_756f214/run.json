@@ -1,0 +1,49 @@
+{
+ "schema": "exp-run/1",
+ "name": "1014_diag_xlat-src18-dst11_mi300x_756f214",
+ "fields": {
+  "date": "1014",
+  "category": "diag",
+  "item": "xlat-src18-dst11",
+  "config": "mi300x",
+  "version": "756f214"
+ },
+ "properties": [
+  {
+   "property": "Git Revision",
+   "value": "756f214"
+  },
+  {
+   "property": "Host",
+   "value": "yss2"
+  },
+  {
+   "property": "Start Time",
+   "value": "2026-10-14T21:41:01+00:00"
+  },
+  {
+   "property": "End Time",
+   "value": "2026-10-14T21:42:31+00:00"
+  },
+  {
+   "property": "Task",
+   "value": "T13-diag"
+  },
+  {
+   "property": "Config Files",
+   "value": "mi300x_eighth"
+  },
+  {
+   "property": "GPM Preset",
+   "value": "mi300x-eighth"
+  },
+  {
+   "property": "Exit Code",
+   "value": "0"
+  },
+  {
+   "property": "Renamed From",
+   "value": "1014_diag-xlat-src18-dst11_wafer48_mi300x_756f214"
+  }
+ ]
+}

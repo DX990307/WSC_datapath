@@ -139,3 +139,10 @@
 ### 2026-10-16 [cowork] 新增 T15（oracle 实验）和 prompt P09
 - 新建 `tasks/T15_headroom_oracle.md`：mi200 短片段，14 个 workload × 6 组（B、O1 `-force-local-data-access`、O2a L1V 窗口放大、O2b RDMA 窗口放大、O2 两者都放大、O3 `-switch-latency=1`），全部加 `-report-l2-source`；有效性检查（指令数差异 > 1% 标为无效）；输出每个 workload 的上限、远程访问和延迟占比、m2/Complete 占上限的比例。
 - 改了：`README.md`（索引加 T15）。新建 `prompts/P09_T15_headroom_oracle.md`。
+
+### 2026-10-16 [claude-code] 补记 10-14 到 10-16 的提交；P08 完成；T15 停在第 1 步（⏸）
+- **补记（10-14 之后没写进 SYNC 的提交）**：代码分支 `isca27/t13-mi300x`：`3aa570e`（DRAM 建模：pseudo channel、行保持、refresh、tFAW、HBM2 写时序，默认全关）、`0b60da8`（mi200 预设和 `configs/mi200.json`）、`67f1c03`（runall2 启动间隔、不在子进程暂停时启动、STALL 提示）、`313a141`（画图脚本）、`c0d59d7`、`d9160e6`（结果目录命名 `isca27_name.py`）、`7b786a2`（`exp.json` 命名规则、`run.json`）、`21fddba`（`exp.json` 的 simulators/campaigns/plots 和 `akkalat/exp_cells.py`）。已推到 `21fddba`。**没有打标签**（`isca27-mi200-v1` 等用户确认冻结）。文档：`6b3b5be`、`5492a61`（STATUS 10-15 两条）。
+- **本轮**：Cowork 改动以 `cowork:` 提交（`86bf7f7`）。P08：`results_index/` 新增 10-14 到 10-16 的结果（新命名）和 `platform_mi200/`；STATUS 新增 P08 七张表、mi200 验证清单、复核意见 (a)–(d)（(a) m3 在 kernel 边界不失效，和论文 IV-C 不一致，代码位置见“规格与代码的差异”）。改了 `STATUS.md`、`SYNC.md`、`results_index/`。
+- **结果目录**：yss2 已改为新命名（`1015_abl_wg32k_hpca_67f1c03` 等，见 `results/RENAMES.tsv`）；yss3 待改。
+- **⏸ 等用户**：mi200 是否冻结、每 slice MSHR 是否改为 128（影响 T15 是否要等重跑）；复核意见 (a)–(c) 的方案选择。
+- 文档推送 commit：见本条所在的提交。

@@ -1,0 +1,10 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi200,remotebw,remoteHBM,read,1,0,7,6,6,16777216,256,1,,,1,,,16777216,9.68255e+06,,1.73273
+mi200,remotebw,remoteHBM,read,1,0,7,6,6,16777216,512,2,,,1,,,16777216,4.84739e+06,,3.46108
+mi200,remotebw,remoteHBM,read,1,0,7,6,6,16777216,1024,4,,,1,,,16777216,2.44104e+06,,6.87297
+mi200,remotebw,remoteHBM,read,1,0,7,6,6,16777216,2048,8,,,1,,,16777216,2.39596e+06,,7.00228
+mi200,remotebw,remoteHBM,read,1,0,7,6,6,16777216,4096,16,,,1,,,16777216,2.38478e+06,,7.03513
+mi200,remotebw,remoteHBM,read,1,0,7,6,6,16777216,8192,32,,,1,,,16777216,2.30504e+06,,7.27849
+mi200,remotebw,remoteHBM,read,1,0,7,6,6,16777216,16384,64,,,1,,,16777216,2.30252e+06,,7.28646
+mi200,remotebw,remoteHBM,read,1,0,7,6,6,16777216,32768,128,,,1,,,16777216,2.30663e+06,,7.27348
+mi200,remotebw,remoteHBM,read,1,0,7,6,6,16777216,65536,256,,,1,,,16777216,2.28828e+06,,7.33181

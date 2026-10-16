@@ -1,0 +1,3 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+mi300x-eighth,latency,A,cold,18,17,11,10,1,67108864,1,1,,20000,,,,,6.07669e+06,303.834,
+mi300x-eighth,latency,B,cold,18,17,11,10,1,67108864,1,1,,20000,,,,,1.71774e+07,858.87,

@@ -1,0 +1,7 @@
+config,test,group,mode,src_driver,src_tile,dst_driver,dst_tile,hops,footprint_bytes,threads,wgs,active_cus,steps,iters,k,pattern,bytes_moved,cycles,latency_ns,bandwidth_B_per_cycle
+hpca,bandwidth,L2,read,1,0,1,0,0,1048576,2048,8,1,,4,,,4194304,46880,,89.4689
+hpca,bandwidth,L2,read,1,0,1,0,0,1048576,4096,16,2,,4,,,4194304,24396,,171.926
+hpca,bandwidth,L2,read,1,0,1,0,0,1048576,8192,32,4,,4,,,4194304,13193,,317.919
+hpca,bandwidth,L2,read,1,0,1,0,0,1048576,16384,64,8,,4,,,4194304,8438,,497.073
+hpca,bandwidth,L2,read,1,0,1,0,0,1048576,32768,128,16,,4,,,4194304,7179,,584.246
+hpca,bandwidth,L2,read,1,0,1,0,0,1048576,65536,256,32,,4,,,4194304,10041,,417.718

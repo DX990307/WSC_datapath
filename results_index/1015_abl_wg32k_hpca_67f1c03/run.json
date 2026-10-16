@@ -1,0 +1,29 @@
+{
+ "schema": "exp-run/1",
+ "name": "1015_abl_wg32k_hpca_67f1c03",
+ "fields": {
+  "date": "1015",
+  "category": "abl",
+  "item": "wg32k",
+  "config": "hpca",
+  "version": "67f1c03"
+ },
+ "properties": [
+  {
+   "property": "Git Revision",
+   "value": "67f1c03"
+  },
+  {
+   "property": "Start Time",
+   "value": "2026-10-15T15:00:16.259270"
+  },
+  {
+   "property": "Runs",
+   "value": "65"
+  },
+  {
+   "property": "Renamed From",
+   "value": "1015_abl_wafer48_hpca_67f1c03"
+  }
+ ]
+}

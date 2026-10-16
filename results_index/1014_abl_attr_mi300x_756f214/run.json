@@ -1,0 +1,29 @@
+{
+ "schema": "exp-run/1",
+ "name": "1014_abl_attr_mi300x_756f214",
+ "fields": {
+  "date": "1014",
+  "category": "abl",
+  "item": "attr",
+  "config": "mi300x",
+  "version": "756f214"
+ },
+ "properties": [
+  {
+   "property": "Git Revision",
+   "value": "756f214"
+  },
+  {
+   "property": "Start Time",
+   "value": "2026-10-14T21:39:36.742717"
+  },
+  {
+   "property": "Runs",
+   "value": "25"
+  },
+  {
+   "property": "Renamed From",
+   "value": "1014_diag-attr_wafer48_mi300x_756f214"
+  }
+ ]
+}

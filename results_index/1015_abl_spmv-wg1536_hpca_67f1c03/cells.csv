@@ -1,0 +1,6 @@
+workload,variant,config,status,total_time_s,wgs,reason
+spmv,,complete,ok,0.000426297,1536,
+spmv,,baseline,ok,0.000538556,1536,
+spmv,,m1,ok,0.000425767,1536,
+spmv,,m2,ok,0.000538581,1536,
+spmv,,m3,ok,0.000538305,1536,

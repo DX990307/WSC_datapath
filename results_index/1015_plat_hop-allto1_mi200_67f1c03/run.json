@@ -1,0 +1,49 @@
+{
+ "schema": "exp-run/1",
+ "name": "1015_plat_hop-allto1_mi200_67f1c03",
+ "fields": {
+  "date": "1015",
+  "category": "plat",
+  "item": "hop-allto1",
+  "config": "mi200",
+  "version": "67f1c03"
+ },
+ "properties": [
+  {
+   "property": "Git Revision",
+   "value": "67f1c03"
+  },
+  {
+   "property": "Host",
+   "value": "yss2"
+  },
+  {
+   "property": "Start Time",
+   "value": "2026-10-15T15:00:16+00:00"
+  },
+  {
+   "property": "End Time",
+   "value": "2026-10-15T15:26:20+00:00"
+  },
+  {
+   "property": "Task",
+   "value": "T14-mi200"
+  },
+  {
+   "property": "Config Files",
+   "value": "mi200"
+  },
+  {
+   "property": "GPM Preset",
+   "value": "mi200"
+  },
+  {
+   "property": "Exit Code",
+   "value": "0"
+  },
+  {
+   "property": "Renamed From",
+   "value": "1015_t14m2-hop-allto1_wafer48_mi200_67f1c03"
+  }
+ ]
+}

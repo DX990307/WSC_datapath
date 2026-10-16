@@ -1,0 +1,26 @@
+workload,variant,config,status,total_time_s,wgs,reason
+pagerank,,complete,running,,,"stdout exists, no result.json yet"
+fir,,complete,failed,,,success=False returncode=2 simulator_returncode=None
+bitonicsort,,complete,ok,4.647e-06,32768,
+relu,,complete,ok,4.557e-06,32768,
+fastwalshtransform,,complete,ok,1.4798e-05,32768,
+pagerank,,baseline,running,,,"stdout exists, no result.json yet"
+fir,,baseline,running,,,"stdout exists, no result.json yet"
+bitonicsort,,baseline,failed,,,success=False returncode=2 simulator_returncode=None
+relu,,baseline,ok,4.625e-06,32768,
+fastwalshtransform,,baseline,ok,1.4935e-05,32768,
+pagerank,,m1,running,,,"stdout exists, no result.json yet"
+fir,,m1,running,,,"stdout exists, no result.json yet"
+bitonicsort,,m1,ok,4.647e-06,32768,
+relu,,m1,ok,4.557e-06,32768,
+fastwalshtransform,,m1,running,,,"stdout exists, no result.json yet"
+pagerank,,m2,failed,,,success=False returncode=2 simulator_returncode=None
+fir,,m2,running,,,"stdout exists, no result.json yet"
+bitonicsort,,m2,running,,,"stdout exists, no result.json yet"
+relu,,m2,missing,,,not started
+fastwalshtransform,,m2,missing,,,not started
+pagerank,,m3,missing,,,not started
+fir,,m3,missing,,,not started
+bitonicsort,,m3,missing,,,not started
+relu,,m3,missing,,,not started
+fastwalshtransform,,m3,missing,,,not started

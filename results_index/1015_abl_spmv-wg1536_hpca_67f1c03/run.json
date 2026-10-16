@@ -1,0 +1,29 @@
+{
+ "schema": "exp-run/1",
+ "name": "1015_abl_spmv-wg1536_hpca_67f1c03",
+ "fields": {
+  "date": "1015",
+  "category": "abl",
+  "item": "spmv-wg1536",
+  "config": "hpca",
+  "version": "67f1c03"
+ },
+ "properties": [
+  {
+   "property": "Git Revision",
+   "value": "67f1c03"
+  },
+  {
+   "property": "Start Time",
+   "value": "2026-10-15T15:00:16.255401"
+  },
+  {
+   "property": "Runs",
+   "value": "5"
+  },
+  {
+   "property": "Renamed From",
+   "value": "1015_abl-spmv_wafer48_hpca_67f1c03"
+  }
+ ]
+}
