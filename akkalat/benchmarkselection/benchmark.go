@@ -487,6 +487,9 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = spmvmt
 
 	default:
+		if b := t16SmallBenchmark(name, driver); b != nil {
+			return b
+		}
 		panic("Unknown benchmark")
 	}
 
