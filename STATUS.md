@@ -28,6 +28,8 @@
 | T13 MI300X 配置 → mi200 | **已冻结**（用户 10-16） | 10-16 | 标签 `isca27-mi200-v1` = `67f1c03`（只在本地，推不推送等用户）；每 slice MSHR 保持 32；`config_deviation` 改为相对 `configs/mi200.json`（`61b6ae8`）；冻结说明 `akkalat/configs/MI200_V1.md` |
 | T14 平台数据（第一档） | 完成（⏸ 等用户确认） | 10-16 | 7 项 × 3 套配置（hpca、mi300x、mi200）跑完；摘要表见“结果摘要”，CSV 在 `results_index/platform/`、`results_index/platform_mi200/` |
 | T15 oracle 上限实验 | ⏸ 配置确认，等用户 | 10-16 | 用冻结版 `isca27-mi200-v1`；6 组 × 14 个 workload = 84 个运行，见“需要用户决定” |
+| T16 位置导致的负载不均（阶段 1） | 进行中：核实完成，tracer 开发中 | 10-16 | 分支 `isca27/t16-position`（工作区 `~/Desktop/CuPath/wt-t16`）；P10 第 1 步核实结果见日志；配置确认在 tracer 回归通过后给出 |
+| T17 新 workload | 进行中：第 0 步 + W-A 开发 | 10-16 | 分支 `isca27/t17-workloads`（工作区 `~/Desktop/CuPath/wt-t17`）；kernel 在 yss2 的 `~/akita-exp-test/t17build/` 编译 |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
@@ -866,3 +868,14 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 
 - **用户 10-16 决定：保持每 slice 32 个 MSHR，现在冻结。** 标签 `isca27-mi200-v1` 打在 `67f1c03`（验证用的提交）上，只在本地（规则是只推送任务分支，标签推不推送等用户）。`61b6ae8`：`config_deviation` 改为相对 `configs/mi200.json`（`meta.json` 记录 `deviation_base`），`isca27_config.py --base configs/hpca.json` 仍给出相对投稿版的差异；新增 3 个单元测试；冻结说明 `akkalat/configs/MI200_V1.md`（验证、有意的弱化、HBM 诊断）。**给 Cowork**：`CONFIG.md` 的“有效论文配置”可以改为 mi200（D19）了。
 - **T15 配置确认**：见“需要用户决定”。发现 `mi200.json` 不含 CuPath 各机制的开关（模拟器有的默认开），所以 T15 用 runall2 的 baseline 加 `--extra-benchmark-flags`，不用配置文件。
+
+### 2026-10-16 (P10/P11) 同步；T16 第 1 步核实；T16 tracer 和 T17 开发开始
+
+- **同步**：读了 SYNC 里 10-16 的十条 `[cowork]`，以及 Cowork 未提交的改动（`ideas_from_T14.md` 的 placement 和 placement 以外的几节、模拟器约束、速度预算；T15 的 10-16 补充；新文件 T16、T17、P10、P11；T5a–d、T9 标为被取代；README；figs；site），以 `cowork:` 提交并推送（`d574d93`）。**理解到的规格变化**：新增 T16（W1 位置导致的负载不均，阶段 1 只测量）和 T17（PagedAttention、MoE、R-GAT 三个新 workload，DLRM 备选；不用 atomic、pull、索引在 host 端算；每个实验 3–5 小时、kernel 要完整跑完）；T15 增加三项检查（按 O1 上限分类、KM/MM/FWS 的 baseline 人为因素、FWT 的退化）。
+- **T16 第 1 步核实（和 Cowork 说的一致）**：
+  1. WG 静态连续切分：`mgpusim/driver/driver.go:432` `distributeWGToGPUs`，`wgPerCU = ceil(总 WG / 总 CU)`，按 `UnifiedGPUIDs` 顺序每个 GPM 连续分 `CU 数 × wgPerCU` 个，超出总数后截断，所以后面的 GPM 可能分到 0 个。
+  2. 页按 48 等分连续放：`mgpusim/driver/internal/memoryallocator.go:213` `selectActualGPUForDistributedPage`，`pageIndex / floor(numPages/48)`，余数页给最后一个 GPM，页数 < 48 的 buffer 全部放在第一个 GPM。按每次分配（每个 buffer）各自计算。
+  3. `-max-wg` 是全局计数：`akkalat/baseline/runner/wgtracer.go` 的一个 tracer 挂在所有 CU 上，统计 `WGCompletionMsg`，到 N 就 `atexit.Exit(0)`，所以截断运行里所有 kernel 都没结束。
+  4. **编号对应**：`runner.go:526` `createUnifiedGPUs` 用 driver ID 1..48 依次组成 `UnifiedGPUIDs`（下标 i ↔ driver ID i+1）；GPM 按 7×7 逐行创建、跳过中心（`timingplatform.go:580`，组件名 `GPU[t]`，t = x + 7y），所以 driver ID g ↔ tile t = g−1（g ≤ 24）或 t = g（g ≥ 25），坐标 (t mod 7, t div 7)。**推论**：WG 段和页段都按“逐行”顺序排列，第 i 段在 tile 顺序的第 i 个位置；行尾到下一行开头是 7 跳（Cowork 已修正）。
+- **并行开发（不占正式实验位置）**：T16 的 per-GPM tracer、platbench 远程比例参数、1d 小输入建议在分支 `isca27/t16-position`；T17 第 0 步和 W-A 在分支 `isca27/t17-workloads`；两个分支都从 `61b6ae8`（冻结版之后，模拟器代码和 `isca27-mi200-v1` 相同）开出，用独立工作区，不影响正在跑 T15 的代码目录。
+- **T15**：yss2 的 54 个已完成；yss3 原来排队的 13 个已挪到 yss2（用户 10-16 要求两台服务器平衡）；yss3 上 kmeans 等长运行还在跑。
