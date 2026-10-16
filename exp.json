@@ -21,5 +21,22 @@
     ],
     "group_by": ["category", "item"],
     "compare_by": "config"
-  }
+  },
+  "simulators": [
+    {"executable": "baseline", "label_flag": "-benchmark", "output_flag": "-metric-file-name"}
+  ],
+  "campaigns": {
+    "detect": ["EXPERIMENT_METADATA.json"],
+    "adapter": {"type": "command", "command": ["python3", "akkalat/exp_cells.py"]}
+  },
+  "plots": [
+    {"name": "speedup", "label": "Speedup", "kind": "ratio",
+     "metric": "total_time", "lower_is_better": true,
+     "x": "workload", "series": "config", "baseline": "baseline",
+     "match": ["wgs"], "summary": "gmean"},
+    {"name": "sensitivity", "label": "Speedup", "kind": "sweep",
+     "metric": "total_time", "lower_is_better": true,
+     "x": "workload", "series": "config", "baseline": "baseline",
+     "match": ["wgs"], "summary": "gmean"}
+  ]
 }
