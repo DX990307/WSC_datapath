@@ -230,9 +230,8 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 	case "t17-isacheck":
 		// end-to-end check of the instructions added for T17 (use -verify)
 		benchmark = newISACheck(driver)
-	case "rgat-mini":
-		// T17 W-C step-0 instruction check only (tiny random subgraph).
-		benchmark = newRGATMini(driver)
+	case "rgat":
+		benchmark = newRGAT(driver)
 	case "floydwarshall":
 		floydwarshall := floydwarshall.NewBenchmark(driver)
 		floydwarshall.NumNodes = 11584

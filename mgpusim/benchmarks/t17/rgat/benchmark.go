@@ -1,13 +1,20 @@
-// Package rgat holds the T17 W-C step-0 minimal kernels (R-GAT style
-// sampled aggregation, MLPerf Inference RGAT) and a tiny harness that runs
-// them on a random sampled subgraph: rgat_proj projects the source features
-// (h = x W), rgat_agg gathers each target's sampled neighbours, scores them
-// (dot product with the attention vectors + LeakyReLU), applies the
-// neighbour softmax and writes the weighted sum, once per relation, each
-// relation adding to the previous relation's output (pull, no atomics).
+// Package rgat implements the T17 W-C workload: R-GAT style sampled
+// mini-batch inference (MLPerf Inference RGAT) on IGBH.
 //
-// This is only the instruction check of T17 step 0: no real dataset, no
-// multi-layer sampling. The workload itself is not started.
+// Host side: the heterogeneous graph (IGBH from -rgat-data, or a synthetic
+// graph with the IGBH schema), neighbour sampling like DGL's
+// MultiLayerNeighborSampler (default 512 paper seeds, fanouts (10, 5), per
+// relation, without replacement), the per-block index arrays and the
+// weights. GPU side, per layer and per relation (kernels.cl): rgat_proj
+// gathers the sampled source rows and projects them, rgat_agg computes the
+// attention, the neighbour softmax and the weighted sum for each
+// destination, adding into the destination type's output rows (relations
+// summed, ReLU after the hidden layer). No atomics, pull only. Single
+// attention head, no bias (simplifications of MLPerf's 4-head R-GAT).
+//
+// Raw features live in one buffer per node type (the whole table is
+// allocated, as on a real GPU; only the rows the sample touches are
+// copied). Buffers use the default allocator.
 package rgat
 
 import (
@@ -17,6 +24,8 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"sort"
+	"strings"
 
 	"github.com/sarchlab/mgpusim/v3/driver"
 	"github.com/sarchlab/mgpusim/v3/insts"
@@ -26,49 +35,74 @@ import (
 //go:embed kernels.hsaco
 var hsacoBytes []byte
 
-// MaxDeg is the largest neighbour count rgat_agg handles (MAXDEG).
-const MaxDeg = 32
+// Kernel tile constants (kernels.cl).
+const (
+	MaxDeg = 32
+	TileM  = 32
+	TileN  = 64
+	TileK  = 32
+	wgSize = 256
+)
 
 // ProjArgs are the arguments of rgat_proj.
 type ProjArgs struct {
-	X, W, H             driver.Ptr
-	FIn, FOut           int32
-	HiddenGlobalOffsetX int64
-	HiddenGlobalOffsetY int64
-	HiddenGlobalOffsetZ int64
+	X, SrcIDs, W, H           driver.Ptr
+	NRows, FIn, FOut, NTilesN int32
+	HiddenGlobalOffsetX       int64
+	HiddenGlobalOffsetY       int64
+	HiddenGlobalOffsetZ       int64
 }
 
 // AggArgs are the arguments of rgat_agg.
 type AggArgs struct {
-	HSrc, HDst, RowPtr, ColIdx, AttnL, AttnR driver.Ptr
-	KernargGap, GapPadding                   int32 // unused, see kernels.cl
-	AccIn, Out                               driver.Ptr
-	F, UseAcc                                int32
-	HiddenGlobalOffsetX                      int64
-	HiddenGlobalOffsetY                      int64
-	HiddenGlobalOffsetZ                      int64
+	HSrc, XDst, DstIDs, RowPtr, ColIdx, AttnL, VR, Out driver.Ptr
+	FIn, FH, UseAcc, Act                               int32
+	HiddenGlobalOffsetX                                int64
+	HiddenGlobalOffsetY                                int64
+	HiddenGlobalOffsetZ                                int64
 }
 
-// Benchmark is the minimal R-GAT aggregation harness.
+// Params are the size knobs.
+type Params struct {
+	DataDir     string // IGBH directory; empty = synthetic graph
+	SynthPapers int    // synthetic graph size
+	SynthDim    int    // synthetic feature dimension
+	Seeds       int
+	Fanouts     []int // input layer first
+	Hidden      int
+	Seed        int64
+}
+
+// DefaultParams returns a small synthetic default.
+func DefaultParams() Params {
+	return Params{SynthPapers: 2000, SynthDim: 128, Seeds: 32, Fanouts: []int{10, 5},
+		Hidden: 64, Seed: 1}
+}
+
+// Benchmark is the R-GAT benchmark.
 type Benchmark struct {
 	driver  *driver.Driver
 	context *driver.Context
 	gpus    []int
 
 	proj, agg *insts.HsaCo
+	Params    Params
 
-	NumSrc, NumDst, Fanout, F, Relations int
-	Seed                                 int64
-
-	x, w, al, ar []float32 // x [NumSrc][F], w [Rel][F][F], a [Rel][F]
-	rowPtr       [][]int32 // per relation
-	colIdx       [][]int32
-	dOut         []driver.Ptr
+	graph  *Graph
+	sample *Sample
+	model  *Model
+	outs   []map[string]driver.Ptr // per layer, per type
+	launch []launchInfo
 }
 
-// NewBenchmark returns the harness with a tiny default size.
+type launchInfo struct {
+	name string
+	wgs  int
+}
+
+// NewBenchmark returns the benchmark with the small default.
 func NewBenchmark(d *driver.Driver) *Benchmark {
-	b := &Benchmark{driver: d, NumSrc: 256, NumDst: 64, Fanout: 10, F: 128, Relations: 2, Seed: 1}
+	b := &Benchmark{driver: d, Params: DefaultParams()}
 	b.context = d.Init()
 	b.proj = kernels.LoadProgramFromMemory(hsacoBytes, "rgat_proj")
 	b.agg = kernels.LoadProgramFromMemory(hsacoBytes, "rgat_agg")
@@ -84,158 +118,305 @@ func (b *Benchmark) SelectGPU(gpus []int) { b.gpus = gpus }
 // SetUnifiedMemory is not supported.
 func (b *Benchmark) SetUnifiedMemory() { panic("rgat does not support unified memory") }
 
-func (b *Benchmark) alloc(n int, name string) driver.Ptr {
-	p := b.driver.AllocateMemory(b.context, uint64(n*4))
-	b.driver.RegisterMemoryObject(b.context, p, uint64(n*4), name)
+// Prepare loads the graph, samples and builds the model (host only).
+func Prepare(pr Params) (*Graph, *Sample, *Model, error) {
+	for _, f := range pr.Fanouts {
+		if f < 1 || f > MaxDeg {
+			return nil, nil, nil, fmt.Errorf("rgat: fanout %d outside 1..%d", f, MaxDeg)
+		}
+	}
+	if pr.Hidden <= 0 || pr.Hidden%TileN != 0 {
+		return nil, nil, nil, fmt.Errorf("rgat: hidden %d must be a multiple of %d", pr.Hidden, TileN)
+	}
+	var g *Graph
+	var err error
+	if pr.DataDir != "" {
+		g, err = LoadIGBH(pr.DataDir)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	} else {
+		g = SyntheticIGBH(pr.SynthPapers, pr.SynthDim, pr.Seed)
+	}
+	if g.FeatDim%TileK != 0 {
+		return nil, nil, nil, fmt.Errorf("rgat: feature dim %d not a multiple of %d", g.FeatDim, TileK)
+	}
+	for _, t := range g.Types {
+		if uint64(g.NumNodes[t])*uint64(g.FeatDim) >= 1<<32 {
+			return nil, nil, nil, fmt.Errorf("rgat: %s table exceeds 2^32 elements", t)
+		}
+	}
+	rng := rand.New(rand.NewSource(pr.Seed))
+	if pr.Seeds > g.NumNodes["paper"] {
+		return nil, nil, nil, fmt.Errorf("rgat: %d seeds > %d papers", pr.Seeds, g.NumNodes["paper"])
+	}
+	seeds := make([]int32, pr.Seeds)
+	for i, v := range rng.Perm(g.NumNodes["paper"])[:pr.Seeds] {
+		seeds[i] = int32(v)
+	}
+	s := SampleBlocks(g, "paper", seeds, pr.Fanouts, rng)
+	m := NewModel(s, g.FeatDim, pr.Hidden, pr.Seed)
+	if err := s.Check(g, m); err != nil {
+		return nil, nil, nil, err
+	}
+	return g, s, m, nil
+}
+
+// Check verifies every index the kernels dereference.
+func (s *Sample) Check(g *Graph, m *Model) error {
+	for l, blocks := range s.Blocks {
+		for _, b := range blocks {
+			rows := func(t string) int {
+				if l == 0 {
+					return g.NumNodes[t]
+				}
+				return len(s.Dst[l-1][t])
+			}
+			for _, r := range b.SrcRows {
+				if r < 0 || int(r) >= rows(b.SrcType) {
+					return fmt.Errorf("layer %d %s: src row %d out of range", l, b.RelName, r)
+				}
+			}
+			for _, r := range b.DstRows {
+				if r < 0 || int(r) >= rows(b.DstType) {
+					return fmt.Errorf("layer %d %s: dst row %d out of range", l, b.RelName, r)
+				}
+			}
+			if len(b.RowPtr) != len(b.DstNodes)+1 || int(b.RowPtr[len(b.DstNodes)]) != len(b.ColIdx) {
+				return fmt.Errorf("layer %d %s: bad row pointer", l, b.RelName)
+			}
+			for i := range b.DstNodes {
+				if d := b.RowPtr[i+1] - b.RowPtr[i]; d < 0 || int(d) > MaxDeg || int(d) > s.Fanouts[l] {
+					return fmt.Errorf("layer %d %s: degree %d", l, b.RelName, d)
+				}
+			}
+			for _, c := range b.ColIdx {
+				if c < 0 || int(c) >= len(b.SrcNodes) {
+					return fmt.Errorf("layer %d %s: neighbour %d out of range", l, b.RelName, c)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (b *Benchmark) alloc(bytes int, name string) driver.Ptr {
+	if bytes == 0 {
+		bytes = 4
+	}
+	p := b.driver.AllocateMemory(b.context, uint64(bytes))
+	b.driver.RegisterMemoryObject(b.context, p, uint64(bytes), name)
 	return p
 }
 
-func (b *Benchmark) generate() {
-	if b.Fanout > MaxDeg {
-		panic("rgat: fanout above MAXDEG")
+func (b *Benchmark) upload(name string, data interface{}, n int) driver.Ptr {
+	p := b.alloc(4*n, name)
+	if n > 0 {
+		b.driver.MemCopyH2D(b.context, p, data)
 	}
-	rng := rand.New(rand.NewSource(b.Seed))
-	F := b.F
-	b.x = make([]float32, b.NumSrc*F)
-	for i := range b.x {
-		b.x[i] = rng.Float32()*2 - 1
-	}
-	b.w = make([]float32, b.Relations*F*F)
-	for i := range b.w {
-		b.w[i] = (rng.Float32()*2 - 1) / float32(math.Sqrt(float64(F)))
-	}
-	b.al = make([]float32, b.Relations*F)
-	b.ar = make([]float32, b.Relations*F)
-	for i := range b.al {
-		b.al[i] = (rng.Float32()*2 - 1) / float32(math.Sqrt(float64(F)))
-		b.ar[i] = (rng.Float32()*2 - 1) / float32(math.Sqrt(float64(F)))
-	}
-	// host-side sampling: each target gets up to Fanout distinct sources
-	// (targets are the first NumDst source nodes, as in a mini-batch)
-	for r := 0; r < b.Relations; r++ {
-		rp := []int32{0}
-		var ci []int32
-		for i := 0; i < b.NumDst; i++ {
-			deg := 1 + rng.Intn(b.Fanout)
-			for _, j := range rng.Perm(b.NumSrc)[:deg] {
-				ci = append(ci, int32(j))
-			}
-			rp = append(rp, int32(len(ci)))
-		}
-		b.rowPtr = append(b.rowPtr, rp)
-		b.colIdx = append(b.colIdx, ci)
-	}
+	return p
 }
 
-// Run projects the features per relation and aggregates relation by
-// relation.
+// Run samples on the host, uploads and launches every kernel.
 func (b *Benchmark) Run() {
 	b.driver.SelectGPU(b.context, b.gpus[0])
-	// Verify copies results back; make the magic D2H copy read through the
-	// write-back L2 (no simulated time; does not affect the kernels).
+	// Verify copies results back through the write-back L2 (no time).
 	b.driver.SetMagicCopyCoherent(true)
-	b.generate()
-	F := b.F
-	q := b.driver.CreateCommandQueue(b.context)
-	dX := b.alloc(len(b.x), "rgat_x")
-	b.driver.MemCopyH2D(b.context, dX, b.x)
-	var prev driver.Ptr
-	wgs := 0
-	for r := 0; r < b.Relations; r++ {
-		dW := b.alloc(F*F, "rgat_w")
-		dAL := b.alloc(F, "rgat_attn_l")
-		dAR := b.alloc(F, "rgat_attn_r")
-		dRP := b.alloc(len(b.rowPtr[r]), "rgat_row_ptr")
-		dCI := b.alloc(len(b.colIdx[r]), "rgat_col_idx")
-		dH := b.alloc(b.NumSrc*F, "rgat_h")
-		dOut := b.alloc(b.NumDst*F, "rgat_out")
-		b.driver.MemCopyH2D(b.context, dW, b.w[r*F*F:(r+1)*F*F])
-		b.driver.MemCopyH2D(b.context, dAL, b.al[r*F:(r+1)*F])
-		b.driver.MemCopyH2D(b.context, dAR, b.ar[r*F:(r+1)*F])
-		b.driver.MemCopyH2D(b.context, dRP, b.rowPtr[r])
-		b.driver.MemCopyH2D(b.context, dCI, b.colIdx[r])
-
-		pa := ProjArgs{X: dX, W: dW, H: dH, FIn: int32(F), FOut: int32(F)}
-		b.driver.EnqueueLaunchKernel(q, b.proj, [3]uint32{uint32(b.NumSrc * 256), 1, 1},
-			[3]uint16{256, 1, 1}, &pa)
-		aa := AggArgs{HSrc: dH, HDst: dH, RowPtr: dRP, ColIdx: dCI, AttnL: dAL, AttnR: dAR,
-			AccIn: prev, Out: dOut, F: int32(F)}
-		if r > 0 {
-			aa.UseAcc = 1
-		} else {
-			aa.AccIn = dOut
-		}
-		b.driver.EnqueueLaunchKernel(q, b.agg, [3]uint32{uint32(b.NumDst * 256), 1, 1},
-			[3]uint16{256, 1, 1}, &aa)
-		wgs += b.NumSrc + b.NumDst
-		prev = dOut
-		b.dOut = append(b.dOut, dOut)
+	g, s, m, err := Prepare(b.Params)
+	if err != nil {
+		log.Panic(err)
 	}
+	b.graph, b.sample, b.model = g, s, m
+	H := m.Hidden
+	q := b.driver.CreateCommandQueue(b.context)
+
+	// raw feature tables: allocate whole, copy the touched rows
+	tables := map[string]driver.Ptr{}
+	touched := b.touchedRows()
+	for _, t := range g.Types {
+		tables[t] = b.alloc(4*g.NumNodes[t]*g.FeatDim, "rgat_feat_"+t)
+		row := make([]float32, g.FeatDim)
+		for _, id := range touched[t] {
+			g.Feats[t].Row(int(id), row)
+			b.driver.MemCopyH2D(b.context,
+				tables[t]+driver.Ptr(uint64(id)*uint64(g.FeatDim)*4), row)
+		}
+	}
+	b.outs = make([]map[string]driver.Ptr, len(s.Blocks))
+	for l := range s.Blocks {
+		b.outs[l] = map[string]driver.Ptr{}
+		for _, t := range sortedTypes(s.Dst[l]) {
+			b.outs[l][t] = b.alloc(4*len(s.Dst[l][t])*H, fmt.Sprintf("rgat_out%d_%s", l, t))
+		}
+		input := func(t string) driver.Ptr {
+			if l == 0 {
+				return tables[t]
+			}
+			return b.outs[l-1][t]
+		}
+		fin := m.FIn[l]
+		for _, blk := range s.Blocks[l] {
+			k := [2]int{l, blk.Rel}
+			nm := fmt.Sprintf("rgat_l%d_%s", l, blk.RelName)
+			dSrc := b.upload(nm+"_src_rows", blk.SrcRows, len(blk.SrcRows))
+			dDst := b.upload(nm+"_dst_rows", blk.DstRows, len(blk.DstRows))
+			dPtr := b.upload(nm+"_row_ptr", blk.RowPtr, len(blk.RowPtr))
+			dCol := b.upload(nm+"_col_idx", blk.ColIdx, len(blk.ColIdx))
+			dW := b.upload(nm+"_w", m.W[k], len(m.W[k]))
+			dAL := b.upload(nm+"_attn_l", m.AL[k], len(m.AL[k]))
+			dV := b.upload(nm+"_v", m.V[k], len(m.V[k]))
+			dH := b.alloc(4*len(blk.SrcNodes)*H, nm+"_h")
+
+			ntn := H / TileN
+			nProj := (len(blk.SrcNodes) + TileM - 1) / TileM * ntn
+			pa := ProjArgs{X: input(blk.SrcType), SrcIDs: dSrc, W: dW, H: dH,
+				NRows: int32(len(blk.SrcNodes)), FIn: int32(fin), FOut: int32(H), NTilesN: int32(ntn)}
+			b.driver.EnqueueLaunchKernel(q, b.proj, [3]uint32{uint32(nProj * wgSize), 1, 1},
+				[3]uint16{wgSize, 1, 1}, &pa)
+			aa := AggArgs{HSrc: dH, XDst: input(blk.DstType), DstIDs: dDst, RowPtr: dPtr,
+				ColIdx: dCol, AttnL: dAL, VR: dV, Out: b.outs[l][blk.DstType],
+				FIn: int32(fin), FH: int32(H), UseAcc: b2i(blk.UseAcc), Act: b2i(blk.Act)}
+			b.driver.EnqueueLaunchKernel(q, b.agg, [3]uint32{uint32(len(blk.DstNodes) * wgSize), 1, 1},
+				[3]uint16{wgSize, 1, 1}, &aa)
+			b.launch = append(b.launch, launchInfo{"proj_" + nm[5:], nProj},
+				launchInfo{"agg_" + nm[5:], len(blk.DstNodes)})
+		}
+	}
+	b.report(touched)
 	b.driver.DrainCommandQueue(q)
-	fmt.Printf("RGAT,mini,src=%d,dst=%d,fanout=%d,f=%d,relations=%d,kernels=%d,wgs=%d\n",
-		b.NumSrc, b.NumDst, b.Fanout, F, b.Relations, 2*b.Relations, wgs)
 }
 
-// Verify compares the last relation's output with a float64 reference.
+func b2i(v bool) int32 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func sortedTypes(m map[string][]int32) []string {
+	var k []string
+	for t := range m {
+		k = append(k, t)
+	}
+	sort.Strings(k)
+	return k
+}
+
+// touchedRows returns, per type, the raw-feature rows layer 0 reads.
+func (b *Benchmark) touchedRows() map[string][]int32 {
+	set := map[string]map[int32]bool{}
+	add := func(t string, ids []int32) {
+		if set[t] == nil {
+			set[t] = map[int32]bool{}
+		}
+		for _, v := range ids {
+			set[t][v] = true
+		}
+	}
+	for _, blk := range b.sample.Blocks[0] {
+		add(blk.SrcType, blk.SrcNodes)
+		add(blk.DstType, blk.DstNodes)
+	}
+	out := map[string][]int32{}
+	for t, s := range set {
+		for v := range s {
+			out[t] = append(out[t], v)
+		}
+		sort.Slice(out[t], func(i, j int) bool { return out[t][i] < out[t][j] })
+	}
+	return out
+}
+
+func (b *Benchmark) report(touched map[string][]int32) {
+	g, s, m, pr := b.graph, b.sample, b.model, b.Params
+	fan := make([]string, len(pr.Fanouts))
+	for i, f := range pr.Fanouts {
+		fan[i] = fmt.Sprint(f)
+	}
+	fmt.Printf("RGAT,config,graph=%s,types=%d,relations=%d,edges=%d,feat_dim=%d,seeds=%d,"+
+		"fanouts=%s,hidden=%d,heads=1,seed=%d\n", g.Name, len(g.Types), len(g.Rels),
+		g.NumEdges(), g.FeatDim, pr.Seeds, strings.Join(fan, ":"), m.Hidden, pr.Seed)
+	for l := range s.Blocks {
+		var parts []string
+		edges, srcRows := 0, 0
+		for _, t := range sortedTypes(s.Dst[l]) {
+			parts = append(parts, fmt.Sprintf("%s:%d", t, len(s.Dst[l][t])))
+		}
+		for _, blk := range s.Blocks[l] {
+			edges += len(blk.ColIdx)
+			srcRows += len(blk.SrcNodes)
+		}
+		fmt.Printf("RGAT,layer%d,dst=%s,blocks=%d,edges=%d,projected_rows=%d\n",
+			l, strings.Join(parts, ";"), len(s.Blocks[l]), edges, srcRows)
+	}
+	featRows := 0
+	for _, ids := range touched {
+		featRows += len(ids)
+	}
+	featBytes := uint64(featRows) * uint64(g.FeatDim) * 4
+	var gather, hBytes, wBytes uint64
+	totalWG, projWG, aggWG := 0, 0, 0
+	for _, li := range b.launch {
+		totalWG += li.wgs
+		if strings.HasPrefix(li.name, "proj_") {
+			projWG += li.wgs
+		} else {
+			aggWG += li.wgs
+		}
+	}
+	for l, blocks := range s.Blocks {
+		for _, blk := range blocks {
+			gather += uint64(len(blk.SrcNodes)) * uint64(m.FIn[l]) * 4 * uint64(m.Hidden/TileN)
+			hBytes += uint64(len(blk.SrcNodes)) * uint64(m.Hidden) * 4
+			wBytes += uint64(m.FIn[l]*m.Hidden) * 4
+		}
+	}
+	allocMB := 0.0
+	for _, t := range g.Types {
+		allocMB += float64(g.NumNodes[t]*g.FeatDim*4) / 1e6
+	}
+	fmt.Printf("RGAT,kernels,count=%d,proj_wgs=%d,agg_wgs=%d,total_wgs=%d\n",
+		len(b.launch), projWG, aggWG, totalWG)
+	var per []string
+	for _, li := range b.launch {
+		per = append(per, fmt.Sprintf("%s:%d", li.name, li.wgs))
+	}
+	fmt.Printf("RGAT,kernel_wgs,%s\n", strings.Join(per, ";"))
+	fmt.Printf("RGAT,footprint,feature_rows=%d,feature_bytes=%d,projected_bytes=%d,weight_bytes=%d,"+
+		"total_mb=%.1f,feature_gather_traffic_mb=%.1f,feature_tables_alloc_mb=%.1f\n",
+		featRows, featBytes, hBytes, wBytes, float64(featBytes+hBytes+wBytes)/1e6,
+		float64(gather)/1e6, allocMB)
+}
+
+// Verify compares the seeds' outputs with the float64 reference
+// (tolerance 1e-4 absolute + 1e-3 relative).
 func (b *Benchmark) Verify() {
-	F := b.F
-	acc := make([]float64, b.NumDst*F)
-	for r := 0; r < b.Relations; r++ {
-		h := make([]float64, b.NumSrc*F)
-		for n := 0; n < b.NumSrc; n++ {
-			for c := 0; c < F; c++ {
-				s := 0.0
-				for k := 0; k < F; k++ {
-					s += float64(b.x[n*F+k]) * float64(b.w[r*F*F+k*F+c])
+	s, m, g := b.sample, b.model, b.graph
+	feat := func(t string, id int32) []float32 {
+		row := make([]float32, g.FeatDim)
+		g.Feats[t].Row(int(id), row)
+		return row
+	}
+	ref := Reference(s, m, feat)
+	L := len(s.Blocks)
+	bad, maxErr, n := 0, 0.0, 0
+	for _, t := range sortedTypes(s.Dst[L-1]) {
+		want := ref[L-1][t]
+		got := make([]float32, len(want))
+		b.driver.MemCopyD2H(b.context, got, b.outs[L-1][t])
+		for i := range want {
+			e := math.Abs(float64(got[i]) - want[i])
+			maxErr = math.Max(maxErr, e)
+			if !(e <= 1e-4+1e-3*math.Abs(want[i])) {
+				if bad < 5 {
+					log.Printf("rgat: %s[%d] got %g want %g", t, i, got[i], want[i])
 				}
-				h[n*F+c] = s
+				bad++
 			}
-		}
-		for i := 0; i < b.NumDst; i++ {
-			er := 0.0
-			for c := 0; c < F; c++ {
-				er += h[i*F+c] * float64(b.ar[r*F+c])
-			}
-			beg, end := b.rowPtr[r][i], b.rowPtr[r][i+1]
-			sc := make([]float64, end-beg)
-			m := math.Inf(-1)
-			for j := beg; j < end; j++ {
-				el := 0.0
-				src := int(b.colIdx[r][j])
-				for c := 0; c < F; c++ {
-					el += h[src*F+c] * float64(b.al[r*F+c])
-				}
-				e := el + er
-				if e < 0 {
-					e *= 0.2
-				}
-				sc[j-beg] = e
-				m = math.Max(m, e)
-			}
-			sum := 0.0
-			for k := range sc {
-				sc[k] = math.Exp(sc[k] - m)
-				sum += sc[k]
-			}
-			for j := beg; j < end; j++ {
-				src := int(b.colIdx[r][j])
-				for c := 0; c < F; c++ {
-					acc[i*F+c] += sc[j-beg] / sum * h[src*F+c]
-				}
-			}
+			n++
 		}
 	}
-	got := make([]float32, b.NumDst*F)
-	b.driver.MemCopyD2H(b.context, got, b.dOut[len(b.dOut)-1])
-	maxErr, bad := 0.0, 0
-	for i := range acc {
-		e := math.Abs(float64(got[i]) - acc[i])
-		maxErr = math.Max(maxErr, e)
-		if !(e <= 1e-4+1e-3*math.Abs(acc[i])) {
-			bad++
-		}
-	}
-	fmt.Printf("RGAT,verify,elements=%d,max_abs_err=%.3g,mismatches=%d\n", len(acc), maxErr, bad)
+	fmt.Printf("RGAT,verify,elements=%d,max_abs_err=%.3g,mismatches=%d\n", n, maxErr, bad)
 	if bad > 0 {
 		log.Fatalf("rgat: %d mismatches", bad)
 	}

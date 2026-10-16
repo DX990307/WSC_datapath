@@ -74,6 +74,32 @@ func newMoE(d *driver.Driver) *moe.Benchmark {
 	return b
 }
 
-func newRGATMini(d *driver.Driver) *rgat.Benchmark { return rgat.NewBenchmark(d) }
+// T17 W-C R-GAT knobs. Defaults: a small synthetic graph with the IGBH
+// schema; the T17 shape is -rgat-data=<IGBH dir> -rgat-seeds=512
+// -rgat-fanouts=10,5.
+var (
+	rgatDefaults    = rgat.DefaultParams()
+	rgatDataFlag    = flag.String("rgat-data", "", "rgat: IGBH directory (e.g. .../igbh/tiny); empty = synthetic graph")
+	rgatSeedsFlag   = flag.Int("rgat-seeds", rgatDefaults.Seeds, "rgat: paper seed nodes in the mini-batch")
+	rgatFanoutsFlag = flag.String("rgat-fanouts", "10,5", "rgat: per-relation fanouts, input layer first")
+	rgatHiddenFlag  = flag.Int("rgat-hidden", rgatDefaults.Hidden, "rgat: hidden dimension (multiple of 64)")
+	rgatSeedFlag    = flag.Int64("rgat-seed", rgatDefaults.Seed, "rgat: sampling and weight seed")
+	rgatPapersFlag  = flag.Int("rgat-synth-papers", rgatDefaults.SynthPapers, "rgat: synthetic graph papers")
+	rgatDimFlag     = flag.Int("rgat-synth-dim", rgatDefaults.SynthDim, "rgat: synthetic feature dimension")
+)
+
+func newRGAT(d *driver.Driver) *rgat.Benchmark {
+	b := rgat.NewBenchmark(d)
+	b.Params = rgat.Params{
+		DataDir:     *rgatDataFlag,
+		SynthPapers: *rgatPapersFlag,
+		SynthDim:    *rgatDimFlag,
+		Seeds:       *rgatSeedsFlag,
+		Fanouts:     parseInts(*rgatFanoutsFlag),
+		Hidden:      *rgatHiddenFlag,
+		Seed:        *rgatSeedFlag,
+	}
+	return b
+}
 
 func newISACheck(d *driver.Driver) *isacheck.Benchmark { return isacheck.NewBenchmark(d) }
