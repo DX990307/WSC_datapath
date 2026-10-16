@@ -223,6 +223,8 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = newProbe(driver)
 	case "platbench":
 		benchmark = newPlatbench(driver)
+	case "pagedattn":
+		benchmark = newPagedAttn(driver)
 	case "floydwarshall":
 		floydwarshall := floydwarshall.NewBenchmark(driver)
 		floydwarshall.NumNodes = 11584
