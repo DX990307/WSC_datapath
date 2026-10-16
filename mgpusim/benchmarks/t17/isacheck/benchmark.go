@@ -79,6 +79,9 @@ func (b *Benchmark) alloc(bytes int, data interface{}) driver.Ptr {
 // Run launches the kernel.
 func (b *Benchmark) Run() {
 	b.driver.SelectGPU(b.context, b.gpus[0])
+	// Verify copies results back; make the magic D2H copy read through the
+	// write-back L2 (no simulated time; does not affect the kernels).
+	b.driver.SetMagicCopyCoherent(true)
 	rng := rand.New(rand.NewSource(1))
 	n := b.N
 	b.a, b.b = make([]int32, n), make([]int32, n)

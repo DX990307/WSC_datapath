@@ -131,6 +131,9 @@ func (b *Benchmark) generate() {
 // relation.
 func (b *Benchmark) Run() {
 	b.driver.SelectGPU(b.context, b.gpus[0])
+	// Verify copies results back; make the magic D2H copy read through the
+	// write-back L2 (no simulated time; does not affect the kernels).
+	b.driver.SetMagicCopyCoherent(true)
 	b.generate()
 	F := b.F
 	q := b.driver.CreateCommandQueue(b.context)

@@ -6,9 +6,10 @@
 // Kernels (no atomics, pull only, kernels.cl):
 //
 //	moe_gate     WG per token: gate GEMV, softmax, top-k (prob + bias) in LDS
-//	(host)       the routing is computed on the host from the same inputs
-//	             (top-k, then the expert-grouped permutation, its inverse
-//	             and the GEMM row tiles) and copied to the GPU before launch
+//	(host)       the gate's top-k is copied back (coherent magic copy, not
+//	             timed), grouped by expert on the host (permutation, inverse,
+//	             GEMM row tiles; cross-checked against a float64 host gate)
+//	             and copied to the GPU
 //	moe_dispatch WG per slot: gather x rows into expert order
 //	moe_up       WG per (row tile, 64 columns of F): SwiGLU(xs W1, xs W3)
 //	moe_down     WG per (row tile, 64 columns of H): act W2
@@ -96,6 +97,9 @@ type Benchmark struct {
 	prob     *Problem
 	routing  *Routing
 	hostTopK []int32
+	gpuTopK  []int32
+	gpuTopW  []float32
+	selDiff  int
 
 	dX, dWg, dBias, dIdx, dW, dW1, dW3, dW2   driver.Ptr
 	dPerm, dInv, dTiles, dXs, dAct, dYs, dOut driver.Ptr
@@ -149,29 +153,42 @@ func (b *Benchmark) Run() {
 	T, K, H, F := p.Tokens, p.TopK, p.Hidden, p.FFN
 	S := T * K
 
-	// Routing (top-k -> expert-grouped permutation) is computed on the host
-	// from the same gate inputs, in float64, before any launch. The gate
-	// kernel still runs (its top-k weights feed moe_combine). Reading the
-	// gate's top-k back instead does not work in timing mode: the magic D2H
-	// copy reads DRAM directly while the gate output is still dirty in the
-	// write-back L2 (it returns zeros).
+	// The gate output is copied back, grouped by expert on the host and the
+	// index arrays copied to the GPU (magic copies, no simulated time). The
+	// D2H copy must be coherent: the gate output is still dirty in the
+	// write-back L2, and a plain magic copy reads DRAM only.
+	b.driver.SetMagicCopyCoherent(true)
+	ga := GateArgs{X: b.dX, Wg: b.dWg, Bias: b.dBias, TopKIdx: b.dIdx, TopKW: b.dW,
+		Hidden: int32(H), TopK: int32(K)}
+	b.launch(q, b.gate, T, &ga)
+	b.driver.DrainCommandQueue(q)
+
+	b.gpuTopK = make([]int32, S)
+	b.gpuTopW = make([]float32, S)
+	b.driver.MemCopyD2H(b.context, b.gpuTopK, b.dIdx)
+	b.driver.MemCopyD2H(b.context, b.gpuTopW, b.dW)
+	// Cross-check against the float64 host gate (near-ties may differ).
 	b.hostTopK = p.HostTopK()
-	r, err := BuildRouting(b.hostTopK, T, K)
+	b.selDiff = 0
+	for i := range b.hostTopK {
+		if b.gpuTopK[i] != b.hostTopK[i] {
+			b.selDiff++
+		}
+	}
+	r, err := BuildRouting(b.gpuTopK, T, K)
 	if err == nil {
 		err = r.Check(T, K)
 	}
 	if err != nil {
-		log.Panicf("moe: routing: %v", err)
+		log.Panicf("moe: routing from the GPU gate output: %v", err)
 	}
 	b.routing = r
 	b.driver.MemCopyH2D(b.context, b.dPerm, r.PermToken)
 	b.driver.MemCopyH2D(b.context, b.dInv, r.InvSlot)
 	b.driver.MemCopyH2D(b.context, b.dTiles, r.Tiles)
 	b.report()
+	fmt.Printf("MOE,gate_check,host_vs_gpu_topk_diffs=%d,of=%d\n", b.selDiff, S)
 
-	ga := GateArgs{X: b.dX, Wg: b.dWg, Bias: b.dBias, TopKIdx: b.dIdx, TopKW: b.dW,
-		Hidden: int32(H), TopK: int32(K)}
-	b.launch(q, b.gate, T, &ga)
 	da := DispatchArgs{X: b.dX, PermToken: b.dPerm, Xs: b.dXs, Hidden: int32(H)}
 	b.launch(q, b.dispatch, S, &da)
 	ua := UpArgs{Xs: b.dXs, W1: b.dW1, W3: b.dW3, Tiles: b.dTiles, Act: b.dAct,
@@ -225,28 +242,21 @@ func (b *Benchmark) initMem() {
 	}
 }
 
-// Verify (emulation only: D2H reads DRAM) checks the gate kernel against the
-// float64 host gate (same top-k, weights within 1e-5) and the layer output
-// against the float64 reference. Tolerance: 1e-4 absolute + 1e-3 relative.
+// Verify checks the gate kernel against the float64 host gate (same top-k,
+// weights within 1e-5) and the layer output against the float64 reference
+// computed with the GPU's routing. Tolerance: 1e-4 absolute + 1e-3
+// relative. In timing mode it relies on the coherent magic D2H copy.
 func (b *Benchmark) Verify() {
 	p := b.prob
 	K := p.TopK
-	S := p.Tokens * K
-	gpuIdx := make([]int32, S)
-	gpuW := make([]float32, S)
-	b.driver.MemCopyD2H(b.context, gpuIdx, b.dIdx)
-	b.driver.MemCopyD2H(b.context, gpuW, b.dW)
 	probs := p.GateProbs()
-	selDiff, wErr := 0, 0.0
-	for i := range gpuIdx {
-		if gpuIdx[i] != b.hostTopK[i] {
-			selDiff++
-		}
-		wErr = math.Max(wErr, math.Abs(float64(gpuW[i])-probs[i/K][b.hostTopK[i]]))
+	selDiff, wErr := b.selDiff, 0.0
+	for i := range b.gpuTopK {
+		wErr = math.Max(wErr, math.Abs(float64(b.gpuTopW[i])-probs[i/K][b.gpuTopK[i]]))
 	}
 	got := make([]float32, p.Tokens*p.Hidden)
 	b.driver.MemCopyD2H(b.context, got, b.dOut)
-	ref := p.Reference(b.hostTopK, gpuW)
+	ref := p.Reference(b.gpuTopK, b.gpuTopW)
 	maxErr, bad := 0.0, 0
 	for i := range ref {
 		e := math.Abs(float64(got[i]) - float64(ref[i]))
