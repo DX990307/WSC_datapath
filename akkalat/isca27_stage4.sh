@@ -29,7 +29,9 @@
 # memory of the previous one. A campaign part prints a STALL line when its
 # simulators have all been stopped, or none has written output, for 30
 # minutes.
-# Results go to results/1013_t13s4-<part>_wafer48_<preset>_<commit>/.
+# Results go to results/<MMDD>_<category>_<item>_<label>_<commit>/ (see
+# akkalat/isca27_name.py): abl_full, audit_full, llm_full, sens_<dims>, and
+# probe_<probe> for the T11 probes; MMDD is the launch date.
 set -euo pipefail
 
 # Many simulations share this session; a shared heartbeat file would be
@@ -52,7 +54,12 @@ mkdir -p "$EXP_SLOT_DIR"
 # Longest first (paper campaign runtimes), so long runs do not become the tail.
 BENCHMARKS=kmeans,matrixtranspose,matrixmultiplication,aes,pagerank,fir,fft,floydwarshall,im2col,spmv,simpleconvolution,bitonicsort,relu,fastwalshtransform
 
-out() { echo "$ROOT/results/1013_t13s4-$1_wafer48_$2_$COMMIT"; }
+DATE="$(date -u +%m%d)"
+# out() runs in a command substitution, where a failed check could not stop
+# the script, so the variable part of every name (the commit) is checked here.
+python3 akkalat/isca27_name.py check "${DATE}_abl_full_hpca_$COMMIT" >/dev/null ||
+  { echo "commit must be 7 hex digits: $COMMIT" >&2; exit 1; }
+out() { echo "$ROOT/results/${DATE}_$1_$2_$3_$COMMIT"; } # category item label
 log() { echo "[stage4 $(date -Is)] $*"; }
 
 build() {
@@ -95,7 +102,7 @@ probes() { # config
     args="${r#*|}"
     # shellcheck disable=SC2086
     python3 akkalat/slot_pool.py run -- \
-      akkalat/isca27_run.sh "1013_t13s4-probe-${name}_wafer48_${label}_$COMMIT" \
+      akkalat/isca27_run.sh "${DATE}_probe_${name}_${label}_$COMMIT" \
       "$COMMIT" T13-stage4 "$cfg" "${common[@]}" $args &
     pids+=($!)
   done
@@ -112,7 +119,7 @@ main() { # preset label
     --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
     --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
     --stall-alert-minutes=$STALL_ALERT --skip-build \
-    --output-dir="$(out main "$label")" || log "main ($preset) rc=$?"
+    --output-dir="$(out abl full "$label")" || log "main ($preset) rc=$?"
   log "main ($preset) done"
 }
 
@@ -125,7 +132,7 @@ audit() { # preset label
     --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
     --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
     --stall-alert-minutes=$STALL_ALERT --skip-build \
-    --output-dir="$(out filter-audit "$label")" || log "filter audit ($preset) rc=$?"
+    --output-dir="$(out audit full "$label")" || log "filter audit ($preset) rc=$?"
   log "filter audit ($preset) done"
 }
 
@@ -137,7 +144,7 @@ llm() { # preset label cu-per-gpu (the preset's CUs per GPM)
     --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
     --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
     --stall-alert-minutes=$STALL_ALERT --skip-build \
-    --output-dir="$(out llm "$label")" || log "LLM ($preset) rc=$?"
+    --output-dir="$(out llm full "$label")" || log "LLM ($preset) rc=$?"
   log "LLM ($preset) done"
 }
 
@@ -150,7 +157,7 @@ sensitivity() { # dimensions label-suffix [--include-reference]
     --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
     --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
     --stall-alert-minutes=$STALL_ALERT \
-    --output-dir="$(out "sens-$part" mi300x)" || log "sensitivity rc=$?"
+    --output-dir="$(out sens "$part" mi300x)" || log "sensitivity rc=$?"
   log "sensitivity ($dims) done"
 }
 

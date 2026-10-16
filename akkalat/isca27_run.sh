@@ -9,6 +9,7 @@
 # "hpca", "mi300x_eighth" or "mi200" means akkalat/configs/<name>.json. The
 # simulator reads them with -config (later files override earlier ones), so
 # no configuration flag is written here.
+# <exp_id> follows akkalat/isca27_name.py: <MMDD>_<category>_<item>_<config>_<commit>.
 # Output: results/<exp_id>/{meta.json,summary.csv,config_used.json,stats/,stdout.log,stderr.log}
 set -euo pipefail
 
@@ -18,6 +19,8 @@ TASK="$3"
 CONFIG_NAMES="$4"
 shift 4
 BENCH=("$@")
+
+python3 akkalat/isca27_name.py check "$EXP_ID" >&2 || exit 1
 
 ROOT="$(pwd)"
 OUT="$ROOT/results/$EXP_ID"
