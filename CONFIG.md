@@ -1,5 +1,7 @@
 # 论文配置（不可修改）
 
+> ⚠️ **10-16 更新：目标配置改为 mi200（D19，取代 D15 的 MI300X）。** `configs/mi200.json` 冻结（标签 `isca27-mi200-v1`）并经用户确认之后，成为论文配置和所有新实验的默认基准（`config_deviation` 相对 `mi200.json` 计算）；`hpca.json` 保留为 HPCA 投稿版，`mi300x_eighth.json` 只作参照。**冻结之前，下面的 hpca 规则仍然有效。** mi200 有意比真实 MI200 稍弱（D20），论文必须写明。
+
 > ⚠️ **10-13 更新：配置正在切换中。** 用户决定把 GPM 改成 **1/8 MI300X**（见 `tasks/T13_mi300x_config.md`）。**在 T13 的校准完成、用户确认之前，下面的旧配置（95b4f46）仍然是唯一有效的配置。** 新配置确认之后，Cowork 侧会更新本文件：新预设成为论文配置，旧配置保留为“HPCA 投稿版”，用来复现旧结果。
 
 > **用户 10-13 的规定**：之前设置的实验配置是**论文始终使用的配置，不要改**。**每一个 task 执行之前，都要先按本文件做一次配置确认。**
@@ -21,7 +23,7 @@
 > | `akkalat/baseline/runner/r9nanobuilder.go` | `6c7c78ea4916` |
 > | `akkalat/baseline/runner/timingplatform.go` | `c8636d99cc06` |
 > | `akkalat/baseline/runner/runner.go` | `378f7313f8d4` |
-> | `akkalat/baseline/runner/gpm_preset.go`（新） | `487bbd5e578d` |
+> | `akkalat/baseline/runner/gpm_preset.go`（新；`0e38983` 加了 `CUsPerGPM()` 之后为 `4a149c51b45a`，配置数值不变） | `4a149c51b45a` |
 > | `akkalat/baseline/runner/config_file.go`（新） | `f31cc47e59fb` |
 > | `akkalat/configs/hpca.json`（新） | `90954272240e` |
 > | `akkalat/configs/mi300x_eighth.json`（新） | `9accc5e93b62` |

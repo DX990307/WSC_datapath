@@ -41,6 +41,7 @@
 | [`tasks/T12_driver_flush_fix.md`](tasks/T12_driver_flush_fix.md) | 修复 driver 的 flush 竞争（多个 queue 共用一个 Context 时死锁） | `[已定]` · ✅ 完成（10-13，commit `9c30a89`，见 STATUS） | W1 |
 | [`tasks/T13_mi300x_config.md`](tasks/T13_mi300x_config.md) | **GPM 改成 1/8 MI300X**（按比例缩放）+ 全量重跑 | `[已定]` | W1–W2 |
 | [`tasks/T14_wafer_platform_data.md`](tasks/T14_wafer_platform_data.md) | wafer 平台特征数据（延迟阶梯、带宽、跳数矩阵、incast、通信模式、kernel 开销），和 T13 阶段 3 一起跑 | 第一档 `[已定]`；第二、三档 `[提案]` | W1–W2 |
+| [`tasks/T15_headroom_oracle.md`](tasks/T15_headroom_oracle.md) | oracle 实验：量出 wafer 层的优化空间（全部本地 / 端点不受限 / 距离几乎免费） | `[已定]` | mi200 冻结后 |
 | [`guides/G1_port_workload_to_mgpusim.md`](guides/G1_port_workload_to_mgpusim.md) | **操作指南**：怎么把新 workload 移植进 MGPUSim（以 GCN 为例） | 参考资料 | — |
 
 ## 时间线

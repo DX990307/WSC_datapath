@@ -123,3 +123,19 @@
 - 代码：`isca27/t13-mi300x` 推到 `756f214`（`f1ef3f0` 远程批量读按顺序处理；`756f214` 四处内存泄漏）。
 - 文档：本条所在的提交（推到 `isca27/docs`）。只改了 `STATUS.md`、`SYNC.md`。
 - STATUS：阶段 4 卡死约 13 小时的经过、修复、停止；重启前待定事项。另外 STATUS 里有内存控制器审查和 Local Pairing 相关发现，涉及论文 Table II、DRAM 模型和 Local Pairing 的论述，可能需要更新 CONFIG.md 和任务文档。
+
+### 2026-10-16 [cowork] 同步 10-14 到 10-15 的全部进展；发现同步规则有两处没执行
+- 读了：SYNC 日志 10-13 到 10-14 的 [claude-code] 条目；STATUS 10-13 19:40 到 10-15 20:00 的全部日志（阶段 4 内存问题和停止、不确定性和内存泄漏修复、内存控制器审查、Local Pairing 实测、改用 mi200、27 人瓶颈审查、诊断实验 A–D、yss2 硬件故障、mi200 实现和验证、mi200 HBM 读只到 31%）；代码仓库 `configs/mi200.json`。
+- 改了：`00_background.md`（新增 D19–D22，D15 标为被取代）；`CONFIG.md`（顶部加 10-16 说明：目标配置改为 mi200，冻结前 hpca 规则仍有效）。
+- **同步规则没执行的两处**：① 10-14 之后 STATUS 和 git 有十几次提交，但 SYNC 日志只到 10-14 的第一条；② Cowork 10-13 的改动（`ideas_from_T14.md`、`CONFIG.md`、`site/` 三页）一直没被提交。另外 10-14、10-15 的新结果（诊断 A–D、mi200 平台测量、mi200/hpca 短片段 ablation、可复现性检查）都不在 `results_index/` 里，STATUS 里也只有部分数字，Cowork 看不到。
+- 新建 `prompts/P08_sync_and_results_review.md`。
+
+### 2026-10-16 [cowork] 记录改用 MI200 的原因；补充“不用 Local Pairing 时的替代方向”
+- 改了：`00_background.md` D19 的理由（用户 10-16：MI300X 有很多新架构，模拟器没法实现）；`ideas_from_T14.md` 末尾新增“10-16 补充”：L-A 不再做本地机制（推荐）、L-B owner 端服务优先级、L-C 按重取代价管理 L2，以及不建议的方向。全部是提案。
+
+### 2026-10-16 [cowork] 记录“本地还是 wafer 层”的讨论和 oracle 实验建议
+- 改了：`ideas_from_T14.md` 末尾新增一节：看远程时间占比而不是访问个数；本地越好 wafer 层空间越大；“大部分在本地”是旧 benchmark 的性质；建议用 oracle 实验（O1 `-force-local-data-access`、O2 端点不受限、O3 距离 1 跳）量出每个 workload 的上限后再决定方向。全部是提案。
+
+### 2026-10-16 [cowork] 新增 T15（oracle 实验）和 prompt P09
+- 新建 `tasks/T15_headroom_oracle.md`：mi200 短片段，14 个 workload × 6 组（B、O1 `-force-local-data-access`、O2a L1V 窗口放大、O2b RDMA 窗口放大、O2 两者都放大、O3 `-switch-latency=1`），全部加 `-report-l2-source`；有效性检查（指令数差异 > 1% 标为无效）；输出每个 workload 的上限、远程访问和延迟占比、m2/Complete 占上限的比例。
+- 改了：`README.md`（索引加 T15）。新建 `prompts/P09_T15_headroom_oracle.md`。
