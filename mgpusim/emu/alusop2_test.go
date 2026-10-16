@@ -539,4 +539,24 @@ var _ = Describe("ALU", func() {
 		Expect(sp.SCC).To(Equal(byte(1)))
 	})
 
+	It("should run S_ASHR_I64", func() {
+		state.inst = insts.NewInst()
+		state.inst.FormatType = insts.SOP2
+		state.inst.Opcode = 33
+
+		sp := state.Scratchpad().AsSOP2()
+		sp.SRC0 = 0x8000000400000000 // negative
+		sp.SRC1 = 30 + 64            // only S1[5:0] counts
+
+		alu.Run(state)
+
+		Expect(sp.DST).To(Equal(uint64(0xfffffffe00000010)))
+		Expect(sp.SCC).To(Equal(byte(1)))
+
+		sp.SRC0 = 0x0000000100000000
+		sp.SRC1 = 33
+		alu.Run(state)
+		Expect(sp.DST).To(Equal(uint64(0)))
+		Expect(sp.SCC).To(Equal(byte(0)))
+	})
 })

@@ -119,6 +119,8 @@ func (u *ScalarUnit) executeSMEMInst(now sim.VTimeInSec) bool {
 		return u.executeSMEMLoad(16, now)
 	case 3:
 		return u.executeSMEMLoad(32, now)
+	case 4: // s_load_dwordx16
+		return u.executeSMEMLoad(64, now)
 	default:
 		log.Panicf("opcode %d is not supported.", inst.Opcode)
 	}

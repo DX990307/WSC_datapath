@@ -60,6 +60,8 @@ func (u *ALUImpl) runVOP3A(state InstEmuState) {
 		u.runVMADI32I24(state)
 	case 451, 488:
 		u.runVMADU64U32(state)
+	case 462:
+		u.runVALIGNBITB32(state)
 	case 460:
 		u.runVFMAF64(state)
 	case 464:
@@ -631,6 +633,22 @@ func (u *ALUImpl) runVMADU64U32(state InstEmuState) {
 		}
 
 		sp.DST[i] = sp.SRC0[i]*sp.SRC1[i] + sp.SRC2[i]
+	}
+}
+
+// runVALIGNBITB32 implements V_ALIGNBIT_B32 (GCN3 ISA reference, ch. 12, "VOP3a
+// Opcodes", opcode 462): D.u = ({S0.u, S1.u} >> S2.u[4:0]) & 0xffffffff.
+func (u *ALUImpl) runVALIGNBITB32(state InstEmuState) {
+	sp := state.Scratchpad().AsVOP3A()
+
+	var i uint
+	for i = 0; i < 64; i++ {
+		if !laneMasked(sp.EXEC, i) {
+			continue
+		}
+
+		v := uint64(uint32(sp.SRC0[i]))<<32 | uint64(uint32(sp.SRC1[i]))
+		sp.DST[i] = uint64(uint32(v >> (sp.SRC2[i] & 0x1f)))
 	}
 }
 

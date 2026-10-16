@@ -91,6 +91,8 @@ func (u *ALUImpl) runSMEM(state InstEmuState) {
 		u.runSLOADDWORDX4(state)
 	case 3:
 		u.runSLOADDWORDX8(state)
+	case 4:
+		u.runSLOADDWORDX16(state)
 	default:
 		log.Panicf("Opcode %d for SMEM format is not implemented", inst.Opcode)
 	}
@@ -130,6 +132,18 @@ func (u *ALUImpl) runSLOADDWORDX8(state InstEmuState) {
 
 	buf := u.storageAccessor.Read(pid, sp.Base+sp.Offset, 32)
 	copy(spRaw[32:64], buf)
+}
+
+// runSLOADDWORDX16 implements S_LOAD_DWORDX16 (GCN3 ISA reference, ch. 12,
+// "SMEM Instructions", opcode 4): 16 consecutive dwords from Base + Offset
+// into SDST..SDST+15.
+func (u *ALUImpl) runSLOADDWORDX16(state InstEmuState) {
+	sp := state.Scratchpad().AsSMEM()
+	spRaw := state.Scratchpad()
+	pid := state.PID()
+
+	buf := u.storageAccessor.Read(pid, sp.Base+sp.Offset, 64)
+	copy(spRaw[32:96], buf)
 }
 
 //nolint:gocyclo

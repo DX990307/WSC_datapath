@@ -75,4 +75,46 @@ var _ = Describe("ALU", func() {
 		Expect(asInt64(sp.DST)).To(Equal(int64(-20000)))
 	})
 
+	It("should run s_cmpk_eq_i32", func() {
+		state.inst = insts.NewInst()
+		state.inst.FormatType = insts.SOPK
+		state.inst.Opcode = 2
+
+		sp := state.Scratchpad().AsSOPK()
+		sp.IMM = uint64(int16ToBits(-5))
+		sp.DST = uint64(uint32(0xfffffffb)) // -5 as i32
+		alu.Run(state)
+		Expect(sp.SCC).To(Equal(uint8(1)))
+
+		// equal low 16 bits, different i32: not equal
+		sp.DST = 0x0001fffb
+		alu.Run(state)
+		Expect(sp.SCC).To(Equal(uint8(0)))
+		Expect(sp.DST).To(Equal(uint64(0x0001fffb)))
+	})
+
+	It("should run s_addk_i32", func() {
+		state.inst = insts.NewInst()
+		state.inst.FormatType = insts.SOPK
+		state.inst.Opcode = 14
+
+		sp := state.Scratchpad().AsSOPK()
+		sp.IMM = 0x2100
+		sp.DST = 0x40
+		alu.Run(state)
+		Expect(sp.DST).To(Equal(uint64(0x2140)))
+		Expect(sp.SCC).To(Equal(uint8(0)))
+
+		sp.IMM = uint64(int16ToBits(-1))
+		sp.DST = 0
+		alu.Run(state)
+		Expect(sp.DST).To(Equal(uint64(0xffffffff)))
+		Expect(sp.SCC).To(Equal(uint8(0)))
+
+		sp.IMM = 1
+		sp.DST = 0x7fffffff
+		alu.Run(state)
+		Expect(sp.DST).To(Equal(uint64(0x80000000)))
+		Expect(sp.SCC).To(Equal(uint8(1)))
+	})
 })

@@ -486,7 +486,7 @@ func (d *Disassembler) isVOP3bOpcode(opcode Opcode) bool {
 	//}
 
 	switch opcode {
-	case 281, 282, 283, 284, 285, 286, 480, 481:
+	case 281, 282, 283, 284, 285, 286, 480, 481, 489:
 		return true
 	}
 

@@ -25,6 +25,8 @@ func (u *ALUImpl) runVOP3B(state InstEmuState) {
 		u.runVSUBBREVU32VOP3b(state)
 	case 481:
 		u.runVDIVSCALEF64(state)
+	case 489:
+		u.runVMADI64I32(state)
 	default:
 		log.Panicf("Opcode %d for VOP3b format is not implemented", inst.Opcode)
 	}
@@ -205,6 +207,28 @@ func (u *ALUImpl) runVDIVSCALEF64(state InstEmuState) {
 		} else if exponentSrc2 <= 53 {
 			// Numerator is tiny
 			sp.DST[i] = math.Float64bits(src0 * math.Pow(2.0, 128))
+		}
+	}
+}
+
+// runVMADI64I32 implements V_MAD_I64_I32 (GCN3 ISA reference, ch. 12, "VOP3b
+// Opcodes", opcode 489): {SDST, D.i64} = S0.i32 * S1.i32 + S2.i64. The lane's
+// SDST bit is set on signed overflow of the 64-bit result.
+func (u *ALUImpl) runVMADI64I32(state InstEmuState) {
+	sp := state.Scratchpad().AsVOP3B()
+
+	var i uint
+	for i = 0; i < 64; i++ {
+		if !laneMasked(sp.EXEC, i) {
+			continue
+		}
+
+		prod := int64(int32(uint32(sp.SRC0[i]))) * int64(int32(uint32(sp.SRC1[i])))
+		add := int64(sp.SRC2[i])
+		sum := prod + add
+		sp.DST[i] = uint64(sum)
+		if (prod >= 0) == (add >= 0) && (sum >= 0) != (prod >= 0) {
+			sp.SDST |= 1 << i
 		}
 	}
 }

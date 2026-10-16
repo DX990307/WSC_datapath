@@ -701,4 +701,28 @@ var _ = Describe("ALU", func() {
 		// inf / inf
 		Expect(sp.DST[0]).To(Equal(math.Float64bits(0xFFF8000000000000)))
 	})
+
+	It("should run V_ALIGNBIT_B32", func() {
+		state.inst = insts.NewInst()
+		state.inst.FormatType = insts.VOP3a
+		state.inst.Opcode = 462
+
+		sp := state.Scratchpad().AsVOP3A()
+		sp.SRC0[0] = 0x00000000
+		sp.SRC1[0] = 0x00000f08
+		sp.SRC2[0] = 3
+		sp.SRC0[1] = 0x000000ab
+		sp.SRC1[1] = 0x12345678
+		sp.SRC2[1] = 8 + 32 // only S2[4:0] counts
+		sp.SRC0[2] = 0xdeadbeef
+		sp.SRC1[2] = 0x1
+		sp.SRC2[2] = 0
+		sp.EXEC = 7
+
+		alu.Run(state)
+
+		Expect(sp.DST[0]).To(Equal(uint64(0x1e1)))
+		Expect(sp.DST[1]).To(Equal(uint64(0xab123456)))
+		Expect(sp.DST[2]).To(Equal(uint64(0x1)))
+	})
 })
