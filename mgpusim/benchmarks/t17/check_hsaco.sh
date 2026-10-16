@@ -10,7 +10,15 @@
 #   - ds_* outside the 7 implemented opcodes (emu/aluds.go);
 #   - s_load/s_store/s_buffer_* other than s_load_dword/x2/x4/x8/x16
 #     (emu/alu.go runSMEM and timing/cu/scalarunit.go implement SMEM 0-4);
-#   - a kernel whose private segment (scratch) size is not 0.
+#   - a kernel whose private segment (scratch) size is not 0;
+#   - an s_nop (or another scheduler-internal SOPP op other than s_endpgm,
+#     s_barrier, s_waitcnt) inside a kernel body: the timing CU scheduler
+#     (timing/cu/scheduler.go EvaluateInternalInst, default case) completes
+#     it without advancing the PC, so the wavefront re-executes it forever
+#     (timing hang; emulation is fine). The s_nop padding after s_endpgm is
+#     never executed and is ignored. clang inserts "s_nop 0" after a store of
+#     more than 8 bytes whose data VGPRs the next VALU overwrites (fiji
+#     hazard); store at most 8 bytes per lane per instruction there.
 # Needs llvm-objdump and llvm-readelf (yss2). Usage: check_hsaco.sh a.hsaco...
 set -euo pipefail
 
@@ -40,6 +48,17 @@ for f in "$@"; do
         [[ "$m" =~ $ALLOWED_SMEM ]] || bad+="  $m ($count)"$'\n' ;;
     esac
   done <<<"$mnems"
+
+  # scheduler-internal ops in a kernel body (labels start a kernel,
+  # s_endpgm ends its body; the padding after it is never executed)
+  internal="$("$OBJDUMP" -d --mcpu="$MCPU" "$f" | awk '
+    /^[0-9a-f]+ <.*>:$/ { body = 1; next }
+    { m = $1 }
+    m == "s_endpgm" { body = 0; next }
+    body && m ~ /^s_(nop|setkill|sethalt|sleep|setprio|trap|icache_inv|incperflevel|decperflevel|ttracedata|set_gpr_idx_off|set_gpr_idx_mode)$/ {
+      n[m]++ }
+    END { for (k in n) printf "  %s in a kernel body (%d): timing hang\n", k, n[k] }')"
+  bad+="${internal:+$internal$'\n'}"
 
   priv="$("$READELF" --notes "$f" | grep -E 'PrivateSegmentFixedSize' |
     awk '$2 != 0' || true)"

@@ -31,6 +31,19 @@
 // 32-bit local id: shifts of the 64-bit get_local_id(0) become
 // v_alignbit_b32 (VOP3a opcode 462), which the emulator does not implement.
 #define LOCAL_ID ((int)__builtin_amdgcn_workitem_id_x())
+// Store 8 floats as four 8-byte stores. Two 16-byte stores make clang
+// insert "s_nop 0" (fiji store-data hazard), which hangs the timing CU
+// (check_hsaco.sh); the empty asm keeps the stores from being merged.
+#define STORE8(o, a, b, c, d, e, f, g, h)            \
+  do {                                               \
+    vstore2((float2)(a, b), 0, (o));                 \
+    __asm__ volatile("" ::: "memory");               \
+    vstore2((float2)(c, d), 0, (o) + 2);             \
+    __asm__ volatile("" ::: "memory");               \
+    vstore2((float2)(e, f), 0, (o) + 4);             \
+    __asm__ volatile("" ::: "memory");               \
+    vstore2((float2)(g, h), 0, (o) + 6);             \
+  } while (0)
 
 __kernel __attribute__((reqd_work_group_size(256, 1, 1)))
 void moe_gate(__global const float *x,
@@ -279,8 +292,7 @@ void moe_down(__global const float *act,
   }
   if (r < rows) {
     __global float *o = ys + IDX(slot0 + r, hidden) + n0 + c0;
-    vstore4((float4)(y0, y1, y2, y3), 0, o);
-    vstore4((float4)(y4, y5, y6, y7), 0, o + 4);
+    STORE8(o, y0, y1, y2, y3, y4, y5, y6, y7);
   }
 }
 
