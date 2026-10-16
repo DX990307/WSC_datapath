@@ -151,3 +151,28 @@
 - 用户确认冻结（MSHR 保持 32）。代码 `isca27/t13-mi300x` 推到 `61b6ae8`（偏差基准改为 mi200.json、`akkalat/configs/MI200_V1.md`）。标签 `isca27-mi200-v1` = `67f1c03`，**只在本地**，等用户决定是否推送。
 - **请 Cowork 更新 `CONFIG.md`**：有效论文配置改为 `configs/mi200.json`（冻结版），`config_deviation` 相对它计算；`hpca.json` 是投稿版；mi200 有意弱化的清单见 `MI200_V1.md`（D20、D21）。
 - T15：配置确认写在 STATUS“需要用户决定”，等用户确认后运行。改了 `STATUS.md`、`SYNC.md`。
+
+### 2026-10-16 [cowork] 记录用户贴出的 mi200 短片段 ablation；T15 增加三项检查
+- 用户贴出 `1015_abl_wafer48_mi200_67f1c03` 的图：GMEAN RA 1.24、RR 1.10、LP 1.03、Complete 1.30；收益集中在 FWS、KM、MM（和 I2C）；FWT 的 LP 和 Complete 约 0.88。
+- 改了：`tasks/T15_headroom_oracle.md` 末尾新增“10-16 补充”：按 O1 上限给 workload 分类（事先定好标准）、检查 KM/MM/FWS 三个大收益是否来自 baseline 的人为因素（放置热点、baseline 不缓存远程数据）、查 FWT 的退化。
+
+### 2026-10-16 [cowork] 记录“用 thread placement 利用 wafer 特性”的讨论
+- 改了：`ideas_from_T14.md` 末尾新增一节：已有工作（Milic MICRO'17、Khairy MICRO'20、CODA、Griffin）；wafer 特有的三个角度（二维拓扑映射、避开热点 owner、搬计算比搬数据便宜）；上限由 T15 的 O1、O3 给出；建议的便宜实验 P1 对齐、P2 拓扑顺序、P3 小 buffer 交错（需要改少量代码，等用户决定是否加进 T15）。全部是提案。
+
+- 2026-10-16 · cowork · ideas_from_T14.md 的 placement 一节新增“10-16 补充”：哪些负载可能受益；只缩短距离为什么收益有限；建议把 placement 做成强 baseline；新增 O4 放置 oracle；placement 以外的三条路（a 用带宽换延迟、b 远程翻译、c 空间/流水线执行）。另外把行优先编号换行处的距离从 6 跳改为 7 跳。等用户决定 O4 和 P1–P3 是否加进 T15。
+
+- 2026-10-16 · cowork · ideas_from_T14.md 新增一节“placement 以外的办法”，列了 W1–W6：位置导致的负载不均（角落 GPM 远程延迟约 639 ns，靠近中心约 465 ns）、窗口受限、incast、远程翻译、全局同步、空间/流水线执行。另外记了 baseline 本身的三个问题、可能的论文故事（受限于端点和位置），以及 T16 瓶颈分解的建议（只加统计）。等用户决定。
+
+- 2026-10-16 · cowork · 用户决定试 W1（位置导致的负载不均）。新建 `tasks/T16_position_imbalance.md`：阶段 1 已定，只测量（per-GPM tracer、截断运行里的速率不均、跑完整个 kernel 的 all-to-all 微基准、少量 workload 的小输入）；阶段 2 是提案（M-a 加权切分、M-b 只向邻居偷 WG、M-c 按距离分配在途窗口）。新建 `prompts/P10`；README 索引加了 T16。读代码时发现：WG 静态连续切分；页按 48 等分；**`-max-wg` 是全局计数，到了就退出，所以截断运行看不到 kernel 尾部**，W1 必须用跑完整个 kernel 的运行来评估。
+
+- 2026-10-16 · cowork · 从 T14 的原始结果（`results/1013_t14-pat-*/stats/metrics.csv`）读出每个 GPM 的 kernel_time，作为 W1 的已有证据：all-to-all 最慢/平均 1.23、最慢/最快 1.43、ρ = 0.93；环形的行尾和回绕让 kernel 慢约 4 倍。新增 `figs/t14_alltoall_per_gpm.png`。T16 加了“已有的证据”一节；1c 改为复用 platbench，并加远程比例扫描；P10 同步修改。确认截断运行里每个 GPM 的 kernel_time 都是 0。
+
+- 2026-10-16 · cowork · 讨论 W1 是否需要新 workload（`ideas_from_T14.md` 新增一节，提案）：需要；用 unified 写法（W1 的机制作用在 driver/CP 的 WG 分配上）；最小集合是 MoE、DLRM embedding、图计算 PR/BFS，可选 TP 的 LLM 层；旧的远程型 benchmark 用小输入，AES 作为对照。等用户决定。
+
+- 2026-10-16 · cowork · 用户希望找“最新的、page placement 帮不上忙”的 workload。`ideas_from_T14.md` 新增一节（提案）：第一档是 MoE dispatch/combine、PagedAttention decode、R-GAT 采样聚合；第二档是 CAGRA 向量检索、DLRM embedding；用 O4 放置 oracle 证明“放置帮不上”；T5a/T5b/T9 相应调整；补了一条相关工作 arXiv 2511.02132。等用户决定是否开 T17。
+
+- 2026-10-16 · cowork · 读代码确认模拟器的约束（`ideas_from_T14.md` 新增“模拟器能不能跑”一节）：没有 global atomic、没有 scratch、LDS 只实现了 7 条 DS 指令、编译链是 OpenCL→fiji。由此定下写法原则：不用 atomic、统一 pull、索引结构在 host 端算。可行性排序：PagedAttention 和 DLRM 高，MoE 中高，R-GAT 中，CAGRA 中低。T1 要作为新 workload 的第一步。
+
+- 2026-10-16 · cowork · 用户要求每个实验 3–5 小时。`ideas_from_T14.md` 新增“模拟速度预算”一节：T14 实测本地约 1.5–1.8 GB/小时、远程约 200–250 MB/小时（远程每字节约贵 7 倍）；mi200 短片段中位数 48 分钟，KM 12.5 小时超出预算。粗估模型：wall 分钟 ≈ 3 + 远程 MB/3.5 + 本地 MB/27。给出了 4 个新 workload 的初始规模；规定先按 1/8 规模试跑、再外推定规模，不用 `-max-wg`。
+
+- 2026-10-16 · cowork · 用户同意 T17（“可以试试吧”）。新建 `tasks/T17_latest_workloads.md`（PagedAttention、MoE、R-GAT，DLRM 备选；第 0 步就是原来的 T1；写法原则是 unified、不用 atomic、pull、索引在 host 端算；先 1/8 试跑，再外推到 baseline 约 3 小时，上限 5 小时）和 `prompts/P11`。README 里 T5a/T5b/T5c/T5d/T9 标为被取代或暂停，这些文档的开头也加了说明。

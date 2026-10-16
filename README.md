@@ -28,20 +28,22 @@
 | [`tasks/T2_stats.md`](tasks/T2_stats.md) | 新增统计：M1 共享度、M2 跨 kernel 复用、M3 跳数等 | `[已定]` | W1 |
 | [`tasks/T3_baselines.md`](tasks/T3_baselines.md) | 强 baseline B1–B4 | `[已定]` | W1 |
 | [`tasks/T4_configs.md`](tasks/T4_configs.md) | `cu8` / `mi100match` 配置（**偏离论文配置，等用户确认**） | `[提案]` | — |
-| [`tasks/T5a_llm_decode_prefix.md`](tasks/T5a_llm_decode_prefix.md) | 新 workload：共享前缀的 LLM decode | `[已定]` | W1–W2 |
-| [`tasks/T5b_gcn_arxiv.md`](tasks/T5b_gcn_arxiv.md) | 新 workload：GCN（ogbn-arxiv） | `[已定]` | W1–W2 |
-| [`tasks/T5c_dlrm_emb.md`](tasks/T5c_dlrm_emb.md) | 新 workload：DLRM embedding bag | `[已定]` | W1–W2 |
-| [`tasks/T5d_ssb_join.md`](tasks/T5d_ssb_join.md) | 新 workload：SSB hash join | `[已定]` | W1–W2 |
+| [`tasks/T5a_llm_decode_prefix.md`](tasks/T5a_llm_decode_prefix.md) | 新 workload：共享前缀的 LLM decode | ~~`[已定]`~~ 被 T17 的 PagedAttention 取代 | W1–W2 |
+| [`tasks/T5b_gcn_arxiv.md`](tasks/T5b_gcn_arxiv.md) | 新 workload：GCN（ogbn-arxiv） | ~~`[已定]`~~ 被 T17 的 R-GAT 取代 | W1–W2 |
+| [`tasks/T5c_dlrm_emb.md`](tasks/T5c_dlrm_emb.md) | 新 workload：DLRM embedding bag | ~~`[已定]`~~ 降为 T17 的备选 W-D | W1–W2 |
+| [`tasks/T5d_ssb_join.md`](tasks/T5d_ssb_join.md) | 新 workload：SSB hash join | ~~`[已定]`~~ 暂停（10-16） | W1–W2 |
 | [`tasks/T6_truncation_check.md`](tasks/T6_truncation_check.md) | 验证截断运行的结果是否具有代表性 | `[已定]` | W1 |
 | [`tasks/T7_mech1_region_replication.md`](tasks/T7_mech1_region_replication.md) | 机制 1：按距离分区域的远程复制 | `[提案]` | W2–W3 |
 | [`tasks/T8_mech2_write_signature.md`](tasks/T8_mech2_write_signature.md) | 机制 2：基于写签名的选择性失效 | `[提案]` | W2–W3 |
-| [`tasks/T9_workloads_batch2.md`](tasks/T9_workloads_batch2.md) | 第二批 workload：MoE、GAP 图计算、stencil | `[提案]` | W2+ |
+| [`tasks/T9_workloads_batch2.md`](tasks/T9_workloads_batch2.md) | 第二批 workload：MoE、GAP 图计算、stencil | ~~`[提案]`~~ MoE 移到 T17；其余暂停 | W2+ |
 | [`tasks/T10_spmd_comm_suite.md`](tasks/T10_spmd_comm_suite.md) | 自写的通信型 benchmark 套件（SPMD 分片 + 显式通信） | `[提案]` | W1–W3 |
 | [`tasks/T11_probe_placement_comm.md`](tasks/T11_probe_placement_comm.md) | 探针实验：数据放置、kernel 放置、远程访问路径（T10 的前置任务） | `[已定]` | W1 |
 | [`tasks/T12_driver_flush_fix.md`](tasks/T12_driver_flush_fix.md) | 修复 driver 的 flush 竞争（多个 queue 共用一个 Context 时死锁） | `[已定]` · ✅ 完成（10-13，commit `9c30a89`，见 STATUS） | W1 |
 | [`tasks/T13_mi300x_config.md`](tasks/T13_mi300x_config.md) | **GPM 改成 1/8 MI300X**（按比例缩放）+ 全量重跑 | `[已定]` | W1–W2 |
 | [`tasks/T14_wafer_platform_data.md`](tasks/T14_wafer_platform_data.md) | wafer 平台特征数据（延迟阶梯、带宽、跳数矩阵、incast、通信模式、kernel 开销），和 T13 阶段 3 一起跑 | 第一档 `[已定]`；第二、三档 `[提案]` | W1–W2 |
 | [`tasks/T15_headroom_oracle.md`](tasks/T15_headroom_oracle.md) | oracle 实验：量出 wafer 层的优化空间（全部本地 / 端点不受限 / 距离几乎免费） | `[已定]` | mi200 冻结后 |
+| [`tasks/T16_position_imbalance.md`](tasks/T16_position_imbalance.md) | W1：GPM 在 mesh 上的位置是否造成负载不均（阶段 1 只测量） | 阶段 1 `[已定]`，阶段 2 `[提案]` | 和 T15 一起 |
+| [`tasks/T17_latest_workloads.md`](tasks/T17_latest_workloads.md) | 新 workload：PagedAttention、MoE、R-GAT（DLRM 备选），不用 atomic、统一 pull，每个实验 3–5 小时 | `[已定]` | 10-27 前跑出 baseline |
 | [`guides/G1_port_workload_to_mgpusim.md`](guides/G1_port_workload_to_mgpusim.md) | **操作指南**：怎么把新 workload 移植进 MGPUSim（以 GCN 为例） | 参考资料 | — |
 
 ## 时间线

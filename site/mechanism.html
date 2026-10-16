@@ -7,6 +7,28 @@
 <tr><td class="who">I5</td><td><b>远程地址转换是一阶开销</b>（作为特征分析；作为机制和 HDPAT 重合）</td><td>远程 TLB miss 多付 732 ns，和距离无关</td></tr>
 </tbody></table></div>
 <div class="next" style="margin-top:14px;background:var(--risk-soft);border-color:var(--risk)"><div class="tag" style="color:var(--risk)">先决条件</div><p>① 端点模型是否太弱：MI300X 每个 XCD 到 IOD 是 1 KB/周期，我们每 GPM 的远程能力只有 26–113 B/周期，需要做端点敏感性实验；② 远程瓶颈缺统计证据；③ 本地 L2 带宽异常没查清，建议和阶段 4 并行诊断。</p></div></section>
+<section id="placement"><h2>用 thread placement 利用 wafer 特性（10-16，提案）</h2><p class="lede">完整内容在 ideas_from_T14.md。上限由 T15 的 O1（全部本地）和 O3（距离几乎免费）给出。</p>
+<div class="tablewrap"><table><thead><tr><th>wafer 特有的角度</th><th>和已有工作（Milic MICRO'17、Khairy MICRO'20、CODA）的区别</th></tr></thead><tbody>
+<tr><td>二维拓扑映射：共享数据的 WG 组放在物理相邻的 tile 上</td><td>已有工作面对的是 4 个左右、距离差不多的模块；wafer 上 1 跳和 12 跳差 4 倍多</td></tr>
+<tr><td>避开热点 owner：分散读同一个 owner 的 WG，或分散热点数据</td><td>瓶颈在端点（owner 约 113 B/周期封顶），不只是距离</td></tr>
+<tr><td>搬计算而不是搬数据：下一个 kernel 的 WG 跟着上一个 kernel 写出的数据走</td><td>wafer 上 kernel 边界约 1 µs，跨 wafer 搬数据又慢又占窗口</td></tr>
+</tbody></table></div>
+<p><b>补充（10-16）</b>：AES、BT 这类几乎全在本地的负载，placement 帮不上；只有远程占比高的负载（pagerank、I2C、MT、SPMV、mi200 下的 KM）可能受益。只缩短距离的话 198 ns 的固定开销还在，距离减半大约带来 1.5–2×；量级上的收益只来自把访问变成本地。<b>建议把 placement 做成强 baseline，不当主贡献</b>，以此回应“收益来自弱 baseline”的质疑。新增 <b>O4 放置 oracle</b>：离线按 WG→页 的统计，在负载均衡的约束下把每个 WG 放到加权跳数最小的 GPM 上。</p>
+<div class="tablewrap"><table><thead><tr><th>placement 以外的路</th><th>依据</th><th>最近的已有工作</th></tr></thead><tbody>
+<tr><td>a. 用带宽换延迟：owner 端合并、多行事务、批量推送（I2、I3）</td><td>链路 97% 空闲；远程路径受窗口限制</td><td>GPS（MICRO'21）</td></tr>
+<tr><td>b. 远程翻译（I5）</td><td>远程 TLB miss 多 555–732 ns，和到中心 IOMMU 的距离有关</td><td>Trans-FW（HPCA'23）</td></tr>
+<tr><td>c. 空间/流水线执行：分区跑不同 kernel，邻居间流式传数据</td><td>最有 wafer 特色；需要驱动支持多 kernel 并发，工程量大</td><td>—（3.5 周内风险高）</td></tr>
+</tbody></table></div></section>
+<section id="beyond"><h2>placement 以外的办法（10-16，提案）</h2><p class="lede">先找出 wafer 上贵的资源（远程延迟、在途窗口、热点 owner、中心 IOMMU、全局同步）和闲的资源（链路 97%、L2 60%、提前跑完的 GPM）。完整内容在 ideas_from_T14.md。</p>
+<div class="tablewrap"><table><thead><tr><th>#</th><th>瓶颈</th><th>办法</th><th>最近的已有工作</th></tr></thead><tbody>
+<tr><td class="who">W1</td><td><b>位置导致的负载不均</b>：角落 GPM 平均 6.1 跳（约 639 ns），靠近中心的 3.7 跳（约 465 ns）</td><td>按位置分配 WG，或邻居之间偷 WG；按距离给在途窗口</td><td>需要查 · <b>已开 T16</b>。已有证据：T14 all-to-all 最慢/平均 1.23、最慢/最快 1.43、ρ = 0.93</td></tr>
+<tr><td class="who">W2</td><td>窗口受限：带宽 ≈ 64 ÷ 延迟</td><td>多行事务、按距离调整预取深度、owner 推送</td><td>GPS（MICRO'21）</td></tr>
+<tr><td class="who">W3</td><td>incast：owner 约 113 B/周期封顶</td><td>owner 端合并 + 多播，或区域代理</td><td>HMG、CARVE</td></tr>
+<tr><td class="who">W4</td><td>远程翻译 +555–732 ns，都走中心 IOMMU</td><td>owner 端做地址转换、区域共享 TLB、大页</td><td>Trans-FW（HPCA'23）</td></tr>
+<tr><td class="who">W5</td><td>全局同步：kernel 边界约 1 µs</td><td>区域级、按依赖的 kernel 边界</td><td>BlockMaestro（ISCA'21）</td></tr>
+<tr><td class="who">W6</td><td>小 kernel 撑不满 48 个 GPM</td><td>空间/流水线执行（工程量大）</td><td>Cerebras dataflow</td></tr>
+</tbody></table></div>
+<div class="next" style="margin-top:14px"><div class="tag">可能的论文故事</div><p>wafer-scale GPU 受限于端点和位置，而不是链路：W2（多行事务）+ W3（owner 端合并）+ W1（位置感知的 WG 分配），W4 做成特征分析或第四个机制。先跑 T16 瓶颈分解（只加统计）和 T15 一起跑；同时修 baseline（HBM 只到 31%、KM 热点、MM 不缓存远程数据）。</p></div></section>
 <section id="no-lp"><h2>不用 Local Pairing 时的替代方向（10-16，提案）</h2><p class="lede">mi200 下 m1 只剩 1.03，HPCA 版的收益主要来自 128 B 访问单位。完整内容在 ideas_from_T14.md 的“10-16 补充”。</p>
 <div class="tablewrap"><table><thead><tr><th>方向</th><th>做法</th><th>需要先确认的数据</th></tr></thead><tbody>
 <tr><td><b>L-A 不再做本地机制</b>（推荐）</td><td>论文只保留 2–3 个和 wafer 直接相关的远程侧机制：多 line 远程事务、owner 端合并、按距离分层的副本</td><td>—</td></tr>

@@ -1,4 +1,28 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Workload 与实验</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"><link rel="stylesheet" href="style.css"></head><body><nav class="topnav" aria-label="页面"><div class="in"><a class="brand" href="index.html">CuPath · ISCA 27</a><a class="pg" href="index.html">总览</a><a class="pg" href="plan.html">计划与配置</a><a class="pg" href="mechanism.html">新机制</a><a class="pg" href="workloads.html" aria-current="page">Workload 与实验</a><a class="pg" href="reviews.html">审稿意见</a><a class="pg" href="facts.html">论文数字</a><a class="pg" href="log.html">讨论日志</a></div></nav><div class="wrap"><main><header><h1>Workload 与实验</h1><p class="sub">测量定义、workload 讨论和已有的实验结果。</p></header><section id="t11"><h2>T11 探针结果（10-13）</h2><p class="lede">P1、P2 是功能性结论，仍然有效。P3、P4 用的是 baseline 二进制的默认参数（16 GB/s、20 周期交换延迟），<b>不是论文配置，性能数字作废</b>，要用新配置重跑。</p>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Workload 与实验</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"><link rel="stylesheet" href="style.css"></head><body><nav class="topnav" aria-label="页面"><div class="in"><a class="brand" href="index.html">CuPath · ISCA 27</a><a class="pg" href="index.html">总览</a><a class="pg" href="plan.html">计划与配置</a><a class="pg" href="mechanism.html">新机制</a><a class="pg" href="workloads.html" aria-current="page">Workload 与实验</a><a class="pg" href="reviews.html">审稿意见</a><a class="pg" href="facts.html">论文数字</a><a class="pg" href="log.html">讨论日志</a></div></nav><div class="wrap"><main><header><h1>Workload 与实验</h1><p class="sub">测量定义、workload 讨论和已有的实验结果。</p></header><section id="latest"><h2>最新的、placement 帮不上忙的 workload（10-16，<b>已开 T17</b>）</h2><p class="lede">标准：访问由数据决定（间接寻址、路由、采样），任何静态的页放置都没法让它变成本地访问；用 O4 放置 oracle 证明。输入的分布用真实数据，只缩小规模。</p>
+<div class="tablewrap"><table><thead><tr><th>优先级</th><th>workload</th><th>来源</th><th>为什么放置帮不上</th></tr></thead><tbody>
+<tr><td>第一档</td><td><b>MoE dispatch/combine + expert GEMM</b></td><td>DeepSeek-V3 配置、DeepEP；Mixtral</td><td>路由由数据决定，本质是 all-to-all；热门 expert 形成热点 owner</td></tr>
+<tr><td>第一档</td><td><b>PagedAttention decode</b></td><td>vLLM（SOSP'23）</td><td>KV 块从池里分配，散落各处，只能靠 block table 间接访问；序列长度不一</td></tr>
+<tr><td>第一档</td><td><b>R-GAT / GNN 采样聚合</b></td><td>MLPerf Inference v5.0 RGAT（IGBH）</td><td>邻居采样是随机的，要从巨大的特征表里 gather</td></tr>
+<tr><td>第二档</td><td>CAGRA 向量检索</td><td>cuVS、arXiv 2308.15136</td><td>沿 kNN 图游走，随机读向量</td></tr>
+<tr><td>第二档</td><td>DLRM embedding bag</td><td>MLPerf 推荐任务</td><td>按幂律随机查表</td></tr>
+</tbody></table></div><p style="margin-top:10px">和原计划的关系：T5a 改成 PagedAttention，T5b 改成 R-GAT，T9 的 MoE 提到第一档，T5c 放到第二档，T5d 先不做。统一用 unified 写法。</p>
+<h3 style="margin-top:18px">能不能在模拟器上跑（读代码，10-16）</h3>
+<p>约束：<b>没有 global atomic</b>（只实现了 FLAT load/store）；<b>没有 scratch</b>（寄存器溢出会 panic）；LDS 只实现了 7 条 DS 指令（没有 LDS atomic，不能用 sub-group 函数）；编译链是 OpenCL → <code>clang -mcpu=fiji</code>。写法原则：不用 atomic、统一 pull、索引结构（路由、采样子图、块表）在 host 端预先算好。</p>
+<div class="tablewrap"><table><thead><tr><th>workload</th><th>可行性</th><th>改写方式</th></tr></thead><tbody>
+<tr><td>PagedAttention decode</td><td><span class="chip c-ok">高</span></td><td>WG 对应 (序列, KV 头)；split-K 加一个 reduce kernel；块表在 host 端模拟</td></tr>
+<tr><td>MoE</td><td><span class="chip c-ok">中高</span></td><td>gating 在 GPU 上算，排列索引在 host 端算；dispatch 是 gather，combine 是 pull；缩小配置、只跑 1 层</td></tr>
+<tr><td>R-GAT 风格的采样聚合</td><td><span class="chip c-warn">中</span></td><td>采样在 host 端做；每个目标点一个 WG 拉取邻居；数据集要核实</td></tr>
+<tr><td>DLRM embedding bag（推理）</td><td><span class="chip c-ok">高</span></td><td>每个 bag 一个 WG，gather 后求和</td></tr>
+<tr><td>CAGRA</td><td><span class="chip c-risk">中低</span></td><td>候选表和 visited 集合都要放在 LDS 里，不能用 atomic，建议推后</td></tr>
+</tbody></table></div>
+<h3 style="margin-top:18px">模拟速度预算：每个实验 3–5 小时（10-16）</h3>
+<p>已有数据：本地约 1.5–1.8 GB/小时，全 wafer 的远程通信约 200–250 MB/小时（远程每字节约贵 7 倍）；mi200 短片段中位数 48 分钟，MT 3.8 小时，<b>KM 12.5 小时，超出预算</b>。粗估模型：wall 分钟 ≈ 3 + 远程 MB/3.5 + 本地 MB/27。baseline 目标 3 小时（给慢的变体留余量），大约是远程流量 ≤ 0.5 GB，或者本地流量 ≤ 4 GB。</p>
+<div class="tablewrap"><table><thead><tr><th>workload</th><th>初始规模</th><th>主要流量（估）</th></tr></thead><tbody>
+<tr><td>PagedAttention</td><td>Llama-3-8B 的注意力形状，1 层，batch 32，平均约 1K token</td><td>KV 约 256 MB，大部分是远程</td></tr>
+<tr><td>MoE</td><td>DeepSeekMoE 16B 按比例缩小（hidden 1024、64 个 expert、top-6），1 层，256 个 token</td><td>权重约 550 MB；decode 的远程比例可能不高，用 O4 实测</td></tr>
+<tr><td>R-GAT 风格</td><td>512 个种子点，fanout (10, 5)，1024 维</td><td>约 120 MB 随机 gather</td></tr>
+<tr><td>DLRM</td><td>26 张表 × 100 万行 × 128 维，batch 2048</td><td>约 500 MB 随机读</td></tr>
+</tbody></table></div><p style="margin-top:8px">流程：先按 1/8 规模试跑，用心跳测速度，外推出约 3 小时的规模；超过 5 小时就缩小规模，不用 <code>-max-wg</code>。</p></section><section id="t11"><h2>T11 探针结果（10-13）</h2><p class="lede">P1、P2 是功能性结论，仍然有效。P3、P4 用的是 baseline 二进制的默认参数（16 GB/s、20 周期交换延迟），<b>不是论文配置，性能数字作废</b>，要用新配置重跑。</p>
 <div class="tablewrap"><table><thead><tr><th>实验</th><th>结论</th><th>说明</th></tr></thead><tbody>
 <tr><td class="who">P1</td><td><span class="chip c-ok">通过</span></td><td>数据和 kernel 在同一个 GPM 上时，远程事务数为 0</td></tr>
 <tr><td class="who">P2</td><td><span class="chip c-ok">通过</span></td><td>只有目标 GPM 的 32 个 CU 执行了指令</td></tr>

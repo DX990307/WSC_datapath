@@ -51,3 +51,16 @@ workload：现有 14 个（`-max-wg 32768`，spmv 1536；kmeans 如果短片段�
 ## 之后（`[提案]`，不要开始）
 
 T10 的现代负载做出来以后，用同样的 6 组再跑一次。
+
+
+## 10-16 补充：用户贴出的 mi200 短片段 ablation（`1015_abl_wafer48_mi200_67f1c03`，yss3，13 个 workload）
+
+GMEAN：Remote Aggregation 1.24、Remote Reuse 1.10、Local Pairing 1.03、Complete 1.30。收益几乎全部来自 FWS（RA 约 2.5、LP 约 1.6、Complete 约 2.55）、KM（RA 约 2.8、Complete 约 2.85）、MM（RA 约 2.05、RR 约 3.25、Complete 约 3.85）和 I2C（约 1.1–1.2）；AES、BT、FFT、FIR、RELU、SC、PR、MT 都在 1.0 左右；**FWT 的 LP 和 Complete 约 0.88，是退化**。
+
+因此 T15 额外要做三件事：
+1. **按 O1 上限给 workload 分类**：“wafer 敏感”（O1 上限 > 1.05）和“本地型”（≤ 1.05）。分类标准在看结果之前定好，避免被说挑 workload。论文里两组的 GMEAN 都要报。
+2. **检查三个大收益 workload 有没有 baseline 的人为因素**（审稿人 A 专门提过“要排除 baseline artifact”）：
+   - KM：瓶颈审查发现小 buffer 全放在 GPM 1，约 97% 是远程读、挤在 2–3 个 owner 上。RA 的 2.8× 有多少是在缓解这个放置造成的热点？从 `-report-l2-source` 看 owner 集中度。
+   - MM：RR 3.25×。真实 MI200 默认把对端显存缓存在请求方 L2（NC），我们的 baseline 不缓存。B1（远程数据总进 L2）能拿到其中多少？
+   - FWS：RA 2.5×、LP 1.6×，看远程请求里重复 line 的比例和 owner 集中度。
+3. **FWT 的退化**：LP 和 Complete 都约 0.88，查原因（额外的配对读占了带宽或 MSHR？）。如果 LP 被删掉，Complete 在 FWT 上应该回到 1.0，顺带确认。
