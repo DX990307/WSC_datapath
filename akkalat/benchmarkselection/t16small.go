@@ -64,7 +64,9 @@ func t16SmallBenchmark(name string, d *driver.Driver) benchmarks.Benchmark {
 		b = pr
 	case "im2col-t16small":
 		// WGs = ceil(F*F/8) * ceil(27/8) with F = H - 2.
-		f := int(math.Ceil(math.Sqrt(float64(wgs) * 8 / 4)))
+		// Rounded down: more WGs than g per CU would raise the driver's
+		// ceil(WGs / CUs) and leave the last GPMs without work.
+		f := int(math.Floor(math.Sqrt(float64(wgs) * 8 / 4)))
 		ic := im2col.NewBenchmark(d)
 		ic.N, ic.C, ic.H, ic.W = 1, 3, f+2, f+2
 		ic.KernelHeight, ic.KernelWidth = 3, 3
@@ -75,7 +77,7 @@ func t16SmallBenchmark(name string, d *driver.Driver) benchmarks.Benchmark {
 		b = ic
 	case "matrixtranspose-t16small":
 		// WGs = (Width / 64)^2.
-		side := int(math.Ceil(math.Sqrt(float64(wgs))))
+		side := int(math.Floor(math.Sqrt(float64(wgs)))) // rounded down, see im2col
 		mt := matrixtranspose.NewBenchmark(d)
 		mt.Width = side * 64
 		wgs = side * side

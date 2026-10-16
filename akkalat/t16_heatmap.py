@@ -179,11 +179,12 @@ def main():
         except ImportError:
             print("matplotlib not available; text grid only")
             return
+        scale = 1e-3 if args.metric in ("finish", "lastwg") else 1.0  # ns -> us
         grid = [[float("nan")] * W for _ in range(W)]
         for r in kr:
             v = value(r, args.metric) if int(r["wg_assigned"]) > 0 else None
             if v is not None:
-                grid[int(r["y"])][int(r["x"])] = v
+                grid[int(r["y"])][int(r["x"])] = v * scale
         fig, ax = plt.subplots(figsize=(5.2, 4.6))
         im = ax.imshow(grid, cmap="viridis", origin="upper")
         for y in range(W):
@@ -196,7 +197,7 @@ def main():
         ax.set_yticks(range(W))
         ax.set_xlabel("x")
         ax.set_ylabel("y")
-        unit = {"finish": "ns", "lastwg": "ns", "rate": "WG/us",
+        unit = {"finish": "us", "lastwg": "us", "rate": "WG/us",
                 "remote": "fraction", "remotelat": "ns"}[args.metric]
         ax.set_title(f"kernel {k}: {args.metric} ({unit})", fontsize=9)
         fig.colorbar(im, ax=ax, shrink=0.8)
