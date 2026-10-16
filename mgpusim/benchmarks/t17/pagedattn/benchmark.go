@@ -89,15 +89,17 @@ type Benchmark struct {
 	dTmp, dML, dES, dOut          driver.Ptr
 }
 
-// DefaultParams returns a small default size. The T17 target shape is
-// Batch 32 with Mean 1024 (see the package README in STATUS).
+// DefaultParams returns a small default size (batch 2). The T17 target
+// shape is batch 32 with lengths from the Azure conversation trace (mean
+// about 1.26K tokens at a random point of the decode phase).
 func DefaultParams() Params {
 	return Params{
-		Batch:      4,
+		Batch:      2,
 		KVHeads:    8,
 		PartTokens: 64,
 		PoolFactor: 2.0,
-		Dist:       LenDist{Mean: 256, Sigma: 0.8, Min: 16, Max: 8192},
+		Dist:       LenDist{Mean: 1024, Sigma: 0.8, Min: 16, Max: 8192},
+		LenSource:  "azure",
 		Churn:      ChurnConfig{Rounds: 8, Occupancy: 0.9, FinishP: 0.5},
 		Seed:       1,
 	}
@@ -275,11 +277,9 @@ func (b *Benchmark) report() {
 	nRed := p.Batch * p.QHeads()
 	fp := p.Footprint()
 	fmt.Printf("PAGEDATTN,config,batch=%d,q_heads=%d,kv_heads=%d,head_dim=%d,block=%d,"+
-		"part_tokens=%d,len_mean=%g,len_sigma=%g,len_min=%d,len_max=%d,pool_factor=%g,"+
-		"churn_rounds=%d,seed=%d\n",
+		"part_tokens=%d,lengths=%s,pool_factor=%g,churn_rounds=%d,seed=%d\n",
 		p.Batch, p.QHeads(), p.KVHeads, HeadDim, BlockSize, p.PartTokens,
-		pr.Dist.Mean, pr.Dist.Sigma, pr.Dist.Min, pr.Dist.Max, pr.PoolFactor,
-		pr.Churn.Rounds, pr.Seed)
+		pr.Source().Describe(), pr.PoolFactor, pr.Churn.Rounds, pr.Seed)
 	fmt.Printf("PAGEDATTN,lens,tokens=%d,mean=%.1f,min=%d,max=%d,blocks=%d,pool_blocks=%d,"+
 		"max_parts=%d\n",
 		tokens, float64(tokens)/float64(p.Batch), minL, maxL, blocks, p.NumBlocks, p.MaxParts)

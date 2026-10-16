@@ -67,7 +67,12 @@ func TestBuildBlockTablesValidAndScattered(t *testing.T) {
 		need += blocksFor(l)
 	}
 	pool := NewBlockPool(2 * need)
-	tables := BuildBlockTables(rng, pool, lens, d, ChurnConfig{Rounds: 8, Occupancy: 0.9, FinishP: 0.5})
+	prompts := make([]int, len(lens))
+	for i, l := range lens {
+		prompts[i] = clampPrompt(l/2, l)
+	}
+	tables := BuildBlockTables(rng, pool, lens, prompts, d,
+		ChurnConfig{Rounds: 8, Occupancy: 0.9, FinishP: 0.5})
 	seen := map[int]bool{}
 	contiguous, pairs := 0, 0
 	for s, tb := range tables {
@@ -125,6 +130,7 @@ func smallParams() Params {
 	pr.KVHeads = 2
 	pr.PartTokens = 32
 	pr.Dist = LenDist{Mean: 100, Sigma: 0.8, Min: 16, Max: 400}
+	pr.LenSource = "lognormal"
 	return pr
 }
 
@@ -140,8 +146,10 @@ func TestGenerateBoundsAndFootprint(t *testing.T) {
 
 	pr := DefaultParams()
 	pr.Batch = 32
-	pr.Dist.Mean = 1024
 	big := Generate(pr, false)
+	if err := big.CheckBounds(); err != nil {
+		t.Fatal(err)
+	}
 	fp := big.Footprint()
 	tokens := 0
 	for _, l := range big.Lens {
@@ -245,5 +253,34 @@ func TestWGAndPageMapping(t *testing.T) {
 	}
 	if g := pageGPM(0, 10*4096, 48); g != 0 {
 		t.Fatalf("small buffer on GPM %d", g)
+	}
+}
+
+func TestAzureTrace(t *testing.T) {
+	reqs := AzureConvTrace()
+	if len(reqs) != 19366 {
+		t.Fatalf("%d requests, want 19366", len(reqs))
+	}
+	ctx, gen := 0, 0
+	for _, r := range reqs {
+		ctx += r.Context
+		gen += r.Generated
+	}
+	if m := float64(ctx) / float64(len(reqs)); math.Abs(m-1155) > 1 {
+		t.Fatalf("mean context %f, want about 1155", m)
+	}
+	d := TraceDist{Reqs: reqs, Min: 16, Max: 8192}
+	rng := rand.New(rand.NewSource(1))
+	sum := 0.0
+	for i := 0; i < 100000; i++ {
+		total, prompt := d.Sample(rng)
+		if total < 16 || total > 8192 || prompt < 1 || prompt >= total {
+			t.Fatalf("sample %d/%d", total, prompt)
+		}
+		sum += float64(total)
+	}
+	// E[context + U{1..gen}] = 1155 + (211 + 1)/2 approximately
+	if m := sum / 100000; math.Abs(m-1260) > 25 {
+		t.Fatalf("mean decode-time length %f, want about 1260", m)
 	}
 }
