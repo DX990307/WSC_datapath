@@ -227,6 +227,9 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = newPagedAttn(driver)
 	case "moe":
 		benchmark = newMoE(driver)
+	case "t17-isacheck":
+		// end-to-end check of the instructions added for T17 (use -verify)
+		benchmark = newISACheck(driver)
 	case "rgat-mini":
 		// T17 W-C step-0 instruction check only (tiny random subgraph).
 		benchmark = newRGATMini(driver)

@@ -8,7 +8,7 @@
 // dispatch functions handle (the `case` labels of runSOP1, runVOP3A, ... in
 // mgpusim/emu, read from the source tree given by -emu), plus the opcodes
 // the CUs handle themselves (s_endpgm, s_barrier) and the timing units'
-// limits (vector memory: FLAT 16-31; scalar unit: SMEM 0-3). Instructions
+// limits (vector memory: FLAT 16-31; scalar unit: SMEM 0-4). Instructions
 // MGPUSim cannot even decode are reported too.
 //
 // Usage:
@@ -158,8 +158,8 @@ func main() {
 			if inst.FormatType == insts.FLAT && (inst.Opcode < 16 || inst.Opcode > 31) {
 				bad[key{inst.FormatName, int(inst.Opcode), mnem, "timing VMU: FLAT 16-31 only"}]++
 			}
-			if inst.FormatType == insts.SMEM && inst.Opcode > 3 {
-				bad[key{inst.FormatName, int(inst.Opcode), mnem, "timing scalar unit: SMEM 0-3 only"}]++
+			if inst.FormatType == insts.SMEM && inst.Opcode > 4 {
+				bad[key{inst.FormatName, int(inst.Opcode), mnem, "timing scalar unit: SMEM 0-4 only"}]++
 			}
 		}
 		f.Close()

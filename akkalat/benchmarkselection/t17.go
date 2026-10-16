@@ -4,6 +4,7 @@ import (
 	"flag"
 
 	"github.com/sarchlab/akkalat/baseline/runner"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/t17/isacheck"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/t17/moe"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/t17/pagedattn"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/t17/rgat"
@@ -71,3 +72,5 @@ func newMoE(d *driver.Driver) *moe.Benchmark {
 }
 
 func newRGATMini(d *driver.Driver) *rgat.Benchmark { return rgat.NewBenchmark(d) }
+
+func newISACheck(d *driver.Driver) *isacheck.Benchmark { return isacheck.NewBenchmark(d) }

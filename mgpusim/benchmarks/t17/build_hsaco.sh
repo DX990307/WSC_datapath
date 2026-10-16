@@ -15,13 +15,14 @@
 #
 # Patterns that clang 14 turns into instructions the simulator lacks, and
 # the source-level way around them used in these kernels:
-#   >= 64 contiguous used kernarg bytes -> s_load_dwordx16: unused int gap
-#   signed (long)int * int indexing     -> v_mad_i64_i32: unsigned/32-bit
-#   64-bit shifts of get_local_id(0)    -> v_alignbit_b32: workitem_id_x
-#   16-bit constant adds/compares       -> s_addk_i32 / s_cmpk_eq_i32:
-#                                          LDS base 0, unrolled const loops
 #   LDS arrays/strides of 64 dwords     -> ds_*2st64_b32: interleave/pad
 #   4 contiguous aligned LDS loads      -> ds_read_b128: strided layout
+#   unsigned 64-bit int*int + 64        -> v_mad_u64_u32 (488): decoded with a
+#                                          32-bit dst; keep offsets 32-bit
+# Implemented since commit "simulator: implement v_mad_i64_i32, ..." (the
+# kernels written before still avoid them): s_load_dwordx16 (>= 64
+# contiguous kernarg bytes), v_mad_i64_i32 (signed long index math),
+# v_alignbit_b32 (64-bit id shifts), s_ashr_i64, s_addk_i32, s_cmpk_eq_i32.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

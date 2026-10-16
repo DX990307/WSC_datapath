@@ -8,8 +8,8 @@
 #   - flat_* opcodes the emulator does not implement (emu/alu_flat.go
 #     implements load ubyte/ushort/dword/x2/x4 and store dword/x2/x3/x4);
 #   - ds_* outside the 7 implemented opcodes (emu/aluds.go);
-#   - s_load/s_store/s_buffer_* other than s_load_dword/x2/x4/x8 (emu/alu.go
-#     runSMEM and timing/cu/scalarunit.go implement SMEM opcodes 0-3 only);
+#   - s_load/s_store/s_buffer_* other than s_load_dword/x2/x4/x8/x16
+#     (emu/alu.go runSMEM and timing/cu/scalarunit.go implement SMEM 0-4);
 #   - a kernel whose private segment (scratch) size is not 0.
 # Needs llvm-objdump and llvm-readelf (yss2). Usage: check_hsaco.sh a.hsaco...
 set -euo pipefail
@@ -19,7 +19,7 @@ READELF="${LLVM_READELF:-llvm-readelf}"
 MCPU="${GPU:-fiji}"
 
 ALLOWED_DS='^(ds_write_b32|ds_write2_b32|ds_read_b32|ds_read2_b32|ds_write2_b64|ds_read_b64|ds_read2_b64)$'
-ALLOWED_SMEM='^(s_load_dword|s_load_dwordx2|s_load_dwordx4|s_load_dwordx8)$'
+ALLOWED_SMEM='^(s_load_dword|s_load_dwordx2|s_load_dwordx4|s_load_dwordx8|s_load_dwordx16)$'
 ALLOWED_FLAT='^(flat_load_ubyte|flat_load_ushort|flat_load_dword|flat_load_dwordx2|flat_load_dwordx4|flat_store_dword|flat_store_dwordx2|flat_store_dwordx3|flat_store_dwordx4)$'
 
 status=0
