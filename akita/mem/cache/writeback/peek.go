@@ -1,6 +1,8 @@
 package writeback
 
 import (
+	"github.com/sarchlab/akita/v3/mem/cache"
+	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
 )
 
@@ -50,6 +52,9 @@ func (c *Cache) PeekDirty(pid vm.PID, addr uint64, buf []byte) {
 
 	first := addr &^ (blockSize - 1)
 	for line := first; line < end; line += blockSize {
+		if !c.mayHold(line) {
+			continue
+		}
 		block := c.directory.Lookup(pid, line)
 		if block == nil || !block.IsDirty {
 			continue
@@ -60,4 +65,29 @@ func (c *Cache) PeekDirty(pid vm.PID, addr uint64, buf []byte) {
 		}
 		overlay(line, data, block.DirtyMask)
 	}
+}
+
+// mayHold reports whether the address belongs to this cache's slice of an
+// interleaved address space (the directory's address converter panics on
+// addresses of other slices).
+func (c *Cache) mayHold(addr uint64) bool {
+	d, ok := c.directory.(*cache.DirectoryImpl)
+	if !ok || d.AddrConverter == nil {
+		return true
+	}
+	var conv mem.InterleavingConverter
+	switch v := d.AddrConverter.(type) {
+	case mem.InterleavingConverter:
+		conv = v
+	case *mem.InterleavingConverter:
+		conv = *v
+	default:
+		return true
+	}
+	if addr < conv.Offset || conv.InterleavingSize == 0 {
+		return false
+	}
+	a := addr - conv.Offset
+	round := conv.InterleavingSize * uint64(conv.TotalNumOfElements)
+	return int(a%round/conv.InterleavingSize) == conv.CurrentElementIndex
 }

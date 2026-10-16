@@ -60,7 +60,7 @@ weights).
 ## ogbn-mag (not used)
 
 1,939,743 nodes (paper 736,389, author 1,134,649, institution 8,740,
-field_of_study 59,965), 21,110,007 edges in 4 relations (affiliated_with
+field_of_study 59,965), 21,111,007 edges in 4 relations (affiliated_with
 1,043,998; writes 7,145,660; cites 5,416,271; has_topic 7,505,078); only
 papers have features (128-dim). It would need feature generation for the
 other types, so IGBH tiny is used instead.

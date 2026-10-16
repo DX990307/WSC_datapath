@@ -65,6 +65,15 @@ func TestPeekDirty(t *testing.T) {
 	if line[0] != 0xee || line[63] != 0xee {
 		t.Fatalf("dirty block not preferred: %#x", line[0])
 	}
+
+	// an interleaved slice skips addresses of other slices instead of
+	// panicking in the address converter
+	dir.AddrConverter = mem.InterleavingConverter{
+		InterleavingSize: 64, TotalNumOfElements: 2, CurrentElementIndex: 1}
+	if c.mayHold(0x1000) || !c.mayHold(0x1040) {
+		t.Fatal("wrong slice ownership")
+	}
+	c.PeekDirty(1, 0x1000, bytesOf(128, 0))
 }
 
 func bytesOf(n int, v byte) []byte {
