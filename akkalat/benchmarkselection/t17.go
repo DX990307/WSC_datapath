@@ -4,7 +4,9 @@ import (
 	"flag"
 
 	"github.com/sarchlab/akkalat/baseline/runner"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/t17/moe"
 	"github.com/sarchlab/mgpusim/v3/benchmarks/t17/pagedattn"
+	"github.com/sarchlab/mgpusim/v3/benchmarks/t17/rgat"
 	"github.com/sarchlab/mgpusim/v3/driver"
 )
 
@@ -40,3 +42,32 @@ func newPagedAttn(d *driver.Driver) *pagedattn.Benchmark {
 	b.CUsPerGPM = runner.CUsPerGPM()
 	return b
 }
+
+// T17 W-B MoE size knobs. Defaults are a small smoke size; the T17 target
+// shape is -moe-tokens=256 -moe-hidden=1024 -moe-ffn=704 -moe-topk=6.
+var (
+	moeDefaults   = moe.DefaultParams()
+	moeTokensFlag = flag.Int("moe-tokens", moeDefaults.Tokens, "moe: tokens in the decode batch")
+	moeHiddenFlag = flag.Int("moe-hidden", moeDefaults.Hidden, "moe: hidden dimension (multiple of 64)")
+	moeFFNFlag    = flag.Int("moe-ffn", moeDefaults.FFN, "moe: expert intermediate dimension (multiple of 64)")
+	moeTopKFlag   = flag.Int("moe-topk", moeDefaults.TopK, "moe: experts per token (64 routed experts)")
+	moeSkewFlag   = flag.Float64("moe-skew", moeDefaults.Skew,
+		"moe: target max/mean expert load via a per-expert routing bias (0 = uniform, no bias)")
+	moeSeedFlag = flag.Int64("moe-seed", moeDefaults.Seed, "moe: input generator seed")
+)
+
+func newMoE(d *driver.Driver) *moe.Benchmark {
+	b := moe.NewBenchmark(d)
+	b.Params = moe.Params{
+		Tokens: *moeTokensFlag,
+		Hidden: *moeHiddenFlag,
+		FFN:    *moeFFNFlag,
+		TopK:   *moeTopKFlag,
+		Skew:   *moeSkewFlag,
+		Seed:   *moeSeedFlag,
+	}
+	b.CUsPerGPM = runner.CUsPerGPM()
+	return b
+}
+
+func newRGATMini(d *driver.Driver) *rgat.Benchmark { return rgat.NewBenchmark(d) }

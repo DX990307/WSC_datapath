@@ -225,6 +225,11 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = newPlatbench(driver)
 	case "pagedattn":
 		benchmark = newPagedAttn(driver)
+	case "moe":
+		benchmark = newMoE(driver)
+	case "rgat-mini":
+		// T17 W-C step-0 instruction check only (tiny random subgraph).
+		benchmark = newRGATMini(driver)
 	case "floydwarshall":
 		floydwarshall := floydwarshall.NewBenchmark(driver)
 		floydwarshall.NumNodes = 11584
