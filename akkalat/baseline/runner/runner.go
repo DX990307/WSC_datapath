@@ -67,6 +67,7 @@ type Runner struct {
 	cuCPITraces         []cuCPIStackTracer
 	sharingTraceWriter  *pageSharingTraceWriter
 	observationDRAM     *windowedPhysicalDRAMObserver
+	gpmTracer           *gpmTracer
 
 	Timing                     bool
 	Verify                     bool
@@ -611,6 +612,7 @@ func (r *Runner) dumpMetrics() {
 func (r *Runner) flushMetrics() {
 	r.reportOnce.Do(func() {
 		r.reportStats()
+		r.writeGPMTrace()
 		r.closeSharingTrace()
 	})
 }

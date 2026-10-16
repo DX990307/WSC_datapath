@@ -213,6 +213,13 @@ var l2SourceFileFlag = flag.String("l2-source-file", "",
 	"Output prefix for L2 source CSV files. Defaults to <metric-file-name>_l2_source.")
 var l2SourceTileWidthFlag = flag.Int("l2-source-tile-width", 7,
 	"Tile-array width used to compute Manhattan hops for L2 source reports.")
+var gpmTraceFlag = flag.Bool("report-gpm-trace", false,
+	"Statistics only (T16): write one CSV row per kernel x GPM with assigned/"+
+		"completed WGs, first/last WG times, the GPM's kernel end, L1V local/"+
+		"remote misses and latency, L2 TLB local/remote misses, and the GPM's "+
+		"mesh position. Does not change timing.")
+var gpmTraceFileFlag = flag.String("gpm-trace-file", "",
+	"Output file of -report-gpm-trace. Defaults to <metric-file-name>_gpm_trace.csv.")
 
 func configuredLog2PageSize() uint64 {
 	return *log2PageSizeFlag
