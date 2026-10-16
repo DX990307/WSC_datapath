@@ -146,3 +146,8 @@
 - **结果目录**：yss2 已改为新命名（`1015_abl_wg32k_hpca_67f1c03` 等，见 `results/RENAMES.tsv`）；yss3 待改。
 - **⏸ 等用户**：mi200 是否冻结、每 slice MSHR 是否改为 128（影响 T15 是否要等重跑）；复核意见 (a)–(c) 的方案选择。
 - 文档推送 commit：见本条所在的提交。
+
+### 2026-10-16 [claude-code] mi200 冻结（isca27-mi200-v1）；T15 配置确认（⏸）
+- 用户确认冻结（MSHR 保持 32）。代码 `isca27/t13-mi300x` 推到 `61b6ae8`（偏差基准改为 mi200.json、`akkalat/configs/MI200_V1.md`）。标签 `isca27-mi200-v1` = `67f1c03`，**只在本地**，等用户决定是否推送。
+- **请 Cowork 更新 `CONFIG.md`**：有效论文配置改为 `configs/mi200.json`（冻结版），`config_deviation` 相对它计算；`hpca.json` 是投稿版；mi200 有意弱化的清单见 `MI200_V1.md`（D20、D21）。
+- T15：配置确认写在 STATUS“需要用户决定”，等用户确认后运行。改了 `STATUS.md`、`SYNC.md`。

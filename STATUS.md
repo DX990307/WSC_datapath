@@ -25,15 +25,35 @@
 | T9 第二批 workload | `[提案]`，不要开始 | | |
 | T10 SPMD 通信套件 | `[提案]`，不要开始 | | |
 | T12 driver flush 修复 | 完成（用户已确认；10-13 15:17 补跑带 magic copy 的 R3，通过） | 10-13 15:17 | 修复 `9c30a89`；单元测试、R1、R2、R3 全部通过 |
-| T13 MI300X 配置 → mi200 | 验证完成，⏸ 等用户确认冻结 | 10-16 | mi200 实现 `0b60da8`（DRAM `3aa570e`）；验证清单 7 项见“结果摘要 → mi200 验证”；HBM 读 31% 暂时保持（D21）；**冻结（`isca27-mi200-v1`）需要用户确认**，每 slice MSHR 是否改为 128 也待定 |
+| T13 MI300X 配置 → mi200 | **已冻结**（用户 10-16） | 10-16 | 标签 `isca27-mi200-v1` = `67f1c03`（只在本地，推不推送等用户）；每 slice MSHR 保持 32；`config_deviation` 改为相对 `configs/mi200.json`（`61b6ae8`）；冻结说明 `akkalat/configs/MI200_V1.md` |
 | T14 平台数据（第一档） | 完成（⏸ 等用户确认） | 10-16 | 7 项 × 3 套配置（hpca、mi300x、mi200）跑完；摘要表见“结果摘要”，CSV 在 `results_index/platform/`、`results_index/platform_mi200/` |
-| T15 oracle 上限实验 | ⏸ 等 mi200 冻结 | 10-16 | P09 第 1 步：mi200 还没冻结，按规定停下来问用户（MSHR 改不改会影响 T15 是否要重跑） |
+| T15 oracle 上限实验 | ⏸ 配置确认，等用户 | 10-16 | 用冻结版 `isca27-mi200-v1`；6 组 × 14 个 workload = 84 个运行，见“需要用户决定” |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
 
 <!-- 每条格式：- [ ] (T#) 问题 —— 可选方案 A / B，推荐 X，理由 -->
-- [ ] (P08/T13) **mi200 冻结（`isca27-mi200-v1`）和每 slice MSHR 32 → 128**。验证清单见“结果摘要 → mi200 验证”（1–4、6 通过，5 是 HBM 31%，7 冻结时写）。**MSHR 改动的影响范围（P08 d）**：只改 `akkalat/baseline/runner/gpm_preset.go` 里 mi200 预设的 `L2MSHRPerBank`（hpca 是 64、mi300x 是 16，都不受影响，旧结果仍可复现）；HBM 读预计从 74 升到约 111 B/周期（31% → 46%，10-15 诊断 v1）。**改了就要重跑全部已完成的 mi200 结果**：短片段 ablation（70 个，kmeans 单个 11–13 小时）、可复现检查（4）、LLM 算子（110）、数据放置（14，远程比例应基本不变但延迟会变）、T14 平台测量（29）；在 yss3 上约一天（受 kmeans 限制）。T15 也要在改完之后跑。可选方案 —— **A** 保持 32 冻结 / **B** 改 128 后重跑再冻结。由用户决定（D21 暂定 A）。
+- [ ] (T15) **配置确认（CONFIG.md 第 3 节；mi200 冻结版 `isca27-mi200-v1`）**。
+  - **运行方式**：用 runall2（`--remote-ablation --configs=baseline --gpm-preset=mi200 --max-wg=32768`，spmv 1536），oracle 的改动用 `--extra-benchmark-flags` 加在命令末尾（同名参数以后者为准）。**不用 `isca27_run.sh` + 配置文件**：`mi200.json` 只有 14 个参数，没有写 CuPath 各机制的开关，而模拟器有些机制默认是开的（如 `-remote-data-path-l2-enable` 默认 true），那样跑出来的 B 不是 baseline。runall2 的 baseline 显式关掉全部机制，和 10-15 ablation 的 baseline 参数逐个相同。
+  - **共同参数**（6 组都一样）：10-15 mi200 ablation 的 baseline 命令（`-timing -num-memory-banks=8 -l1v-mshr-entries=16 -l1v-max-concurrent-trans=16 -bandwidth=48 -switch-latency=32 -rdma-pipeline-width=8 -rdma-pipeline-latency=10 -rdma-max-outstanding=64 -magic-memory-copy -report-all -gpm-preset=mi200 -l2-cache-size-mb=2 -mmutlb-lookup-latency=80`，加上 runall2 baseline 的全部机制关闭开关）+ 统计开关 `-report-l2-source -l2-source-tile-width=7`（只加统计，不改配置）。
+  - **6 组**（相对 `mi200.json` 的差异；没有改 mi200 或 hpca 的任何数值，oracle 是有意偏离的分析实验）：
+
+    | 组 | 额外参数 | 和 mi200.json 的差异 |
+    |---|---|---|
+    | B | （无） | 无 |
+    | O1 | `-force-local-data-access` | L1V miss 一律走本地 L2/DRAM；地址转换和非 L1V 的访存不变（远程地址转换没有去掉） |
+    | O2a | `-l1v-mshr-entries=256 -l1v-max-concurrent-trans=256` | L1V 每 CU 在途 16 → 256 |
+    | O2b | `-rdma-max-outstanding=4096 -rdma-pipeline-width=64` | RDMA 在途 64 → 4096，流水线宽度 8 → 64 |
+    | O2 | O2a + O2b | 两者 |
+    | O3 | `-switch-latency=1` | 每跳 32 → 1 周期（RDMA 端点固定的 10 周期等仍在） |
+
+  - **按诊断 A 是否调整 O2a/O2b**：不调整。诊断 A 显示 L1V 在途 16/32/64 对 L2 带宽没有影响，256 已远超；远程带宽到 RDMA 256 仍线性增长、没有饱和点，4096 是 T15 的原值，比测到的范围大 16 倍。
+  - **运行个数和时间**：14 × 6 = **84 个**。按 10-15 baseline 的实测耗时分两台：**yss3（长）**：kmeans（12.5 小时）、matrixtranspose（3.8 小时）、matrixmultiplication（1.9 小时）、aes（1.7 小时）、pagerank（1.5 小时）× 6 = 30 个，16 个并行，墙钟约 13 小时（受 kmeans 限制）；**yss2（短，内存条有故障，只放短的）**：fir、fft、fwt、im2col、simpleconvolution、floydwarshall、spmv、bitonicsort、relu × 6 = 54 个，每个 2–55 分钟，墙钟约 1.5 小时。oracle 组的耗时可能不同（O1/O2/O3 多半更快）。yss2 上因硬件故障失败的，挪到 yss3 重跑。
+  - **kmeans**：T15 说“短片段也太慢就先报告”：baseline 单个 12.5 小时。建议照跑（6 个并行，不影响其他 workload 的完成时间）；或者把 kmeans 降到 `-max-wg 8192`（约 3 小时），但那样就不能和 10-15 的 m2/Complete（32768）直接比，需要补跑。
+  - **有效性检查**：每格和 B 比较 kernel 数（从进度输出数）、完成的 WG 数（`cu_wg_count` 合计）、总指令数（`cu_inst_count` 合计），差异 > 1% 的标为“oracle 无效”。另外 B 应该和 10-15 的 baseline 完全相同（只多了统计开关），可以顺便确认。
+  - **结果目录**：`results/1016_diag_oracle-<组>_mi200_<commit>/`（runall2 campaign，每组一个）。
+
+- [x] (P08/T13) **用户 10-16 决定：保持 MSHR 32，现在冻结。** 已打标签 `isca27-mi200-v1`（`67f1c03`）。原问题：**mi200 冻结（`isca27-mi200-v1`）和每 slice MSHR 32 → 128**。验证清单见“结果摘要 → mi200 验证”（1–4、6 通过，5 是 HBM 31%，7 冻结时写）。**MSHR 改动的影响范围（P08 d）**：只改 `akkalat/baseline/runner/gpm_preset.go` 里 mi200 预设的 `L2MSHRPerBank`（hpca 是 64、mi300x 是 16，都不受影响，旧结果仍可复现）；HBM 读预计从 74 升到约 111 B/周期（31% → 46%，10-15 诊断 v1）。**改了就要重跑全部已完成的 mi200 结果**：短片段 ablation（70 个，kmeans 单个 11–13 小时）、可复现检查（4）、LLM 算子（110）、数据放置（14，远程比例应基本不变但延迟会变）、T14 平台测量（29）；在 yss3 上约一天（受 kmeans 限制）。T15 也要在改完之后跑。可选方案 —— **A** 保持 32 冻结 / **B** 改 128 后重跑再冻结。由用户决定（D21 暂定 A）。
 - [ ] (P08 a) **m3（Remote Reuse）在 kernel 边界没有失效，和论文 IV-C 不一致**（代码位置见“规格与代码的差异”）。影响：m3 的收益对多 kernel 的 workload 可能偏乐观（floydwarshall、kmeans、pagerank 等多次迭代）；owner 后续 kernel 写了的数据，请求方可能读到旧值（timing 模式不做 verify，查不出来）；T8（写签名选择性失效）在模拟器里目前没有可优化的对象。可选方案 —— **A** 实现 kernel 边界失效（只失效请求方 L2 里来自远程的 line），重跑 m3/Complete / **B** 改论文描述，说明实现不失效并论证安全性 / **C** 两者都做，A 作为主结果、B 的数字作为“不失效的上限”。推荐 A（论文的说法和审稿人对一致性的关注都需要它）；需要改模拟器，等用户决定后再开任务。
 - [ ] (P08 b) **B1 对照 baseline（远程数据总进请求方 L2，不改默认）的工作量**：代码约 1–2 天——在 `mgpusim/timing/rdma/remote_requester.go` 加一个开关，绕过 m3 的“值得复用”判断，每个远程响应都按普通 LRU 填进请求方 L2；T3 的 B1 规格要求“在 kernel 边界和同步点失效”，这正是 (a) 缺的那部分，两者共用同一套失效实现。模拟时间：主结果加 1 列 = 每个 workload 多 1 个运行（+20%）；mi200 短片段下中位数约 48 分钟，kmeans 约 12 小时，16 个并行位置下墙钟约多半天。需要用户决定是否加入主结果。
 - [ ] (P08 c) **数据放置的候选修正（只给方案，没实现）**。诊断 C 的新发现：**没有小于 192 KB 的 workload buffer**（每个 workload 的 buffer 都是几百 MB，见结果摘要），被整个放在 GPM 1 的小块是运行时分配（kernarg、code object 等，每个程序约 144 次、合计 < 100 KB），它们解释了 aes/fir/simpleconvolution 的 0.1–1.8% 远程读（100% 来自 GPM 1）。真正的大问题是 **WG 段和页段错开**（kmeans：hpca 0% → mi200 42.9% 远程读，baseline 慢 3.7 倍）。候选：**P1** WG 段和页段按同一规则切分（页段按每个 GPM 的 CU 数占比切，而不是 48 等分）——只影响 CU 数不同或不整除的配置；hpca 每 GPM 32 CU、48 等分时两者本来就对齐，旧结果可复现（需要回归确认）。**P2** 运行时的小分配（kernarg 等）放在发起 kernel 的 GPM 上，或复制到每个 GPM——改变 hpca 的 0.1–1.8% 远程读，hpca 旧结果不能逐位复现（加开关、hpca 默认关）。**P3** 小 buffer（< 48 页）按页交错——现有 workload 没有这种 buffer，对旧结果没有影响，只对 T10 的新负载有意义。推荐 P1（对 mi200 影响最大、对 hpca 无影响）；是否作为 baseline 的一部分还是作为可优化的点（用户 10-14：“保持现状，这也算一个可以优化的点”），由用户决定。
@@ -841,3 +861,8 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 - **mi200 的新观察**（详见 `~/Desktop/CuPath/mi200_findings_2026-10-16.md`，用户要求整理给后续讨论）：Local Pairing 在 mi200 上失效的原因（合并后的 128 B 请求到 DRAM 又被拆开，行激活次数 ×1.00，hpca 是 ×0.48–0.59）；kmeans 的放置错位；LLM attention 的 m3 收益（attn_score 9.5×）；L2 变小后 floydwarshall 的 m3 从 1.06× 变成 0.95×。
 - **T15 停在第 1 步**：mi200 还没冻结（`isca27-mi200-v1` 不存在），按 P09 停下来问用户；每 slice MSHR 是否改为 128 也还没定（见“需要用户决定”）。配置确认（第 2 步）等冻结后再做。按诊断 A，O2a（L1V 256）、O2b（RDMA 4096）都明显超过饱和点，可以用 T15 的原值。
 - 另外（不属于 P08/P09，用户在 10-15 到 10-16 要求的工具工作，不影响实验）：监控网页改成 akita 风格；做了通用的 `akita exp` 工具（akita v5 的本地分支 `exp-tool`，没有推送，中英文说明书在 `experiment/MANUAL*.md`）。
+
+### 2026-10-16 (T13/T15) mi200 冻结；T15 配置确认（⏸ 等用户）
+
+- **用户 10-16 决定：保持每 slice 32 个 MSHR，现在冻结。** 标签 `isca27-mi200-v1` 打在 `67f1c03`（验证用的提交）上，只在本地（规则是只推送任务分支，标签推不推送等用户）。`61b6ae8`：`config_deviation` 改为相对 `configs/mi200.json`（`meta.json` 记录 `deviation_base`），`isca27_config.py --base configs/hpca.json` 仍给出相对投稿版的差异；新增 3 个单元测试；冻结说明 `akkalat/configs/MI200_V1.md`（验证、有意的弱化、HBM 诊断）。**给 Cowork**：`CONFIG.md` 的“有效论文配置”可以改为 mi200（D19）了。
+- **T15 配置确认**：见“需要用户决定”。发现 `mi200.json` 不含 CuPath 各机制的开关（模拟器有的默认开），所以 T15 用 runall2 的 baseline 加 `--extra-benchmark-flags`，不用配置文件。
