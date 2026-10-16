@@ -5,6 +5,7 @@ import (
 
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
+	"github.com/sarchlab/akita/v3/sim"
 )
 
 func TestPeekDirty(t *testing.T) {
@@ -34,11 +35,11 @@ func TestPeekDirty(t *testing.T) {
 		evictingPID: 1, evictingAddr: 0x1080, evictingData: bytesOf(64, 0xcc),
 	}}
 	c.writeBuffer.pendingEvictions = []*transaction{{
-		evictingPID: 2, evictingAddr: 0x1080, evictingData: bytesOf(64, 0xdd), // other PID
+		evictingPID: 0, evictingAddr: 0x1100, evictingData: bytesOf(64, 0xdd), // out of range
 	}}
 
 	buf := bytesOf(0xc0, 0x11) // [0x1000, 0x10c0)
-	c.PeekDirty(1, 0x1000, buf)
+	c.PeekDirty(0x1000, buf)
 	for i, b := range buf {
 		want := byte(0x11)
 		switch {
@@ -54,14 +55,14 @@ func TestPeekDirty(t *testing.T) {
 
 	// unaligned window inside a dirty line
 	small := bytesOf(2, 0)
-	c.PeekDirty(1, 0x1002, small)
+	c.PeekDirty(0x1002, small)
 	if small[0] != 0xaa || small[1] != 0 {
 		t.Fatalf("window %v", small)
 	}
 	// directory block wins over an older eviction of the same line
 	fill(0x1080, true, nil, 0xee)
 	line := bytesOf(64, 0)
-	c.PeekDirty(1, 0x1080, line)
+	c.PeekDirty(0x1080, line)
 	if line[0] != 0xee || line[63] != 0xee {
 		t.Fatalf("dirty block not preferred: %#x", line[0])
 	}
@@ -73,7 +74,7 @@ func TestPeekDirty(t *testing.T) {
 	if c.mayHold(0x1000) || !c.mayHold(0x1040) {
 		t.Fatal("wrong slice ownership")
 	}
-	c.PeekDirty(1, 0x1000, bytesOf(128, 0))
+	c.PeekDirty(0x1000, bytesOf(128, 0))
 }
 
 func bytesOf(n int, v byte) []byte {
@@ -82,4 +83,46 @@ func bytesOf(n int, v byte) []byte {
 		b[i] = v
 	}
 	return b
+}
+
+// TestPeekDirtyPhysicalLinesWithPIDZero reproduces the timing-mode failure of
+// coherent magic copies: an L2 slice built like the mi200 GPM L2 holds a
+// line written through the address translator, which issues physical
+// requests with PID 0, while the driver copies for the context's PID (1).
+// The line must be found by its physical address.
+func TestPeekDirtyPhysicalLinesWithPIDZero(t *testing.T) {
+	const slices, slice = 8, 3
+	c := MakeBuilder().
+		WithEngine(sim.NewSerialEngine()).
+		WithFreq(1*sim.GHz).
+		WithLog2BlockSize(6).
+		WithWayAssociativity(16).
+		WithByteSize(256*1024).
+		WithInterleaving(2, slices, slice). // 128 B per slice
+		Build("L2")
+
+	addr := uint64(0x200007000 + slice*128 + 64) // second line of the slice
+	write := mem.WriteReqBuilder{}.
+		WithAddress(addr).
+		WithPID(0). // as issued by the address translator
+		WithData(bytesOf(64, 0x5a)).
+		Build()
+	block := c.directory.FindVictim(addr)
+	block.Tag, block.PID, block.IsValid, block.IsDirty =
+		write.Address, write.PID, true, true
+	if err := c.storage.Write(block.CacheAddress, write.Data); err != nil {
+		t.Fatal(err)
+	}
+
+	page := bytesOf(4096, 0)
+	c.PeekDirty(0x200007000, page) // the whole page, all slices' lines
+	for i, b := range page {
+		want := byte(0)
+		if uint64(i) >= addr-0x200007000 && uint64(i) < addr-0x200007000+64 {
+			want = 0x5a
+		}
+		if b != want {
+			t.Fatalf("byte %#x = %#x, want %#x", i, b, want)
+		}
+	}
 }

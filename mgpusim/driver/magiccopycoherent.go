@@ -1,12 +1,12 @@
 package driver
 
-import "github.com/sarchlab/akita/v3/mem/vm"
-
 // MagicCopyPeeker is a cache that can overlay, functionally, the bytes it
 // holds that are newer than memory (dirty lines, pending write-backs) onto a
-// buffer read from memory. akita's writeback.Cache implements it.
+// buffer read from memory. addr is a physical address: caches below the
+// address translator (the L2) see physical requests with PID 0, so they
+// match lines by address only. akita's writeback.Cache implements it.
 type MagicCopyPeeker interface {
-	PeekDirty(pid vm.PID, addr uint64, buf []byte)
+	PeekDirty(addr uint64, buf []byte)
 }
 
 // RegisterMagicCopyPeekers records the caches a coherent magic D2H copy
@@ -28,11 +28,11 @@ func (d *Driver) SetMagicCopyCoherent(on bool) { d.magicCopyCoherent = on }
 // MagicCopyCoherent reports whether coherent magic D2H copies are on.
 func (d *Driver) MagicCopyCoherent() bool { return d.magicCopyCoherent }
 
-func (d *Driver) peekCachedData(pid vm.PID, pAddr uint64, buf []byte) {
+func (d *Driver) peekCachedData(pAddr uint64, buf []byte) {
 	if !d.magicCopyCoherent {
 		return
 	}
 	for _, p := range d.magicCopyPeekers {
-		p.PeekDirty(pid, pAddr, buf)
+		p.PeekDirty(pAddr, buf)
 	}
 }
