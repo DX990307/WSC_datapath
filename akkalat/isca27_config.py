@@ -7,9 +7,12 @@ command line override every file).
 
     python3 akkalat/isca27_config.py --show configs/mi300x_eighth.json
         The merged flag values.
-    python3 akkalat/isca27_config.py --deviation CONFIGS [-- benchmark args ...]
-        JSON list of differences from the paper configuration
-        (configs/hpca.json), for meta.json's config_deviation.
+    python3 akkalat/isca27_config.py [--base FILE] --deviation CONFIGS [-- benchmark args ...]
+        JSON list of differences from the base configuration, for
+        meta.json's config_deviation. The base is configs/mi200.json, the
+        frozen ISCA'27 baseline (isca27-mi200-v1, user 10-16); --base
+        configs/hpca.json gives the differences from the HPCA submission
+        as before.
 """
 
 import json
@@ -21,11 +24,13 @@ sys.path.insert(0, ROOT)
 
 from runall2_constants import GPM_PRESET_FLAGS  # noqa: E402
 
-PAPER_CONFIG = os.path.join(ROOT, "configs", "hpca.json")
+PAPER_CONFIG = os.path.join(ROOT, "configs", "hpca.json")  # the HPCA submission
+BASE_CONFIG = os.path.join(ROOT, "configs", "mi200.json")  # isca27-mi200-v1
 
 # Why a GPM preset changes the paper configuration, keyed by -gpm-preset.
 # isca27_flags.py reports the same reasons.
 PRESET_REASON = {
+    "hpca": "HPCA 投稿版的 GPM（hpca 预设：32 CU、4 个 L2/DRAM 分区）",
     "mi300x-eighth": ("T13 预设 mi300x-eighth：GPM 内部改为 1/8 MI300X（38 CU、16 个 L2/HBM channel）；"
                       "带宽按 2.1 GHz 每周期等效，延迟保持纳秒值、不做每周期等效缩放"),
     "mi200": ("T13 预设 mi200：GPM 内部改为 1/4 MI250X GCD（28 CU、8 个 L2 slice/HBM2e channel，"
@@ -76,10 +81,16 @@ def merged(config_list):
     return values
 
 
-def deviation(config_list, bench):
-    paper, used = load(PAPER_CONFIG), merged(config_list)
+def deviation(config_list, bench, base=None):
+    """Differences of config_list (plus bench args) from the base config.
+
+    The "paper" key of each entry holds the base config's value (the name is
+    kept for the readers of existing meta.json files)."""
+    paper, used = load(base or BASE_CONFIG), merged(config_list)
     preset = used.get("gpm-preset", "hpca")
-    keys = preset_keys(preset)
+    # A key that either the run's preset or the base's preset sets differs
+    # because of the preset (e.g. hpca against the mi200 base).
+    keys = preset_keys(preset) | preset_keys(paper.get("gpm-preset", "hpca"))
     out = []
     for name in sorted(set(paper) | set(used)):
         if paper.get(name) == used.get(name):
@@ -113,11 +124,14 @@ def deviation(config_list, bench):
 
 def main():
     args = sys.argv[1:]
+    base = None
+    if len(args) >= 2 and args[0] == "--base":
+        base, args = args[1], args[2:]
     if len(args) >= 2 and args[0] == "--show":
         print(json.dumps(merged(args[1]), indent=2, sort_keys=True))
     elif len(args) >= 2 and args[0] == "--deviation":
         bench = args[3:] if len(args) > 2 and args[2] == "--" else args[2:]
-        print(json.dumps(deviation(args[1], bench), ensure_ascii=False))
+        print(json.dumps(deviation(args[1], bench, base), ensure_ascii=False))
     else:
         sys.exit(__doc__)
 

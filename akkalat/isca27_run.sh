@@ -51,6 +51,8 @@ if [ ! -x "$BIN" ]; then
   (cd akkalat/baseline && go build -buildvcs=false -o "$BIN" .)
 fi
 
+# config_deviation is relative to configs/mi200.json, the frozen baseline
+# (isca27-mi200-v1); meta.json records the base as deviation_base.
 DEVIATION="$(python3 akkalat/isca27_config.py --deviation "$CONFIG_LIST" -- "${BENCH[@]}")"
 ARGS=(-config "$CONFIG_LIST" -config-out "$OUT/config_used.json" "${BENCH[@]}"
   -metric-file-name "$OUT/stats/metrics")
@@ -122,7 +124,7 @@ json.dump({
     "exp_id": exp_id, "task": task, "commit": commit, "host": host,
     "go_version": gover, "mode": "timing", "verify": False,
     "config": config_names, "gpm_preset": preset, "notes": notes,
-    "config_deviation": json.loads(deviation),
+    "config_deviation": json.loads(deviation), "deviation_base": "configs/mi200.json",
     "start": start, "end": end, "exit_code": int(rc), "args": args,
 }, open(os.path.join(out, "meta.json"), "w"), indent=2, ensure_ascii=False)
 EOF

@@ -87,7 +87,8 @@ class ISCA27ConfigTest(unittest.TestCase):
                 self.assertIn(preset, isca27_config.PRESET_REASON)
 
     def test_mi200_deviation_is_attributed_to_the_preset(self):
-        out = isca27_config.deviation(os.path.join(CONFIGS, "mi200.json"), ["-max-wg=64"])
+        out = isca27_config.deviation(os.path.join(CONFIGS, "mi200.json"), ["-max-wg=64"],
+                                      base=isca27_config.PAPER_CONFIG)
         by_flag = {d["flag"]: d for d in out}
         self.assertEqual(set(by_flag),
                          {"-gpm-preset", "-num-memory-banks", "-l2-cache-size-mb", "-max-wg 64"})
@@ -129,8 +130,21 @@ class ISCA27ConfigTest(unittest.TestCase):
                 self.assertEqual(values.get("magic-memory-copy"), "true", name)
                 self.assertNotIn("disable-servers", values, name)
 
-    def test_paper_config_has_no_deviation(self):
-        self.assertEqual(isca27_config.deviation(os.path.join(CONFIGS, "hpca.json"), []), [])
+    def test_paper_config_has_no_deviation_from_itself(self):
+        self.assertEqual(isca27_config.deviation(os.path.join(CONFIGS, "hpca.json"), [],
+                                                 base=isca27_config.PAPER_CONFIG), [])
+
+    def test_mi200_is_the_default_base(self):
+        # isca27-mi200-v1 (user 10-16): new runs are compared with mi200.json.
+        self.assertEqual(isca27_config.deviation(os.path.join(CONFIGS, "mi200.json"), []), [])
+
+    def test_hpca_against_the_mi200_base_is_attributed_to_the_preset(self):
+        out = isca27_config.deviation(os.path.join(CONFIGS, "hpca.json"), [])
+        by_flag = {d["flag"]: d for d in out}
+        self.assertEqual(set(by_flag), {"-gpm-preset", "-num-memory-banks", "-l2-cache-size-mb"})
+        for d in out:
+            self.assertEqual(d["reason"], isca27_config.PRESET_REASON["hpca"], d)
+        self.assertEqual(by_flag["-num-memory-banks"]["paper"], "8")
 
 
 if __name__ == "__main__":
