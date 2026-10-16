@@ -16,7 +16,7 @@ func TestSampleBlocks(t *testing.T) {
 	seeds := []int32{1, 5, 9, 40, 77}
 	fan := []int{4, 2}
 	s := SampleBlocks(g, "paper", seeds, fan, rng)
-	m := NewModel(s, g.FeatDim, 64, 1)
+	m := NewModel(s, g.FeatDim, 64, 1, 1)
 	if err := s.Check(g, m); err != nil {
 		t.Fatal(err)
 	}
@@ -79,32 +79,61 @@ func TestSampleBlocks(t *testing.T) {
 func TestReferenceAttentionFactorisation(t *testing.T) {
 	g := SyntheticIGBH(200, 32, 5)
 	s := SampleBlocks(g, "paper", []int32{3, 4}, []int{3, 2}, rand.New(rand.NewSource(2)))
-	m := NewModel(s, g.FeatDim, 64, 2)
 	feat := func(tp string, id int32) []float32 {
 		r := make([]float32, g.FeatDim)
 		g.Feats[tp].Row(int(id), r)
 		return r
 	}
-	ref := Reference(s, m, feat)
-	b := s.Blocks[0][0]
-	k := [2]int{0, b.Rel}
-	x := feat(b.DstType, b.DstNodes[0])
-	a, c := 0.0, 0.0
-	for i := range x {
-		a += float64(x[i]) * float64(m.V[k][i])
-	}
-	for h := 0; h < m.Hidden; h++ {
-		p := 0.0
-		for i := range x {
-			p += float64(x[i]) * float64(m.W[k][i*m.Hidden+h])
+	for _, heads := range []int{1, 2, 4} {
+		m := NewModel(s, g.FeatDim, 128, heads, 2)
+		ref := Reference(s, m, feat)
+		b := s.Blocks[0][0]
+		k := [2]int{0, b.Rel}
+		x := feat(b.DstType, b.DstNodes[0])
+		d := m.Hidden / heads
+		if len(m.V[k]) != heads*len(x) {
+			t.Fatalf("heads %d: len(V) = %d", heads, len(m.V[k]))
 		}
-		c += p * float64(m.AR[k][h])
+		for hd := 0; hd < heads; hd++ {
+			a, c := 0.0, 0.0
+			for i := range x {
+				a += float64(x[i]) * float64(m.V[k][hd*len(x)+i])
+			}
+			for h := hd * d; h < (hd+1)*d; h++ {
+				p := 0.0
+				for i := range x {
+					p += float64(x[i]) * float64(m.W[k][i*m.Hidden+h])
+				}
+				c += p * float64(m.AR[k][h])
+			}
+			if math.Abs(a-c) > 1e-4 {
+				t.Fatalf("heads %d head %d: x.v = %g, (xW).a = %g", heads, hd, a, c)
+			}
+		}
+		if len(ref[1]["paper"]) != 2*m.Hidden {
+			t.Fatalf("output size %d", len(ref[1]["paper"]))
+		}
 	}
-	if math.Abs(a-c) > 1e-4 {
-		t.Fatalf("x.v = %g, (xW).a = %g", a, c)
+}
+
+// TestReferenceHeadsDiffer checks that the heads have their own attention:
+// with more than one head the outputs differ from the single-head ones.
+func TestReferenceHeadsDiffer(t *testing.T) {
+	g := SyntheticIGBH(200, 32, 5)
+	s := SampleBlocks(g, "paper", []int32{3, 4, 5}, []int{5, 3}, rand.New(rand.NewSource(2)))
+	feat := func(tp string, id int32) []float32 {
+		r := make([]float32, g.FeatDim)
+		g.Feats[tp].Row(int(id), r)
+		return r
 	}
-	if len(ref[1]["paper"]) != 2*m.Hidden {
-		t.Fatalf("output size %d", len(ref[1]["paper"]))
+	one := Reference(s, NewModel(s, g.FeatDim, 128, 1, 2), feat)[1]["paper"]
+	four := Reference(s, NewModel(s, g.FeatDim, 128, 4, 2), feat)[1]["paper"]
+	diff := 0.0
+	for i := range one {
+		diff = math.Max(diff, math.Abs(one[i]-four[i]))
+	}
+	if diff < 1e-6 {
+		t.Fatal("4-head output equals the single-head output")
 	}
 }
 

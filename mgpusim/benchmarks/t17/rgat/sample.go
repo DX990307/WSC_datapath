@@ -170,18 +170,22 @@ func SampleBlocks(g *Graph, seedType string, seeds []int32, fanouts []int, rng *
 	return s
 }
 
-// Model holds the per-layer, per-relation weights (single attention head).
+// Model holds the per-layer, per-relation weights. Hidden is the projected
+// width with the heads concatenated (GATConv concat=True): head hd owns the
+// columns [hd*d, (hd+1)*d), d = Hidden/Heads, and its attention vectors are
+// those columns of AL and AR.
 type Model struct {
 	Hidden int
+	Heads  int
 	FIn    []int                // per layer
 	W      map[[2]int][]float32 // (layer, relation) -> [FIn][Hidden]
 	AL, AR map[[2]int][]float32 // attention vectors [Hidden]
-	V      map[[2]int][]float32 // W . AR, [FIn]
+	V      map[[2]int][]float32 // per head W[:,head] . AR[head], [Heads][FIn]
 }
 
 // NewModel draws uniform weights with variance 1/fan_in for every block.
-func NewModel(s *Sample, featDim, hidden int, seed int64) *Model {
-	m := &Model{Hidden: hidden, W: map[[2]int][]float32{}, AL: map[[2]int][]float32{},
+func NewModel(s *Sample, featDim, hidden, heads int, seed int64) *Model {
+	m := &Model{Hidden: hidden, Heads: heads, W: map[[2]int][]float32{}, AL: map[[2]int][]float32{},
 		AR: map[[2]int][]float32{}, V: map[[2]int][]float32{}}
 	for l := range s.Blocks {
 		fin := featDim
@@ -204,13 +208,16 @@ func NewModel(s *Sample, featDim, hidden int, seed int64) *Model {
 				al[i] = float32((rng.Float64()*2 - 1) * aa)
 				ar[i] = float32((rng.Float64()*2 - 1) * aa)
 			}
-			v := make([]float32, fin)
-			for i := 0; i < fin; i++ {
-				s := 0.0
-				for c := 0; c < hidden; c++ {
-					s += float64(w[i*hidden+c]) * float64(ar[c])
+			d := hidden / heads
+			v := make([]float32, heads*fin)
+			for hd := 0; hd < heads; hd++ {
+				for i := 0; i < fin; i++ {
+					s := 0.0
+					for c := hd * d; c < (hd+1)*d; c++ {
+						s += float64(w[i*hidden+c]) * float64(ar[c])
+					}
+					v[hd*fin+i] = float32(s)
 				}
-				v[i] = float32(s)
 			}
 			m.W[k], m.AL[k], m.AR[k], m.V[k] = w, al, ar, v
 		}
@@ -257,45 +264,49 @@ func Reference(s *Sample, m *Model, feat func(t string, id int32) []float32) []m
 				}
 			}
 			out := outs[l][b.DstType]
+			d := H / m.Heads
 			for i := range b.DstNodes {
 				xd := input(b.DstType, b.DstRows[i], b.DstNodes[i])
-				er := 0.0
-				for c := 0; c < H; c++ {
-					hd := 0.0
-					for q := 0; q < fin; q++ {
-						hd += xd[q] * float64(w[q*H+c])
-					}
-					er += hd * float64(ar[c])
-				}
 				beg, end := b.RowPtr[i], b.RowPtr[i+1]
-				sc := make([]float64, end-beg)
-				mx := math.Inf(-1)
-				for e := beg; e < end; e++ {
-					el := 0.0
-					for c := 0; c < H; c++ {
-						el += h[b.ColIdx[e]][c] * float64(al[c])
-					}
-					v := el + er
-					if v < 0 {
-						v *= 0.2
-					}
-					sc[e-beg] = v
-					mx = math.Max(mx, v)
-				}
-				sum := 0.0
-				for q := range sc {
-					sc[q] = math.Exp(sc[q] - mx)
-					sum += sc[q]
-				}
 				row := out[i*H : (i+1)*H]
 				if !b.UseAcc {
 					for c := range row {
 						row[c] = 0
 					}
 				}
-				for e := beg; e < end; e++ {
-					for c := 0; c < H; c++ {
-						row[c] += sc[e-beg] / sum * h[b.ColIdx[e]][c]
+				for hd := 0; hd < m.Heads; hd++ {
+					c0, c1 := hd*d, (hd+1)*d
+					er := 0.0
+					for c := c0; c < c1; c++ {
+						p := 0.0
+						for q := 0; q < fin; q++ {
+							p += xd[q] * float64(w[q*H+c])
+						}
+						er += p * float64(ar[c])
+					}
+					sc := make([]float64, end-beg)
+					mx := math.Inf(-1)
+					for e := beg; e < end; e++ {
+						el := 0.0
+						for c := c0; c < c1; c++ {
+							el += h[b.ColIdx[e]][c] * float64(al[c])
+						}
+						v := el + er
+						if v < 0 {
+							v *= 0.2
+						}
+						sc[e-beg] = v
+						mx = math.Max(mx, v)
+					}
+					sum := 0.0
+					for q := range sc {
+						sc[q] = math.Exp(sc[q] - mx)
+						sum += sc[q]
+					}
+					for e := beg; e < end; e++ {
+						for c := c0; c < c1; c++ {
+							row[c] += sc[e-beg] / sum * h[b.ColIdx[e]][c]
+						}
 					}
 				}
 				if b.Act {

@@ -82,10 +82,12 @@ var (
 	rgatDataFlag    = flag.String("rgat-data", "", "rgat: IGBH directory (e.g. .../igbh/tiny); empty = synthetic graph")
 	rgatSeedsFlag   = flag.Int("rgat-seeds", rgatDefaults.Seeds, "rgat: paper seed nodes in the mini-batch")
 	rgatFanoutsFlag = flag.String("rgat-fanouts", "10,5", "rgat: per-relation fanouts, input layer first")
-	rgatHiddenFlag  = flag.Int("rgat-hidden", rgatDefaults.Hidden, "rgat: hidden dimension (multiple of 64)")
-	rgatSeedFlag    = flag.Int64("rgat-seed", rgatDefaults.Seed, "rgat: sampling and weight seed")
-	rgatPapersFlag  = flag.Int("rgat-synth-papers", rgatDefaults.SynthPapers, "rgat: synthetic graph papers")
-	rgatDimFlag     = flag.Int("rgat-synth-dim", rgatDefaults.SynthDim, "rgat: synthetic feature dimension")
+	rgatHiddenFlag  = flag.Int("rgat-hidden", rgatDefaults.Hidden, "rgat: hidden dimension, all heads concatenated (multiple of 64)")
+	rgatHeadsFlag   = flag.Int("rgat-heads", rgatDefaults.Heads,
+		"rgat: attention heads (GATConv concat); each head takes rgat-hidden/rgat-heads columns")
+	rgatSeedFlag   = flag.Int64("rgat-seed", rgatDefaults.Seed, "rgat: sampling and weight seed")
+	rgatPapersFlag = flag.Int("rgat-synth-papers", rgatDefaults.SynthPapers, "rgat: synthetic graph papers")
+	rgatDimFlag    = flag.Int("rgat-synth-dim", rgatDefaults.SynthDim, "rgat: synthetic feature dimension")
 )
 
 func newRGAT(d *driver.Driver) *rgat.Benchmark {
@@ -97,6 +99,7 @@ func newRGAT(d *driver.Driver) *rgat.Benchmark {
 		Seeds:       *rgatSeedsFlag,
 		Fanouts:     parseInts(*rgatFanoutsFlag),
 		Hidden:      *rgatHiddenFlag,
+		Heads:       *rgatHeadsFlag,
 		Seed:        *rgatSeedFlag,
 	}
 	return b

@@ -55,11 +55,12 @@ type ProjArgs struct {
 
 // AggArgs are the arguments of rgat_agg.
 type AggArgs struct {
-	HSrc, XDst, DstIDs, RowPtr, ColIdx, AttnL, VR, Out driver.Ptr
-	FIn, FH, UseAcc, Act                               int32
-	HiddenGlobalOffsetX                                int64
-	HiddenGlobalOffsetY                                int64
-	HiddenGlobalOffsetZ                                int64
+	HSrc, XDst, DstIDs, RowPtr, ColIdx, AttnL, VR, Prev, Out driver.Ptr
+	FIn, FH, UseAcc, Act                                     int32
+	Heads, Padding                                           int32
+	HiddenGlobalOffsetX                                      int64
+	HiddenGlobalOffsetY                                      int64
+	HiddenGlobalOffsetZ                                      int64
 }
 
 // Params are the size knobs.
@@ -69,14 +70,15 @@ type Params struct {
 	SynthDim    int    // synthetic feature dimension
 	Seeds       int
 	Fanouts     []int // input layer first
-	Hidden      int
+	Hidden      int   // projected width, all heads concatenated
+	Heads       int   // attention heads; each takes Hidden/Heads columns
 	Seed        int64
 }
 
 // DefaultParams returns a small synthetic default.
 func DefaultParams() Params {
 	return Params{SynthPapers: 2000, SynthDim: 128, Seeds: 32, Fanouts: []int{10, 5},
-		Hidden: 64, Seed: 1}
+		Hidden: 64, Heads: 1, Seed: 1}
 }
 
 // Benchmark is the R-GAT benchmark.
@@ -128,6 +130,9 @@ func Prepare(pr Params) (*Graph, *Sample, *Model, error) {
 	if pr.Hidden <= 0 || pr.Hidden%TileN != 0 {
 		return nil, nil, nil, fmt.Errorf("rgat: hidden %d must be a multiple of %d", pr.Hidden, TileN)
 	}
+	if pr.Heads < 1 || pr.Hidden%pr.Heads != 0 {
+		return nil, nil, nil, fmt.Errorf("rgat: heads %d must divide hidden %d", pr.Heads, pr.Hidden)
+	}
 	var g *Graph
 	var err error
 	if pr.DataDir != "" {
@@ -155,7 +160,7 @@ func Prepare(pr Params) (*Graph, *Sample, *Model, error) {
 		seeds[i] = int32(v)
 	}
 	s := SampleBlocks(g, "paper", seeds, pr.Fanouts, rng)
-	m := NewModel(s, g.FeatDim, pr.Hidden, pr.Seed)
+	m := NewModel(s, g.FeatDim, pr.Hidden, pr.Heads, pr.Seed)
 	if err := s.Check(g, m); err != nil {
 		return nil, nil, nil, err
 	}
@@ -244,10 +249,12 @@ func (b *Benchmark) Run() {
 	}
 	b.outs = make([]map[string]driver.Ptr, len(s.Blocks))
 	for l := range s.Blocks {
+		// Every relation writes its own output buffer: out_r = out_{r-1} +
+		// its contribution (the previous relation's buffer is passed as
+		// prev). No buffer is read before a kernel writes it, so no L1V
+		// can hold a stale line of it: with magic copies the timing model
+		// never invalidates the L1 caches between kernels.
 		b.outs[l] = map[string]driver.Ptr{}
-		for _, t := range sortedTypes(s.Dst[l]) {
-			b.outs[l][t] = b.alloc(4*len(s.Dst[l][t])*H, fmt.Sprintf("rgat_out%d_%s", l, t))
-		}
 		input := func(t string) driver.Ptr {
 			if l == 0 {
 				return tables[t]
@@ -266,6 +273,12 @@ func (b *Benchmark) Run() {
 			dAL := b.upload(nm+"_attn_l", m.AL[k], len(m.AL[k]))
 			dV := b.upload(nm+"_v", m.V[k], len(m.V[k]))
 			dH := b.alloc(4*len(blk.SrcNodes)*H, nm+"_h")
+			prev := driver.Ptr(0)
+			if blk.UseAcc {
+				prev = b.outs[l][blk.DstType]
+			}
+			dOut := b.alloc(4*len(s.Dst[l][blk.DstType])*H, nm+"_out")
+			b.outs[l][blk.DstType] = dOut
 
 			ntn := H / TileN
 			nProj := (len(blk.SrcNodes) + TileM - 1) / TileM * ntn
@@ -274,8 +287,9 @@ func (b *Benchmark) Run() {
 			b.driver.EnqueueLaunchKernel(q, b.proj, [3]uint32{uint32(nProj * wgSize), 1, 1},
 				[3]uint16{wgSize, 1, 1}, &pa)
 			aa := AggArgs{HSrc: dH, XDst: input(blk.DstType), DstIDs: dDst, RowPtr: dPtr,
-				ColIdx: dCol, AttnL: dAL, VR: dV, Out: b.outs[l][blk.DstType],
-				FIn: int32(fin), FH: int32(H), UseAcc: b2i(blk.UseAcc), Act: b2i(blk.Act)}
+				ColIdx: dCol, AttnL: dAL, VR: dV, Prev: prev, Out: dOut,
+				FIn: int32(fin), FH: int32(H), UseAcc: b2i(blk.UseAcc), Act: b2i(blk.Act),
+				Heads: int32(m.Heads)}
 			b.driver.EnqueueLaunchKernel(q, b.agg, [3]uint32{uint32(len(blk.DstNodes) * wgSize), 1, 1},
 				[3]uint16{wgSize, 1, 1}, &aa)
 			b.launch = append(b.launch, launchInfo{"proj_" + nm[5:], nProj},
@@ -334,8 +348,9 @@ func (b *Benchmark) report(touched map[string][]int32) {
 		fan[i] = fmt.Sprint(f)
 	}
 	fmt.Printf("RGAT,config,graph=%s,types=%d,relations=%d,edges=%d,feat_dim=%d,seeds=%d,"+
-		"fanouts=%s,hidden=%d,heads=1,seed=%d\n", g.Name, len(g.Types), len(g.Rels),
-		g.NumEdges(), g.FeatDim, pr.Seeds, strings.Join(fan, ":"), m.Hidden, pr.Seed)
+		"fanouts=%s,hidden=%d,heads=%d,head_dim=%d,seed=%d\n", g.Name, len(g.Types), len(g.Rels),
+		g.NumEdges(), g.FeatDim, pr.Seeds, strings.Join(fan, ":"), m.Hidden, m.Heads,
+		m.Hidden/m.Heads, pr.Seed)
 	for l := range s.Blocks {
 		var parts []string
 		edges, srcRows := 0, 0

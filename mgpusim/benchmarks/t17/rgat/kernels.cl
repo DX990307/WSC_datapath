@@ -4,15 +4,23 @@
 //
 //   rgat_proj  WG per (32 sampled source rows, 64 output columns):
 //              h_r[k] = x_src[src_ids[k]] . W_r     (gather + projection)
-//   rgat_agg   WG per destination node i of the block:
-//              er    = x_dst[dst_ids[i]] . v_r      (v_r = W_r a_r, host)
-//              el_j  = h_r[j] . a_l                 for sampled neighbours j
+//   rgat_agg   WG per destination node i of the block, for every head
+//              hd (columns C_hd = [hd*d, (hd+1)*d), d = f_h / heads):
+//              er    = x_dst[dst_ids[i]] . v_r[hd]  (v_r[hd] = W_r[:,C_hd]
+//                                                    a_r[C_hd], host)
+//              el_j  = h_r[j][C_hd] . a_l[C_hd]     for sampled neighbours j
 //              e_ij  = LeakyReLU(el_j + er, 0.2), softmax over j
-//              out[i] = (acc ? out[i] : 0) + sum_j alpha_ij h_r[j]
-//              (ReLU on the last relation of a hidden layer)
+//              out[i][C_hd] = (acc ? prev[i][C_hd] : 0)
+//                             + sum_j alpha_ij h_r[j][C_hd]
+//              (ReLU on the last relation of a hidden layer; the heads are
+//              concatenated, GATConv concat=True)
 //
-// The relations into one destination type run one after another and add
-// into the same output rows (each row is read and written by its own WG).
+// The relations into one destination type run one after another; each
+// writes its own output buffer, prev = the previous relation's (each row is
+// read and written by its own WG). No buffer is read before it is written:
+// with magic copies the timing model never invalidates the L1 caches
+// between kernels, so a read-modify-write of one buffer across kernels
+// could hit a stale L1V line.
 //
 // Simulator rules (T17): no atomics, no private arrays, only implemented DS
 // opcodes, fp32. 32-bit element offsets (every buffer < 2^32 elements; the
@@ -26,6 +34,19 @@
 #define LOG2E 1.4426950408889634f
 #define IDX(a, b) ((uint)(a) * (uint)(b))
 #define LOCAL_ID ((int)__builtin_amdgcn_workitem_id_x())
+// Store 8 floats as four 8-byte stores. Two 16-byte stores make clang
+// insert "s_nop 0" (fiji store-data hazard), which hangs the timing CU
+// (check_hsaco.sh); the empty asm keeps the stores from being merged.
+#define STORE8(o, a, b, c, d, e, f, g, h)            \
+  do {                                               \
+    vstore2((float2)(a, b), 0, (o));                 \
+    __asm__ volatile("" ::: "memory");               \
+    vstore2((float2)(c, d), 0, (o) + 2);             \
+    __asm__ volatile("" ::: "memory");               \
+    vstore2((float2)(e, f), 0, (o) + 4);             \
+    __asm__ volatile("" ::: "memory");               \
+    vstore2((float2)(g, h), 0, (o) + 6);             \
+  } while (0)
 
 __kernel __attribute__((reqd_work_group_size(256, 1, 1)))
 void rgat_proj(__global const float *x,
@@ -90,8 +111,7 @@ void rgat_proj(__global const float *x,
   }
   if (row0 + r < n_rows) {
     __global float *o = h + IDX(row0 + r, f_out) + n0 + c0;
-    vstore4((float4)(y0, y1, y2, y3), 0, o);
-    vstore4((float4)(y4, y5, y6, y7), 0, o + 4);
+    STORE8(o, y0, y1, y2, y3, y4, y5, y6, y7);
   }
 }
 
@@ -103,11 +123,13 @@ void rgat_agg(__global const float *h_src,
               __global const int *col_idx,
               __global const float *attn_l,
               __global const float *v_r,
+              __global const float *prev,
               __global float *out,
               const int f_in,
               const int f_h,
               const int use_acc,
-              const int act) {
+              const int act,
+              const int heads) {
   // one LDS array, score at offset 0 (see build_hsaco.sh)
   __local float lds[MAXDEG + 320 + 64 * MAXDEG];
   __local float *score = lds;               // [MAXDEG]
@@ -124,79 +146,87 @@ void rgat_agg(__global const float *h_src,
     deg = MAXDEG;
   }
 
-  // el_j partial sums: wave w takes neighbours w, w+4, ...
-  for (int j = wave; j < deg; j += 4) {
-    const __global float *hj = h_src + IDX(col_idx[beg + j], f_h);
-    float s = 0.0f;
-    for (int c = lane; c < f_h; c += 64) {
-      s += hj[c] * attn_l[c];
+  // heads one after another; the barriers inside keep the LDS reuse safe
+  // (score/part/rpart of head hd+1 are written only after every thread has
+  // passed a barrier that follows its use of head hd)
+  const int dh = f_h / heads;
+  for (int hd = 0; hd < heads; ++hd) {
+    const int c0 = hd * dh;
+    const __global float *vh = v_r + IDX(hd, f_in);
+    // el_j partial sums: wave w takes neighbours w, w+4, ...
+    for (int j = wave; j < deg; j += 4) {
+      const __global float *hj = h_src + IDX(col_idx[beg + j], f_h);
+      float s = 0.0f;
+      for (int c = c0 + lane; c < c0 + dh; c += 64) {
+        s += hj[c] * attn_l[c];
+      }
+      part[lane * MAXDEG + j] = s;
     }
-    part[lane * MAXDEG + j] = s;
-  }
-  // er_i = x_dst . v_r over f_in, all 256 threads; partials stored with a
-  // stride of 5 so no two operands are a multiple of 64 dwords apart
-  // (ds_read2st64_b32 is not implemented)
-  {
-    const __global float *xi = x_dst + IDX(dst_ids[i], f_in);
-    float s = 0.0f;
-    for (int c = lid; c < f_in; c += 256) {
-      s += xi[c] * v_r[c];
-    }
-    rpart[lane * 5 + wave] = s;
-  }
-  barrier(CLK_LOCAL_MEM_FENCE);
-  if (lid < 64) {
-    rpart[lid * 5 + 4] = rpart[lid * 5] + rpart[lid * 5 + 1] +
-                         rpart[lid * 5 + 2] + rpart[lid * 5 + 3];
-  }
-  barrier(CLK_LOCAL_MEM_FENCE);
-  for (int st = 32; st > 0; st >>= 1) {
-    if (lid < st) {
-      rpart[lid * 5 + 4] += rpart[(lid + st) * 5 + 4];
+    // er_i = x_dst . v_r over f_in, all 256 threads; partials stored with a
+    // stride of 5 so no two operands are a multiple of 64 dwords apart
+    // (ds_read2st64_b32 is not implemented)
+    {
+      const __global float *xi = x_dst + IDX(dst_ids[i], f_in);
+      float s = 0.0f;
+      for (int c = lid; c < f_in; c += 256) {
+        s += xi[c] * vh[c];
+      }
+      rpart[lane * 5 + wave] = s;
     }
     barrier(CLK_LOCAL_MEM_FENCE);
-  }
-  if (lid < deg) {
-    float s = 0.0f;
-#pragma unroll
-    for (int c = 0; c < 64; ++c) {
-      s += part[c * MAXDEG + lid];
+    if (lid < 64) {
+      rpart[lid * 5 + 4] = rpart[lid * 5] + rpart[lid * 5 + 1] +
+                           rpart[lid * 5 + 2] + rpart[lid * 5 + 3];
     }
-    score[lid] = s;
-  }
-  barrier(CLK_LOCAL_MEM_FENCE);
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int st = 32; st > 0; st >>= 1) {
+      if (lid < st) {
+        rpart[lid * 5 + 4] += rpart[(lid + st) * 5 + 4];
+      }
+      barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (lid < deg) {
+      float s = 0.0f;
+  #pragma unroll
+      for (int c = 0; c < 64; ++c) {
+        s += part[c * MAXDEG + lid];
+      }
+      score[lid] = s;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
 
-  if (lid == 0) {
-    const float er = rpart[4];
-    float m = NEG_INF;
-    for (int j = 0; j < deg; ++j) {
-      float e = score[j] + er;
-      e = e > 0.0f ? e : 0.2f * e;
-      score[j] = e;
-      m = fmax(m, e);
+    if (lid == 0) {
+      const float er = rpart[4];
+      float m = NEG_INF;
+      for (int j = 0; j < deg; ++j) {
+        float e = score[j] + er;
+        e = e > 0.0f ? e : 0.2f * e;
+        score[j] = e;
+        m = fmax(m, e);
+      }
+      float sum = 0.0f;
+      for (int j = 0; j < deg; ++j) {
+        const float p = native_exp2((score[j] - m) * LOG2E);
+        score[j] = p;
+        sum += p;
+      }
+      const float inv = deg > 0 ? native_recip(sum) : 0.0f;
+      for (int j = 0; j < deg; ++j) {
+        score[j] *= inv;
+      }
     }
-    float sum = 0.0f;
-    for (int j = 0; j < deg; ++j) {
-      const float p = native_exp2((score[j] - m) * LOG2E);
-      score[j] = p;
-      sum += p;
-    }
-    const float inv = deg > 0 ? native_recip(sum) : 0.0f;
-    for (int j = 0; j < deg; ++j) {
-      score[j] *= inv;
-    }
-  }
-  barrier(CLK_LOCAL_MEM_FENCE);
+    barrier(CLK_LOCAL_MEM_FENCE);
 
-  for (int c = lid; c < f_h; c += 256) {
-    const uint o = IDX(i, f_h) + c;
-    float acc = use_acc ? out[o] : 0.0f;
-    for (int j = 0; j < deg; ++j) {
-      acc += score[j] * h_src[IDX(col_idx[beg + j], f_h) + c];
+    for (int c = c0 + lid; c < c0 + dh; c += 256) {
+      const uint o = IDX(i, f_h) + c;
+      float acc = use_acc ? prev[o] : 0.0f;
+      for (int j = 0; j < deg; ++j) {
+        acc += score[j] * h_src[IDX(col_idx[beg + j], f_h) + c];
+      }
+      if (act) {
+        acc = fmax(acc, 0.0f);
+      }
+      out[o] = acc;
     }
-    if (act) {
-      acc = fmax(acc, 0.0f);
-    }
-    out[o] = acc;
   }
 }
