@@ -5,7 +5,7 @@ package benchmarkselection
 // benchmark names; every existing benchmark name keeps its input unchanged.
 //
 // Each input is sized from g, the target number of work-groups per CU of a
-// kernel (48 GPMs x CUs per GPM; -t16-wg-per-cu, default 4), keeping the
+// kernel (48 GPMs x CUs per GPM; -t16-wg-per-cu, default: the per-workload proposal), keeping the
 // shape parameters of the default input (pagerank: average degree; spmv:
 // non-zeros per row; matrixmultiplication: inner and output widths; im2col:
 // 3 channels, 3x3 kernel; kmeans: 32 features, 8 clusters, 2 iterations).
@@ -28,8 +28,22 @@ import (
 	"github.com/sarchlab/mgpusim/v3/driver"
 )
 
-var t16WGPerCUFlag = flag.Float64("t16-wg-per-cu", 4,
-	"T16 *-t16small inputs: target work-groups per CU of each kernel")
+var t16WGPerCUFlag = flag.Float64("t16-wg-per-cu", 0,
+	"T16 *-t16small inputs: target work-groups per CU of each kernel "+
+		"(0 = the per-workload proposal in t16SmallDefaultWGPerCU)")
+
+// t16SmallDefaultWGPerCU is the T16 1d proposal (2026-10-16): the largest
+// size whose whole run is estimated at about 1-2.5 h on yss2 (mi200), from
+// complete g=1 runs and 4096-WG truncated trials at these sizes.
+var t16SmallDefaultWGPerCU = map[string]float64{
+	"pagerank-t16small":             48,
+	"im2col-t16small":               1024,
+	"matrixtranspose-t16small":      12,
+	"spmv-t16small":                 256,
+	"kmeans-t16small":               4,
+	"matrixmultiplication-t16small": 12,
+	"aes-t16small":                  64,
+}
 
 const (
 	t16NumGPM = 48
@@ -49,6 +63,9 @@ func roundUp(v, m int) int { return (v + m - 1) / m * m }
 // not a *-t16small name.
 func t16SmallBenchmark(name string, d *driver.Driver) benchmarks.Benchmark {
 	g := *t16WGPerCUFlag
+	if g <= 0 {
+		g = t16SmallDefaultWGPerCU[name]
+	}
 	wgs := int(math.Ceil(g * float64(t16TotalCUs())))
 	var b benchmarks.Benchmark
 	var params string
