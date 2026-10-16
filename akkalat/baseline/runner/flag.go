@@ -85,6 +85,10 @@ var useUnifiedMemoryFlag = flag.Bool("use-unified-memory", false,
 var reportAll = flag.Bool("report-all", false, "Report all metrics to .csv file.")
 var filenameFlag = flag.String("metric-file-name", "metrics",
 	"Modify the name of the output csv file.")
+var magicCopyCoherentFlag = flag.Bool("magic-copy-coherent", false,
+	"With -magic-memory-copy, make D2H copies read through dirty L2 lines "+
+		"(functional, no simulated time). Benchmarks that copy results back "+
+		"between kernels may enable it themselves.")
 var magicMemoryCopy = flag.Bool("magic-memory-copy", false,
 	"Copy data from CPU directly to global memory")
 var switchLatencyFlag = flag.Int("switch-latency", 20,

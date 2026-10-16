@@ -94,6 +94,8 @@ func (m *globalStorageMemoryCopyMiddleware) processMemCopyD2HCommand(
 
 		data, _ := m.driver.globalStorage.Read(pAddr, sizeToCopy)
 		copy(cmd.RawData[offset:], data)
+		m.driver.peekCachedData(queue.Context.pid, pAddr,
+			cmd.RawData[offset:offset+sizeToCopy])
 
 		sizeLeft -= sizeToCopy
 		addr += sizeToCopy

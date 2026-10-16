@@ -158,10 +158,30 @@ func (r *Runner) Init() *Runner {
 	}
 
 	r.createUnifiedGPUs()
+	r.configureMagicCopyCoherence()
 
 	r.defineMetrics()
 
 	return r
+}
+
+// configureMagicCopyCoherence registers every L2 write-back cache with the
+// driver so that coherent magic D2H copies can read through dirty lines.
+// Registration alone changes nothing; -magic-copy-coherent (or a benchmark
+// calling Driver.SetMagicCopyCoherent) turns it on.
+func (r *Runner) configureMagicCopyCoherence() {
+	var peekers []driver.MagicCopyPeeker
+	for _, gpu := range r.platform.GPUs {
+		for _, c := range gpu.L2Caches {
+			if l2, ok := c.(*writeback.Cache); ok {
+				peekers = append(peekers, l2)
+			}
+		}
+	}
+	r.platform.Driver.RegisterMagicCopyPeekers(peekers)
+	if *magicCopyCoherentFlag {
+		r.platform.Driver.SetMagicCopyCoherent(true)
+	}
 }
 
 func (r *Runner) configureAllocationProfile() {

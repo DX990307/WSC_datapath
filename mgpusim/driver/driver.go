@@ -26,6 +26,10 @@ type Driver struct {
 	distributor   distributor
 	globalStorage *mem.Storage
 
+	// Coherent magic D2H copies (see magiccopycoherent.go).
+	magicCopyPeekers  []MagicCopyPeeker
+	magicCopyCoherent bool
+
 	GPUs        []sim.Port
 	devices     []*internal.Device
 	pageTable   vm.PageTable
