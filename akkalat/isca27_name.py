@@ -147,13 +147,10 @@ _TEXT_SUFFIXES = (".json", ".stdout", ".log", ".txt", ".csv", ".tsv")
 
 
 def _in_use(paths):
-    """Directories some process has open or names on its command line."""
-    busy = set()
+    """Directories some process names on its command line (by directory name,
+    since scripts pass relative paths such as results/<name>)."""
     out = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
-    for p in paths:
-        if p in out:
-            busy.add(p)
-    return busy
+    return {p for p in paths if os.path.basename(p) in out}
 
 
 def _rewrite(directory, old_path, new_path):
