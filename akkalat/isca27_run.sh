@@ -10,7 +10,7 @@
 # simulator reads them with -config (later files override earlier ones), so
 # no configuration flag is written here.
 # <exp_id> follows akkalat/isca27_name.py: <MMDD>_<category>_<item>_<config>_<commit>.
-# Output: results/<exp_id>/{meta.json,summary.csv,config_used.json,stats/,stdout.log,stderr.log}
+# Output: results/<exp_id>/{meta.json,run.json,summary.csv,config_used.json,stats/,stdout.log,stderr.log}
 set -euo pipefail
 
 EXP_ID="$1"
@@ -126,5 +126,8 @@ json.dump({
     "start": start, "end": end, "exit_code": int(rc), "args": args,
 }, open(os.path.join(out, "meta.json"), "w"), indent=2, ensure_ascii=False)
 EOF
+# The run record the experiment monitor reads (name fields + properties).
+python3 akkalat/isca27_name.py record "$OUT" "Command=$BIN ${ARGS[*]}" "Working Directory=$ROOT" ||
+  echo "warning: could not write $OUT/run.json" >&2
 
 exit "$RC"

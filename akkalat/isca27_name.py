@@ -21,9 +21,13 @@ match but whose config differs.
     python3 akkalat/isca27_name.py plan RESULTS_DIR
         Old name -> new name for every directory (tab separated); names no
         rule knows are listed as "?".
+    python3 akkalat/isca27_name.py record DIR [PROPERTY=VALUE ...]
+        Write DIR/run.json: the fields of DIR's name and the given
+        properties (merged into an existing run.json).
     python3 akkalat/isca27_name.py apply RESULTS_DIR [--dry-run]
         Rename the directories of `plan`, rewrite their recorded paths, move
-        their marks in ../.exp_archive.json, and append to RENAMES.tsv.
+        their marks in ../.exp_archive.json, write their run.json, and
+        append to RENAMES.tsv.
         Refuses while a process uses a directory.
 """
 
@@ -34,22 +38,16 @@ import subprocess
 import sys
 import time
 
-CATEGORIES = {
-    "abl": "ablation: baseline, m1, m2, m3, Complete",
-    "audit": "typed-filter authoritative audit",
-    "det": "determinism: the same runs again",
-    "diag": "diagnostic run",
-    "llm": "LLM and CNN operators",
-    "place": "data placement (-report-l2-source)",
-    "plat": "platform measurement (platbench, T14)",
-    "probe": "T11 probes",
-    "sens": "sensitivity",
-}
-
-_FIELD = r"[A-Za-z0-9][A-Za-z0-9.-]*"
-NAME_RE = re.compile(
-    r"^(?P<date>\d{4})_(?P<category>[a-z]+)_(?P<item>%s)_"
-    r"(?P<config>[a-z0-9][a-z0-9-]*(?:\+[A-Za-z0-9.-]+)*)_(?P<version>[0-9a-f]{7})$" % _FIELD)
+# The naming rule itself lives in the repo's exp.json, which the experiment
+# monitor reads too; this module adds the old names and the renaming.
+with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "exp.json")) as _f:
+    NAMING = json.load(_f)["naming"]
+_FIELDS = {f["name"]: f for f in NAMING["fields"]}
+assert [f["name"] for f in NAMING["fields"]] == ["date", "category", "item", "config", "version"]
+CATEGORIES = _FIELDS["category"]["values"]
+NAME_RE = re.compile("^" + re.escape(NAMING["separator"]).join(
+    "(?P<%s>%s)" % (f["name"], f.get("pattern") or "|".join(map(re.escape, f["values"])))
+    for f in NAMING["fields"]) + "$")
 
 
 def make(date, category, item, config, version):
@@ -59,6 +57,11 @@ def make(date, category, item, config, version):
     if problem:
         raise ValueError(problem)
     return name
+
+
+def _category_ok(name):
+    parts = name.split(NAMING["separator"])
+    return len(parts) > 1 and parts[1] in CATEGORIES
 
 
 def parse(name):
@@ -71,13 +74,13 @@ def parse(name):
 def check(name):
     """Why a name breaks the rule, or "" if it follows it."""
     m = NAME_RE.match(name)
-    if not m:
+    if not m or not _category_ok(name):
+        if m:
+            return "%s: 类别 %s 不在 %s 中" % (name, name.split("_")[1], ", ".join(sorted(CATEGORIES)))
         return ("%s: 不符合 <MMDD>_<类别>_<项目>_<配置>_<7 位 commit>，"
                 "每段内部不能有下划线" % name)
-    if m.group("category") not in CATEGORIES:
-        return "%s: 类别 %s 不在 %s 中" % (name, m.group("category"), ", ".join(sorted(CATEGORIES)))
-    if m.group("item") == "wafer48":
-        return "%s: 项目不能是 wafer48（那是旧命名的固定段）" % name
+    if m.group("item") in _FIELDS["item"].get("not", []):
+        return "%s: 项目不能是 %s（那是旧命名的固定段）" % (name, m.group("item"))
     return ""
 
 
@@ -141,6 +144,52 @@ def plan(results):
     return [(n, legacy_name(n)) for n in names]
 
 
+# ---- run records ----
+
+def _meta_properties(directory):
+    """Akita exec_info-style properties from what a run already recorded."""
+    props = []
+    for fname in ("meta.json", "EXPERIMENT_METADATA.json"):
+        try:
+            with open(os.path.join(directory, fname)) as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            continue
+        for key, prop in (("commit", "Git Revision"), ("git_revision", "Git Revision"),
+                          ("host", "Host"), ("start", "Start Time"), ("created_at", "Start Time"),
+                          ("end", "End Time"), ("task", "Task"), ("config", "Config Files"),
+                          ("gpm_preset", "GPM Preset"), ("experiment_count", "Runs"),
+                          ("exit_code", "Exit Code")):
+            if meta.get(key) not in (None, "") and prop not in {p["property"] for p in props}:
+                props.append({"property": prop, "value": str(meta[key])})
+    return props
+
+
+def record(directory, properties=()):
+    """Write directory/run.json (exp-run/1) and return it."""
+    name = os.path.basename(os.path.abspath(directory))
+    fields = parse(name)
+    if fields is None:
+        raise ValueError(check(name))
+    path = os.path.join(directory, "run.json")
+    try:
+        with open(path) as f:
+            run = json.load(f)
+    except (OSError, ValueError):
+        run = {}
+    props = {p["property"]: p["value"] for p in run.get("properties", [])}
+    for p in _meta_properties(directory):
+        props.setdefault(p["property"], p["value"])
+    props.update(properties)
+    run.update({"schema": "exp-run/1", "name": name, "fields": fields,
+                "properties": [{"property": k, "value": v} for k, v in props.items()]})
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(run, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
+    return run
+
+
 # ---- renaming ----------------------------------------------------------------
 
 _TEXT_SUFFIXES = (".json", ".stdout", ".log", ".txt", ".csv", ".tsv")
@@ -202,6 +251,7 @@ def apply(results, dry_run=False, out=sys.stdout):
         src, dst = os.path.join(results, o), os.path.join(results, n)
         os.rename(src, dst)
         _rewrite(dst, src, dst)
+        record(dst, {"Renamed From": o})
         if db and o in db.get("results", {}):
             db["results"][n] = db["results"].pop(o)
         with open(log, "a") as f:
@@ -222,6 +272,10 @@ def main(argv):
     if len(argv) == 2 and argv[0] == "plan":
         for o, n in plan(argv[1]):
             print("%s\t%s" % (o, n or "?"))
+        return 0
+    if len(argv) >= 2 and argv[0] == "record":
+        props = dict(a.split("=", 1) for a in argv[2:])
+        record(argv[1], props)
         return 0
     if len(argv) >= 2 and argv[0] == "apply":
         apply(argv[1], dry_run="--dry-run" in argv[2:])

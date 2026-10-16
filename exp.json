@@ -1,0 +1,25 @@
+{
+  "schema": "exp-project/1",
+  "naming": {
+    "separator": "_",
+    "fields": [
+      {"name": "date", "label": "日期", "pattern": "\\d{4}"},
+      {"name": "category", "label": "类别", "values": {
+        "abl": "ablation",
+        "audit": "filter 统计",
+        "det": "可复现",
+        "diag": "诊断",
+        "llm": "LLM 算子",
+        "place": "数据放置",
+        "plat": "平台测量",
+        "probe": "T11 探针",
+        "sens": "敏感性"
+      }},
+      {"name": "item", "label": "项目", "pattern": "[A-Za-z0-9][A-Za-z0-9.-]*", "not": ["wafer48"]},
+      {"name": "config", "label": "配置", "pattern": "[a-z0-9][a-z0-9-]*(?:\\+[A-Za-z0-9.-]+)*", "variant_separator": "+"},
+      {"name": "version", "label": "版本", "pattern": "[0-9a-f]{7}"}
+    ],
+    "group_by": ["category", "item"],
+    "compare_by": "config"
+  }
+}

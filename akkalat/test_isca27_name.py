@@ -78,8 +78,27 @@ class NameTest(unittest.TestCase):
             with open(os.path.join(root, ".exp_archive.json")) as f:
                 self.assertIn("1015_abl_wg32k_mi200_67f1c03", json.load(f)["results"])
             self.assertTrue(os.path.isdir(os.path.join(res, "odd-name")))
+            with open(os.path.join(new, "run.json")) as f:
+                run = json.load(f)
+            self.assertEqual(run["fields"]["item"], "wg32k")
+            self.assertIn({"property": "Renamed From", "value": "1015_abl_wafer48_mi200_67f1c03"},
+                          run["properties"])
             with open(os.path.join(res, "RENAMES.tsv")) as f:
                 self.assertIn("\t1015_abl_wg32k_mi200_67f1c03", f.read())
+
+    def test_record(self):
+        with tempfile.TemporaryDirectory() as root:
+            d = os.path.join(root, "1015_plat_bw-read_mi200_67f1c03")
+            os.makedirs(d)
+            with open(os.path.join(d, "meta.json"), "w") as f:
+                json.dump({"commit": "67f1c03", "host": "yss2", "exit_code": 0}, f)
+            nm.record(d, {"Command": "x"})
+            run = nm.record(d, {"Host": "yss3"})
+            props = {p["property"]: p["value"] for p in run["properties"]}
+            self.assertEqual(props, {"Command": "x", "Git Revision": "67f1c03", "Host": "yss3", "Exit Code": "0"})
+            self.assertEqual(run["fields"]["category"], "plat")
+            with self.assertRaises(ValueError):
+                nm.record(root)
 
 
 if __name__ == "__main__":
