@@ -181,3 +181,8 @@
 - 代码：`isca27/t16-position` 推到 `2e09bc9`（per-GPM tracer `-report-gpm-trace`、platbench `remotefrac`、`*-t16small` 输入、`akkalat/t16_heatmap.py`）；回归通过（fir、MM，tracer 关/开和改动前完全一致）。`isca27/t17-workloads` 在本地开发中（没推送）：第 0 步完成、补了 6 条指令（用户批准）、W-A/W-B/W-C 已实现、数据集已下载到 yss2 测试目录。
 - 文档：STATUS 新增 T16 配置确认、T17 进度。改了 `STATUS.md`、`SYNC.md`。
 - ⏸ 等用户：T16 配置确认（1b 跑不跑）；T17 的三个问题（`v_mad_u64_u32`、W-C 简化、kmeans/kmsc 的 coherent 开关）。
+
+### 2026-10-17 [claude-code] T17 第 2 步规模确认（⏸）
+- 代码：`isca27/t17-workloads` 推到 `db47df3`（16 个提交：编译检查、emu 启动修复、pagedattn/moe/rgat、6 条指令（用户批准）、opt-in coherent D2H 拷回及其修复（PID 不匹配）、`-rgat-heads`、回归记录）。回归：fir、MM 改动前后 total_time 和全部统计（排序后）完全一致。
+- 文档：STATUS 新增 T17 规模确认和三个发现（`s_nop` 死循环、kernel 之间不失效 L1、`v_mad_u64_u32` 扫描）。
+- ⏸ 等用户：T17 规模；`s_nop` 是否在模拟器里修；`v_mad_u64_u32` 是否修。

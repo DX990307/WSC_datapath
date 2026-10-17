@@ -29,12 +29,20 @@
 | T14 平台数据（第一档） | 完成（⏸ 等用户确认） | 10-16 | 7 项 × 3 套配置（hpca、mi300x、mi200）跑完；摘要表见“结果摘要”，CSV 在 `results_index/platform/`、`results_index/platform_mi200/` |
 | T15 oracle 上限实验 | ⏸ 配置确认，等用户 | 10-16 | 用冻结版 `isca27-mi200-v1`；6 组 × 14 个 workload = 84 个运行，见“需要用户决定” |
 | T16 位置导致的负载不均（阶段 1） | 运行中（用户 10-17 确认） | 10-17 | 1c（6 个）+ 1d（7 个）在 yss2 运行，不跑 1b；二进制 `2e09bc9`（`isca27/t16-position`） |
-| T17 新 workload | 进行中：第 0 步 + W-A 开发 | 10-16 | 分支 `isca27/t17-workloads`（工作区 `~/Desktop/CuPath/wt-t17`）；kernel 在 yss2 的 `~/akita-exp-test/t17build/` 编译 |
+| T17 新 workload | ⏸ 规模确认，等用户 | 10-17 | 第 0 步、W-A/W-B/W-C、6 条指令、coherent 拷回、回归都完成；分支 `isca27/t17-workloads` 推到 `db47df3`；规模确认见“需要用户决定” |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
 
 <!-- 每条格式：- [ ] (T#) 问题 —— 可选方案 A / B，推荐 X，理由 -->
+- [ ] (T17) **规模确认 + 配置确认**（第 2 步）。所有命令 = runall2 的 mi200 baseline 参数（和 `mi200.json` 没有差异，保留 `-magic-memory-copy`）+ benchmark 参数 + `-report-l2-source -heartbeat-file`；二进制来自 `isca27/t17-workloads` `db47df3`。按 1/8 规模试跑外推（墙钟和 L2 请求量成正比：W-A、W-B 约 0.21 分钟/MB，W-C 0.27–0.37）。
+  - **W-A PagedAttention**：`-benchmark=pagedattn -pa-batch=66`（Azure 长度，9.36 万 token，8 KV 头 × 128，分段 64）。2 个 kernel：partial 11,928 WG（每 GPM 252，最后一个 84，无空闲）、reduce 2,112（10 个 GPM 空闲）。footprint 794 MB。预计约 3.0 小时，峰值约 28 GB。（备选 `-pa-batch=83`：两个 kernel 都没有空闲 GPM，约 3.7 小时、34 GB。）试跑：远程读 95–97%，远程延迟占 96–99.8%，前 3 个 owner 占 12–16%。
+  - **W-B MoE**：规格形状 `-moe-tokens=256 -moe-hidden=1024 -moe-ffn=704 -moe-topk=6 -moe-skew=1.75`，对照 `-moe-skew=0`。5 个 kernel；up/gate/combine 的 WG 少于 1344，结构上就有 20–38 个 GPM 空闲。footprint 约 574 MB。预计 3.9 / 3.6 小时，12–20 GB。（备选 `-moe-ffn=512`：约 2.9 / 2.7 小时。）试跑：远程读 95%，远程延迟占 97%，前 3 个 owner 占 22–23%。
+  - **W-C R-GAT**：`-benchmark=rgat -rgat-data=~/akita-exp-test/datasets/igbh/tiny -rgat-seeds=320 -rgat-fanouts=10,5 -rgat-hidden=128 -rgat-heads=1`。30 个 kernel，共 13,416 WG（最大的 aggregation kernel 1,344 个，无空闲）。footprint 约 140 MB。预计约 4 小时（范围 3.3–5.4 小时），8–12 GB。**和规格的差别**：种子从 512 减到 320（512 会超过 5 小时上限）；备选 256 个种子（2.7–4.3 小时）。试跑：远程读 93%，远程延迟占 92%，前 3 个 owner 占 25%。接近 MLPerf 的 4 头 × 512 维：512 个种子要 31–47 小时，不可行；3 小时只能跑约 32–40 个种子。
+  - **放置**：4 个运行（W-A、W-B 两个、W-C），长的放 yss3（T15 跑完之后），或者 yss2。
+- [ ] (T17) **模拟器的两个新发现**（子代理没有改模拟器，都在 kernel 侧绕开了）：(1) timing 模式下 `s_nop` 不推进 PC，wavefront 死循环（`timing/cu/scheduler.go` 的 `EvaluateInternalInst` 默认分支）；现在编译检查脚本拒绝 kernel 里的 `s_nop`。要不要在模拟器里修？（2）**开着 magic copy 时 kernel 之间不失效 L1**：先读后被下一个 kernel 改写的 buffer，再读会读到 L1 里的旧值；R-GAT 已改成每个关系写自己的 buffer。注意：真实 GPU 在 kernel 之间会失效 L1，我们不失效，**baseline 会多一些 L1 命中（偏快）**，D20 把它列为“有意比真实 MI200 弱”，方向其实相反，要更正。
+- [ ] (T17) **`v_mad_u64_u32`（VOP3 488）扫描结果**：80 个 hsaco 里只有 `gemm` 用到（4 个文件，各 24 处），在 64 位无符号除法/取余的慢路径上，只有被除数 ≥ 2³² 时才执行（执行了就会 panic）；链接这个 gemm 的有 fulllayer、lenet、minerva、vgg16、bert、gpt、resnet、llmop。现有结果都没有 panic，所以没走到这条路径，现有结果不受影响。修不修由用户决定。
+
 - [x] (T16 阶段 1) **用户 10-17 确认：跑 1c + 1d，不跑 1b。** 已在 yss2 启动 13 个运行（`results/1017_diag_t16-*_mi200_2e09bc9`，组 `t16-stage1-1017`）。原问题：**配置确认（CONFIG.md 第 3 节；冻结版 mi200，二进制来自 `isca27/t16-position` `2e09bc9`，模拟器时序代码和 `isca27-mi200-v1` 相同，只多了统计）**。所有运行都是 runall2 的 mi200 baseline 参数（和 `mi200.json` 没有差异）+ 统计开关 `-report-gpm-trace`（新）、`-report-l2-source -l2-source-tile-width=7`，保留 `-magic-memory-copy`。
   - **回归已通过**（yss2 测试目录，mi200，`-max-wg 4096`）：fir 改动前 / tracer 关 / tracer 开 total_time 都是 26.568 µs，16.5 万项统计排序后完全一致；MM tracer 关 / 开都是 345.433 µs，17.0 万项完全一致。（metrics.csv 本身每次行顺序不同，因为 `report.go` 遍历 Go map；排序后一致。）
   - **1c 微基准**（platbench，跑完整个 kernel）：① mi200 补跑 T14 的 all-to-all（每对 16 KB），约 13 分钟；② 远程比例扫描 `-plat-test=remotefrac`，每 GPM 1 MB 本地分片、224 个 WG、12 次迭代（每阶段读 504 MiB），f = 0 / 0.1 / 0.25 / 0.5 / 1 各一个运行，约 24 分钟 / 36 分钟 / 55 分钟 / 1.4 小时 / 2.5 小时，每个约 3.3 GB 内存；③ 可选：all-to-all 每对 256 KB，约 2.8 小时。共 6 个（加可选 1 个）。注意：重编 `kernels.hsaco` 后 T14 原有 kernel 的代码位置变了，旧 platbench 数字可能有极小差异，这次的 all-to-all 用新二进制重跑。
