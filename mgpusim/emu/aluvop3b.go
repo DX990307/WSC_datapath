@@ -25,6 +25,8 @@ func (u *ALUImpl) runVOP3B(state InstEmuState) {
 		u.runVSUBBREVU32VOP3b(state)
 	case 481:
 		u.runVDIVSCALEF64(state)
+	case 488:
+		u.runVMADU64U32VOP3b(state)
 	case 489:
 		u.runVMADI64I32(state)
 	default:
@@ -229,6 +231,30 @@ func (u *ALUImpl) runVMADI64I32(state InstEmuState) {
 		sp.DST[i] = uint64(sum)
 		if (prod >= 0) == (add >= 0) && (sum >= 0) != (prod >= 0) {
 			sp.SDST |= 1 << i
+		}
+	}
+}
+
+// runVMADU64U32VOP3b implements V_MAD_U64_U32 (GCN3 ISA reference, ch. 12,
+// "VOP3b Opcodes", opcode 488): {SDST, D.u64} = S0.u32 * S1.u32 + S2.u64.
+// The lane's SDST bit is the carry out of the 64-bit addition (the 32x32-bit
+// product itself cannot overflow 64 bits).
+func (u *ALUImpl) runVMADU64U32VOP3b(state InstEmuState) {
+	sp := state.Scratchpad().AsVOP3B()
+
+	var i uint
+	for i = 0; i < 64; i++ {
+		if !laneMasked(sp.EXEC, i) {
+			continue
+		}
+
+		prod := uint64(uint32(sp.SRC0[i])) * uint64(uint32(sp.SRC1[i]))
+		sum := prod + sp.SRC2[i]
+		sp.DST[i] = sum
+		if sum < prod {
+			sp.SDST |= 1 << i
+		} else {
+			sp.SDST &^= 1 << i
 		}
 	}
 }

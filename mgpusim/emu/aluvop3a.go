@@ -58,7 +58,7 @@ func (u *ALUImpl) runVOP3A(state InstEmuState) {
 		u.runVMADF32(state)
 	case 450:
 		u.runVMADI32I24(state)
-	case 451, 488:
+	case 451:
 		u.runVMADU64U32(state)
 	case 462:
 		u.runVALIGNBITB32(state)
