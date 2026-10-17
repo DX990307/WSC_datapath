@@ -28,14 +28,14 @@
 | T13 MI300X 配置 → mi200 | **已冻结**（用户 10-16） | 10-16 | 标签 `isca27-mi200-v1` = `67f1c03`（只在本地，推不推送等用户）；每 slice MSHR 保持 32；`config_deviation` 改为相对 `configs/mi200.json`（`61b6ae8`）；冻结说明 `akkalat/configs/MI200_V1.md` |
 | T14 平台数据（第一档） | 完成（⏸ 等用户确认） | 10-16 | 7 项 × 3 套配置（hpca、mi300x、mi200）跑完；摘要表见“结果摘要”，CSV 在 `results_index/platform/`、`results_index/platform_mi200/` |
 | T15 oracle 上限实验 | ⏸ 配置确认，等用户 | 10-16 | 用冻结版 `isca27-mi200-v1`；6 组 × 14 个 workload = 84 个运行，见“需要用户决定” |
-| T16 位置导致的负载不均（阶段 1） | ⏸ 配置确认，等用户 | 10-17 | tracer、platbench 远程比例扫描、`*-t16small` 输入已完成，回归通过；分支 `isca27/t16-position` 推到 `2e09bc9`；配置确认见“需要用户决定” |
+| T16 位置导致的负载不均（阶段 1） | 运行中（用户 10-17 确认） | 10-17 | 1c（6 个）+ 1d（7 个）在 yss2 运行，不跑 1b；二进制 `2e09bc9`（`isca27/t16-position`） |
 | T17 新 workload | 进行中：第 0 步 + W-A 开发 | 10-16 | 分支 `isca27/t17-workloads`（工作区 `~/Desktop/CuPath/wt-t17`）；kernel 在 yss2 的 `~/akita-exp-test/t17build/` 编译 |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
 
 <!-- 每条格式：- [ ] (T#) 问题 —— 可选方案 A / B，推荐 X，理由 -->
-- [ ] (T16 阶段 1) **配置确认（CONFIG.md 第 3 节；冻结版 mi200，二进制来自 `isca27/t16-position` `2e09bc9`，模拟器时序代码和 `isca27-mi200-v1` 相同，只多了统计）**。所有运行都是 runall2 的 mi200 baseline 参数（和 `mi200.json` 没有差异）+ 统计开关 `-report-gpm-trace`（新）、`-report-l2-source -l2-source-tile-width=7`，保留 `-magic-memory-copy`。
+- [x] (T16 阶段 1) **用户 10-17 确认：跑 1c + 1d，不跑 1b。** 已在 yss2 启动 13 个运行（`results/1017_diag_t16-*_mi200_2e09bc9`，组 `t16-stage1-1017`）。原问题：**配置确认（CONFIG.md 第 3 节；冻结版 mi200，二进制来自 `isca27/t16-position` `2e09bc9`，模拟器时序代码和 `isca27-mi200-v1` 相同，只多了统计）**。所有运行都是 runall2 的 mi200 baseline 参数（和 `mi200.json` 没有差异）+ 统计开关 `-report-gpm-trace`（新）、`-report-l2-source -l2-source-tile-width=7`，保留 `-magic-memory-copy`。
   - **回归已通过**（yss2 测试目录，mi200，`-max-wg 4096`）：fir 改动前 / tracer 关 / tracer 开 total_time 都是 26.568 µs，16.5 万项统计排序后完全一致；MM tracer 关 / 开都是 345.433 µs，17.0 万项完全一致。（metrics.csv 本身每次行顺序不同，因为 `report.go` 遍历 Go map；排序后一致。）
   - **1c 微基准**（platbench，跑完整个 kernel）：① mi200 补跑 T14 的 all-to-all（每对 16 KB），约 13 分钟；② 远程比例扫描 `-plat-test=remotefrac`，每 GPM 1 MB 本地分片、224 个 WG、12 次迭代（每阶段读 504 MiB），f = 0 / 0.1 / 0.25 / 0.5 / 1 各一个运行，约 24 分钟 / 36 分钟 / 55 分钟 / 1.4 小时 / 2.5 小时，每个约 3.3 GB 内存；③ 可选：all-to-all 每对 256 KB，约 2.8 小时。共 6 个（加可选 1 个）。注意：重编 `kernels.hsaco` 后 T14 原有 kernel 的代码位置变了，旧 platbench 数字可能有极小差异，这次的 all-to-all 用新二进制重跑。
   - **1d 小输入**（`<workload>-t16small`，默认输入完全不变，有单元测试检查）：pagerank（64,512 节点、816 万边，1 × 64,512 WG）、im2col（H = W = 1661，1 × 1,376,144）、matrixtranspose（宽 4672，1 × 5,329）、spmv（4,400 万维，1 × 344,064）、kmeans（344,064 点，3 × 5,376）、matrixmultiplication（Y = 129,024，1 × 16,128）、aes（84 MB，1 × 86,016）；每个 1–2 小时、3–9 GB；WG 数都是 CU 总数的整数倍（matrixtranspose 最后一个 GPM 65 个），没有空闲 GPM。远程读比例（前 4096 个 WG）和默认输入相近：pagerank 0.85/0.83、im2col 0.91/0.91、matrixtranspose 0.98/0.98、spmv 0.27/0.21、MM 0.95/0.80、aes 0.023/0.023。共 7 个。
@@ -887,3 +887,10 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
   4. **编号对应**：`runner.go:526` `createUnifiedGPUs` 用 driver ID 1..48 依次组成 `UnifiedGPUIDs`（下标 i ↔ driver ID i+1）；GPM 按 7×7 逐行创建、跳过中心（`timingplatform.go:580`，组件名 `GPU[t]`，t = x + 7y），所以 driver ID g ↔ tile t = g−1（g ≤ 24）或 t = g（g ≥ 25），坐标 (t mod 7, t div 7)。**推论**：WG 段和页段都按“逐行”顺序排列，第 i 段在 tile 顺序的第 i 个位置；行尾到下一行开头是 7 跳（Cowork 已修正）。
 - **并行开发（不占正式实验位置）**：T16 的 per-GPM tracer、platbench 远程比例参数、1d 小输入建议在分支 `isca27/t16-position`；T17 第 0 步和 W-A 在分支 `isca27/t17-workloads`；两个分支都从 `61b6ae8`（冻结版之后，模拟器代码和 `isca27-mi200-v1` 相同）开出，用独立工作区，不影响正在跑 T15 的代码目录。
 - **T15**：yss2 的 54 个已完成；yss3 原来排队的 13 个已挪到 yss2（用户 10-16 要求两台服务器平衡）；yss3 上 kmeans 等长运行还在跑。
+
+### 2026-10-17 用户决定；T16 阶段 1 运行启动；更正一处说法
+
+- **用户 10-17 决定**：(1) T16 跑 1c + 1d，不跑 1b；(2) `v_mad_u64_u32`（VOP3 488，解码成 32 位目的寄存器）先查现有 benchmark 有没有用到，再决定修不修；(3) W-C 接受简化（单头、无 bias、hidden 128），定规模时另报 4 头、512 维的估算；(4) kmeans、kmsc 读到旧数据的问题保持原样，只记录为局限（论文用的 kmeans MaxIter = 2，kernel 数和访存模式不变，只有算出来的数可能不对）。之前（10-16）已决定：补 6 条指令（已做，fir 回归一致）、批准不计时的 coherent D2H 拷回（opt-in，默认关；timing 模式下还有 bug，在修）、下载 Azure trace、IGBH-tiny、ogbn-mag（已下载到 yss2 测试目录）、MoE 不均 1.75 + 无偏置对照、不加共享 expert。
+- **T16 运行**：yss2，`akkalat/isca27_run.sh` + `configs/mi200.json` + `-report-gpm-trace`（1d 另加 `-report-l2-source`），13 个：`1017_diag_t16-a2a-16k`、`-frac{1,0.5,0.25,0.1,0}`、`-{pagerank,kmeans,matrixmultiplication,matrixtranspose,spmv,aes,im2col}-small`，都在 `results/1017_diag_t16-*_mi200_2e09bc9/`。二进制是 `isca27/t16-position` `2e09bc9` 交叉编译后放进 `~/isca27bin/baseline_2e09bc9`（服务器上的源码目录没有换）。
+- **更正**：10-16 T15 配置确认里写的“`mi200.json` 不含 CuPath 机制开关、模拟器有些机制默认开，用配置文件跑出来的 B 不是 baseline”**不对**。`-remote-data-path-enable` 默认 false，Remote Aggregation/Reuse 的子开关（dedup、batching、requester L2 默认 true）只在它打开时起作用（`akkalat/baseline/runner/runner.go:447`、`mgpusim/timing/rdma/remote_requester.go:21`）；Local Pairing、granularity、filter、prefetch、row continuation 默认都是 false。所以用配置文件跑的就是 baseline，T14 的平台测量有效；T15 用 runall2 的 baseline 也没问题，只是当时的理由写错了。
+- **T15**：yss2 67/67 完成（原 54 + 挪过去的 13），yss3 12 个完成、5 个还在跑，合计 79/84，没有失败。
