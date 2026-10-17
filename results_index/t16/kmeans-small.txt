@@ -1,0 +1,13 @@
+1017_diag_t16-kmeans-small_mi200_2e09bc9/stats/metrics_gpm_trace.csv: kernel 1 (unified), metric finish
+         x=0      x=1      x=2      x=3      x=4      x=5      x=6   
+y=0   8.98e+05  8.08e+05  7.67e+05  7.45e+05  7.61e+05  8.23e+05  9.14e+05 
+y=1   8.09e+05  7.25e+05  6.72e+05  6.55e+05  6.76e+05  7.28e+05  8.25e+05 
+y=2   7.65e+05  6.72e+05  6.28e+05  6.08e+05  6.25e+05  6.84e+05  7.69e+05 
+y=3   7.54e+05  6.67e+05  6.07e+05   [IOMMU]  6.09e+05  6.69e+05  7.53e+05 
+y=4   7.69e+05  6.84e+05  6.24e+05  6.08e+05  6.29e+05   6.7e+05  7.64e+05 
+y=5   8.22e+05  7.25e+05  6.74e+05  6.54e+05   6.7e+05  7.24e+05  8.07e+05 
+y=6   9.12e+05  8.19e+05  7.59e+05  7.44e+05  7.64e+05  8.07e+05  8.97e+05 
+GPMs with a value: 48  without work: 0
+max 914073.000  mean 732153.375  min 607376.000  max/mean 1.248  max/min 1.505
+spearman vs mean hops to others +0.991  vs hops to centre +0.958
+matplotlib not available; text grid only

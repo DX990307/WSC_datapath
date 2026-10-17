@@ -1,0 +1,55 @@
+{
+  "exp_id": "1017_diag_t16-aes-small_mi200_2e09bc9",
+  "task": "T16-stage1",
+  "commit": "2e09bc9",
+  "host": "yss2",
+  "go_version": "go version go1.22.2 linux/amd64",
+  "mode": "timing",
+  "verify": false,
+  "config": "mi200",
+  "gpm_preset": "mi200",
+  "notes": [
+    "GPM 内部按 1/4 MI250X GCD（按公开规格设置，未校准）：28 CU，8 个 256 KB L2 slice（64 B 行，MI200 实际为 128 B），每个 slice 对应一个 HBM2e channel；L2、HBM2e 带宽按 MI250X 在 1.7 GHz 下的每周期等效值设置（每 GPM 241 B/cycle）；访问延迟（tCL、tRCD、tRP、tRAS、tRFC 等）保持纳秒值，限制带宽的间隔（tCCD、tRRD、tFAW、tWTR）保持 1.6 GHz 器件的时钟数。HBM2e channel：2 个 pseudo-channel，各 64-bit、BL4、每次访问 32 B、DRAM 时钟 1.6 GHz / 1.7 = 941 MHz；含 all-bank refresh、tFAW、同请求行保持。"
+  ],
+  "config_deviation": [
+    {
+      "flag": "-benchmark aes-t16small",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-report-gpm-trace",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-report-l2-source",
+      "change": "added",
+      "reason": "统计开关：L2 数据来源（本地/远程 × L2/DRAM）"
+    },
+    {
+      "flag": "-l2-source-tile-width 7",
+      "change": "added",
+      "reason": "统计开关的参数：7×7 mesh 宽度，用来算跳数"
+    }
+  ],
+  "deviation_base": "configs/mi200.json",
+  "start": "2026-10-17T01:04:20+00:00",
+  "end": "2026-10-17T04:33:05+00:00",
+  "exit_code": 0,
+  "args": [
+    "-config",
+    "/home/daoxuanxu/exp/cupath/akkalat/configs/mi200.json",
+    "-config-out",
+    "/home/daoxuanxu/exp/cupath/results/1017_diag_t16-aes-small_mi200_2e09bc9/config_used.json",
+    "-benchmark",
+    "aes-t16small",
+    "-report-gpm-trace",
+    "-report-l2-source",
+    "-l2-source-tile-width=7",
+    "-metric-file-name",
+    "/home/daoxuanxu/exp/cupath/results/1017_diag_t16-aes-small_mi200_2e09bc9/stats/metrics",
+    "-l2-source-file",
+    "/home/daoxuanxu/exp/cupath/results/1017_diag_t16-aes-small_mi200_2e09bc9/stats/l2"
+  ]
+}

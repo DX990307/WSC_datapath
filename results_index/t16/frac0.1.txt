@@ -1,0 +1,13 @@
+1017_diag_t16-frac0.1_mi200_2e09bc9/stats/metrics_gpm_trace.csv: kernel 1 (single_gpm_phase), metric finish
+         x=0      x=1      x=2      x=3      x=4      x=5      x=6   
+y=0   1.66e+05  1.62e+05  1.65e+05  1.62e+05   1.6e+05  1.64e+05  1.63e+05 
+y=1   1.67e+05  1.58e+05   1.6e+05  1.56e+05  1.58e+05  1.58e+05   1.6e+05 
+y=2   1.64e+05  1.62e+05  1.56e+05  1.59e+05  1.55e+05  1.56e+05  1.56e+05 
+y=3   1.64e+05  1.57e+05  1.58e+05   [IOMMU]  1.55e+05  1.54e+05  1.55e+05 
+y=4    1.6e+05  1.58e+05  1.57e+05  1.58e+05  1.54e+05  1.54e+05  1.57e+05 
+y=5   1.59e+05  1.56e+05  1.58e+05   1.6e+05  1.54e+05  1.54e+05  1.54e+05 
+y=6   1.67e+05  1.56e+05  1.58e+05  1.56e+05  1.56e+05  1.54e+05   1.6e+05 
+GPMs with a value: 48  without work: 0
+max 167016.000  mean 158477.771  min 153564.000  max/mean 1.054  max/min 1.088
+spearman vs mean hops to others +0.436  vs hops to centre +0.394
+matplotlib not available; text grid only
