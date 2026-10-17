@@ -186,3 +186,9 @@
 - 代码：`isca27/t17-workloads` 推到 `db47df3`（16 个提交：编译检查、emu 启动修复、pagedattn/moe/rgat、6 条指令（用户批准）、opt-in coherent D2H 拷回及其修复（PID 不匹配）、`-rgat-heads`、回归记录）。回归：fir、MM 改动前后 total_time 和全部统计（排序后）完全一致。
 - 文档：STATUS 新增 T17 规模确认和三个发现（`s_nop` 死循环、kernel 之间不失效 L1、`v_mad_u64_u32` 扫描）。
 - ⏸ 等用户：T17 规模；`s_nop` 是否在模拟器里修；`v_mad_u64_u32` 是否修。
+
+### 2026-10-17 [claude-code] T17 第一轮 baseline 完成（⏸）；`s_nop`、`v_mad_u64_u32` 修好
+- 代码：`isca27/t17-workloads` 推到 `c9cdf64`（`3a94d26` SOPP 指令推进 PC、`b5cff1b` 488 改 VOP3b、`c9cdf64` 编译检查）；回归 fir、MM、llmop gemm 完全一致。
+- 结果：`results_index/t17/`（summary.csv、每个运行的 gpm_trace、l2_summary、l2_remote_matrix、meta、10 张热力图）。远程读 95–97%、远程延迟占 99.9%；PagedAttention、MoE 的 owner 均匀，R-GAT 一个 owner 占 16%；尾部比 1.2–1.75，但和位置相关性弱。
+- 文档：STATUS 更新 T17 状态、结果摘要、两条新的待决事项、日志；改了 `STATUS.md`、`SYNC.md`，新增 `results_index/t17/`。
+- ⏸ 等用户：R-GAT 的 GPM 利用率（A 保持 / B 改 kernel / C 改 WG 分配）；W1 用 T17 再判断的结论。

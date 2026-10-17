@@ -1,0 +1,13 @@
+1017_diag_t17-moe-skew1.75_mi200_95615c4/stats/metrics_gpm_trace.csv: kernel 2 (unified), metric finish
+         x=0      x=1      x=2      x=3      x=4      x=5      x=6   
+y=0   5.82e+05  9.63e+05  1.05e+06  1.35e+06  1.86e+06   1.8e+06   1.6e+06 
+y=1   2.12e+06  1.34e+06  1.15e+06  1.13e+06  1.26e+06  2.28e+06   2.5e+06 
+y=2   2.46e+06  2.08e+06  1.52e+06  1.42e+06  1.39e+06   1.8e+06  3.11e+06 
+y=3   2.06e+06  2.41e+06  2.24e+06   [IOMMU]   2.5e+06   2.3e+06  1.97e+06 
+y=4   2.64e+06      --        --        --        --        --        --   
+y=5       --        --        --        --        --        --        --   
+y=6       --        --        --        --        --        --        --   
+GPMs with a value: 28  without work: 20
+max 3109039.000  mean 1816662.429  min 581983.000  max/mean 1.711  max/min 5.342
+spearman vs mean hops to others -0.050  vs hops to centre -0.085
+wrote png/moe-skew1.75-k2.png

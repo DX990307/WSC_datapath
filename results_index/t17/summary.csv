@@ -1,0 +1,5 @@
+run,sim_ms,wall_h,kernels,local_mb,remote_mb,remote_frac_bytes,remote_lat_share,local_avg_ns,remote_avg_ns,mean_hops,owners,top1_owner,top3_owner,owner_max_over_mean,owner_min_over_mean,tail_time_weighted,note
+1017_diag_t17-moe-skew0_mi200_95615c4,5.895,3.17,5,584.9,986.9,0.6279,0.9813,70,2168,3.6,48,0.039,0.1,1.86,0.1,1.619,L2-miss level (l2_summary); peak RSS not recorded
+1017_diag_t17-moe-skew1.75_mi200_95615c4,5.98,3.29,5,591.3,1028.9,0.635,0.9817,70,2164,3.69,48,0.037,0.099,1.79,0.1,1.639,L2-miss level (l2_summary); peak RSS not recorded
+1017_diag_t17-pagedattn_mi200_95615c4,4.035,3.75,2,813.6,1002.9,0.5521,0.9799,73,2871,4.28,48,0.038,0.107,1.83,0.11,1.753,L2-miss level (l2_summary); peak RSS not recorded
+1017_diag_t17-rgat-s320_mi200_95615c4,15.153,3.3,30,144.4,890.9,0.8605,0.9953,72,2433,5.47,48,0.16,0.244,7.68,0.77,1.205,L2-miss level (l2_summary); peak RSS not recorded

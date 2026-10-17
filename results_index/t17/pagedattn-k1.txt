@@ -1,0 +1,13 @@
+1017_diag_t17-pagedattn_mi200_95615c4/stats/metrics_gpm_trace.csv: kernel 1 (unified), metric finish
+         x=0      x=1      x=2      x=3      x=4      x=5      x=6   
+y=0   2.94e+04  2.28e+04   2.6e+04  1.32e+04   4.3e+04  6.43e+04  5.62e+04 
+y=1   1.09e+05  2.41e+04  5.84e+04  3.61e+04  1.56e+05  4.53e+04  5.33e+04 
+y=2   8.91e+04  1.38e+05  2.67e+04  7.69e+04  9.77e+04  7.45e+04  6.26e+04 
+y=3   6.14e+04   3.1e+04  4.21e+04   [IOMMU]  3.62e+04  2.89e+04  5.42e+04 
+y=4   8.43e+04  6.79e+04   7.3e+04  9.04e+04  4.29e+04   1.7e+05  9.72e+04 
+y=5   7.32e+04  7.54e+04  1.85e+04  1.32e+05      --        --        --   
+y=6       --        --        --        --        --        --        --   
+GPMs with a value: 38  without work: 10
+max 170011.000  mean 65286.237  min 13195.000  max/mean 2.604  max/min 12.885
+spearman vs mean hops to others -0.050  vs hops to centre -0.021
+wrote png/pagedattn-k1.png

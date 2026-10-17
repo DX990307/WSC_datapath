@@ -1,0 +1,13 @@
+1017_diag_t17-rgat-s320_mi200_95615c4/stats/metrics_gpm_trace.csv: kernel 8 (unified), metric finish
+         x=0      x=1      x=2      x=3      x=4      x=5      x=6   
+y=0   1.25e+06  1.31e+06  1.32e+06  1.32e+06  1.23e+06  1.15e+06  1.46e+06 
+y=1   1.39e+06  1.38e+06  1.35e+06  1.26e+06  1.14e+06  1.36e+06  1.55e+06 
+y=2   1.55e+06  1.46e+06  1.23e+06  1.15e+06  1.19e+06   1.5e+06  1.47e+06 
+y=3   1.65e+06  6.68e+05      --     [IOMMU]      --        --        --   
+y=4       --        --        --        --        --        --        --   
+y=5       --        --        --        --        --        --        --   
+y=6       --        --        --        --        --        --        --   
+GPMs with a value: 23  without work: 25
+max 1654121.000  mean 1318546.435  min 668156.000  max/mean 1.255  max/min 2.476
+spearman vs mean hops to others +0.367  vs hops to centre +0.349
+wrote png/rgat-s320-k8.png
