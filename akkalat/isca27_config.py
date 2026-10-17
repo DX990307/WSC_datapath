@@ -42,6 +42,8 @@ STAT_FLAGS = {
     "-report-l2-source": "统计开关：L2 数据来源（本地/远程 × L2/DRAM）",
     "-l2-source-tile-width": "统计开关的参数：7×7 mesh 宽度，用来算跳数",
     "-heartbeat-file": "运行监控：心跳文件",
+    "-report-gpm-trace": "统计开关（T16）：每个 kernel × GPM 的 WG 数、完成时间、本地/远程访问",
+    "-gpm-trace-file": "统计开关的参数：T16 per-GPM CSV 的文件名",
 }
 
 

@@ -32,6 +32,8 @@ from runall2_constants import (  # noqa: E402
 KNOWN_REASONS = {
     "-report-l2-source": "统计开关：L2 数据来源（本地/远程 × L2/DRAM）",
     "-max-wg=": "benchmark 截断参数（不算配置修改）",
+    "-report-gpm-trace": "统计开关（T16）：每个 kernel × GPM 的 WG 数、完成时间、本地/远程访问",
+    "-gpm-trace-file=": "统计开关的参数：T16 per-GPM CSV 的文件名",
 }
 
 

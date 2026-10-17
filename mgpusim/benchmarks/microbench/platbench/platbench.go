@@ -59,6 +59,17 @@ type GatherArgs struct {
 	Iters             uint32
 }
 
+// MixReadArgs are the arguments of the mixread kernel (no hidden arguments).
+type MixReadArgs struct {
+	Table, Sink driver.Ptr
+	Me          int32
+	NRanks      int32
+	ChunkMask   int32
+	Iters       int32
+	FThr        int32
+	Seed        int32
+}
+
 // EmptyArgs are the arguments of the empty kernel.
 type EmptyArgs struct {
 	Sink                driver.Ptr
@@ -73,24 +84,27 @@ type Benchmark struct {
 	context *driver.Context
 	gpus    []int // the runner's GPU list (the unified GPU), for Test=kernel
 
-	chaseCo, bwCo, gatherCo, emptyCo *insts.HsaCo
+	chaseCo, bwCo, gatherCo, emptyCo, mixReadCo *insts.HsaCo
 
-	Test       string   // latency, bandwidth, hopmatrix, remotebw, incast, patterns, kernel
-	Config     string   // configuration name, copied into every row
-	CUsPerGPM  int      // 32 (hpca) or 38 (mi300x-eighth)
-	Src        int      // driver ID that runs the kernel
-	Dsts       []int    // driver IDs that hold the data
-	Footprints []uint64 // bytes
-	Groups     []string // latency: A (page-local) and/or B (cross-page)
-	Steps      int      // latency: measured chase steps
-	WarmLimit  uint64   // latency: warm up footprints up to this size
-	CUs        []int    // bandwidth: active CU counts
-	Modes      []string // bandwidth: read, write, copy
-	WGs        []int    // remotebw: work-group counts
-	Ks         []int    // incast: number of readers
-	Patterns   []string // patterns: alltoall, neighbor, transpose, ring, snake
-	ChunkBytes uint64   // patterns: bytes read from each source
-	Sources    []int    // hopmatrix: source driver IDs (0 = all GPMs)
+	Test       string    // latency, bandwidth, hopmatrix, remotebw, incast, patterns, kernel, remotefrac
+	Config     string    // configuration name, copied into every row
+	CUsPerGPM  int       // 32 (hpca) or 38 (mi300x-eighth)
+	Src        int       // driver ID that runs the kernel
+	Dsts       []int     // driver IDs that hold the data
+	Footprints []uint64  // bytes
+	Groups     []string  // latency: A (page-local) and/or B (cross-page)
+	Steps      int       // latency: measured chase steps
+	WarmLimit  uint64    // latency: warm up footprints up to this size
+	CUs        []int     // bandwidth: active CU counts
+	Modes      []string  // bandwidth: read, write, copy
+	WGs        []int     // remotebw: work-group counts
+	Ks         []int     // incast: number of readers
+	Patterns   []string  // patterns: alltoall, neighbor, transpose, ring, snake
+	ChunkBytes uint64    // patterns: bytes read from each source
+	Sources    []int     // hopmatrix: source driver IDs (0 = all GPMs)
+	Fractions  []float64 // remotefrac: remote fractions f, one phase each
+	MixIters   int       // remotefrac: 1-KB chunks read per wavefront
+	MixWGs     int       // remotefrac: work-groups per GPM (0 = CUsPerGPM * wgsPerCU)
 	Seed       int64
 }
 
@@ -102,11 +116,14 @@ func NewBenchmark(d *driver.Driver) *Benchmark {
 	b.bwCo = kernels.LoadProgramFromMemory(hsacoBytes, "bw")
 	b.gatherCo = kernels.LoadProgramFromMemory(hsacoBytes, "gather")
 	b.emptyCo = kernels.LoadProgramFromMemory(hsacoBytes, "empty")
+	b.mixReadCo = kernels.LoadProgramFromMemory(hsacoBytes, "mixread")
 	b.Src = 1
 	b.Steps = 20000
 	b.WarmLimit = 8 << 20
 	b.CUsPerGPM = 32
 	b.ChunkBytes = 256 << 10
+	b.Fractions = []float64{0, 0.1, 0.25, 0.5, 1}
+	b.MixIters = 64
 	b.Seed = 1
 	return b
 }
@@ -138,6 +155,8 @@ func (b *Benchmark) Run() {
 		b.runPatterns()
 	case "kernel":
 		b.runKernel()
+	case "remotefrac":
+		b.runRemoteFrac()
 	default:
 		panic(fmt.Sprintf("unknown -plat-test %q", b.Test))
 	}
@@ -716,4 +735,84 @@ func (b *Benchmark) measureUnified(ctx *driver.Context, name string, dev, ngpm i
 	}
 	b.emit(row{"pattern": name, "k": ngpm, "wgs": wgs, "cycles": oneKernel,
 		"latency_ns": (now() - start) / 10, "iters": 10})
+}
+
+// ---------------------------------------------------------------- 8. remote fraction (T16)
+
+// MixChunkBytes is the bytes one wavefront reads per mixread iteration.
+const MixChunkBytes = 64 * 16
+
+// FractionThreshold converts a remote fraction to the kernel's 16-bit
+// fixed-point threshold (65536 = always remote).
+func FractionThreshold(f float64) int32 {
+	if f <= 0 {
+		return 0
+	}
+	if f >= 1 {
+		return 1 << 16
+	}
+	return int32(f*65536 + 0.5)
+}
+
+// runRemoteFrac (T16 1c): every GPM holds a shard of Footprints[0] bytes and
+// runs MixWGs work-groups; each wavefront reads MixIters 1-KB chunks, a
+// fraction f of them from uniformly random other GPMs' shards and the rest
+// from its own shard. The shards are first read once locally (one warm-up
+// phase), then each f is one SPMD phase over all 48 GPMs. Phase k of the
+// -report-gpm-trace CSV is the warm-up (k = 0) or f = Fractions[k-1]; its
+// per-GPM gpm_kernel_end_ns gives the finish-time heatmap.
+func (b *Benchmark) runRemoteFrac() {
+	n := b.driver.GetNumGPUs()
+	all := make([]int, n)
+	for i := range all {
+		all[i] = i + 1
+	}
+	shardBytes := b.Footprints[0]
+	chunks := shardBytes / MixChunkBytes
+	if chunks == 0 || chunks&(chunks-1) != 0 {
+		panic(fmt.Sprintf("remotefrac: shard %d B must be a power-of-two number of 1-KB chunks",
+			shardBytes))
+	}
+	wgs := b.MixWGs
+	if wgs <= 0 {
+		wgs = b.CUsPerGPM * wgsPerCU
+	}
+
+	s := probe.NewSPMD(b.driver, b.context, all)
+	sinks := s.AllocShards(64)
+	shards := s.AllocShards(shardBytes)
+	tables := s.UploadPtrTable(shards)
+
+	warm := make([]probe.Launch, n)
+	for r := range all {
+		nwg := b.CUsPerGPM * wgsPerCU
+		warm[r] = probe.Launch{
+			Rank: r, Grid: [3]uint32{uint32(nwg * wgSize), 1, 1}, WG: [3]uint16{wgSize, 1, 1},
+			Args: &BwArgs{A: shards[r], B: shards[r], Sink: sinks[r], N4: uint32(shardBytes / 16),
+				Iters: 1, Mode: 0, ActiveWGs: uint32(nwg)},
+		}
+	}
+	tWarm := elapsed(s, func() { s.RunPhase(b.bwCo, warm) })
+	b.emit(row{"pattern": "warmup", "mode": "read", "footprint_bytes": shardBytes,
+		"k": n, "wgs": n * b.CUsPerGPM * wgsPerCU, "bytes_moved": shardBytes * uint64(n),
+		"cycles": tWarm, "group": "phase0"})
+
+	wavefronts := uint64(wgs * wgSize / 64)
+	for i, f := range b.Fractions {
+		ls := make([]probe.Launch, n)
+		for r := range all {
+			ls[r] = probe.Launch{
+				Rank: r, Grid: [3]uint32{uint32(wgs * wgSize), 1, 1}, WG: [3]uint16{wgSize, 1, 1},
+				Args: &MixReadArgs{Table: tables[r], Sink: sinks[r], Me: int32(r),
+					NRanks: int32(n), ChunkMask: int32(chunks - 1), Iters: int32(b.MixIters),
+					FThr: FractionThreshold(f), Seed: int32(b.Seed)},
+			}
+		}
+		t := elapsed(s, func() { s.RunPhase(b.mixReadCo, ls) })
+		moved := uint64(n) * wavefronts * uint64(b.MixIters) * MixChunkBytes
+		b.emit(row{"pattern": fmt.Sprintf("remotefrac-%g", f), "mode": "read",
+			"footprint_bytes": shardBytes, "k": n, "wgs": n * wgs, "iters": b.MixIters,
+			"threads": n * wgs * wgSize, "bytes_moved": moved, "cycles": t,
+			"bandwidth_B_per_cycle": float64(moved) / t, "group": fmt.Sprintf("phase%d", i+1)})
+	}
 }

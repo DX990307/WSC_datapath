@@ -133,6 +133,7 @@ func (r *Runner) defineMetrics() {
 	r.addKernelTimeTracer()
 	r.addInstCountTracer()
 	r.addWGCountTracer()
+	r.addGPMTracer()
 	r.addMaxWGStopper()
 	r.addCUCPIHook()
 	r.addCacheLatencyTracer()
