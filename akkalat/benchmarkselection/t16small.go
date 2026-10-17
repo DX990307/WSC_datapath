@@ -38,7 +38,7 @@ var t16WGPerCUFlag = flag.Float64("t16-wg-per-cu", 0,
 var t16SmallDefaultWGPerCU = map[string]float64{
 	"pagerank-t16small":             48,
 	"im2col-t16small":               1024,
-	"matrixtranspose-t16small":      12,
+	"matrixtranspose-t16small":      4,
 	"spmv-t16small":                 256,
 	"kmeans-t16small":               4,
 	"matrixmultiplication-t16small": 12,
