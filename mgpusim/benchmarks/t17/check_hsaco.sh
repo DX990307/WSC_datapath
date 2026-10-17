@@ -11,14 +11,14 @@
 #   - s_load/s_store/s_buffer_* other than s_load_dword/x2/x4/x8/x16
 #     (emu/alu.go runSMEM and timing/cu/scalarunit.go implement SMEM 0-4);
 #   - a kernel whose private segment (scratch) size is not 0;
-#   - an s_nop (or another scheduler-internal SOPP op other than s_endpgm,
-#     s_barrier, s_waitcnt) inside a kernel body: the timing CU scheduler
-#     (timing/cu/scheduler.go EvaluateInternalInst, default case) completes
-#     it without advancing the PC, so the wavefront re-executes it forever
-#     (timing hang; emulation is fine). The s_nop padding after s_endpgm is
-#     never executed and is ignored. clang inserts "s_nop 0" after a store of
-#     more than 8 bytes whose data VGPRs the next VALU overwrites (fiji
-#     hazard); store at most 8 bytes per lane per instruction there.
+#   - a scheduler-internal SOPP op other than s_nop, s_endpgm, s_barrier,
+#     s_waitcnt inside a kernel body: emu/alu.go runSOPP has no case for
+#     them (emulation panics) and the timing CU treats them as no-ops
+#     (s_sethalt/s_setkill/s_trap/s_set_gpr_idx_* are not modeled). s_nop is
+#     accepted: the timing scheduler used to complete it without advancing
+#     the PC (hang), fixed in "timing/cu: advance PC for scheduler-internal
+#     SOPP instructions". Padding after s_endpgm is never executed and is
+#     ignored.
 # Needs llvm-objdump and llvm-readelf (yss2). Usage: check_hsaco.sh a.hsaco...
 set -euo pipefail
 
@@ -55,9 +55,9 @@ for f in "$@"; do
     /^[0-9a-f]+ <.*>:$/ { body = 1; next }
     { m = $1 }
     m == "s_endpgm" { body = 0; next }
-    body && m ~ /^s_(nop|setkill|sethalt|sleep|setprio|trap|icache_inv|incperflevel|decperflevel|ttracedata|set_gpr_idx_off|set_gpr_idx_mode)$/ {
+    body && m ~ /^s_(setkill|sethalt|sleep|setprio|trap|icache_inv|incperflevel|decperflevel|ttracedata|set_gpr_idx_off|set_gpr_idx_mode)$/ {
       n[m]++ }
-    END { for (k in n) printf "  %s in a kernel body (%d): timing hang\n", k, n[k] }')"
+    END { for (k in n) printf "  %s in a kernel body (%d): not implemented\n", k, n[k] }')"
   bad+="${internal:+$internal$'\n'}"
 
   priv="$("$READELF" --notes "$f" | grep -E 'PrivateSegmentFixedSize' |

@@ -17,12 +17,16 @@
 # the source-level way around them used in these kernels:
 #   LDS arrays/strides of 64 dwords     -> ds_*2st64_b32: interleave/pad
 #   4 contiguous aligned LDS loads      -> ds_read_b128: strided layout
-#   unsigned 64-bit int*int + 64        -> v_mad_u64_u32 (488): decoded with a
-#                                          32-bit dst; keep offsets 32-bit
 # Implemented since commit "simulator: implement v_mad_i64_i32, ..." (the
 # kernels written before still avoid them): s_load_dwordx16 (>= 64
 # contiguous kernarg bytes), v_mad_i64_i32 (signed long index math),
 # v_alignbit_b32 (64-bit id shifts), s_ashr_i64, s_addk_i32, s_cmpk_eq_i32.
+# Fixed since commits "timing/cu: advance PC for scheduler-internal SOPP
+# instructions" and "insts, emu: decode v_mad_u64_u32 (VOP3 488) as VOP3b"
+# (the kernels written before still avoid them): s_nop in a kernel body
+# (clang's fiji store-data hazard padding; used to hang the timing CU) and
+# v_mad_u64_u32 (unsigned 64-bit int*int + 64; used to be decoded with a
+# 32-bit dst).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
