@@ -29,7 +29,7 @@
 | T14 平台数据（第一档） | 完成（⏸ 等用户确认） | 10-16 | 7 项 × 3 套配置（hpca、mi300x、mi200）跑完；摘要表见“结果摘要”，CSV 在 `results_index/platform/`、`results_index/platform_mi200/` |
 | T15 oracle 上限实验 | ⏸ 配置确认，等用户 | 10-16 | 用冻结版 `isca27-mi200-v1`；6 组 × 14 个 workload = 84 个运行，见“需要用户决定” |
 | T16 位置导致的负载不均（阶段 1） | 完成（⏸ 等用户看结果） | 10-17 | 13 个运行全部成功；结果见“结果摘要 → T16 阶段 1”；按判断标准 W1 **差一点没成立**（真实 workload 只有 2 个满足） |
-| T17 新 workload | 第一轮 baseline 运行中（用户 10-17 确认规模） | 10-17 | yss2：pagedattn batch 66、moe skew 1.75 / 0、rgat 320 seeds；二进制 `95615c4`（T17 + T16 tracer 合并，fir 回归一致）；`results/1017_diag_t17-*` |
+| T17 新 workload | 第一轮 baseline 完成（⏸ 等用户看结果） | 10-17 | 4 个运行全部成功（rc=0，墙钟 3.2–3.75 小时）；结果见“结果摘要 → T17 第一轮”，CSV 和热力图在 `results_index/t17/`；R-GAT 85% 的时间只用了 ≤13 个 GPM（见“需要用户决定”） |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
@@ -40,9 +40,11 @@
   - **W-B MoE**：规格形状 `-moe-tokens=256 -moe-hidden=1024 -moe-ffn=704 -moe-topk=6 -moe-skew=1.75`，对照 `-moe-skew=0`。5 个 kernel；up/gate/combine 的 WG 少于 1344，结构上就有 20–38 个 GPM 空闲。footprint 约 574 MB。预计 3.9 / 3.6 小时，12–20 GB。（备选 `-moe-ffn=512`：约 2.9 / 2.7 小时。）试跑：远程读 95%，远程延迟占 97%，前 3 个 owner 占 22–23%。
   - **W-C R-GAT**：`-benchmark=rgat -rgat-data=~/akita-exp-test/datasets/igbh/tiny -rgat-seeds=320 -rgat-fanouts=10,5 -rgat-hidden=128 -rgat-heads=1`。30 个 kernel，共 13,416 WG（最大的 aggregation kernel 1,344 个，无空闲）。footprint 约 140 MB。预计约 4 小时（范围 3.3–5.4 小时），8–12 GB。**和规格的差别**：种子从 512 减到 320（512 会超过 5 小时上限）；备选 256 个种子（2.7–4.3 小时）。试跑：远程读 93%，远程延迟占 92%，前 3 个 owner 占 25%。接近 MLPerf 的 4 头 × 512 维：512 个种子要 31–47 小时，不可行；3 小时只能跑约 32–40 个种子。
   - **放置**：4 个运行（W-A、W-B 两个、W-C），长的放 yss3（T15 跑完之后），或者 yss2。
-- [ ] (T17) **模拟器的两个新发现**（子代理没有改模拟器，都在 kernel 侧绕开了）：(1) timing 模式下 `s_nop` 不推进 PC，wavefront 死循环（`timing/cu/scheduler.go` 的 `EvaluateInternalInst` 默认分支）；现在编译检查脚本拒绝 kernel 里的 `s_nop`。要不要在模拟器里修？（2）**开着 magic copy 时 kernel 之间不失效 L1**：先读后被下一个 kernel 改写的 buffer，再读会读到 L1 里的旧值；R-GAT 已改成每个关系写自己的 buffer。注意：真实 GPU 在 kernel 之间会失效 L1，我们不失效，**baseline 会多一些 L1 命中（偏快）**，D20 把它列为“有意比真实 MI200 弱”，方向其实相反，要更正。
-- [ ] (T17) **`v_mad_u64_u32`（VOP3 488）扫描结果**：80 个 hsaco 里只有 `gemm` 用到（4 个文件，各 24 处），在 64 位无符号除法/取余的慢路径上，只有被除数 ≥ 2³² 时才执行（执行了就会 panic）；链接这个 gemm 的有 fulllayer、lenet、minerva、vgg16、bert、gpt、resnet、llmop。现有结果都没有 panic，所以没走到这条路径，现有结果不受影响。修不修由用户决定。
+- [x] (T17) **已修（用户 10-17 批准）：`s_nop` 等调度器内部 SOPP 指令现在推进 PC（`3a94d26`）；L1 不失效的问题保持原样，只记录（D20 的说法要更正）。** 原问题：**模拟器的两个新发现**（子代理没有改模拟器，都在 kernel 侧绕开了）：(1) timing 模式下 `s_nop` 不推进 PC，wavefront 死循环（`timing/cu/scheduler.go` 的 `EvaluateInternalInst` 默认分支）；现在编译检查脚本拒绝 kernel 里的 `s_nop`。要不要在模拟器里修？（2）**开着 magic copy 时 kernel 之间不失效 L1**：先读后被下一个 kernel 改写的 buffer，再读会读到 L1 里的旧值；R-GAT 已改成每个关系写自己的 buffer。注意：真实 GPU 在 kernel 之间会失效 L1，我们不失效，**baseline 会多一些 L1 命中（偏快）**，D20 把它列为“有意比真实 MI200 弱”，方向其实相反，要更正。
+- [x] (T17) **已修（用户 10-17）：488 改成 VOP3b、64 位目的/src2/进位（`b5cff1b`）；回归 fir、MM、llmop gemm 修复前后 total_time 和排序后统计的 md5 完全一致。** 原问题：**`v_mad_u64_u32`（VOP3 488）扫描结果**：80 个 hsaco 里只有 `gemm` 用到（4 个文件，各 24 处），在 64 位无符号除法/取余的慢路径上，只有被除数 ≥ 2³² 时才执行（执行了就会 panic）；链接这个 gemm 的有 fulllayer、lenet、minerva、vgg16、bert、gpt、resnet、llmop。现有结果都没有 panic，所以没走到这条路径，现有结果不受影响。修不修由用户决定。
 
+- [ ] (T17) **R-GAT 的时间大部分花在只用 1–13 个 GPM 的 kernel 上**：30 个 kernel 里，85% 的模拟时间在用到 ≤13 个 GPM 的 kernel 上（42% 在 ≤3 个 GPM 上），48 个 GPM 的占用上限只有 19%。原因是 WG 按 `ceil(总 WG / 1344)` 连续切分，每个 GPM 拿 28 的倍数个 WG；R-GAT 的变换/注意力 kernel 只有 26–340 个 WG，但每个 WG 很长（例如 kernel 2：56 个 WG、2 个 GPM、1.7 ms）。MoE 的 expert kernel 也只用到 26–41 个 GPM（试跑时已知）。这样的 R-GAT 主要在测“少数 GPM 读远程数据”，不太代表 wafer 级执行。—— A：保持现状，论文里如实写；B：把 R-GAT 的变换/注意力 kernel 改成更多、更小的 WG，让每个 kernel 至少铺满 48 个 GPM，再跑一次（约 3–4 小时）；C：不改 kernel，在 driver 里把少于 1344 个 WG 的 kernel 摊到全部 GPM（改模拟器的 WG 分配，影响所有 workload，需要回归）。推荐 B（只改 T17 自己的 kernel，不碰冻结的模拟器）。
+- [ ] (T17/T16) **W1 用 T17 再判断**：T17 的 kernel 尾部比都很高（时间加权 1.2–1.75），但和位置的相关性弱：主 kernel 的 |ρ|（对平均跳数）只有 0.05–0.37，只有 MoE 的 router kernel（10 个 GPM、占 19% 时间）ρ = 0.65。PagedAttention 的不均来自 Azure 序列长度不同（每个 WG 的工作量不同），MoE 来自每个 expert 的 token 数不同，都是数据导致的，不是位置。所以按 T16 的标准，T17 **没有给 W1 增加支持**：真实 workload 里满足“尾部比 ≥ 1.1 且 |ρ| > 0.5”的仍然只有 kmeans、pagerank（MoE router 这个短 kernel 只能算勉强第 3 个）。—— 建议：W1 不作为主线；“数据导致的负载不均 + 远程延迟”可以作为新的观察，交给 Cowork 讨论。最终由用户决定。
 - [x] (T16 阶段 1) **用户 10-17 确认：跑 1c + 1d，不跑 1b。** 已在 yss2 启动 13 个运行（`results/1017_diag_t16-*_mi200_2e09bc9`，组 `t16-stage1-1017`）。原问题：**配置确认（CONFIG.md 第 3 节；冻结版 mi200，二进制来自 `isca27/t16-position` `2e09bc9`，模拟器时序代码和 `isca27-mi200-v1` 相同，只多了统计）**。所有运行都是 runall2 的 mi200 baseline 参数（和 `mi200.json` 没有差异）+ 统计开关 `-report-gpm-trace`（新）、`-report-l2-source -l2-source-tile-width=7`，保留 `-magic-memory-copy`。
   - **回归已通过**（yss2 测试目录，mi200，`-max-wg 4096`）：fir 改动前 / tracer 关 / tracer 开 total_time 都是 26.568 µs，16.5 万项统计排序后完全一致；MM tracer 关 / 开都是 345.433 µs，17.0 万项完全一致。（metrics.csv 本身每次行顺序不同，因为 `report.go` 遍历 Go map；排序后一致。）
   - **1c 微基准**（platbench，跑完整个 kernel）：① mi200 补跑 T14 的 all-to-all（每对 16 KB），约 13 分钟；② 远程比例扫描 `-plat-test=remotefrac`，每 GPM 1 MB 本地分片、224 个 WG、12 次迭代（每阶段读 504 MiB），f = 0 / 0.1 / 0.25 / 0.5 / 1 各一个运行，约 24 分钟 / 36 分钟 / 55 分钟 / 1.4 小时 / 2.5 小时，每个约 3.3 GB 内存；③ 可选：all-to-all 每对 256 KB，约 2.8 小时。共 6 个（加可选 1 个）。注意：重编 `kernels.hsaco` 后 T14 原有 kernel 的代码位置变了，旧 platbench 数字可能有极小差异，这次的 all-to-all 用新二进制重跑。
@@ -149,6 +151,37 @@
 ## 结果摘要
 
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
+
+### T17 第一轮：新 workload 的 baseline（10-17，mi200，二进制 `95615c4`，全部跑完；`results_index/t17/`）
+
+运行：yss2，`akkalat/isca27_run.sh` + `configs/mi200.json`（无配置差异，保留 `-magic-memory-copy`）+ `-report-gpm-trace -report-l2-source`。4 个全部 rc=0。
+
+| 运行 | 模拟时间 | 墙钟 | kernel 数 | L1V 读远程比例 | L1V 读远程延迟占比 | L2 缺失远程比例（字节） | L2 缺失远程延迟占比 | 远程 / 本地平均延迟 | 平均跳数 | owner：前 1 / 前 3 / 最大÷平均 | 时间加权尾部比 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| PagedAttention（batch 66） | 4.035 ms | 3.75 h | 2 | 96.8% | 99.9% | 55.2% | 98.0% | 2871 / 73 ns | 4.28 | 3.8% / 10.7% / 1.83 | 1.75 |
+| MoE skew 1.75 | 5.980 ms | 3.29 h | 5 | 95.5% | 99.9% | 63.5% | 98.2% | 2164 / 70 ns | 3.69 | 3.7% / 9.9% / 1.79 | 1.64 |
+| MoE skew 0（对照） | 5.895 ms | 3.17 h | 5 | 96.6% | 99.9% | 62.8% | 98.1% | 2168 / 70 ns | 3.60 | 3.9% / 10.0% / 1.86 | 1.62 |
+| R-GAT（320 个种子） | 15.153 ms | 3.30 h | 30 | 97.4% | 99.95% | 86.1% | 99.5% | 2433 / 72 ns | 5.47 | 16.0% / 24.4% / 7.68 | 1.21 |
+
+- **远程**：L1V 读 95–97% 是远程地址，远程访问占了 99.9% 的读延迟；按 L2 缺失算，远程是 55–86%（字节），延迟占 98–99.5%。远程平均延迟是本地的 30–40 倍。
+- **owner 集中度**：PagedAttention 和 MoE 的数据均匀分布在 48 个 GPM 上（前 3 个 owner 约 10%），没有热点 owner；R-GAT 有一个 owner 占 16%（最大÷平均 7.7）。
+- **MoE 的 skew**：1.75 只比 0 慢 1.4%；skew 主要改变每个 expert kernel 的 WG 数（726 → 781、1056 → 1136）和哪几个 GPM 收尾，对总时间影响很小。
+- **每个 GPM 的结束时间**（热力图 `results_index/t17/<运行>-k<kernel>.png` / `.txt`）：
+
+| 运行 / kernel | 占总时间 | 有工作的 GPM | 最大÷平均 | 最大÷最小 | ρ（对平均跳数） |
+|---|---|---|---|---|---|
+| PagedAttention k0（partial） | 95% | 48 | 1.715 | 5.78 | +0.29 |
+| PagedAttention k1（reduce） | 4% | 38 | 2.604 | 12.9 | −0.05 |
+| MoE 1.75 k0（router） | 19% | 10 | 1.245 | 4.19 | +0.65 |
+| MoE 1.75 k2（up/gate） | 52% | 28 | 1.711 | 5.34 | −0.05 |
+| MoE 1.75 k3（down） | 26% | 41 | 1.814 | 6.99 | −0.20 |
+| MoE 0 k2 / k3 | 48% / 30% | 26 / 38 | 1.655 / 1.827 | 4.99 / 7.81 | −0.31 / +0.10 |
+| R-GAT k8（最长的之一） | 11% | 23 | 1.255 | 2.48 | +0.37 |
+| R-GAT k9（聚合，48 个 GPM） | 0.6% | 48 | 1.270 | 1.76 | +0.18 |
+
+- **R-GAT 的 GPM 利用率**：85% 的时间在只用 ≤13 个 GPM 的 kernel 上（见“需要用户决定”）。
+- **峰值内存**：正式运行没有记录（`isca27_run.sh` 不包 `/usr/bin/time`）；规模确认时按试跑外推的是 W-A 约 28 GB、W-B 12–20 GB、W-C 8–12 GB，运行期间 yss2 没有内存告警。以后的 T17 运行会加上峰值内存记录。
+- **墙钟**：3.2–3.75 小时，都在 3–5 小时的预算内。
 
 ### T16 阶段 1：位置导致的负载不均（10-17，mi200，二进制 `2e09bc9`，全部跑完整个 kernel；`results_index/t16/`）
 
@@ -933,3 +966,8 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 - **合并**：`isca27/t16-position` 合并进 `isca27/t17-workloads`（`95615c4`），这样 T17 的运行能打开 T16 的 per-GPM tracer。回归（yss2 测试目录，mi200 baseline 参数，fir，`-max-wg 4096`）：冻结版 `67f1c03` 和 `95615c4` 的 total_time 都是 26.568 µs，164,567 行排序后的 md5 相同。
 - **运行**（yss2，`akkalat/isca27_run.sh` + `configs/mi200.json` + `-report-gpm-trace -report-l2-source -l2-source-tile-width=7`，二进制 `~/isca27bin/baseline_95615c4`）：`1017_diag_t17-pagedattn`（`-pa-batch=66`）、`-moe-skew1.75`、`-moe-skew0`（`-moe-tokens=256 -moe-hidden=1024 -moe-ffn=704 -moe-topk=6`）、`-rgat-s320`（IGBH-tiny，`-rgat-seeds=320 -rgat-fanouts=10,5 -rgat-hidden=128 -rgat-heads=1`）。预计 3–4 小时。
 - **模拟器 bug 修复**（用户批准）：`s_nop` 在 timing 模式下不推进 PC、`v_mad_u64_u32` 解码成 32 位目的寄存器；在 T17 分支上做，回归在 yss2 测试目录。
+
+### 2026-10-17 T17 第一轮 baseline 完成；两个模拟器 bug 修好
+
+- **模拟器 bug**（`isca27/t17-workloads`，推到 `c9cdf64`）：`3a94d26` 调度器内部的 SOPP 指令（`s_nop`、`s_sleep`、`s_setprio` 等）推进 PC；`b5cff1b` `v_mad_u64_u32` 改成 VOP3b、64 位；`c9cdf64` 编译检查接受 `s_nop`（`s_sleep` 等 emu 没实现，仍然拒绝）。回归（yss2 测试目录，修复前 `95615c4` 对修复后 `c9cdf64`）：fir、MM（`-max-wg 4096`）、llmop gemm（含 488 的 kernel）total_time 和排序后统计的 md5 完全一致。`b5cff1b` 在回归跑完之前就推了，回归一致，不需要补救。T17 第一轮用的是修复前的 `95615c4`，因为回归一致，结果不受影响。
+- **T17**：4 个运行全部成功，结果见“结果摘要 → T17 第一轮”。新发现：R-GAT 的时间大部分在只用少数 GPM 的 kernel 上；T17 的负载不均来自数据，不是位置。两条都放进“需要用户决定”。
