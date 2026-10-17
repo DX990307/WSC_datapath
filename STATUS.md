@@ -29,13 +29,13 @@
 | T14 平台数据（第一档） | 完成（⏸ 等用户确认） | 10-16 | 7 项 × 3 套配置（hpca、mi300x、mi200）跑完；摘要表见“结果摘要”，CSV 在 `results_index/platform/`、`results_index/platform_mi200/` |
 | T15 oracle 上限实验 | ⏸ 配置确认，等用户 | 10-16 | 用冻结版 `isca27-mi200-v1`；6 组 × 14 个 workload = 84 个运行，见“需要用户决定” |
 | T16 位置导致的负载不均（阶段 1） | 完成（⏸ 等用户看结果） | 10-17 | 13 个运行全部成功；结果见“结果摘要 → T16 阶段 1”；按判断标准 W1 **差一点没成立**（真实 workload 只有 2 个满足） |
-| T17 新 workload | ⏸ 规模确认，等用户 | 10-17 | 第 0 步、W-A/W-B/W-C、6 条指令、coherent 拷回、回归都完成；分支 `isca27/t17-workloads` 推到 `db47df3`；规模确认见“需要用户决定” |
+| T17 新 workload | 第一轮 baseline 运行中（用户 10-17 确认规模） | 10-17 | yss2：pagedattn batch 66、moe skew 1.75 / 0、rgat 320 seeds；二进制 `95615c4`（T17 + T16 tracer 合并，fir 回归一致）；`results/1017_diag_t17-*` |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
 
 <!-- 每条格式：- [ ] (T#) 问题 —— 可选方案 A / B，推荐 X，理由 -->
-- [ ] (T17) **规模确认 + 配置确认**（第 2 步）。所有命令 = runall2 的 mi200 baseline 参数（和 `mi200.json` 没有差异，保留 `-magic-memory-copy`）+ benchmark 参数 + `-report-l2-source -heartbeat-file`；二进制来自 `isca27/t17-workloads` `db47df3`。按 1/8 规模试跑外推（墙钟和 L2 请求量成正比：W-A、W-B 约 0.21 分钟/MB，W-C 0.27–0.37）。
+- [x] (T17) **用户 10-17 确认**：W-A batch 66、W-B 规格形状 ffn 704（1.75 和 0 各一个）、W-C 320 个种子；两个模拟器 bug（`s_nop`、`v_mad_u64_u32`）都修（修复和回归在做，T17 的 kernel 已经绕开，不影响这次运行）。原问题：**规模确认 + 配置确认**（第 2 步）。所有命令 = runall2 的 mi200 baseline 参数（和 `mi200.json` 没有差异，保留 `-magic-memory-copy`）+ benchmark 参数 + `-report-l2-source -heartbeat-file`；二进制来自 `isca27/t17-workloads` `db47df3`。按 1/8 规模试跑外推（墙钟和 L2 请求量成正比：W-A、W-B 约 0.21 分钟/MB，W-C 0.27–0.37）。
   - **W-A PagedAttention**：`-benchmark=pagedattn -pa-batch=66`（Azure 长度，9.36 万 token，8 KV 头 × 128，分段 64）。2 个 kernel：partial 11,928 WG（每 GPM 252，最后一个 84，无空闲）、reduce 2,112（10 个 GPM 空闲）。footprint 794 MB。预计约 3.0 小时，峰值约 28 GB。（备选 `-pa-batch=83`：两个 kernel 都没有空闲 GPM，约 3.7 小时、34 GB。）试跑：远程读 95–97%，远程延迟占 96–99.8%，前 3 个 owner 占 12–16%。
   - **W-B MoE**：规格形状 `-moe-tokens=256 -moe-hidden=1024 -moe-ffn=704 -moe-topk=6 -moe-skew=1.75`，对照 `-moe-skew=0`。5 个 kernel；up/gate/combine 的 WG 少于 1344，结构上就有 20–38 个 GPM 空闲。footprint 约 574 MB。预计 3.9 / 3.6 小时，12–20 GB。（备选 `-moe-ffn=512`：约 2.9 / 2.7 小时。）试跑：远程读 95%，远程延迟占 97%，前 3 个 owner 占 22–23%。
   - **W-C R-GAT**：`-benchmark=rgat -rgat-data=~/akita-exp-test/datasets/igbh/tiny -rgat-seeds=320 -rgat-fanouts=10,5 -rgat-hidden=128 -rgat-heads=1`。30 个 kernel，共 13,416 WG（最大的 aggregation kernel 1,344 个，无空闲）。footprint 约 140 MB。预计约 4 小时（范围 3.3–5.4 小时），8–12 GB。**和规格的差别**：种子从 512 减到 320（512 会超过 5 小时上限）；备选 256 个种子（2.7–4.3 小时）。试跑：远程读 93%，远程延迟占 92%，前 3 个 owner 占 25%。接近 MLPerf 的 4 头 × 512 维：512 个种子要 31–47 小时，不可行；3 小时只能跑约 32–40 个种子。
@@ -927,3 +927,9 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 - **T16 运行**：yss2，`akkalat/isca27_run.sh` + `configs/mi200.json` + `-report-gpm-trace`（1d 另加 `-report-l2-source`），13 个：`1017_diag_t16-a2a-16k`、`-frac{1,0.5,0.25,0.1,0}`、`-{pagerank,kmeans,matrixmultiplication,matrixtranspose,spmv,aes,im2col}-small`，都在 `results/1017_diag_t16-*_mi200_2e09bc9/`。二进制是 `isca27/t16-position` `2e09bc9` 交叉编译后放进 `~/isca27bin/baseline_2e09bc9`（服务器上的源码目录没有换）。
 - **更正**：10-16 T15 配置确认里写的“`mi200.json` 不含 CuPath 机制开关、模拟器有些机制默认开，用配置文件跑出来的 B 不是 baseline”**不对**。`-remote-data-path-enable` 默认 false，Remote Aggregation/Reuse 的子开关（dedup、batching、requester L2 默认 true）只在它打开时起作用（`akkalat/baseline/runner/runner.go:447`、`mgpusim/timing/rdma/remote_requester.go:21`）；Local Pairing、granularity、filter、prefetch、row continuation 默认都是 false。所以用配置文件跑的就是 baseline，T14 的平台测量有效；T15 用 runall2 的 baseline 也没问题，只是当时的理由写错了。
 - **T15**：yss2 67/67 完成（原 54 + 挪过去的 13），yss3 12 个完成、5 个还在跑，合计 79/84，没有失败。
+
+### 2026-10-17 T17 第一轮 baseline 启动
+
+- **合并**：`isca27/t16-position` 合并进 `isca27/t17-workloads`（`95615c4`），这样 T17 的运行能打开 T16 的 per-GPM tracer。回归（yss2 测试目录，mi200 baseline 参数，fir，`-max-wg 4096`）：冻结版 `67f1c03` 和 `95615c4` 的 total_time 都是 26.568 µs，164,567 行排序后的 md5 相同。
+- **运行**（yss2，`akkalat/isca27_run.sh` + `configs/mi200.json` + `-report-gpm-trace -report-l2-source -l2-source-tile-width=7`，二进制 `~/isca27bin/baseline_95615c4`）：`1017_diag_t17-pagedattn`（`-pa-batch=66`）、`-moe-skew1.75`、`-moe-skew0`（`-moe-tokens=256 -moe-hidden=1024 -moe-ffn=704 -moe-topk=6`）、`-rgat-s320`（IGBH-tiny，`-rgat-seeds=320 -rgat-fanouts=10,5 -rgat-hidden=128 -rgat-heads=1`）。预计 3–4 小时。
+- **模拟器 bug 修复**（用户批准）：`s_nop` 在 timing 模式下不推进 PC、`v_mad_u64_u32` 解码成 32 位目的寄存器；在 T17 分支上做，回归在 yss2 测试目录。
