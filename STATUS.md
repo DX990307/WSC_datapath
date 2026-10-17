@@ -28,13 +28,21 @@
 | T13 MI300X 配置 → mi200 | **已冻结**（用户 10-16） | 10-16 | 标签 `isca27-mi200-v1` = `67f1c03`（只在本地，推不推送等用户）；每 slice MSHR 保持 32；`config_deviation` 改为相对 `configs/mi200.json`（`61b6ae8`）；冻结说明 `akkalat/configs/MI200_V1.md` |
 | T14 平台数据（第一档） | 完成（⏸ 等用户确认） | 10-16 | 7 项 × 3 套配置（hpca、mi300x、mi200）跑完；摘要表见“结果摘要”，CSV 在 `results_index/platform/`、`results_index/platform_mi200/` |
 | T15 oracle 上限实验 | ⏸ 配置确认，等用户 | 10-16 | 用冻结版 `isca27-mi200-v1`；6 组 × 14 个 workload = 84 个运行，见“需要用户决定” |
-| T16 位置导致的负载不均（阶段 1） | 进行中：核实完成，tracer 开发中 | 10-16 | 分支 `isca27/t16-position`（工作区 `~/Desktop/CuPath/wt-t16`）；P10 第 1 步核实结果见日志；配置确认在 tracer 回归通过后给出 |
+| T16 位置导致的负载不均（阶段 1） | ⏸ 配置确认，等用户 | 10-17 | tracer、platbench 远程比例扫描、`*-t16small` 输入已完成，回归通过；分支 `isca27/t16-position` 推到 `2e09bc9`；配置确认见“需要用户决定” |
 | T17 新 workload | 进行中：第 0 步 + W-A 开发 | 10-16 | 分支 `isca27/t17-workloads`（工作区 `~/Desktop/CuPath/wt-t17`）；kernel 在 yss2 的 `~/akita-exp-test/t17build/` 编译 |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
 
 <!-- 每条格式：- [ ] (T#) 问题 —— 可选方案 A / B，推荐 X，理由 -->
+- [ ] (T16 阶段 1) **配置确认（CONFIG.md 第 3 节；冻结版 mi200，二进制来自 `isca27/t16-position` `2e09bc9`，模拟器时序代码和 `isca27-mi200-v1` 相同，只多了统计）**。所有运行都是 runall2 的 mi200 baseline 参数（和 `mi200.json` 没有差异）+ 统计开关 `-report-gpm-trace`（新）、`-report-l2-source -l2-source-tile-width=7`，保留 `-magic-memory-copy`。
+  - **回归已通过**（yss2 测试目录，mi200，`-max-wg 4096`）：fir 改动前 / tracer 关 / tracer 开 total_time 都是 26.568 µs，16.5 万项统计排序后完全一致；MM tracer 关 / 开都是 345.433 µs，17.0 万项完全一致。（metrics.csv 本身每次行顺序不同，因为 `report.go` 遍历 Go map；排序后一致。）
+  - **1c 微基准**（platbench，跑完整个 kernel）：① mi200 补跑 T14 的 all-to-all（每对 16 KB），约 13 分钟；② 远程比例扫描 `-plat-test=remotefrac`，每 GPM 1 MB 本地分片、224 个 WG、12 次迭代（每阶段读 504 MiB），f = 0 / 0.1 / 0.25 / 0.5 / 1 各一个运行，约 24 分钟 / 36 分钟 / 55 分钟 / 1.4 小时 / 2.5 小时，每个约 3.3 GB 内存；③ 可选：all-to-all 每对 256 KB，约 2.8 小时。共 6 个（加可选 1 个）。注意：重编 `kernels.hsaco` 后 T14 原有 kernel 的代码位置变了，旧 platbench 数字可能有极小差异，这次的 all-to-all 用新二进制重跑。
+  - **1d 小输入**（`<workload>-t16small`，默认输入完全不变，有单元测试检查）：pagerank（64,512 节点、816 万边，1 × 64,512 WG）、im2col（H = W = 1661，1 × 1,376,144）、matrixtranspose（宽 4672，1 × 5,329）、spmv（4,400 万维，1 × 344,064）、kmeans（344,064 点，3 × 5,376）、matrixmultiplication（Y = 129,024，1 × 16,128）、aes（84 MB，1 × 86,016）；每个 1–2 小时、3–9 GB；WG 数都是 CU 总数的整数倍（matrixtranspose 最后一个 GPM 65 个），没有空闲 GPM。远程读比例（前 4096 个 WG）和默认输入相近：pagerank 0.85/0.83、im2col 0.91/0.91、matrixtranspose 0.98/0.98、spmv 0.27/0.21、MM 0.95/0.80、aes 0.023/0.023。共 7 个。
+  - **1b（截断运行里的速率不均）**：T15 已经在跑，B 组没开 tracer，所以要单独补跑 B 组 + tracer（14 个 workload，`-max-wg 32768`，spmv 1536），耗时同 T15 的 B（kmeans 约 12.5 小时）。**但 T16 子代理发现截断运行里同时有 2.8–5.8 万个 WG 在执行（只完成 4,096 个时），速率只反映 kernel 开头，1b 的意义有限。** 可选方案 —— A 照跑 14 个 / B 只跑短的 13 个（不跑 kmeans）/ C 不跑 1b，用 1c、1d 代替。推荐 C（或 B）。
+  - **放置**：1c、1d 都放 yss2（短）；1b 如果跑，长的放 yss3（T15 跑完之后）。总计 1c + 1d 约 13 个运行，单机约 10–14 小时 CPU，16 个并行下墙钟约 2.5 小时。
+  - **需要在结果里分开报告的因素**（子代理发现）：小输入下 buffer 余数页给最后一个 GPM、< 48 页的 buffer 在 GPM 1；MM 默认输入的 64 KB B 矩阵也在 GPM 1（远程比例 0.80 的主要来源）；默认 matrixtranspose 的最后一个 GPM 分到 0 个 WG。这些是和位置无关的不均，不能算进 W1。
+
 - [ ] (T15) **配置确认（CONFIG.md 第 3 节；mi200 冻结版 `isca27-mi200-v1`）**。
   - **运行方式**：用 runall2（`--remote-ablation --configs=baseline --gpm-preset=mi200 --max-wg=32768`，spmv 1536），oracle 的改动用 `--extra-benchmark-flags` 加在命令末尾（同名参数以后者为准）。**不用 `isca27_run.sh` + 配置文件**：`mi200.json` 只有 14 个参数，没有写 CuPath 各机制的开关，而模拟器有些机制默认是开的（如 `-remote-data-path-l2-enable` 默认 true），那样跑出来的 B 不是 baseline。runall2 的 baseline 显式关掉全部机制，和 10-15 ablation 的 baseline 参数逐个相同。
   - **共同参数**（6 组都一样）：10-15 mi200 ablation 的 baseline 命令（`-timing -num-memory-banks=8 -l1v-mshr-entries=16 -l1v-max-concurrent-trans=16 -bandwidth=48 -switch-latency=32 -rdma-pipeline-width=8 -rdma-pipeline-latency=10 -rdma-max-outstanding=64 -magic-memory-copy -report-all -gpm-preset=mi200 -l2-cache-size-mb=2 -mmutlb-lookup-latency=80`，加上 runall2 baseline 的全部机制关闭开关）+ 统计开关 `-report-l2-source -l2-source-tile-width=7`（只加统计，不改配置）。

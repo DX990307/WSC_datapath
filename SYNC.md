@@ -176,3 +176,8 @@
 - 2026-10-16 · cowork · 用户要求每个实验 3–5 小时。`ideas_from_T14.md` 新增“模拟速度预算”一节：T14 实测本地约 1.5–1.8 GB/小时、远程约 200–250 MB/小时（远程每字节约贵 7 倍）；mi200 短片段中位数 48 分钟，KM 12.5 小时超出预算。粗估模型：wall 分钟 ≈ 3 + 远程 MB/3.5 + 本地 MB/27。给出了 4 个新 workload 的初始规模；规定先按 1/8 规模试跑、再外推定规模，不用 `-max-wg`。
 
 - 2026-10-16 · cowork · 用户同意 T17（“可以试试吧”）。新建 `tasks/T17_latest_workloads.md`（PagedAttention、MoE、R-GAT，DLRM 备选；第 0 步就是原来的 T1；写法原则是 unified、不用 atomic、pull、索引在 host 端算；先 1/8 试跑，再外推到 baseline 约 3 小时，上限 5 小时）和 `prompts/P11`。README 里 T5a/T5b/T5c/T5d/T9 标为被取代或暂停，这些文档的开头也加了说明。
+
+### 2026-10-17 [claude-code] T16 阶段 1 开发完成，配置确认（⏸）；T17 开发中
+- 代码：`isca27/t16-position` 推到 `2e09bc9`（per-GPM tracer `-report-gpm-trace`、platbench `remotefrac`、`*-t16small` 输入、`akkalat/t16_heatmap.py`）；回归通过（fir、MM，tracer 关/开和改动前完全一致）。`isca27/t17-workloads` 在本地开发中（没推送）：第 0 步完成、补了 6 条指令（用户批准）、W-A/W-B/W-C 已实现、数据集已下载到 yss2 测试目录。
+- 文档：STATUS 新增 T16 配置确认、T17 进度。改了 `STATUS.md`、`SYNC.md`。
+- ⏸ 等用户：T16 配置确认（1b 跑不跑）；T17 的三个问题（`v_mad_u64_u32`、W-C 简化、kmeans/kmsc 的 coherent 开关）。
