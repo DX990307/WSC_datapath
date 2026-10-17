@@ -249,8 +249,13 @@ func (s *SchedulerImpl) EvaluateInternalInst(now sim.VTimeInSec) bool {
 		case 12: // S_WAITCNT
 			instProgress, instCompleted = s.evalSWaitCnt(executing, now)
 		default:
-			// The program has to make progress
-			executing.State = wavefront.WfReady
+			// Other scheduler-internal SOPP instructions (s_nop, s_setkill,
+			// s_sethalt, s_sleep, s_setprio, s_trap, s_icache_inv,
+			// s_incperflevel, s_decperflevel, s_ttracedata, ...) are not
+			// modeled beyond completing in one evaluation. None of them sets
+			// the PC here, so the PC must move past the instruction;
+			// otherwise the wavefront re-decodes and re-issues it forever.
+			s.cu.UpdatePCAndSetReady(executing)
 			instProgress = true
 			instCompleted = true
 		}
