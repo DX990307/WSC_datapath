@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>下一步：新机制方向</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: long technical document; left table of contents on wide screens, single column on phones; source files in collapsible blocks. */
+:root{
+  --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6774; --line:#d8dee5;
+  --accent:#1d5b7f; --accent-soft:#e3eef5; --on-accent:#ffffff; --code-bg:#f6f8fa;
+  --warn:#9a6a00; --warn-soft:#f7eed6;
+  --k-kw:#8a3ffc; --k-str:#1a7f37; --k-com:#6e7781; --k-num:#0550ae; --k-fn:#953800; --k-type:#0a6b72;
+  --f-display:"Noto Serif SC","Songti SC",serif; --f-body:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif; --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161b; --surface:#182028; --fg:#e4e9ee; --muted:#9aa7b4; --line:#2b3641;
+  --accent:#6fb0d6; --accent-soft:#1c3444; --on-accent:#0d1620; --code-bg:#121a21; --warn:#e2b54d; --warn-soft:#3a2f12;
+  --k-kw:#c4a2ff; --k-str:#7ee2a8; --k-com:#8b98a5; --k-num:#79c0ff; --k-fn:#ffb77c; --k-type:#6fd3d8; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161b; --surface:#182028; --fg:#e4e9ee; --muted:#9aa7b4; --line:#2b3641;
+  --accent:#6fb0d6; --accent-soft:#1c3444; --on-accent:#0d1620; --code-bg:#121a21; --warn:#e2b54d; --warn-soft:#3a2f12;
+  --k-kw:#c4a2ff; --k-str:#7ee2a8; --k-com:#8b98a5; --k-num:#79c0ff; --k-fn:#ffb77c; --k-type:#6fd3d8; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15.5px;line-height:1.7}
+.wrap{max-width:1180px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:24px 64px;display:grid;grid-template-columns:220px minmax(0,1fr);gap:28px}
+@media (max-width:860px){.wrap{grid-template-columns:minmax(0,1fr)} nav.toc{position:static!important;max-height:none!important}}
+nav.toc{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 32px);overflow:auto;font-size:13.5px;display:flex;flex-direction:column;gap:2px}
+nav.toc a{color:var(--muted);text-decoration:none;padding:3px 8px;border-left:2px solid transparent}
+nav.toc a:hover,nav.toc a:focus-visible{color:var(--fg);border-left-color:var(--accent);outline:none}
+nav.toc a.l2{padding-left:20px;font-size:13px}
+nav.toc .back{margin-bottom:10px;color:var(--accent);font-weight:700}
+main{min-width:0;display:flex;flex-direction:column;gap:22px}
+article{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:26px clamp(16px,3.6vw,36px);display:flex;flex-direction:column;gap:14px;min-width:0;scroll-margin-top:12px}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.35}
+h1{font-family:var(--f-display);font-size:clamp(26px,3.6vw,34px)}
+h2{font-family:var(--f-display);font-size:clamp(21px,2.6vw,26px)}
+h3{font-size:16.5px;margin-top:6px;scroll-margin-top:12px}
+p{margin:0;max-width:78ch}
+ul,ol{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:5px;max-width:80ch}
+.kicker{font-size:12px;letter-spacing:.12em;color:var(--accent);font-weight:700}
+.lede{color:var(--muted)}
+code,.mono{font-family:var(--f-mono);font-size:.9em}
+p code,li code,td code{background:var(--code-bg);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:7px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-weight:700;color:var(--muted);font-size:12.5px;background:var(--bg)}
+tr:last-child td{border-bottom:none}
+td.num{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.note{background:var(--warn-soft);border-radius:6px;padding:10px 14px;font-size:14.5px;max-width:none}
+.note b{color:var(--warn)}
+.fact{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.fact div{border:1px solid var(--line);border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.fact b{font-family:var(--f-mono);font-weight:500;font-size:17px}
+.fact span{color:var(--muted);font-size:13px}
+pre.diagram{font-family:var(--f-mono);font-size:12.5px;line-height:1.5;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:12px 14px;overflow-x:auto;margin:0}
+details.src{border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+details.src summary{cursor:pointer;padding:9px 14px;font-family:var(--f-mono);font-size:13.5px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+details.src summary span{color:var(--muted);font-family:var(--f-body);font-size:13px}
+details.src summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+details.src pre{margin:0;max-height:640px;overflow:auto;border-top:1px solid var(--line);background:var(--code-bg)}
+details.src code{display:block;padding:12px 14px;font-family:var(--f-mono);font-size:12.5px;line-height:1.55;white-space:pre;tab-size:4;color:var(--fg)}
+.hljs-keyword,.hljs-built_in,.hljs-meta .hljs-keyword{color:var(--k-kw)}
+.hljs-string,.hljs-meta .hljs-string{color:var(--k-str)}
+.hljs-comment{color:var(--k-com);font-style:italic}
+.hljs-number,.hljs-literal{color:var(--k-num)}
+.hljs-title,.hljs-title.function_{color:var(--k-fn)}
+.hljs-type,.hljs-meta{color:var(--k-type)}
+.srclist{display:flex;flex-direction:column;gap:8px}
+.foot{font-size:13px;color:var(--muted)}
+
+.figure{display:flex;flex-direction:column;gap:6px;min-width:0}
+.figure h3{margin:0}
+.figcap{font-size:13.5px;color:var(--muted);max-width:none}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}
+.grid2>*{min-width:0}
+svg.chart{width:100%;height:auto;display:block}
+svg .grid{stroke:var(--line);stroke-width:1}
+svg .axis{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--muted);stroke-width:1.5;stroke-dasharray:4 3}
+svg .tick{fill:var(--muted);font-size:12px;font-family:var(--f-mono)}
+svg .lab{fill:var(--fg);font-size:13px;font-family:var(--f-body)}
+svg .val{fill:var(--fg);font-size:12.5px;font-family:var(--f-mono)}
+svg .bar{fill:color-mix(in oklab,var(--accent) 38%,var(--surface))}
+svg .bar-em{fill:var(--accent)}
+svg .bar-m{fill:var(--muted)}
+svg .dot{fill:var(--accent);stroke:var(--surface);stroke-width:1.5}
+svg .dot-o{fill:var(--surface);stroke:var(--accent);stroke-width:2}
+svg .conn{stroke:var(--line);stroke-width:3}
+svg .rttbar{fill:color-mix(in oklab,var(--accent) 18%,var(--surface))}
+svg .seg1{fill:color-mix(in oklab,var(--accent) 25%,var(--surface))}
+svg .seg2{fill:color-mix(in oklab,var(--accent) 55%,var(--surface))}
+svg .seg3{fill:var(--accent)}
+svg .bound{stroke:var(--fg);stroke-width:2}
+svg .line{fill:none;stroke:var(--accent);stroke-width:2.5}
+svg .line2{fill:none;stroke:var(--muted);stroke-width:2.5;stroke-dasharray:6 4}
+svg .sbox{fill:var(--bg);stroke:var(--line);stroke-width:1.5}
+svg .sbox-hl{fill:var(--accent-soft);stroke:var(--accent);stroke-width:2}
+svg .arrow{stroke:var(--muted);stroke-width:2}
+svg .arrowhead{fill:var(--muted)}
+svg .loop{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 4}
+.keyrow{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted)}
+.keyrow span{display:flex;align-items:center;gap:6px}
+.k{display:inline-block;width:14px;height:10px;border-radius:2px}
+.bar-k{background:color-mix(in oklab,var(--accent) 38%,var(--surface))}.em-k{background:var(--accent)}.m-k{background:var(--muted)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.card{border:1px solid var(--line);border-radius:6px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
+.card b.n{font-family:var(--f-mono);font-size:12px;color:var(--accent)}
+.card p{font-size:14.5px}
+
+main a{color:var(--accent)}
+p code,li code,td code{overflow-wrap:anywhere}
+.hm{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;max-width:420px}
+.hm-cell{aspect-ratio:1;max-width:100%;display:grid;place-items:center;font-family:var(--f-mono);font-size:12px;border-radius:3px;
+  background:color-mix(in oklab,var(--accent) var(--p),var(--surface));color:var(--fg)}
+.hm-dark{color:var(--on-accent)}
+.hm-sm .hm-cell{font-size:10.5px}
+.hm-idle{background:var(--bg);color:var(--muted);font-size:10.5px;border:1px solid var(--line)}
+.hm-cpu{background:var(--bg);color:var(--muted);font-size:10.5px;border:1px dashed var(--line)}
+.hm-legend{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);font-family:var(--f-mono)}
+.hm-legend i{display:block;width:120px;height:10px;border-radius:2px;background:linear-gradient(90deg,color-mix(in oklab,var(--accent) 8%,var(--surface)),color-mix(in oklab,var(--accent) 88%,var(--surface)))}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:18px}
+.grid3>*{min-width:0}
+svg .dot-b{fill:var(--muted);stroke:var(--surface);stroke-width:1.5}
+svg .fit{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4}
+svg .line3{fill:none;stroke:var(--fg);stroke-width:2;stroke-dasharray:2 3}
+svg .dot-f{fill:var(--fg);stroke:var(--surface);stroke-width:1.5}
+svg .band{fill:color-mix(in oklab,var(--accent) 16%,var(--surface))}
+td.hl,th.hl{background:var(--accent-soft)}
+td.diff{color:var(--warn);font-weight:700}
+pre.json{font-family:var(--f-mono);font-size:12.5px;line-height:1.55;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:12px 14px;overflow-x:auto;margin:0;white-space:pre}
+.steps{counter-reset:st;list-style:none;padding:0;display:flex;flex-direction:column;gap:8px;max-width:none}
+.steps li{counter-increment:st;border:1px solid var(--line);border-radius:6px;padding:10px 14px 10px 46px;position:relative}
+.steps li::before{content:counter(st);position:absolute;left:12px;top:9px;width:24px;height:24px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-family:var(--f-mono);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="目录"><a class="back" href="worklog_1019.html">← 工作总览</a><a class="back" href="index.html" style="margin-top:-8px">← 返回汇报</a><a href="#n1">前提：HDPAT 之后是数据访问</a><a href="#n2">benchmark 集：以远程访问为主</a><a href="#n3">机制 1（T18）：新 m2，两端合并</a><a href="#n4">机制 2（T19）：cuckoo filter 指导的就近 WG 窃取</a><a href="#n5">定方向前的测量（P12）</a><a href="#n6">时间安排</a></nav>
+<main>
+<article id="top"><div class="kicker">下一步 · 10-19 讨论</div><h1>以 HDPAT 为前提：两个和 cuckoo filter 绑定的新机制</h1><p>10-19 讨论定下的方向：以 HDPAT 解决地址转换为前提，CuPath 解决数据访问。两个机制都和 cuckoo filter 绑定，但和 HDPAT 的“就近缓存”拉开距离。下面是设计草案和定方向前要做的测量；任务文档在 isca27/tasks/T18、T19，给 Claude Code 的提示词是 P12。</p><div class="fact"><div><b>T18</b><span>新 m2：两端合并 + 按距离分配窗口</span></div><div><b>T19</b><span>cuckoo filter 指导的就近 WG 窃取</span></div><div><b>约 7×</b><span>窗口放大的模型预测（待 O2b 验证）</span></div><div><b>1.74× / 1.61×</b><span>PagedAttention / MoE 的完美均衡上限</span></div></div></article>
+<article id="n1"><h2>前提：HDPAT 之后是数据访问</h2><div class="cards"><div class="card"><b class="n">HDPAT（HPCA 2026）</b><p>中心 IOMMU 的页表遍历是瓶颈 → 把 PTE 缓存在离请求方近的 GPM 上，用 cuckoo filter 快速判断“本地有没有”。解决<b>地址转换</b>。</p></div><div class="card"><b class="n">CuPath（ISCA 2027）</b><p>地址转换解决之后，远程<b>数据访问</b>成为瓶颈：端点窗口只放行 64 个请求、排队占远程延迟 80% 以上、owner 端不合并相同 line。</p></div></div><p>baseline 要体现前提：打开 HDPAT，或用理想地址转换。动机图建议四根柱子：原始 IOMMU → + HDPAT → + CuPath → O1（数据全部本地）。</p><div class="tw"><table><thead><tr><th></th><th>HDPAT</th><th>CuPath 新机制</th></tr></thead><tbody><tr><td>对象</td><td>PTE（基本只读、规模小）</td><td>数据 line（会写、几百 MB）</td></tr><tr><td>做法</td><td>就近缓存 PTE</td><td>不缓存、不复制、不迁移，只管请求的流动</td></tr><tr><td>cuckoo filter 管的集合</td><td>“本地缓存了哪些 PTE”（静态）</td><td>“正在路上的请求”“哪些 GPM 在等同一条 line”（动态，必须能删除）</td></tr><tr><td>瓶颈</td><td>中心页表遍历单元</td><td>每个 GPM 的端点窗口、owner 端</td></tr></tbody></table></div></article><article id="n2"><h2>benchmark 集：以远程访问为主</h2><div class="tw"><table><thead><tr><th>类别</th><th>workload</th><th>说明</th></tr></thead><tbody><tr><td>保留</td><td>floydwarshall、im2col、pagerank、matrixtranspose、spmv</td><td>远程来自算法本身；pagerank、MT 的 O1 反常要先查清</td></tr><tr><td>待定</td><td>kmeans、matrixmultiplication</td><td>远程来自放置（WG/页段错开、GPM 1 上的 64 KB 矩阵），修放置后很可能变本地</td></tr><tr><td>新（T17）</td><td>PagedAttention、MoE、R-GAT</td><td>MoE 改成 expert-parallel 放置；R-GAT 拆成更多 WG、铺满 48 个 GPM</td></tr><tr><td>可以再加</td><td>张量并行 GEMM 的 all-gather、DLRM embedding、pull 版图算法、halo stencil</td><td>天然跨 GPM 共享；pull、不用 atomic；每个 3–5 小时</td></tr><tr><td>剔除</td><td>aes、bitonicsort、fastwalshtransform、fft、fir、relu、simpleconvolution</td><td>远程 0–0.8%；论文里只报“不变慢”</td></tr></tbody></table></div><p>筛选规则先定：看完整运行里远程占的时间（不看个数）；先修掉放置造成的人为远程，再筛。</p></article><article id="n3"><h2>机制 1（T18）：新 m2，两端合并</h2><div class="figure"><h3>新 m2：两端合并（深色框是 cuckoo 表）</h3><svg class="chart" viewBox="0 0 900 250" role="img" aria-label="新 m2 两端合并示意"><text x="10" y="18" class="val">请求方 GPM（每个都有）</text><text x="640" y="18" class="val">owner GPM</text><rect x="10" y="40" width="150" height="60" rx="6" class="sbox"/><text x="85.0" y="64.0" class="lab" text-anchor="middle">L1V 缺失</text><text x="85.0" y="83.0" class="tick" text-anchor="middle">远程 line 请求</text><rect x="200" y="30" width="200" height="80" rx="6" class="sbox-hl"/><text x="300.0" y="64.0" class="lab" text-anchor="middle">在途表（cuckoo）</text><text x="300.0" y="83.0" class="tick" text-anchor="middle">命中且 tag 相同 → 合并</text><rect x="200" y="140" width="200" height="70" rx="6" class="sbox-hl"/><text x="300.0" y="169.0" class="lab" text-anchor="middle">按距离分配窗口</text><text x="300.0" y="188.0" class="tick" text-anchor="middle">credit ∝ 往返时间</text><rect x="450" y="60" width="120" height="60" rx="6" class="sbox"/><text x="510.0" y="84.0" class="lab" text-anchor="middle">mesh</text><text x="510.0" y="103.0" class="tick" text-anchor="middle">XY 路由</text><rect x="620" y="30" width="270" height="80" rx="6" class="sbox-hl"/><text x="755.0" y="64.0" class="lab" text-anchor="middle">请求者表（cuckoo）</text><text x="755.0" y="83.0" class="tick" text-anchor="middle">指纹 + 48 位请求者位图</text><rect x="620" y="140" width="270" height="70" rx="6" class="sbox"/><text x="755.0" y="169.0" class="lab" text-anchor="middle">读一次 L2 / HBM</text><text x="755.0" y="188.0" class="tick" text-anchor="middle">沿 XY 树多播给位图里的 GPM</text><line x1="160" y1="70" x2="194" y2="70" class="arrow"/><polygon points="194,65 200,70 194,75" class="arrowhead"/><line x1="300" y1="110" x2="306" y2="140" class="arrow"/><polygon points="306,135 300,140 306,145" class="arrowhead"/><line x1="400" y1="175" x2="444" y2="100" class="arrow"/><polygon points="444,95 450,100 444,105" class="arrowhead"/><line x1="570" y1="80" x2="614" y2="70" class="arrow"/><polygon points="614,65 620,70 614,75" class="arrowhead"/><line x1="755" y1="110" x2="761" y2="140" class="arrow"/><polygon points="761,135 755,140 761,145" class="arrowhead"/><path d="M 620 185 C 560 235, 360 235, 300 212" class="loop"/><text x="460" y="244" class="tick" text-anchor="middle">多播响应 → 唤醒等待者，删除在途表项</text></svg></div><div class="tw"><table><thead><tr><th>部分</th><th>做法</th><th>为什么</th></tr></thead><tbody><tr><td>请求方在途表</td><td>cuckoo 表，key = 远程 line 地址，项 = 指纹 + 目的 GPM + 等待者指针；命中就挂上去等，响应回来就删除</td><td>合并重复请求、按索引匹配响应（不用全相联 CAM），可以用小面积撑起上千个在途请求</td></tr><tr><td>正确性</td><td>指纹只做筛选；合并前用完整地址核对（或每项存完整 tag）</td><td>假阳性如果直接合并，会返回错误数据</td></tr><tr><td>按距离分配窗口</td><td>总上限 W（扫描 64 / 256 / 1024 / 4096），每个目的地的 credit ∝ 往返时间</td><td>按 Little 定律，6 跳的 owner 要 3.3 倍于 1 跳的名额才能达到同样带宽</td></tr><tr><td>owner 端请求者表</td><td>指纹 + 48 位请求者位图；同一 line 只读一次，沿 XY 树多播</td><td>incast：k 个 GPM 读同一 owner 时封顶 113 B/周期，相同 line 不合并</td></tr><tr><td>和 HPCA 版 m2 的关系</td><td>保留请求方聚合 / 去重和 typed filter 的面积数据</td><td>新增 owner 端多播和按距离分配窗口：wafer 特有，回应“机制太通用”</td></tr></tbody></table></div><p>数据支持：远程带宽 = 64 × 64 B ÷ 往返时间（1 跳 26.4、6 跳 8.0 B/周期），链路利用率 &lt; 3%；T17 每个 GPM 有 270–400 个远程读在途，堵在 RDMA 门口；按闭环模型，窗口放大后吞吐最多约 7 倍（待 P12 用 O2b 验证）。</p></article><article id="n4"><h2>机制 2（T19）：cuckoo filter 指导的就近 WG 窃取</h2><div class="tw"><table><thead><tr><th>workload</th><th>只在用到的 GPM 之间均衡</th><th>均衡到全部 48 个 GPM</th></tr></thead><tbody><tr><td>PagedAttention</td><td class="num">1.74×</td><td class="num">1.75×</td></tr><tr><td>MoE skew 1.75</td><td class="num">1.61×</td><td class="num">2.94×</td></tr><tr><td>R-GAT</td><td class="num">1.16×</td><td class="num">6.18×</td></tr></tbody></table></div><p>按 T17 trace 估算的完美均衡上限（假设每个 GPM 速度不变、工作可以任意切分）。不均来自数据（序列长度、每个 expert 的 token 数）和静态连续切分，T16 已经排除位置。</p><div class="tw"><table><thead><tr><th>部分</th><th>做法</th></tr></thead><tbody><tr><td>偷谁</td><td>每个 GPM 把剩余 WG 数告诉 1–2 跳内的邻居；先跑完的 GPM 从邻居 WG 区间的尾部偷还没开始的 WG。远处的 WG 偷过来要多付 5–10 跳，所以只偷近处</td></tr><tr><td>偷哪个（cuckoo filter）</td><td>同一个 kernel 第一次运行时，用 cuckoo filter 记录每组 WG 读过的页（模式变化时删除）；偷的时候拿候选 WG 组的足迹和自己的在途表、L2 内容比，挑重叠最多的</td></tr><tr><td>没有历史时</td><td>按编号相邻 / 同一组（如 MoE 同一个 expert）挑</td></tr><tr><td>和 T18 的关系</td><td>共用同一张在途表：m2 用它合并请求，WG 窃取用它判断亲和性</td></tr></tbody></table></div><div class="tw"><table><thead><tr><th>workload</th><th>偷来的 WG 和偷取方的数据重叠</th><th>亲和性的价值</th></tr></thead><tbody><tr><td>MoE</td><td>同一个 expert 的 WG 读同一份权重</td><td>大</td></tr><tr><td>R-GAT</td><td>相邻目标节点共享邻居特征</td><td>中</td></tr><tr><td>PagedAttention</td><td>每个 WG 读自己序列的 KV，几乎不共享</td><td>小（只按距离偷）</td></tr></tbody></table></div><p class="note"><b>风险</b>：要改 driver / dispatcher 的 WG 分配（所有 workload 共用，必须用开关、默认关闭、回归逐位一致）；MCM-GPU 上有分布式 CTA 调度的前人工作。如果测出来亲和性很小，就退回“按距离就近偷”，filter 部分放进讨论。</p></article><article id="n5"><h2>定方向前的测量（P12）</h2><div class="tw"><table><thead><tr><th>测量（P12）</th><th>回答什么</th><th>做法</th></tr></thead><tbody><tr><td>WG 足迹 tracer</td><td>每个 WG 读了哪些页</td><td>只加统计，默认关；回归逐项一致</td></tr><tr><td>亲和性</td><td>相邻 / 同组 WG 的数据重叠有多大（T19 值不值得用 filter）</td><td>MoE、R-GAT、PagedAttention、pagerank、kmeans 的页重叠</td></tr><tr><td>历史稳定性</td><td>同一 kernel 多次启动时，同组 WG 的足迹是否不变（历史足迹法是否成立）</td><td>pagerank、kmeans 多轮；PagedAttention 加 <code>-pa-steps</code> 跑 2–3 步</td></tr><tr><td>M1 共享统计</td><td>同一时间多少个 GPM 读同一条 line、相距几跳（owner 端多播值不值得做）</td><td>T17 三个 + floydwarshall</td></tr><tr><td>T17 的 O1 / O2b / O3</td><td>窗口放大实际能拿多少（模型预测约 7 倍）</td><td>和 T15 同样的三组；oracle 参数要先确认</td></tr></tbody></table></div></article><article id="n6"><h2>时间安排</h2><div class="tw"><table><thead><tr><th>时间</th><th>安排</th></tr></thead><tbody><tr><td>10/19–10/25</td><td>P12 测量；文献检查（可扩展 MSHR、credit 流控、NoC 多播合并、Cuckoo Directory、MCM 上的 CTA 窃取）；定 benchmark 集和修放置</td></tr><tr><td>10/26–11/01</td><td>实现 T18（新 m2）和 T19（WG 窃取）；B1 强 baseline；HDPAT / 理想地址转换接进 baseline</td></tr><tr><td>11/02–11/08</td><td>完整评估（远程型 benchmark 集）、敏感性（窗口、表大小、L2 延迟）、面积；提交 abstract</td></tr><tr><td>11/09–11/16</td><td>写论文（按估计的截止日期，CFP 未出）</td></tr></tbody></table></div></article>
+</main></div></body></html>

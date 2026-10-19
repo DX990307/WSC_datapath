@@ -192,3 +192,40 @@
 - 结果：`results_index/t17/`（summary.csv、每个运行的 gpm_trace、l2_summary、l2_remote_matrix、meta、10 张热力图）。远程读 95–97%、远程延迟占 99.9%；PagedAttention、MoE 的 owner 均匀，R-GAT 一个 owner 占 16%；尾部比 1.2–1.75，但和位置相关性弱。
 - 文档：STATUS 更新 T17 状态、结果摘要、两条新的待决事项、日志；改了 `STATUS.md`、`SYNC.md`，新增 `results_index/t17/`。
 - ⏸ 等用户：R-GAT 的 GPM 利用率（A 保持 / B 改 kernel / C 改 WG 分配）；W1 用 T17 再判断的结论。
+
+- 2026-10-17 · cowork · 读了 Claude Code 10-17 的 4 条日志、STATUS 里 T16 阶段 1 和 T17 第一轮的结果（T15 的结果还没写进 STATUS），并用 `results_index/t17/*.gpm_trace.csv` 补算了三件事：每个 GPM 的忙碌时间由它的远程排队延迟决定（ρ 0.87–0.99）；速率 × 延迟 ≈ 448 个在途（L1V 槽位全满）；粗略的均衡上限（PagedAttention 1.75×、MoE 约 3×、R-GAT 约 6×）。`ideas_from_T14.md` 新增一节“10-17 Cowork 读 T16/T17 结果”：W1 不作为主线；W2（端点排队）证据变强；提出 C′ 均衡连续切分（修 baseline，同时修好 kmeans 的 WG 段和页段错开）；建议 T15 的 oracle 用在 T17 上，并加延迟分解统计。等用户决定。
+
+- 2026-10-17 · cowork · 读了 `~/Desktop/CuPath/findings_T15_T16_T17_2026-10-17.md`（T15 82/84 格）。`ideas_from_T14.md` 新增“补充”一节：O2a 无效、O2b 有效 → 瓶颈在 RDMA 窗口，m2 已经基本拿到；FW 剩下的空间（2.5× 对 11×）假设来自第 k 行的 incast → owner 端合并/多播是候选机制（要先统计 owner 集中度和跨 GPM 共享度 M1）；KM 和 MM 的收益有放置造成的人为因素；截断运行的规则改用每条指令的时间，远程多的 workload 用 T16 的完整小输入；PR、MT 先查 O1 的远程计数；R-GAT/MoE 选 B；数据导致的不均不作为贡献；论文故事更新为“端点受限：请求方窗口 + owner incast + 复用”。等用户决定。
+
+- 2026-10-17 · cowork · 讨论“除了机制还有哪些贡献”：`ideas_from_T14.md` 新增 C1–C7（端点受限的特征分析、Little's law 墙、wafer roofline 模型、placement 帮不上忙的现代负载、截断模拟的方法学问题、baseline 人为因素、位置效应），以及建议的组合（ISCA = C1 + C2 + 机制 + C4 + C5/C6；备用是特征分析 + 方法学的论文）。等用户决定。
+
+- 2026-10-17 · cowork · **更正 C2**：之前说“每个 GPM 需要 6,000–30,000 条 line 同时在途”有误：用了负载下的延迟（包含窗口前面的排队），也没扣包头。重新计算（链路 768 B/ns、读响应 80 B 的 wire 开销、RDMA RTT ≈ 84 + 71.4 × 跳数 ns，从 T14 反推）：平均距离下约 3,700 条（1 跳约 1,500，12 跳约 9,000）；64 个在途只能用到链路的约 1.4%，L1V 的 448 个槽位约 9.5%。计算写在 `ideas_from_T14.md` 的“C2 的计算”。
+
+- 2026-10-17 · cowork · `ideas_from_T14.md` 新增“10-17 汇总：现有数据能下什么结论”，分为 A（证据充分：端点受限、旧 benchmark 的空间集中在少数几个、看时间不看个数、现代负载远程主导且排队受限、方法学、Local Pairing 是人为因素）、B（有迹象：m2 拿到窗口收益、FW 的 incast、L1V–RDMA 之间排队、位置效应、I2C）、C（被否定）、D（缺的数据，按优先级）。
+
+- 2026-10-17 · cowork · 用户问“端点受限会不会是仿真精度不对称造成的”。读了 akita 的 mesh 和 switch：链路是 flit 级模型（32 级流水线、浅缓冲、crossbar 仲裁、反压），不是理想链路。但证据有三处薄弱：链路利用率是推算的、从来没压满过链路、结论依赖 RDMA 64 和每跳 32 周期这两个没有出处的参数。A1 降为“待补”。提出 E1（用现成的 `-trace-memory-path` 做远程延迟分解）、E2（链路压满测试）、E3（RDMA × 每跳延迟 × 链路带宽的敏感性扫描）、E4（找参数的硬件出处）。结论的表述改成和参数无关的 scaling 论点。
+
+- 2026-10-18 · cowork · 为 10-19 给老师的汇报做了一个网页（Artifact “CuPath 十月进展”，源文件备份在 `site/presentation_1019.html`），共 12 页，内容是 HPCA 审稿意见、改了什么、新实验、新结果（T14–T17）、正在形成的论点和风险（E1–E4）、下一步和需要讨论的问题。只用了 STATUS、results_index 和 findings 文件里已有的数字，没有新结论。
+
+- 2026-10-18 · cowork · 读了 `isca27/t17-workloads` 里 T17 三个 workload 的代码（pagedattn、moe、rgat 的 kernels.cl、host.go、benchmark.go），在汇报网页里加了一页“新 workload 的实现与 GPM 映射”。**发现一个需要处理的问题**：MoE 现在 95% 的远程读，主要是因为 expert 权重（按 48 等分放置）和计算它的 WG（tile 按 expert 排序，但小 kernel 只挤在前 26–41 个 GPM）没对齐，不是“placement 帮不上”。真实系统用 expert parallel，权重读取是本地的，只有 dispatch/combine 是远程。下一轮 MoE 应该改成 EP 式映射。PagedAttention 理论上可以用知道 WG 映射的块分配器把块放到本地，要用 O4 来量化。
+
+- 2026-10-18 · cowork · 在汇报网页里加了子页面 `t17_design.html`（备份在 `site/t17_design.html`）：按 `isca27/t17-workloads` @ c9cdf64 的源代码整理了三个 workload 的设计，包括模拟器限制和绕开方法、WG/页到 GPM 的规则、每个 kernel 的线程分工、GPM 映射、和真实系统的差距，并附完整源代码（kernels.cl、host/graph/sample/benchmark.go、build/check 脚本）。新发现：R-GAT 的热点 owner 是 tile 48（16.7%，每个 buffer 的余数页）和 tile 0（7.1%，不足 48 页的 buffer），是分配器造成的。
+
+- 2026-10-18 · cowork · 汇报网页每个结果页都加了图，数据直接取自 results_index（platform_mi200、t16、t17 的 CSV）和 STATUS/findings：wafer 编号与远程路径示意图；hpca 和 mi200 下各机制 GMEAN 的对比；T14 的本地延迟阶梯、远程延迟和跳数（329 对，拟合 198 + 71.8 ns/跳）、单对带宽和 WG 数、incast；T15 远程访问的个数占比和时间占比；T16 的 kmeans、pagerank、MM 小输入热力图；T17 的 GPM 占用时间线、热力图、远程延迟和忙碌时间的散点图；Little's law 所需在途数。
+
+- 2026-10-19 · cowork · 确认 10-17 之后没有新的实验结果。用已有数据做了一次核对（`ideas_from_T14.md` 新增“闭环排队模型”一节）：L1V 观测延迟 ≈ (448/64) × RDMA 往返（84 + 71.4 ns/跳），PagedAttention 预测 2.73 µs、实测 2.87 µs，反推在途请求 472 个（饱和），MoE 约 400 个，R-GAT 约 330 个。可检验的预测是：T17 的 O2b 下远程延迟会降到约 0.4–0.5 µs。汇报网页的论点页也补了这条证据。
+
+- 2026-10-19 · cowork · 新增子页面“T15–T17 结果分析”（`site/analysis_1019.html`，从汇报网页导航栏和论点页进入），共 7 节 11 张图：闭环排队模型示意；预测和实测延迟对比；延迟构成（排队占 80–86%、距离占 10–16%）；用 Little's law 从 trace 还原每个 GPM 的在途数（中位 213–408）和吞吐（5–21 B/ns，贴着 64 窗口的上限）；T15 四个 workload 的 oracle 拆分；其他发现；放大窗口后的吞吐预测和判读表；局限。没有新跑实验。
+
+- 2026-10-19 · cowork · 汇报网页在标题页后面加了“工作总览”一页（12 项工作，每项列出时间、关键数据、状态），并新增子页面“工作总览”（`site/worklog_1019.html`），每项一张详细数据表：HPCA 意见、T11–T17、数据放置审查、mi200 消融、模拟器修复、分析和建模。
+
+- 2026-10-19 · cowork · 汇报网页新增 7 个详细页（site/ 下已备份）：config_1019（配置文件化做了什么、验证、三份 json、hpca / mi300x-eighth / mi200 逐项对比、实测 vs 理论、mi200 和真实 MI200 的偏差）、placement_1019（诊断 C 全表、WG 段 / 页段错开的公式示意、6 类原因、T16/T17 里的放置问题、P1–P3）、t14_1019（三套配置全部 7 项测量 + 诊断 A/B，图）、ablation_1019（14 个 workload × 两套配置 × 4 组 + baseline 时间）、t15_1019（实验介绍 + 结果 + 截断有效性问题）、t16_1019（实验介绍 + 13 个运行的表和热力图）、t17_1019（逐个 kernel、按跳数、owner、每 GPM 的数据）。worklog_1019 和 s-work 幻灯片加了链接。只读数据，没有新实验。
+- 2026-10-19 · cowork · **新观察（给 Claude Code / 讨论）**：T17 的 l2_summary 里远程读延迟随跳数增长远快于空载——PagedAttention 1 跳 1,879 ns → 10 跳 5,149 ns（约 360 ns/跳）；同一个请求方 GPM 内部按跳数回归，斜率中位数约 180（PA）/ 210（MoE）/ 214（R-GAT）ns/跳，是空载 71 ns/跳的 2.5–3 倍。说明有一部分排队随距离增长（switch、owner 端或时间混杂），analysis_1019 里“距离只占 10–16%”是按空载每跳算的，可能低估。需要 E1 分段延迟来拆；另需核对 l2_summary 的延迟起止点（组件 RDMA→RDMA）。
+
+- 2026-10-19 · cowork · 汇报网页 T14 页的“说明”里加了两条：本地延迟阶梯不够陡（L1V 115 / L2 129 / HBM 198 ns；公开的 MI210 向量 L1 约 85 ns、L2 约 200–300 周期即约 120–175 ns）。原因：向量路径固定开销偏大，L1 偏慢约 30 ns；MGPUSim 的 L1V→L2 是 DirectConnection（约 1 周期，没有片上互连），L2 目录 + bank 只有 20 周期，所以 L2 偏快；HBM 只比 L2 多约 70 ns，可能也偏快。三套配置都沿用 MGPUSim 原值。影响：Remote Reuse / B1 的收益可能被高估，远程排队的结论不受影响。建议：论文写明偏差，另做敏感性实验（L1→L2 加延迟，使 L2 命中约 150 ns），改配置的数值需要用户确认；MI200_V1.md 的偏差表还没加这一条。来源：Chips and Cheese MI210 文章、RRZE gpu-benches。
+
+- 2026-10-19 · cowork · 按用户要求，T14 页的两条说明改成一句：“L2 命中延迟和真实芯片相比偏小（129 ns，只比 L1V 多 14 ns）”（原因分析仍记在上一条 SYNC 里）。汇报网页右下角加了“笔记”按钮：按页记笔记，自动保存在网页的数据库里（collection `notes`，每页一个文档），Cowork 之后可以读取同步。
+
+- 2026-10-19 · cowork · 核查地址转换会不会是远程慢的原因（只读代码和 T16/T17 trace，没有新实验）。配置：页 4 KB；L1V TLB 每 CU 32 项全相联、4 个 MSHR（覆盖 128 KB）；L2 TLB 每 GPM 32 组 × 16 路 = 512 项、32 MSHR（覆盖 2 MB）；本地页走 GMMU（页表遍历 100 周期，16 个在途）；远程页由 L2 TLB 经 mesh 发到中心 tile 的 IOMMUTLB（32 × 64 = 2,048 项，全 wafer 共享，覆盖 8 MB；查找 80 周期 = `-mmutlb-lookup-latency`）→ IOMMUCache（32 组直接映射）→ MMU（页表遍历 100 周期，全 wafer 最多 256 个在途）。trace 结果：T17 三个 workload 的远程 L2 TLB 缺失只占远程读的 1.3–1.6%，每次约 630–765 ns，平摊到每个远程读约 8–12 ns，对 2.2–2.9 µs 的远程延迟占 0.3–0.5%；T16 的 kmeans / pagerank / MM / im2col 小输入 ≤ 0.5%。T15 的 O1 保留了远程地址转换仍有 1.9–11×。结论：真实 workload 的远程时间主要在数据访问，不在地址转换。例外：remotefrac f = 1 远程 TLB 缺失 6%、平均 4.46 µs，翻译总延迟相当于数据延迟的 43%——中心 IOMMU 在排队，可能是 T16 remotefrac 位置效应很弱的原因之一（待查）。trace 只记 L2 TLB 缺失，L1 TLB（每 CU 4 个 MSHR）造成的发射阻塞没有直接统计。
+
+- 2026-10-19 · cowork · **方向（用户决定）**：论文前提是地址转换已经由 HDPAT（用户的 HPCA'26 论文）解决，CuPath 解决数据访问。新增 `tasks/T18_new_m2_two_sided_merge.md`（m2 升级为两端合并：请求方改造的 cuckoo 在途表 + 按距离分配窗口 + owner 端请求者位图表和 mesh 多播；不缓存、不复制、不迁移）和 `tasks/T19_filter_guided_wg_stealing.md`（cuckoo filter 指导的就近 WG 窃取；T17 trace 估算的完美均衡上限 PA 1.74×、MoE 1.61×/2.94×、R-GAT 1.16×/6.18×），两者都是 `[提案]`。新增 `prompts/P12_measurements_for_T18_T19.md`：WG 足迹 tracer → 亲和性、历史稳定性；M1 共享统计；T17 的 O1/O2b/O3（oracle 要配置确认）。用户明确不做页迁移和复制。`ideas_from_T14.md` 新增三节（L2 偏小、地址转换核查、下一步方向）；README 加 T18、T19。汇报网页“下一步”页重写，新增子页 `site/next_1019.html`，导航加“新机制”；“想讨论的问题”第 1 条改成新主线。

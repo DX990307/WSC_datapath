@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>配置文件化与三套配置</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: long technical document; left table of contents on wide screens, single column on phones; source files in collapsible blocks. */
+:root{
+  --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6774; --line:#d8dee5;
+  --accent:#1d5b7f; --accent-soft:#e3eef5; --on-accent:#ffffff; --code-bg:#f6f8fa;
+  --warn:#9a6a00; --warn-soft:#f7eed6;
+  --k-kw:#8a3ffc; --k-str:#1a7f37; --k-com:#6e7781; --k-num:#0550ae; --k-fn:#953800; --k-type:#0a6b72;
+  --f-display:"Noto Serif SC","Songti SC",serif; --f-body:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif; --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161b; --surface:#182028; --fg:#e4e9ee; --muted:#9aa7b4; --line:#2b3641;
+  --accent:#6fb0d6; --accent-soft:#1c3444; --on-accent:#0d1620; --code-bg:#121a21; --warn:#e2b54d; --warn-soft:#3a2f12;
+  --k-kw:#c4a2ff; --k-str:#7ee2a8; --k-com:#8b98a5; --k-num:#79c0ff; --k-fn:#ffb77c; --k-type:#6fd3d8; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161b; --surface:#182028; --fg:#e4e9ee; --muted:#9aa7b4; --line:#2b3641;
+  --accent:#6fb0d6; --accent-soft:#1c3444; --on-accent:#0d1620; --code-bg:#121a21; --warn:#e2b54d; --warn-soft:#3a2f12;
+  --k-kw:#c4a2ff; --k-str:#7ee2a8; --k-com:#8b98a5; --k-num:#79c0ff; --k-fn:#ffb77c; --k-type:#6fd3d8; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15.5px;line-height:1.7}
+.wrap{max-width:1180px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:24px 64px;display:grid;grid-template-columns:220px minmax(0,1fr);gap:28px}
+@media (max-width:860px){.wrap{grid-template-columns:minmax(0,1fr)} nav.toc{position:static!important;max-height:none!important}}
+nav.toc{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 32px);overflow:auto;font-size:13.5px;display:flex;flex-direction:column;gap:2px}
+nav.toc a{color:var(--muted);text-decoration:none;padding:3px 8px;border-left:2px solid transparent}
+nav.toc a:hover,nav.toc a:focus-visible{color:var(--fg);border-left-color:var(--accent);outline:none}
+nav.toc a.l2{padding-left:20px;font-size:13px}
+nav.toc .back{margin-bottom:10px;color:var(--accent);font-weight:700}
+main{min-width:0;display:flex;flex-direction:column;gap:22px}
+article{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:26px clamp(16px,3.6vw,36px);display:flex;flex-direction:column;gap:14px;min-width:0;scroll-margin-top:12px}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.35}
+h1{font-family:var(--f-display);font-size:clamp(26px,3.6vw,34px)}
+h2{font-family:var(--f-display);font-size:clamp(21px,2.6vw,26px)}
+h3{font-size:16.5px;margin-top:6px;scroll-margin-top:12px}
+p{margin:0;max-width:78ch}
+ul,ol{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:5px;max-width:80ch}
+.kicker{font-size:12px;letter-spacing:.12em;color:var(--accent);font-weight:700}
+.lede{color:var(--muted)}
+code,.mono{font-family:var(--f-mono);font-size:.9em}
+p code,li code,td code{background:var(--code-bg);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:7px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-weight:700;color:var(--muted);font-size:12.5px;background:var(--bg)}
+tr:last-child td{border-bottom:none}
+td.num{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.note{background:var(--warn-soft);border-radius:6px;padding:10px 14px;font-size:14.5px;max-width:none}
+.note b{color:var(--warn)}
+.fact{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.fact div{border:1px solid var(--line);border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.fact b{font-family:var(--f-mono);font-weight:500;font-size:17px}
+.fact span{color:var(--muted);font-size:13px}
+pre.diagram{font-family:var(--f-mono);font-size:12.5px;line-height:1.5;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:12px 14px;overflow-x:auto;margin:0}
+details.src{border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+details.src summary{cursor:pointer;padding:9px 14px;font-family:var(--f-mono);font-size:13.5px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+details.src summary span{color:var(--muted);font-family:var(--f-body);font-size:13px}
+details.src summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+details.src pre{margin:0;max-height:640px;overflow:auto;border-top:1px solid var(--line);background:var(--code-bg)}
+details.src code{display:block;padding:12px 14px;font-family:var(--f-mono);font-size:12.5px;line-height:1.55;white-space:pre;tab-size:4;color:var(--fg)}
+.hljs-keyword,.hljs-built_in,.hljs-meta .hljs-keyword{color:var(--k-kw)}
+.hljs-string,.hljs-meta .hljs-string{color:var(--k-str)}
+.hljs-comment{color:var(--k-com);font-style:italic}
+.hljs-number,.hljs-literal{color:var(--k-num)}
+.hljs-title,.hljs-title.function_{color:var(--k-fn)}
+.hljs-type,.hljs-meta{color:var(--k-type)}
+.srclist{display:flex;flex-direction:column;gap:8px}
+.foot{font-size:13px;color:var(--muted)}
+
+.figure{display:flex;flex-direction:column;gap:6px;min-width:0}
+.figure h3{margin:0}
+.figcap{font-size:13.5px;color:var(--muted);max-width:none}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}
+.grid2>*{min-width:0}
+svg.chart{width:100%;height:auto;display:block}
+svg .grid{stroke:var(--line);stroke-width:1}
+svg .axis{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--muted);stroke-width:1.5;stroke-dasharray:4 3}
+svg .tick{fill:var(--muted);font-size:12px;font-family:var(--f-mono)}
+svg .lab{fill:var(--fg);font-size:13px;font-family:var(--f-body)}
+svg .val{fill:var(--fg);font-size:12.5px;font-family:var(--f-mono)}
+svg .bar{fill:color-mix(in oklab,var(--accent) 38%,var(--surface))}
+svg .bar-em{fill:var(--accent)}
+svg .bar-m{fill:var(--muted)}
+svg .dot{fill:var(--accent);stroke:var(--surface);stroke-width:1.5}
+svg .dot-o{fill:var(--surface);stroke:var(--accent);stroke-width:2}
+svg .conn{stroke:var(--line);stroke-width:3}
+svg .rttbar{fill:color-mix(in oklab,var(--accent) 18%,var(--surface))}
+svg .seg1{fill:color-mix(in oklab,var(--accent) 25%,var(--surface))}
+svg .seg2{fill:color-mix(in oklab,var(--accent) 55%,var(--surface))}
+svg .seg3{fill:var(--accent)}
+svg .bound{stroke:var(--fg);stroke-width:2}
+svg .line{fill:none;stroke:var(--accent);stroke-width:2.5}
+svg .line2{fill:none;stroke:var(--muted);stroke-width:2.5;stroke-dasharray:6 4}
+svg .sbox{fill:var(--bg);stroke:var(--line);stroke-width:1.5}
+svg .sbox-hl{fill:var(--accent-soft);stroke:var(--accent);stroke-width:2}
+svg .arrow{stroke:var(--muted);stroke-width:2}
+svg .arrowhead{fill:var(--muted)}
+svg .loop{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 4}
+.keyrow{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted)}
+.keyrow span{display:flex;align-items:center;gap:6px}
+.k{display:inline-block;width:14px;height:10px;border-radius:2px}
+.bar-k{background:color-mix(in oklab,var(--accent) 38%,var(--surface))}.em-k{background:var(--accent)}.m-k{background:var(--muted)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.card{border:1px solid var(--line);border-radius:6px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
+.card b.n{font-family:var(--f-mono);font-size:12px;color:var(--accent)}
+.card p{font-size:14.5px}
+
+main a{color:var(--accent)}
+p code,li code,td code{overflow-wrap:anywhere}
+.hm{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;max-width:420px}
+.hm-cell{aspect-ratio:1;max-width:100%;display:grid;place-items:center;font-family:var(--f-mono);font-size:12px;border-radius:3px;
+  background:color-mix(in oklab,var(--accent) var(--p),var(--surface));color:var(--fg)}
+.hm-dark{color:var(--on-accent)}
+.hm-sm .hm-cell{font-size:10.5px}
+.hm-idle{background:var(--bg);color:var(--muted);font-size:10.5px;border:1px solid var(--line)}
+.hm-cpu{background:var(--bg);color:var(--muted);font-size:10.5px;border:1px dashed var(--line)}
+.hm-legend{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);font-family:var(--f-mono)}
+.hm-legend i{display:block;width:120px;height:10px;border-radius:2px;background:linear-gradient(90deg,color-mix(in oklab,var(--accent) 8%,var(--surface)),color-mix(in oklab,var(--accent) 88%,var(--surface)))}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:18px}
+.grid3>*{min-width:0}
+svg .dot-b{fill:var(--muted);stroke:var(--surface);stroke-width:1.5}
+svg .fit{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4}
+svg .line3{fill:none;stroke:var(--fg);stroke-width:2;stroke-dasharray:2 3}
+svg .dot-f{fill:var(--fg);stroke:var(--surface);stroke-width:1.5}
+svg .band{fill:color-mix(in oklab,var(--accent) 16%,var(--surface))}
+td.hl,th.hl{background:var(--accent-soft)}
+td.diff{color:var(--warn);font-weight:700}
+pre.json{font-family:var(--f-mono);font-size:12.5px;line-height:1.55;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:12px 14px;overflow-x:auto;margin:0;white-space:pre}
+.steps{counter-reset:st;list-style:none;padding:0;display:flex;flex-direction:column;gap:8px;max-width:none}
+.steps li{counter-increment:st;border:1px solid var(--line);border-radius:6px;padding:10px 14px 10px 46px;position:relative}
+.steps li::before{content:counter(st);position:absolute;left:12px;top:9px;width:24px;height:24px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-family:var(--f-mono);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="目录"><a class="back" href="worklog_1019.html">← 工作总览</a><a class="back" href="index.html" style="margin-top:-8px">← 返回汇报</a><a href="#c1">配置文件化：做了什么</a><a href="#c2">验证：换成配置文件之后结果不变</a><a href="#c3">三份配置文件</a><a href="#c4">逐项对比：hpca / mi300x-eighth / mi200</a><a href="#c5">实测和理论峰值</a><a href="#c6">mi200 和真实 MI200 的差别（论文里要写明）</a><a href="#c7">为什么从 mi300x-eighth 换成 mi200</a></nav>
+<main>
+<article id="top"><div class="kicker">工作总览 · 第 4 项 T13</div><h1>配置文件化，以及 hpca、mi300x、mi200 三套配置的对比</h1><p>把所有模拟参数从命令行搬进 JSON 配置文件，每次运行记录实际生效的值和与基准的差异；在此基础上增加了 GPM 预设，先试 1/8 MI300X，最后换成 1/4 MI250X GCD（mi200）并冻结。这一页列出做了什么、三套配置逐项怎么不同、实测出来是什么样。</p><div class="fact"><div><b>3 个参数</b><span>三份配置文件之间的全部差异</span></div><div><b>100,477 项</b><span>配置文件 vs 写全参数，统计逐项一致</span></div><div><b>isca27-mi200-v1</b><span>冻结标签（67f1c03，10-16）</span></div><div><b>31%</b><span>mi200 HBM 读带宽占理论峰值</span></div></div></article>
+<article id="c1"><h2>配置文件化：做了什么</h2><ol class="steps">
+<li><b>问题</b>：以前每个实验在命令行写十几个参数（来自 <code>runall2_constants.py</code>）。10-13 的 T11 第一轮漏了，用的是二进制默认值（<code>-bandwidth=1</code> 即 16 GB/s、<code>-switch-latency=20</code>、没有 magic copy），得出“远程带宽只有本地 1/18”的错误结论，P3/P4 的性能数字全部作废。</li>
+<li><b>配置文件</b>（<code>akkalat/baseline/runner/config_file.go</code>，提交 <code>1b1e829</code>）：<code>-config a.json,b.json</code>，键就是参数名；后面的文件覆盖前面的；<code>"extends"</code> 继承另一个文件；<code>_</code> 开头的键是注释；参数名写错直接报错退出；命令行显式写的参数覆盖所有文件，并打印出来。二进制的默认值没有改。</li>
+<li><b>记录实际生效的值</b>：<code>-config-out</code> 写出每个参数的实际值和来源（默认值 / 哪个文件 / 命令行）。每个结果目录都保存这份 <code>config_used.json</code>，它本身也能直接当配置文件用。</li>
+<li><b>运行脚本</b>：<code>isca27_run.sh &lt;exp_id&gt; &lt;commit&gt; &lt;task&gt; &lt;配置名&gt; [benchmark 参数]</code>。<code>meta.json</code> 里自动写 <code>config_deviation</code>：和基准配置的逐项差异。冻结之后基准是 <code>configs/mi200.json</code>（字段 <code>deviation_base</code>）；benchmark 参数和统计开关单独标注，不算配置修改。</li>
+<li><b>测试</b>：<code>test_isca27_configs.py</code> 检查 <code>hpca.json</code> 和论文的 <code>BASE_COMMON_FLAGS</code> 逐项相同、预设和配置文件一致、所有配置都保留 <code>-magic-memory-copy</code>；<code>config_file_test.go</code> 检查继承、循环检测、仓库里的配置只用已有参数。</li>
+<li><b>冻结</b>：10-16 在 <code>67f1c03</code> 打标签 <code>isca27-mi200-v1</code>，说明写在 <code>akkalat/configs/MI200_V1.md</code>。之后改任何预设数值都要用户批准，并打新标签（v2）。</li>
+</ol><ul><li><b>不再用 <code>-disable-servers</code></b>：核实它只关掉两个后台网页服务（Go pprof、akita 监控页），都监听随机端口，多个实验同时跑不冲突，也不影响结果（上表第一行）。</li><li><b>CuPath 机制开关不在配置文件里</b>：<code>-remote-data-path-enable</code> 默认 false，Remote Aggregation / Reuse 的子开关只在它打开时起作用；Local Pairing、filter、prefetch 等默认都关。所以用配置文件跑出来的就是 baseline。消融和 oracle 实验在配置之上用 <code>--extra-benchmark-flags</code> 叠加，差异会写进 <code>config_deviation</code>。</li><li><b>敏感性实验</b>：配置文件可以叠加，例如 <code>mi200,l2_8mb</code>，只需要写一个只含差异的小文件。</li></ul></article><article id="c2"><h2>验证：换成配置文件之后结果不变</h2><div class="tw"><table><thead><tr><th>检查</th><th>对照</th><th>结果</th></tr></thead><tbody><tr><td>配置文件 = 写全参数</td><td>fir（<code>-max-wg 4096</code>）：写全参数 + <code>-disable-servers</code>（yss2） vs <code>-config hpca.json</code>（yss3）</td><td>100,477 项统计排序后完全一致；同时说明两台服务器结果可复现</td></tr><tr><td>引入预设后旧配置不变</td><td>fir / MM：T12 修复后 <code>9c30a89</code> vs 预设版 <code>f444076</code></td><td>total_time 26,662 / 378,553 ns 相同；100,477 / 105,952 项完全一致</td></tr><tr><td>加 mi200 预设后旧配置不变</td><td>hpca fir、hpca matrixtranspose、mi300x fir，改动前后</td><td>100,477 / 102,332 / 294,496 项完全一致；服务器上 hpca matrixtranspose baseline 12,747.6 µs，和论文相同</td></tr><tr><td>实际生效的参数</td><td>服务器上的 <code>config_used.json</code></td><td><code>gpm-preset=mi200</code>、<code>num-memory-banks=8</code>、<code>l2-cache-size-mb=2</code>，其余和论文相同</td></tr><tr><td>可复现</td><td>mi200 fir、pagerank 的 baseline 和 Complete 各跑两次</td><td>16.5 万 / 18.2 万 / 17.1 万 / 18.8 万项逐项一致</td></tr><tr><td>统计开关不改时序</td><td>T16 tracer 开 / 关（mi200，fir、MM）</td><td>26.568 / 345.433 µs 都相同，统计逐项一致</td></tr></tbody></table></div></article><article id="c3"><h2>三份配置文件</h2><div class="grid3"><div class="figure"><h3>configs/hpca.json（HPCA 投稿版）</h3><pre class="json">{
+  &quot;timing&quot;: true,
+  &quot;gpm-preset&quot;: &quot;hpca&quot;,
+  &quot;num-memory-banks&quot;: 4,
+  &quot;l1v-mshr-entries&quot;: 16,
+  &quot;l1v-max-concurrent-trans&quot;: 16,
+  &quot;bandwidth&quot;: 48,
+  &quot;switch-latency&quot;: 32,
+  &quot;rdma-pipeline-width&quot;: 8,
+  &quot;rdma-pipeline-latency&quot;: 10,
+  &quot;rdma-max-outstanding&quot;: 64,
+  &quot;magic-memory-copy&quot;: true,
+  &quot;report-all&quot;: true,
+  &quot;mmutlb-lookup-latency&quot;: 80
+}</pre></div><div class="figure"><h3>configs/mi300x_eighth.json</h3><pre class="json">{
+  &quot;extends&quot;: &quot;hpca.json&quot;,
+  &quot;gpm-preset&quot;: &quot;mi300x-eighth&quot;,
+  &quot;num-memory-banks&quot;: 16
+}</pre></div><div class="figure"><h3>configs/mi200.json（冻结版，注释已简写）</h3><pre class="json">{
+  &quot;extends&quot;: &quot;hpca.json&quot;,
+  // 28 CU、8 个 256 KB slice、HBM2e
+  &quot;gpm-preset&quot;: &quot;mi200&quot;,
+  // 8 个 slice = 8 个 HBM2e channel
+  &quot;num-memory-banks&quot;: 8,
+  // 每 GCD 8 MB ÷ 4
+  &quot;l2-cache-size-mb&quot;: 2
+  // 另有 7 条 &quot;_deviation-*&quot; 注释：
+  // CU 取整、时钟换算、64 B 行、
+  // MSHR 32、DRAM 时序和建模选择
+}</pre></div></div><p>三份文件只在 3 个参数上不同：<code>gpm-preset</code>、<code>num-memory-banks</code>、<code>l2-cache-size-mb</code>。GPM 内部的其余参数由预设决定（<code>akkalat/baseline/runner/gpm_preset.go</code>）；预设检查这两个参数，填错直接报错。wafer 层（网络、RDMA、MMU、L1 MSHR）三套完全相同。</p></article><article id="c4"><h2>逐项对比：hpca / mi300x-eighth / mi200</h2><div class="tw"><table><thead><tr><th></th><th>hpca（HPCA 投稿版）</th><th>mi300x-eighth（10-13 尝试）</th><th>mi200（冻结 baseline）</th></tr></thead><tbody><tr><td><b>定位</b></td><td></td><td></td><td></td></tr><tr><td>每个 GPM 对应</td><td>投稿时自定义</td><td>1/8 MI300X（一个 XCD + 一个 HBM3 stack）</td><td>1/4 MI250X GCD（CDNA2）</td></tr><tr><td>带宽换算</td><td>—</td><td>按 2.1 GHz 的每周期等效值</td><td>按 1.7 GHz 的每周期等效值</td></tr><tr><td>延迟</td><td>纳秒</td><td>保持纳秒值，不做每周期缩放</td><td>同左</td></tr><tr><td><b>wafer 层（三套相同）</b></td><td></td><td></td><td></td></tr><tr><td>mesh / GPM 数</td><td>7×7，48 个 GPM，中心是 CPU/IOMMU</td><td>同左</td><td>同左</td></tr><tr><td>链路带宽 / 每跳延迟</td><td><code>-bandwidth=48</code>：48 flit × 16 B = 768 B/周期；<code>-switch-latency=32</code></td><td>同左</td><td>同左</td></tr><tr><td>RDMA</td><td>在途 64、流水线宽度 8、延迟 10 周期</td><td>同左</td><td>同左</td></tr><tr><td>L1V 在途（每 CU）</td><td>16（MSHR = 并发事务 = 16）</td><td>同左</td><td>同左</td></tr><tr><td>地址转换</td><td><code>-mmutlb-lookup-latency=80</code>；远程页走中心 IOMMU</td><td>同左</td><td>同左</td></tr><tr><td>数据放置 / WG 分配</td><td>每个 buffer 按页 48 等分连续放；WG 按 CU 数连续切分</td><td>同左</td><td>同左</td></tr><tr><td><b>GPM 内部（预设决定）</b></td><td></td><td></td><td></td></tr><tr><td>CU</td><td>32（8 个 SA × 4）</td><td class="diff">38（19 × 2）</td><td class="diff">28（14 × 2）</td></tr><tr><td>整片 CU</td><td>1,536</td><td>1,824</td><td>1,344</td></tr><tr><td>L1V / CU</td><td>16 KB，4 路</td><td class="diff">32 KB，4 路</td><td>16 KB，4 路</td></tr><tr><td>L1I / L1S</td><td>32 KB 4 路 / 16 KB（每 SA）</td><td class="diff">64 KB 8 路 / 16 KB（每 2 CU）</td><td>32 KB 4 路 / 16 KB（每 2 CU）</td></tr><tr><td>L2 容量 / 分区</td><td>4 MB = 4 × 1 MB</td><td>4 MB = 16 × 256 KB</td><td class="diff">2 MB = 8 × 256 KB</td></tr><tr><td>L2 MSHR</td><td>64 / 分区（256 / GPM）</td><td>16 / 分区（256 / GPM）</td><td>32 / slice（256 / GPM）</td></tr><tr><td>L2 请求 / 周期 / 分区</td><td>16</td><td>2</td><td>2（128 B/周期/slice）</td></tr><tr><td>L2 理论吞吐 / GPM</td><td>4,096 B/周期</td><td>2,048 B/周期</td><td>1,024 B/周期</td></tr><tr><td>DRAM 控制器</td><td>4（<code>-num-memory-banks=4</code>）</td><td>16 个 HBM3 channel</td><td>8 个 HBM2e channel，各 2 个 pseudo channel × 2 个 stack ID</td></tr><tr><td>DRAM 时钟 / 总线 / BL</td><td>500 MHz / 256 bit / BL4</td><td>1.23 GHz / 64 bit / BL8</td><td>941 MHz / 64 bit / BL4</td></tr><tr><td>每次访问</td><td>128 B（64 B 请求也占满一个 burst）</td><td>64 B（= 一条 line）</td><td>32 B（一条 line 分两次，同 bank 同行）</td></tr><tr><td>HBM 理论峰值 / GPM</td><td>128 B/周期（4 × 32）</td><td>315 B/周期</td><td>241 B/周期</td></tr><tr><td>DRAM 时序 tCL / tRCD / tRP / tRAS</td><td>14 / 14 / 14 / 34 ns</td><td>约 14 / 14 / 14 / 34 ns（按纳秒换算）</td><td>约 14 / 14 / 14 / 34 ns；tRRD、tFAW 等间隔按 1.6 GHz 器件的时钟数</td></tr><tr><td>DRAM 模型功能</td><td>默认映射，无刷新、无 tFAW</td><td>同左</td><td>close page、行保持、双命令总线、all-bank refresh、tFAW、跨 stack ID 约束</td></tr><tr><td><b>实测（T14，platbench）</b></td><td></td><td></td><td></td></tr><tr><td>L1V / L2 / HBM 延迟</td><td>115.0 / 129.0 / 169.7 ns</td><td>115.0 / 129.0 / 164.7 ns</td><td>115.2 / 129.0 / 198.5 ns</td></tr><tr><td>L1 / L2 容量拐点</td><td>16→24 KB；4→6 MB</td><td>32→48 KB；4→6 MB</td><td>16→24 KB；2→3 MB</td></tr><tr><td>HBM 读 / 写 / 复制峰值</td><td>59 / 66 / 61 B/周期</td><td>243 / 318 / 295 B/周期</td><td>75 / 121 / 90 B/周期</td></tr><tr><td>HBM 读 ÷ 理论峰值</td><td>46%</td><td>77%</td><td class="diff">31%</td></tr><tr><td>L2 读 / 写 / 复制峰值（满 WG 时）</td><td>622 / 638 / 846（419 / 423 / 698）</td><td>631 / 640 / 856（465 / 460 / 702）</td><td>488 / 526 / 612（369 / 364 / 550）</td></tr><tr><td>远程延迟（329 对）</td><td>198.1 + 71.8 ns/跳</td><td>同左</td><td>同左</td></tr><tr><td>单对远程带宽 1 跳 / 6 跳</td><td>26.3 / 7.9 B/周期</td><td>26.4 / 8.0</td><td>26.4 / 8.0</td></tr><tr><td>incast 封顶</td><td>约 113 B/周期</td><td>同左</td><td>同左</td></tr><tr><td>kernel 边界开销（统一 GPU，48 GPM）</td><td>1,114 ns</td><td>1,114 ns</td><td>1,280 ns</td></tr><tr><td><b>目标和状态</b></td><td></td><td></td><td></td></tr><tr><td>和目标比</td><td>论文 Table II 写 0.375 TB/s/GPM，代码只有 0.128</td><td>HBM 读 −23%、L2 −69%（目标 2 KB/周期），没通过校准</td><td>按公开规格设置，没有硬件可校准；HBM 读只到 31%（用户决定保持）</td></tr><tr><td>状态</td><td>只用于复现投稿版</td><td>10-14 放弃</td><td>10-16 冻结为 ISCA'27 baseline</td></tr></tbody></table></div><p>橙色字是和 hpca 不同、而且对结果影响较大的项。预设的每个数值在 <code>gpm_preset.go</code> 里都注明了来源（CDNA2 白皮书、ROCm 规格表、JEDEC、Ramulator 2、gem5、DRAMsim3）。</p></article><article id="c5"><h2>实测和理论峰值</h2><div class="figure"><h3>实测峰值占理论峰值的比例</h3><svg class="chart" viewBox="0 0 900 290" role="img" aria-label="实测峰值占理论峰值的比例"><line x1="170.0" y1="8" x2="170.0" y2="246" class="grid"/><text x="170.0" y="262" class="tick" text-anchor="middle">0</text><line x1="320.0" y1="8" x2="320.0" y2="246" class="grid"/><text x="320.0" y="262" class="tick" text-anchor="middle">25</text><line x1="470.0" y1="8" x2="470.0" y2="246" class="grid"/><text x="470.0" y="262" class="tick" text-anchor="middle">50</text><line x1="620.0" y1="8" x2="620.0" y2="246" class="grid"/><text x="620.0" y="262" class="tick" text-anchor="middle">75</text><line x1="770.0" y1="8" x2="770.0" y2="246" class="grid"/><text x="770.0" y="262" class="tick" text-anchor="middle">100</text><line x1="770.0" y1="6" x2="770.0" y2="246" class="ref"/><text x="500" y="284" class="lab" text-anchor="middle">实测 ÷ 理论（%）</text><text x="162" y="26" class="lab" text-anchor="end">hpca HBM 读</text><g><title>hpca HBM 读：实测为理论峰值的 46%</title><rect x="170" y="15" width="276.6" height="16" rx="3" class="bar"/></g><text x="452.6" y="27" class="val">46</text><text x="162" y="52" class="lab" text-anchor="end">hpca HBM 写</text><g><title>hpca HBM 写：实测为理论峰值的 52%</title><rect x="170" y="41" width="309.4" height="16" rx="3" class="bar"/></g><text x="485.4" y="53" class="val">52</text><text x="162" y="78" class="lab" text-anchor="end">hpca L2 读</text><g><title>hpca L2 读：实测为理论峰值的 15%</title><rect x="170" y="67" width="91.1" height="16" rx="3" class="bar"/></g><text x="267.1" y="79" class="val">15</text><text x="162" y="104" class="lab" text-anchor="end">mi300x HBM 读</text><g><title>mi300x HBM 读：实测为理论峰值的 77%</title><rect x="170" y="93" width="462.9" height="16" rx="3" class="bar"/></g><text x="638.9" y="105" class="val">77</text><text x="162" y="130" class="lab" text-anchor="end">mi300x HBM 写</text><g><title>mi300x HBM 写：实测为理论峰值的 101%</title><rect x="170" y="119" width="605.7" height="16" rx="3" class="bar"/></g><text x="781.7" y="131" class="val">101</text><text x="162" y="156" class="lab" text-anchor="end">mi300x L2 读</text><g><title>mi300x L2 读：实测为理论峰值的 31%</title><rect x="170" y="145" width="184.9" height="16" rx="3" class="bar"/></g><text x="360.9" y="157" class="val">31</text><text x="162" y="182" class="lab" text-anchor="end">mi200 HBM 读</text><g><title>mi200 HBM 读：实测为理论峰值的 31%</title><rect x="170" y="171" width="186.7" height="16" rx="3" class="bar-em"/></g><text x="362.7" y="183" class="val">31</text><text x="162" y="208" class="lab" text-anchor="end">mi200 HBM 写</text><g><title>mi200 HBM 写：实测为理论峰值的 50%</title><rect x="170" y="197" width="301.2" height="16" rx="3" class="bar-em"/></g><text x="477.2" y="209" class="val">50</text><text x="162" y="234" class="lab" text-anchor="end">mi200 L2 读</text><g><title>mi200 L2 读：实测为理论峰值的 48%</title><rect x="170" y="223" width="285.9" height="16" rx="3" class="bar-em"/></g><text x="461.9" y="235" class="val">48</text></svg><p class="figcap">理论值：HBM 按控制器数 × 每次访问字节 ÷ burst 时间；L2 按分区数 × 每周期请求数 × 64 B。三套配置的 L2 都远低于理论值；hpca 和 mi300x 的理论值差 2 倍，实测峰值却几乎一样（622 vs 631），说明瓶颈在 L2 之前（L1V 一侧），不在 L2 本身。</p></div></article><article id="c6"><h2>mi200 和真实 MI200 的差别（论文里要写明）</h2><div class="tw"><table><thead><tr><th>项</th><th>mi200 v1</th><th>真实 MI200</th><th>对 CuPath 的影响</th></tr></thead><tbody><tr><td>远程数据进请求方 L2</td><td>不缓存（baseline）</td><td>默认缓存（MTYPE_NC）</td><td>Remote Reuse 的收益偏大；需要 B1 对照</td></tr><tr><td>远程页的地址转换</td><td>经过中心 IOMMU</td><td>本地硬件</td><td>远程 TLB miss 多 555–818 ns</td></tr><tr><td>kernel 之间失效 L1</td><td>不失效</td><td>运行时会失效</td><td>baseline 多一些 L1 命中，<b>偏快</b>（D20 原来写反了，已更正）</td></tr><tr><td>每个 SIMD 的 wave 数</td><td>10</td><td>8</td><td>—</td></tr><tr><td>L2 line</td><td>64 B</td><td>128 B（32/64 B 分段读）</td><td>用户决定</td></tr><tr><td>L2 MSHR</td><td>32 / slice（256 / GPM）</td><td>AMD 没有公开</td><td>用户决定</td></tr><tr><td>HBM 读带宽</td><td>75 B/周期，峰值的 31%（写约 120，50%）</td><td>一般 75–85%</td><td>本地访存偏慢，远程比例看起来偏小</td></tr><tr><td>数据放置</td><td>页段 48 等分；WG 段按 CU 数切</td><td>取决于 driver 和程序</td><td>两者错开：kmeans hpca 0% → mi200 43% 远程读</td></tr></tbody></table></div><h3>HBM 读为什么只有 31%</h3><div class="tw"><table><thead><tr><th>10-15 诊断（临时构建，HBM 读，28 个 WG）</th><th>B/周期</th></tr></thead><tbody><tr><td>按冻结配置</td><td class="num">74</td></tr><tr><td>每 slice 128 个 MSHR</td><td class="num">111</td></tr><tr><td>关掉刷新</td><td class="num">129</td></tr><tr><td>两者都改</td><td class="num">135</td></tr><tr><td>去掉“同一请求行保持”</td><td class="num">52</td></tr></tbody></table></div><ul><li><b>MSHR 不够</b>：每 slice 32 个，覆盖不了约 200 ns 的 HBM 延迟（按 Little 定律约需 94 个）。</li><li><b>每条 line 开一次行</b>：close page，相邻 line 在不同 bank，速率被 tRRD_S 限制在每 pseudo channel 一次激活，约 138 B/周期。</li><li><b>刷新被放大</b>：一个 pseudo channel 刷新时占满共享的 MSHR，另一个 pseudo channel 也停下来，代价从约 12% 放大到约 40%。刷新模型本身是对的。</li><li>用户 10-16 决定保持 32 个 MSHR 并冻结（改的话已完成的 mi200 结果都要重跑，约一天）。</li></ul></article><article id="c7"><h2>为什么从 mi300x-eighth 换成 mi200</h2><div class="tw"><table><thead><tr><th>时间</th><th>事件</th></tr></thead><tbody><tr><td>10-13</td><td>实现 <code>-gpm-preset</code>，第一个新预设是 1/8 MI300X；同时用同一套微基准实测旧配置</td></tr><tr><td>10-13</td><td>校准：HBM 读 243 B/周期（目标 315，−23%），L2 读约 630（目标 2,048，−69%），偏差超过 10% 按规则停下</td></tr><tr><td>10-13 – 10-14</td><td>用户先按实测值跑全量（阶段 4）；遇到内存泄漏、结果不确定、服务器硬件故障，阶段 4 中止</td></tr><tr><td>10-14</td><td>内存控制器审查：Local Pairing 的收益来自旧配置 128 B 的 DRAM 访问单位；用户决定改用 1/4 MI250X GCD（mi200）</td></tr><tr><td>10-15</td><td>mi200 实现并验证（7 项清单）；HBM 读只有 31%，诊断后决定保持</td></tr><tr><td>10-16</td><td>冻结：标签 <code>isca27-mi200-v1</code>（<code>67f1c03</code>），之后所有新实验都以它为 baseline</td></tr></tbody></table></div></article>
+</main></div></body></html>

@@ -1,0 +1,3975 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>T17 workload 设计说明</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: long technical document; left table of contents on wide screens, single column on phones; source files in collapsible blocks. */
+:root{
+  --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6774; --line:#d8dee5;
+  --accent:#1d5b7f; --accent-soft:#e3eef5; --code-bg:#f6f8fa;
+  --warn:#9a6a00; --warn-soft:#f7eed6;
+  --k-kw:#8a3ffc; --k-str:#1a7f37; --k-com:#6e7781; --k-num:#0550ae; --k-fn:#953800; --k-type:#0a6b72;
+  --f-display:"Noto Serif SC","Songti SC",serif; --f-body:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif; --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161b; --surface:#182028; --fg:#e4e9ee; --muted:#9aa7b4; --line:#2b3641;
+  --accent:#6fb0d6; --accent-soft:#1c3444; --code-bg:#121a21; --warn:#e2b54d; --warn-soft:#3a2f12;
+  --k-kw:#c4a2ff; --k-str:#7ee2a8; --k-com:#8b98a5; --k-num:#79c0ff; --k-fn:#ffb77c; --k-type:#6fd3d8; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161b; --surface:#182028; --fg:#e4e9ee; --muted:#9aa7b4; --line:#2b3641;
+  --accent:#6fb0d6; --accent-soft:#1c3444; --code-bg:#121a21; --warn:#e2b54d; --warn-soft:#3a2f12;
+  --k-kw:#c4a2ff; --k-str:#7ee2a8; --k-com:#8b98a5; --k-num:#79c0ff; --k-fn:#ffb77c; --k-type:#6fd3d8; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15.5px;line-height:1.7}
+.wrap{max-width:1180px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:24px 64px;display:grid;grid-template-columns:220px minmax(0,1fr);gap:28px}
+@media (max-width:860px){.wrap{grid-template-columns:minmax(0,1fr)} nav.toc{position:static!important;max-height:none!important}}
+nav.toc{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 32px);overflow:auto;font-size:13.5px;display:flex;flex-direction:column;gap:2px}
+nav.toc a{color:var(--muted);text-decoration:none;padding:3px 8px;border-left:2px solid transparent}
+nav.toc a:hover,nav.toc a:focus-visible{color:var(--fg);border-left-color:var(--accent);outline:none}
+nav.toc a.l2{padding-left:20px;font-size:13px}
+nav.toc .back{margin-bottom:10px;color:var(--accent);font-weight:700}
+main{min-width:0;display:flex;flex-direction:column;gap:22px}
+article{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:26px clamp(16px,3.6vw,36px);display:flex;flex-direction:column;gap:14px;min-width:0;scroll-margin-top:12px}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.35}
+h1{font-family:var(--f-display);font-size:clamp(26px,3.6vw,34px)}
+h2{font-family:var(--f-display);font-size:clamp(21px,2.6vw,26px)}
+h3{font-size:16.5px;margin-top:6px;scroll-margin-top:12px}
+p{margin:0;max-width:78ch}
+ul,ol{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:5px;max-width:80ch}
+.kicker{font-size:12px;letter-spacing:.12em;color:var(--accent);font-weight:700}
+.lede{color:var(--muted)}
+code,.mono{font-family:var(--f-mono);font-size:.9em}
+p code,li code,td code{background:var(--code-bg);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:7px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-weight:700;color:var(--muted);font-size:12.5px;background:var(--bg)}
+tr:last-child td{border-bottom:none}
+td.num{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.note{background:var(--warn-soft);border-radius:6px;padding:10px 14px;font-size:14.5px;max-width:none}
+.note b{color:var(--warn)}
+.fact{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.fact div{border:1px solid var(--line);border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.fact b{font-family:var(--f-mono);font-weight:500;font-size:17px}
+.fact span{color:var(--muted);font-size:13px}
+pre.diagram{font-family:var(--f-mono);font-size:12.5px;line-height:1.5;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:12px 14px;overflow-x:auto;margin:0}
+details.src{border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+details.src summary{cursor:pointer;padding:9px 14px;font-family:var(--f-mono);font-size:13.5px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+details.src summary span{color:var(--muted);font-family:var(--f-body);font-size:13px}
+details.src summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+details.src pre{margin:0;max-height:640px;overflow:auto;border-top:1px solid var(--line);background:var(--code-bg)}
+details.src code{display:block;padding:12px 14px;font-family:var(--f-mono);font-size:12.5px;line-height:1.55;white-space:pre;tab-size:4;color:var(--fg)}
+.hljs-keyword,.hljs-built_in,.hljs-meta .hljs-keyword{color:var(--k-kw)}
+.hljs-string,.hljs-meta .hljs-string{color:var(--k-str)}
+.hljs-comment{color:var(--k-com);font-style:italic}
+.hljs-number,.hljs-literal{color:var(--k-num)}
+.hljs-title,.hljs-title.function_{color:var(--k-fn)}
+.hljs-type,.hljs-meta{color:var(--k-type)}
+.srclist{display:flex;flex-direction:column;gap:8px}
+.foot{font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="目录">
+  <a class="back" href="index.html">← 返回汇报</a>
+  <a href="#intro">概述</a>
+  <a href="#common">0 共同约束与方法</a>
+  <a class="l2" href="#c-sim">模拟器限制和绕开方法</a>
+  <a class="l2" href="#c-map">WG 与数据怎么落到 GPM</a>
+  <a class="l2" href="#c-check">编译、检查与正确性</a>
+  <a href="#pa">1 PagedAttention</a>
+  <a class="l2" href="#pa-input">输入与 KV 块分配</a>
+  <a class="l2" href="#pa-k1">pa_partial</a>
+  <a class="l2" href="#pa-k2">pa_reduce</a>
+  <a class="l2" href="#pa-map">GPM 映射与访存</a>
+  <a href="#moe">2 MoE</a>
+  <a class="l2" href="#moe-route">路由与负载不均</a>
+  <a class="l2" href="#moe-k">五个 kernel</a>
+  <a class="l2" href="#moe-map">GPM 映射与访存</a>
+  <a href="#rgat">3 R-GAT</a>
+  <a class="l2" href="#rgat-data">数据集与采样</a>
+  <a class="l2" href="#rgat-k">两个 kernel</a>
+  <a class="l2" href="#rgat-map">GPM 映射与访存</a>
+  <a href="#limits">4 与真实系统的差距</a>
+  <a href="#source">5 源代码</a>
+</nav>
+
+<main>
+<article id="intro">
+  <div class="kicker">T17 · 新 workload 设计说明</div>
+  <h1>PagedAttention、MoE、R-GAT：在 MGPUSim 上怎么写、怎么映射到 48 个 GPM</h1>
+  <p>这三个 workload 由 Claude Code 实现，代码在分支 <code>isca27/t17-workloads</code>（提交 <code>c9cdf64</code>）的 <code>mgpusim/benchmarks/t17/</code>。本页按源代码整理：每个模型取哪一部分、输入怎么生成、每个 kernel 的线程怎么分工、WG 和数据落在哪个 GPM、为什么远程访问多。最后附完整源代码。</p>
+  <div class="fact">
+    <div><b>1 层 / 1 个算子</b><span>每个 workload 只模拟模型里有代表性的一层</span></div>
+    <div><b>fp32，无 atomic</b><span>GCN3（gfx803）没有矩阵单元；模拟器没有实现 atomic</span></div>
+    <div><b>3.2–3.75 小时</b><span>mi200 上每个 baseline 运行的墙钟时间，kernel 全部跑完</span></div>
+    <div><b>95–97%</b><span>L1V 读里远程地址的比例（实测）</span></div>
+  </div>
+</article>
+
+<article id="common">
+  <div class="kicker">0 · 共同约束与方法</div>
+  <h2>三个 workload 共用的写法</h2>
+  <ul>
+    <li><b>执行模型</b>：整片 wafer 是一个 unified GPU。host 端用 <code>EnqueueLaunchKernel</code> 一次 launch，driver 把 WG 分给 48 个 GPM。</li>
+    <li><b>pull 写法</b>：每个 WG 自己读需要的数据，只写属于自己的输出行；没有任何跨 WG 的写冲突，所以不需要 atomic。</li>
+    <li><b>索引在 host 端生成</b>：KV 块表、MoE 的按 expert 排列、GNN 的采样子图，都在 Go 里生成后用 <code>MemCopyH2D</code> 拷到 GPU。拷贝开着 <code>-magic-memory-copy</code>，不计模拟时间。</li>
+    <li><b>LDS 只用简单读写</b>：所有归约（max、sum、top-k）都用 LDS 树形归约加 <code>barrier</code>，不用 sub-group 函数。</li>
+    <li><b>不用 private 数组</b>：累加器写成一组标量（如 <code>a00…a31</code>、<code>g0…g7</code>），避免寄存器溢出到 scratch。</li>
+  </ul>
+
+  <h3 id="c-sim">模拟器的限制，以及 kernel 里对应的写法</h3>
+  <div class="tw"><table>
+    <thead><tr><th>限制（MGPUSim v3 的 GCN3 模型）</th><th>编译器什么时候会生成它</th><th>kernel 里的写法</th></tr></thead>
+    <tbody>
+      <tr><td>没有 global / LDS atomic</td><td>任何 <code>atomic_*</code></td><td>pull 写法；需要计数或排序的部分放到 host</td></tr>
+      <tr><td>没有 MUBUF / scratch</td><td>private 数组、寄存器溢出</td><td>累加器写成标量；缓冲放 LDS</td></tr>
+      <tr><td>DS 只实现了 7 条：<code>ds_write_b32</code>、<code>ds_write2_b32</code>、<code>ds_read_b32</code>、<code>ds_read2_b32</code>、<code>ds_write2_b64</code>、<code>ds_read_b64</code>、<code>ds_read2_b64</code></td><td>相隔 64 dword 的两个 LDS 访问会合并成 <code>ds_*2st64_b32</code>；4 个连续对齐的读会合成 <code>ds_read_b128</code></td><td>LDS 数组加一列 padding（如 <code>NE + 1</code>）、交错布局（如 <code>[dim][wave][head]</code>、stride 5）</td></tr>
+      <tr><td><code>v_mad_i64_i32</code>、<code>v_alignbit_b32</code> 未实现（后来补上）</td><td>有符号 64 位下标乘法；对 64 位 thread id 移位</td><td>下标统一用 32 位无符号：<code>IDX(a,b)</code>、<code>UMUL(a,b)</code>；<code>LOCAL_ID</code> 取 32 位</td></tr>
+      <tr><td><code>s_load_dwordx16</code> 未实现（后来补上）</td><td>kernel 参数里有 ≥ 64 字节连续的指针</td><td>在参数中间插一个不用的 <code>kernarg_gap</code></td></tr>
+      <tr><td><code>s_nop</code> 在 timing 模式下不推进 PC（已修）</td><td>两个连续 16 字节 store 时，clang 为 fiji 的冒险插入 <code>s_nop 0</code></td><td><code>STORE8</code> 宏拆成 4 个 8 字节 store，中间用空 asm 隔开</td></tr>
+      <tr><td><code>s_cmpk_eq_i32</code>（SOPK）未实现（后来补上）</td><td>内层循环的退出判断</td><td>内层 K 循环 <code>#pragma unroll</code> 完全展开</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="c-map">WG 和数据怎么落到 GPM（模拟器 driver 的规则，三个 workload 都一样）</h3>
+  <pre class="diagram">WG 分配（mgpusim/driver/driver.go: distributeWGToGPUs）
+  wgPerCU   = ceil(总 WG 数 / 1344)          1344 = 48 GPM × 28 CU
+  GPM g 拿到  WG [g·28·wgPerCU, (g+1)·28·wgPerCU)   连续的一段，g 按 driver ID 1..48
+  driver ID → tile：逐行排列、跳过中心 (3,3)；WG 少于 1344 时只用前 ceil(N/28) 个 GPM
+
+页放置（mgpusim/driver/internal/memoryallocator.go）
+  每个 buffer 单独按页（4 KB）切：每段 floor(页数/48) 页，第 i 段在第 i 个 GPM
+  余数页全部给最后一个 GPM（tile 48）；不足 48 页的 buffer 整个放在第一个 GPM（tile 0）</pre>
+  <p>所以一个 WG 读的数据是不是本地，取决于“它在 WG 序列里的位置”和“数据在 buffer 里的位置”是否落在同一个 1/48 段里。三个 workload 都靠间接下标（块表、排列、采样后的点 id）读数据，下标和 WG 的位置没有对应关系，所以大部分读是远程的。</p>
+
+  <h3 id="c-check">编译、检查与正确性</h3>
+  <ul>
+    <li><b>编译</b>：<code>build_hsaco.sh</code>：OpenCL C 2.0，<code>clang -target amdgcn-amd-amdhsa -mcpu=fiji -mcode-object-version=2</code>，再用 <code>ld.lld</code> 链接成 <code>kernels.hsaco</code>，用 <code>go:embed</code> 打进二进制。</li>
+    <li><b>检查</b>：<code>check_hsaco.sh</code> 反汇编后逐条比对：出现 buffer/scratch、atomic、未实现的 flat/ds/SMEM 指令，或 private segment 不为 0，就拒绝安装。ALU 指令另用 <code>opcheck</code> 对照模拟器的实现表检查。</li>
+    <li><b>正确性</b>：每个 workload 都有 float64 的 host 参考实现（<code>Reference</code>）和单元测试。正式运行不跑 verify；开发时用极小输入在 emu 模式下跑一次，和参考实现逐元素比较（容差 1e-4 绝对 + 1e-3 相对）。</li>
+    <li><b>读回</b>：需要把 GPU 结果拷回 host 时（MoE 的 gate 输出、verify），打开 <code>SetMagicCopyCoherent(true)</code>：magic D2H 拷贝会先读 write-back L2 里的脏数据，否则只读 DRAM 会拿到旧值。这个拷贝同样不计时。</li>
+  </ul>
+</article>
+
+<article id="pa">
+  <div class="kicker">1 · PagedAttention（vLLM, SOSP'23）</div>
+  <h2>一层 decode attention，KV cache 按块分页</h2>
+  <p>只模拟一个 decode step 里一层的 attention（Q 已经算好，不含 QKV 投影和 FFN）。形状取 Llama-3-8B：32 个 query 头、8 个 KV 头（GQA，每个 KV 头被 4 个 query 头共享）、head dim 128。算法是 vLLM 的 PagedAttention 加 FlashDecoding 式的分段：长序列切成 64 token 一段，各段独立算，最后再合并。</p>
+  <div class="fact">
+    <div><b>66 条序列</b><span>batch，长度来自 Azure LLM 推理 trace 2023（对话服务）</span></div>
+    <div><b>93,600 token</b><span>总上下文长度，平均约 1,418</span></div>
+    <div><b>16 token / 块</b><span>vLLM 默认的 KV 块大小</span></div>
+    <div><b>794 MB</b><span>实际访问到的 footprint（fp32）</span></div>
+  </div>
+
+  <h3 id="pa-input">输入与 KV 块分配（host.go）</h3>
+  <ul>
+    <li><b>序列长度</b>：从 Azure trace 的 19,366 个请求里均匀抽样。每条序列被看成“正在 decode 中途”：长度 = ContextTokens + g，g 在 1..GeneratedTokens 均匀取，再截到 [16, 8192]（Llama-3-8B 的上下文上限）。prompt 部分是 ContextTokens。</li>
+    <li><b>块池</b>：池的大小是这批序列所需块数的 2 倍（<code>PoolFactor = 2</code>）。<code>BlockPool</code> 模拟 vLLM v1 的 <code>FreeKVCacheBlockQueue</code>（不开 prefix caching）：分配从队头取，请求结束时按逆序把块放回队尾。</li>
+    <li><b>先打乱池子（churn）</b>：跑 8 轮“后台请求进出”。每轮不断接纳新请求，直到池子用到 90%；然后每个在跑的请求以 50% 概率结束。最后所有后台请求结束。这样空闲队列的顺序就和真实服务一样是乱的。</li>
+    <li><b>再分配这批序列</b>：66 条序列按随机顺序先一次性分到 prompt 的块（prefill），然后逐 token 地一起 decode，谁跨过块边界谁就再取一块。所以同一条序列的块在池里是分散的。</li>
+    <li><b>工作列表</b>：host 生成 <code>(序列, 分段)</code> 列表，按序列主序排列；Q 是 [-1, 1] 的随机数，K、V 按种子确定性生成（只拷贝用到的块）。</li>
+  </ul>
+  <pre class="diagram">数据布局（fp32）
+  q            [B][Hq][D]              B = 66, Hq = 32, D = 128
+  k_cache      [NB][Hkv][BS][D]        一个物理块 = 16 token × 8 个 KV 头；每个 (块, KV 头) 8 KB
+  v_cache      [NB][Hkv][BS][D]
+  block_tables [B][max_blocks]         逻辑块 j → 物理块号
+  work         [n_work][2]             (序列, 分段)
+  tmp_out      [B][Hq][max_parts][D]   各分段未归一化的输出
+  max_logits / exp_sums [B][Hq][max_parts]
+  out          [B][Hq][D]</pre>
+
+  <h3 id="pa-k1">kernel 1：<code>pa_partial</code>（每个 WG 256 线程 = 4 个 wavefront）</h3>
+  <p>一个 WG 负责一个 <b>(序列, 64 token 的分段, KV 头)</b>。WG 编号 = 工作项编号 × 8 + KV 头，所以同一分段的 8 个 KV 头是相邻的 8 个 WG。它同时算共享这个 KV 头的 4 个 query 头。</p>
+  <ol>
+    <li><b>QK 分数</b>：线程 = (块内 token 0–15, 128 维中的一段 8 维)。逐块读块表 → 读 8 KB 的 K 块（每个字节只读一次）→ 每个线程对 4 个 query 头各算一个 8 维点积 → 写进 LDS <code>pdot</code> → 64 个线程把 16 段加起来，得到 4 个头 × 16 个 token 的分数，存在 LDS <code>sc</code>。分数直接乘 log2(e)/√D，后面用 <code>v_exp_f32</code>（2^x）算 softmax。</li>
+    <li><b>分段内 softmax</b>：wave h 负责 query 头 h。在 LDS 里树形归约求 max，再求 Σ2^(s−max)，把分数换成未归一化的概率。</li>
+    <li><b>P × V</b>：wave w 取每个块里的第 w、w+4、w+8、w+12 个 token，每个 lane 负责 2 维；对 4 个头各累加一次。每个 V 字节也只读一次。4 个 wave 的部分和再经 LDS 合并。</li>
+    <li><b>写回</b>：每个 query 头写 128 维的部分输出到 <code>tmp_out</code>，以及该分段的 max 和 exp-sum。</li>
+  </ol>
+
+  <h3 id="pa-k2">kernel 2：<code>pa_reduce</code>（每个 WG 64 线程）</h3>
+  <p>一个 WG 负责一个 <b>(序列, query 头)</b>：先求所有分段 max 的最大值，再把每段按 2^(max_p − max) 重新缩放后加起来，除以总的 exp-sum。每个 lane 负责 2 维。这就是 FlashDecoding 的合并步骤，不需要 atomic。</p>
+
+  <h3 id="pa-map">GPM 映射与访存</h3>
+  <div class="tw"><table>
+    <thead><tr><th>kernel</th><th class="num">WG 数</th><th class="num">每个 CU</th><th class="num">每个 GPM</th><th class="num">用到的 GPM</th><th>每个 WG 读什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>pa_partial</code></td><td class="num">11,928</td><td class="num">9</td><td class="num">252</td><td class="num">48（最后一个 84）</td><td>块表 → 最多 4 个 K 块和 4 个 V 块（各 8 KB），分散在池里</td></tr>
+      <tr><td><code>pa_reduce</code></td><td class="num">2,112</td><td class="num">2</td><td class="num">56</td><td class="num">38</td><td>本序列本头的所有分段结果</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>GPM g 拿到连续的 252 个 WG，也就是约 31 个 (序列, 分段) × 8 个 KV 头。按序列主序，一个 GPM 大约负责 1–2 条序列的一部分分段，长序列会跨几个 GPM。</li>
+    <li>K、V 各是一个大 buffer，按页切成 48 段。一条序列的块散在整个池里，所以一个 WG 读的块约 47/48 在别的 GPM 上。实测 L1V 读远程比例 96.8%，远程平均延迟 2,871 ns（本地 73 ns）。</li>
+    <li>尾部比 1.75：每条序列长度不同，所以同样数量的 WG 工作量不同；这是数据造成的不均，和 GPM 位置关系不大。</li>
+  </ul>
+  <p class="note"><b>放置能不能帮上：</b>如果块分配器知道每条序列会在哪个 GPM 上算，理论上能把它的块分到本地。但 continuous batching 下序列和 GPM 的对应关系每一步都在变，块在 prefill 时就分配好了，实际很难做到。要用 O4 放置 oracle 量化。</p>
+</article>
+
+<article id="moe">
+  <div class="kicker">2 · MoE（DeepSeekMoE / DeepSeek-V3 风格）</div>
+  <h2>一个 MoE 层：gate、按 expert 分组、expert FFN、合并</h2>
+  <p>只模拟一个 MoE 层的 routed experts（不含 shared expert 和 attention）。结构同 DeepSeekMoE 16B：64 个 routed expert、每个 token 选 top-6、expert 是 SwiGLU FFN。为了把模拟时间控制在 3–5 小时，维度减半：hidden 1024（原 2048）、expert 中间维 704（原 1408）。batch 是 256 个 decode token。</p>
+  <div class="fact">
+    <div><b>256 × 6 = 1,536</b><span>(token, expert) 对，也就是 slot 数</span></div>
+    <div><b>3 × 184 MB</b><span>W1、W3、W2 三个权重 buffer，各 [64][1024][704] fp32</span></div>
+    <div><b>1.75</b><span>expert 负载的最大/平均（另跑一个 0 偏置的对照）</span></div>
+    <div><b>约 574 MB</b><span>实际访问到的 footprint</span></div>
+  </div>
+
+  <h3 id="moe-route">路由与负载不均（host.go）</h3>
+  <ul>
+    <li><b>输入</b>：token 表示 x 和 gate 权重 Wg 是均匀随机数；expert 权重按 (seed, expert) 确定性生成，方差 1/fan_in。</li>
+    <li><b>负载不均</b>：随机权重的路由接近均匀，不真实。所以给每个 expert 加一个偏置 k·z_e（z_e ~ N(0,1)），只加在选 top-k 的分数上，不改合并权重（DeepSeek-V3 的 bias 做法）。k 在 host 上用二分法标定，使 max/mean 负载达到目标 1.75。</li>
+    <li><b>按 expert 分组</b>：gate kernel 跑完后，把 top-k 结果拷回 host（coherent magic copy，不计时），做一次按 expert 的计数排序（token 顺序稳定），得到：
+      <ul>
+        <li><code>perm_token[slot]</code>：每个 slot 对应哪个 token；</li>
+        <li><code>inv_slot[t][k]</code>：token t 的第 k 个选择落在哪个 slot；</li>
+        <li><code>tiles[n][3]</code>：GEMM 的行 tile = (expert, 起始 slot, 行数 ≤ 32)，按 expert 顺序排列。</li>
+      </ul>
+      真实系统里这一步是 GPU 上的一个小 kernel，这里放到 host 是因为它需要 atomic。</li>
+  </ul>
+
+  <h3 id="moe-k">五个 kernel（每个 WG 256 线程）</h3>
+  <div class="tw"><table>
+    <thead><tr><th>kernel</th><th>一个 WG 做什么</th><th>线程分工</th></tr></thead>
+    <tbody>
+      <tr><td><code>moe_gate</code></td><td>一个 token：logits = x·Wg，softmax，按 (prob + bias) 选 top-6，写 expert id 和 prob</td><td>4 个 wave 各算 hidden 的 1/4，lane = expert（64 个）；LDS 里求 max、sum；top-k 用 6 次 LDS 树形 arg-max（同分取小 id）</td></tr>
+      <tr><td><code>moe_dispatch</code></td><td>一个 slot：xs[slot] = x[perm_token[slot]]</td><td>每线程搬 4 个 float</td></tr>
+      <tr><td><code>moe_up</code></td><td>一个 (行 tile, 64 列)：act = SiLU(xs·W1) ⊙ (xs·W3)</td><td>32×64 的 tile，K 方向每次 32 放进 LDS；线程 = (1 行, 8 列)，同时累加 W1 和 W3 的 8 个结果；内层循环完全展开</td></tr>
+      <tr><td><code>moe_down</code></td><td>一个 (行 tile, 64 列)：ys = act·W2</td><td>同上，K = 704</td></tr>
+      <tr><td><code>moe_combine</code></td><td>一个 token：out[t] = Σ_k w[t][k] · ys[inv_slot[t][k]]</td><td>每线程 4 个 float，拉取 6 个 expert 的输出</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="moe-map">GPM 映射与访存</h3>
+  <div class="tw"><table>
+    <thead><tr><th>kernel</th><th class="num">WG 数（skew 0 / 1.75）</th><th class="num">每个 GPM</th><th class="num">用到的 GPM</th><th>主要读什么、在哪</th></tr></thead>
+    <tbody>
+      <tr><td><code>moe_gate</code></td><td class="num">256</td><td class="num">28</td><td class="num">10</td><td>Wg（256 KB，全读）</td></tr>
+      <tr><td><code>moe_dispatch</code></td><td class="num">1,536</td><td class="num">56</td><td class="num">28</td><td>x 的一行（token 顺序和 slot 顺序不同）</td></tr>
+      <tr><td><code>moe_up</code></td><td class="num">726 / 781</td><td class="num">28</td><td class="num">26–28</td><td>expert e 的 W1、W3 的 1024×64 列块（各 256 KB）</td></tr>
+      <tr><td><code>moe_down</code></td><td class="num">1,056 / 1,136</td><td class="num">28</td><td class="num">38–41</td><td>expert e 的 W2 的 704×64 列块</td></tr>
+      <tr><td><code>moe_combine</code></td><td class="num">256</td><td class="num">28</td><td class="num">10</td><td>6 行 ys</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>W1、W3、W2 各按页切成 48 段，expert e 的权重（每个 2.9 MB）落在第 ⌊0.75e⌋ 个 GPM 附近。</li>
+    <li>up/down 的 WG 按 tile 顺序（也就是 expert 顺序）连续切分，但每个 kernel 不到 1,344 个 WG，只占前 26–41 个 GPM。以 up 为例，expert e 大约在第 0.4e 个 GPM 上算。两者只在 e 很小时重合，所以读权重基本是远程。<code>benchmark.go</code> 里的 <code>weightRemote</code> 按这个规则估算过权重的远程比例。</li>
+    <li>dispatch 和 combine 按 token/slot 在 GPM 之间搬数据，本来就是跨 GPM 的。</li>
+    <li>实测：L1V 读远程 95.5%，远程平均延迟 2,164 ns；skew 1.75 只比 skew 0 慢 1.4%。</li>
+  </ul>
+  <p class="note"><b>和真实系统的差别：</b>真实部署用 expert parallel，把 expert 放在它的权重所在的 GPU 上算，读权重是本地的，只有 token 的 dispatch/combine 跨 GPU。现在的 95% 远程主要来自权重和计算没对齐，不能直接说成“放置帮不上”。下一轮应改成 EP 式映射（让 expert e 的 tile 落在权重所在的 GPM）再测。</p>
+</article>
+
+<article id="rgat">
+  <div class="kicker">3 · R-GAT（MLPerf Inference v5.0 的 RGAT 任务）</div>
+  <h2>异构图上两层采样的关系图注意力推理</h2>
+  <p>MLPerf 的 RGAT 在 IGBH（5.47 亿点）上做 mini-batch 推理，模型是 4 头、512 维的 R-GAT。这里按比例缩小：数据集用 IGBH-tiny，320 个种子 paper，hidden 128，单头，不加 bias。图结构、关系类型和采样方式保持和 MLPerf 的 DGL 实现一致。</p>
+  <div class="fact">
+    <div><b>55.8 万点</b><span>IGBH-tiny：paper 10 万、author 35.7 万、fos 8.4 万等，6 种点</span></div>
+    <div><b>11 种关系</b><span>6 个边文件，cites 对称化，其余 5 个再加反向，共 410 万条有向边</span></div>
+    <div><b>1024 维</b><span>每种点的原始特征，fp32（全部特征 2.29 GB）</span></div>
+    <div><b>30 个 kernel</b><span>两层 × 每层有边的关系 × (投影 + 聚合)</span></div>
+  </div>
+
+  <h3 id="rgat-data">数据集与采样（graph.go、sample.go）</h3>
+  <ul>
+    <li><b>读图</b>：<code>LoadIGBH</code> 直接读 IGB 发布的 <code>.npy</code> 文件；特征按行按需读取。对每种关系建入边 CSR。</li>
+    <li><b>采样</b>：仿 DGL 的 <code>MultiLayerNeighborSampler</code>，从最后一层往输入层采：每个目标点对每种关系不放回地采最多 fanout 个入邻居。种子所在层 fanout 5，输入层 fanout 10。上一层的目标点 = 本层目标点 + 新采到的源点（按类型、排序）。</li>
+    <li><b>采样结果</b>：每层每种关系一个 block，内容是：目标点列表、去重排序后的源点列表、指向源点的 CSR（<code>RowPtr</code>/<code>ColIdx</code>），以及源点、目标点在本层输入表里的行号。同一目标类型的多个关系依次累加，最后一个关系做 ReLU（只在隐藏层）。</li>
+    <li><b>模型参数</b>：每个 (层, 关系) 一个 W（fan_in × 128）和两个 attention 向量 a_l、a_r。为了不对目标点做投影，host 预先算 v_r = W[:, head] · a_r[head]，于是目标点的分数 er = x_dst · v_r。</li>
+  </ul>
+
+  <h3 id="rgat-k">两个 kernel（每个 WG 256 线程）</h3>
+  <ol>
+    <li><b><code>rgat_proj</code></b>：一个 WG 负责 32 个采样源点 × 64 个输出列。按源点的行号从特征表 gather 32 行，和 W 做 tile GEMM（K 每次 32 放进 LDS），得到 h_r = x_src[src_ids] · W_r。第 1 层的输入是 1024 维原始特征，第 2 层是上一层的 128 维输出。</li>
+    <li><b><code>rgat_agg</code></b>：一个 WG 负责一个目标点 i。
+      <ul>
+        <li>4 个 wave 轮流处理邻居 j，算 el_j = h_r[j] · a_l 的部分和；</li>
+        <li>256 个线程一起算 er = x_dst[i] · v_r（第 1 层是 1024 维）；</li>
+        <li>e_ij = LeakyReLU(el_j + er, 0.2)，lane 0 串行做邻居间的 softmax（最多 32 个邻居）；</li>
+        <li>out[i] = prev[i] + Σ_j α_ij · h_r[j]。</li>
+      </ul>
+      每个关系写自己的输出 buffer，prev 是上一个关系的 buffer。这样任何 buffer 都不会在被写之前被读，绕开了“kernel 之间不失效 L1”可能读到旧值的问题。</li>
+  </ol>
+
+  <h3 id="rgat-map">GPM 映射与访存</h3>
+  <ul>
+    <li>每种点的特征表整张分配（例如 author 表 35.7 万 × 4 KB），按页切成 48 段；只把采样会碰到的行拷进去。采样到的点 id 是随机的，所以 gather 会分散到所有 GPM。实测 L1V 读远程 97.4%。</li>
+    <li><code>rgat_proj</code> 的 WG 数 = ⌈源点数 / 32⌉ × 2，大多只有 26–340 个，又因为每个 WG 要读 32 × 1024 维特征而很长，只占 ≤ 13 个 GPM。这类 kernel 占了 85% 的运行时间；最大的聚合 kernel 有 1,344 个 WG，铺满 48 个 GPM。</li>
+    <li><b>热点 owner 是分配器造成的</b>：按 provider 统计远程读字节，最后一个 GPM（tile 48）占 16.7%，第一个 GPM（tile 0）占 7.1%。原因是 R-GAT 有大量中小 buffer（每个关系的行号、CSR、权重、attention 向量）：每个 buffer 的余数页都落在最后一个 GPM，不足 48 页的整个落在第一个 GPM。</li>
+  </ul>
+</article>
+
+<article id="limits">
+  <div class="kicker">4 · 与真实系统的差距</div>
+  <h2>写论文时必须说明的地方</h2>
+  <div class="tw"><table>
+    <thead><tr><th>方面</th><th>我们的做法</th><th>真实系统</th><th>影响</th></tr></thead>
+    <tbody>
+      <tr><td>规模</td><td>每个 workload 一层、缩小维度或数据集</td><td>整个模型，几十层</td><td>结论限定在单层 kernel；没有跨层的 cache 复用</td></tr>
+      <tr><td>数值精度</td><td>fp32，向量 ALU</td><td>bf16/fp8，矩阵单元</td><td>字节数翻倍、计算偏慢，访存占比可能被低估或高估，需要说明</td></tr>
+      <tr><td>索引结构</td><td>host 端生成，拷贝不计时</td><td>GPU 上的小 kernel（排序、采样）</td><td>省掉了这些小 kernel 的时间</td></tr>
+      <tr><td>MoE 映射</td><td>tile 连续切分，权重按 48 等分</td><td>expert parallel，权重本地</td><td>远程比例偏高，下一轮修正</td></tr>
+      <tr><td>WG 分配</td><td>静态连续切分，小 kernel 只用前几个 GPM</td><td>GPU 内部动态派发</td><td>R-GAT、MoE 的 GPM 利用率偏低；下一轮把 kernel 改成更多、更小的 WG</td></tr>
+      <tr><td>页放置</td><td>每个 buffer 48 等分，余数页和小 buffer 集中在两个 GPM</td><td>取决于系统（交错或 NUMA 感知）</td><td>R-GAT 出现热点 owner</td></tr>
+    </tbody>
+  </table></div>
+</article>
+
+<article id="source">
+  <div class="kicker">5 · 源代码</div>
+  <h2>完整源代码（分支 isca27/t17-workloads，提交 c9cdf64）</h2>
+  <p class="lede">点击文件名展开。单元测试（*_test.go）、Azure trace 数据文件和编译好的 hsaco 没有列出。</p>
+  <div class="srclist">
+    <details class="src"><summary>pagedattn/kernels.cl <span>PagedAttention 的两个 kernel：pa_partial、pa_reduce · 244 行</span></summary><pre><code class="language-c">// PagedAttention decode (vLLM, SOSP&#x27;23) with a FlashDecoding-style split
+// over the sequence: one work-group per (sequence, KV head, partition) in
+// pa_partial, then one work-group per (sequence, query head) in pa_reduce.
+//
+// Simulator rules (T17): no atomics, no private arrays (no scratch), only the
+// DS opcodes ds_write_b32/write2_b32/read_b32/read2_b32/write2_b64/read_b64/
+// read2_b64, fp32 only. build_hsaco.sh checks the generated code.
+//
+// Layouts (fp32):
+//   q            [B][Hq][D]            Hq = Hkv * GQA
+//   k_cache      [NB][Hkv][BS][D]      one physical KV block = BS tokens
+//   v_cache      [NB][Hkv][BS][D]
+//   block_tables [B][max_blocks]       physical block of logical block j
+//   seq_lens     [B]
+//   work         [n_work][2]           (sequence, partition), host-built
+//   tmp_out      [B][Hq][max_parts][D] unnormalised partial outputs
+//   max_logits   [B][Hq][max_parts]    log2-domain max of the partition
+//   exp_sums     [B][Hq][max_parts]    sum of 2^(s - max) of the partition
+//   out          [B][Hq][D]
+//
+// Scores are kept in the log2 domain (scale_log2 = log2(e) / sqrt(D)), so the
+// softmax uses v_exp_f32 (2^x) directly; the result is the usual softmax.
+
+#define D 128
+#define GQA 4
+#define BS 16
+#define MAX_PART 512
+#define NEG_INF (-3.0e38f)
+// Index arithmetic is unsigned on purpose: signed (long)int*int compiles to
+// v_mad_i64_i32 (VOP3a opcode 489), which the emulator does not implement;
+// the unsigned form compiles to v_mad_u64_u32 / 32-bit multiplies.
+#define UMUL(a, b) ((ulong)(uint)(a) * (ulong)(uint)(b))
+
+__kernel __attribute__((reqd_work_group_size(256, 1, 1)))
+void pa_partial(__global const float *q,
+                __global const float *k_cache,
+                __global const float *v_cache,
+                __global float *tmp_out,
+                __global float *max_logits,
+                __global float *exp_sums,
+                // Unused: breaks the kernel arguments into runs shorter than
+                // 64 bytes. The compiler loads all arguments at entry and
+                // merges 16 contiguous dwords into s_load_dwordx16, which the
+                // simulator does not implement (SMEM opcode 4).
+                const int kernarg_gap,
+                __global const int *block_tables,
+                __global const int *seq_lens,
+                __global const int *work,
+                const float scale_log2,
+                const int num_kv_heads,
+                const int max_blocks,
+                const int part_tokens,
+                const int max_parts) {
+  __local float sc[GQA * MAX_PART];  // [token][head] scores, then
+                                     // probabilities, then
+                                     // the cross-wave V partial sums
+  __local float pdot[GQA * BS * 16]; // [token][slice][head] QK partials
+  __local float red[GQA * 64];       // per-head reductions
+
+  const int lid = get_local_id(0);
+  const int wg = get_group_id(0);
+  const int kvh = wg % num_kv_heads;
+  const int item = wg / num_kv_heads;
+  const int seq = work[2 * item];
+  const int part = work[2 * item + 1];
+  const int len = seq_lens[seq];
+  const int tok0 = part * part_tokens;
+  int ntok = len - tok0;
+  if (ntok &gt; part_tokens) {
+    ntok = part_tokens;
+  }
+  const int blk0 = tok0 / BS;
+  const int nblk = (ntok + BS - 1) / BS;
+  const int nq = num_kv_heads * GQA;
+  const int hq0 = kvh * GQA;
+  const uint bt_base = (uint)seq * (uint)max_blocks + (uint)blk0;
+
+  // ---- phase 1: scores. Thread = (token in block, 8-dim slice); the work-
+  // group reads one 8 KB K block per step, each byte once.
+  const int ktok = lid &gt;&gt; 4;
+  const int kseg = lid &amp; 15;
+  const __global float *qp = q + ((uint)seq * nq + hq0) * D + kseg * 8;
+  const float8 q0 = vload8(0, qp);
+  const float8 q1 = vload8(0, qp + D);
+  const float8 q2 = vload8(0, qp + 2 * D);
+  const float8 q3 = vload8(0, qp + 3 * D);
+
+  for (int b = 0; b &lt; nblk; ++b) {
+    const int phys = block_tables[bt_base + b];
+    const int t = b * BS + ktok;
+    float d0 = 0.0f, d1 = 0.0f, d2 = 0.0f, d3 = 0.0f;
+    if (t &lt; ntok) {
+      const __global float *kp =
+          k_cache + UMUL((uint)phys * num_kv_heads + kvh, BS * D) +
+          ktok * D + kseg * 8;
+      const float8 kv = vload8(0, kp);
+      d0 = dot(q0.lo, kv.lo) + dot(q0.hi, kv.hi);
+      d1 = dot(q1.lo, kv.lo) + dot(q1.hi, kv.hi);
+      d2 = dot(q2.lo, kv.lo) + dot(q2.hi, kv.hi);
+      d3 = dot(q3.lo, kv.lo) + dot(q3.hi, kv.hi);
+    }
+    pdot[(ktok * 16 + kseg) * GQA + 0] = d0;
+    pdot[(ktok * 16 + kseg) * GQA + 1] = d1;
+    pdot[(ktok * 16 + kseg) * GQA + 2] = d2;
+    pdot[(ktok * 16 + kseg) * GQA + 3] = d3;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (lid &lt; GQA * BS) {
+      const int h = lid &gt;&gt; 4;
+      const int tk = lid &amp; 15;
+      float s = 0.0f;
+      for (int i = 0; i &lt; 16; ++i) {
+        s += pdot[(tk * 16 + i) * GQA + h];
+      }
+      const int t2 = b * BS + tk;
+      sc[t2 * GQA + h] = (t2 &lt; ntok) ? s * scale_log2 : NEG_INF;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+
+  // ---- phase 2: softmax inside the partition. Wave h owns query head h.
+  const int h = lid &gt;&gt; 6;
+  const int lane = lid &amp; 63;
+  float m = NEG_INF;
+  for (int t = lane; t &lt; ntok; t += 64) {
+    m = fmax(m, sc[t * GQA + h]);
+  }
+  red[h * 64 + lane] = m;
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (int s = 32; s &gt; 0; s &gt;&gt;= 1) {
+    if (lane &lt; s) {
+      red[h * 64 + lane] = fmax(red[h * 64 + lane], red[h * 64 + lane + s]);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+  m = red[h * 64];
+  barrier(CLK_LOCAL_MEM_FENCE);
+
+  float l = 0.0f;
+  for (int t = lane; t &lt; ntok; t += 64) {
+    const float p = native_exp2(sc[t * GQA + h] - m);
+    sc[t * GQA + h] = p;
+    l += p;
+  }
+  red[h * 64 + lane] = l;
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (int s = 32; s &gt; 0; s &gt;&gt;= 1) {
+    if (lane &lt; s) {
+      red[h * 64 + lane] += red[h * 64 + lane + s];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+  l = red[h * 64];
+
+  // ---- phase 3: P x V. Wave w takes tokens w, w+4, w+8, w+12 of every
+  // block for all four heads; lane = 2 dims. Each V byte is read once.
+  const int w = h;
+  float a00 = 0.0f, a01 = 0.0f, a10 = 0.0f, a11 = 0.0f;
+  float a20 = 0.0f, a21 = 0.0f, a30 = 0.0f, a31 = 0.0f;
+  for (int b = 0; b &lt; nblk; ++b) {
+    const int phys = block_tables[bt_base + b];
+    const __global float *vp =
+        v_cache + UMUL((uint)phys * num_kv_heads + kvh, BS * D) + 2 * lane;
+    for (int tk = w; tk &lt; BS; tk += GQA) {
+      const int t = b * BS + tk;
+      if (t &lt; ntok) {
+        const float2 v = vload2(0, vp + tk * D);
+        const float p0 = sc[t * GQA + 0];
+        const float p1 = sc[t * GQA + 1];
+        const float p2 = sc[t * GQA + 2];
+        const float p3 = sc[t * GQA + 3];
+        a00 += p0 * v.x;
+        a01 += p0 * v.y;
+        a10 += p1 * v.x;
+        a11 += p1 * v.y;
+        a20 += p2 * v.x;
+        a21 += p2 * v.y;
+        a30 += p3 * v.x;
+        a31 += p3 * v.y;
+      }
+    }
+  }
+  barrier(CLK_LOCAL_MEM_FENCE); // all waves are done with the probabilities
+  // sc reused as [dim][wave][head]: the 8 values of a thread sit within a
+  // few dwords, so the compiler pairs them as ds_write2_b32 rather than the
+  // unimplemented ds_write2st64_b32 (same for the reads below).
+  const int d0i = (2 * lane) * GQA * GQA + w * GQA;
+  const int d1i = (2 * lane + 1) * GQA * GQA + w * GQA;
+  sc[d0i + 0] = a00;
+  sc[d1i + 0] = a01;
+  sc[d0i + 1] = a10;
+  sc[d1i + 1] = a11;
+  sc[d0i + 2] = a20;
+  sc[d1i + 2] = a21;
+  sc[d0i + 3] = a30;
+  sc[d1i + 3] = a31;
+  barrier(CLK_LOCAL_MEM_FENCE);
+
+  float o0 = 0.0f, o1 = 0.0f;
+  for (int ww = 0; ww &lt; GQA; ++ww) {
+    o0 += sc[(2 * lane) * GQA * GQA + ww * GQA + h];
+    o1 += sc[(2 * lane + 1) * GQA * GQA + ww * GQA + h];
+  }
+  const uint o = ((uint)seq * nq + hq0 + h) * max_parts + part;
+  vstore2((float2)(o0, o1), 0, tmp_out + UMUL(o, D) + 2 * lane);
+  if (lane == 0) {
+    max_logits[o] = m;
+    exp_sums[o] = l;
+  }
+}
+
+// One wavefront per (sequence, query head): merge the partitions.
+__kernel __attribute__((reqd_work_group_size(64, 1, 1)))
+void pa_reduce(__global const float *tmp_out,
+               __global const float *max_logits,
+               __global const float *exp_sums,
+               __global const int *seq_lens,
+               __global float *out,
+               const int num_q_heads,
+               const int part_tokens,
+               const int max_parts) {
+  const int lane = get_local_id(0);
+  const int wg = get_group_id(0);
+  const int seq = wg / num_q_heads;
+  const int qh = wg % num_q_heads;
+  const int len = seq_lens[seq];
+  const int np = (len + part_tokens - 1) / part_tokens;
+  const uint base = ((uint)seq * num_q_heads + qh) * max_parts;
+
+  float gm = NEG_INF;
+  for (int p = 0; p &lt; np; ++p) {
+    gm = fmax(gm, max_logits[base + p]);
+  }
+  float gl = 0.0f, a0 = 0.0f, a1 = 0.0f;
+  for (int p = 0; p &lt; np; ++p) {
+    const float wgt = native_exp2(max_logits[base + p] - gm);
+    gl += wgt * exp_sums[base + p];
+    const float2 v = vload2(0, tmp_out + UMUL(base + p, D) + 2 * lane);
+    a0 += wgt * v.x;
+    a1 += wgt * v.y;
+  }
+  const float inv = native_recip(gl);
+  vstore2((float2)(a0 * inv, a1 * inv), 0,
+          out + UMUL((uint)seq * num_q_heads + qh, D) + 2 * lane);
+}
+</code></pre></details>
+    <details class="src"><summary>pagedattn/host.go <span>输入生成：Azure 长度、vLLM 块池与 churn、工作列表、参考实现 · 538 行</span></summary><pre><code class="language-go">package pagedattn
+
+import (
+	// embed the trace
+	_ &quot;embed&quot;
+	&quot;fmt&quot;
+	&quot;math&quot;
+	&quot;math/rand&quot;
+	&quot;strconv&quot;
+	&quot;strings&quot;
+)
+
+// Model shape constants compiled into kernels.cl.
+const (
+	HeadDim   = 128 // D
+	GQA       = 4   // query heads per KV head
+	BlockSize = 16  // tokens per KV block (vLLM default)
+	MaxPart   = 512 // largest partition the kernel&#x27;s LDS holds
+)
+
+// LenDist is a log-normal context-length distribution clipped to
+// [Min, Max]. Mean is the mean of the unclipped distribution and Sigma the
+// standard deviation of ln(length); Mu = ln(Mean) - Sigma^2/2.
+type LenDist struct {
+	Mean  float64
+	Sigma float64
+	Min   int
+	Max   int
+}
+
+// Mu returns the location parameter of the log-normal distribution.
+func (d LenDist) Mu() float64 { return math.Log(d.Mean) - d.Sigma*d.Sigma/2 }
+
+// SampleSeqLens draws n context lengths.
+func SampleSeqLens(rng *rand.Rand, n int, d LenDist) []int {
+	if d.Mean &lt;= 0 || d.Sigma &lt; 0 || d.Min &lt; 1 || d.Max &lt; d.Min {
+		panic(fmt.Sprintf(&quot;pagedattn: invalid length distribution %+v&quot;, d))
+	}
+	mu := d.Mu()
+	out := make([]int, n)
+	for i := range out {
+		l := int(math.Round(math.Exp(mu + d.Sigma*rng.NormFloat64())))
+		if l &lt; d.Min {
+			l = d.Min
+		}
+		if l &gt; d.Max {
+			l = d.Max
+		}
+		out[i] = l
+	}
+	return out
+}
+
+// LenSource draws the context length of a sequence in the decode batch
+// (total = prompt + tokens generated so far, prompt &lt; total) and the final
+// length of a background request (for the allocator history).
+type LenSource interface {
+	Sample(rng *rand.Rand) (total, prompt int)
+	Request(rng *rand.Rand) int
+	Describe() string
+}
+
+// Sample implements LenSource: a log-normal total, prompt = a U(0.2, 0.8)
+// fraction of it.
+func (d LenDist) Sample(rng *rand.Rand) (total, prompt int) {
+	total = SampleSeqLens(rng, 1, d)[0]
+	prompt = int(math.Round((0.2 + 0.6*rng.Float64()) * float64(total)))
+	return total, clampPrompt(prompt, total)
+}
+
+// Request implements LenSource.
+func (d LenDist) Request(rng *rand.Rand) int { return SampleSeqLens(rng, 1, d)[0] }
+
+// Describe implements LenSource.
+func (d LenDist) Describe() string {
+	return fmt.Sprintf(&quot;lognormal(mean=%g,sigma=%g,min=%d,max=%d)&quot;, d.Mean, d.Sigma, d.Min, d.Max)
+}
+
+func clampPrompt(prompt, total int) int {
+	if prompt &gt;= total {
+		prompt = total - 1
+	}
+	if prompt &lt; 1 {
+		prompt = 1
+	}
+	return prompt
+}
+
+// TraceRequest is one request of a serving trace.
+type TraceRequest struct{ Context, Generated int }
+
+// TraceDist samples requests uniformly from a trace (Azure LLM inference
+// trace 2023, conversation service, by default). A request caught in the
+// middle of its decode phase has context Context + g tokens, with g uniform
+// in 1..Generated (1 if Generated is 0); the prompt is Context. Lengths are
+// clipped to [Min, Max] (Max = the model context, 8192 for Llama-3-8B).
+type TraceDist struct {
+	Name     string
+	Reqs     []TraceRequest
+	Min, Max int
+}
+
+func (d TraceDist) clip(l int) int {
+	if l &lt; d.Min {
+		l = d.Min
+	}
+	if l &gt; d.Max {
+		l = d.Max
+	}
+	return l
+}
+
+// Sample implements LenSource.
+func (d TraceDist) Sample(rng *rand.Rand) (total, prompt int) {
+	r := d.Reqs[rng.Intn(len(d.Reqs))]
+	g := 1
+	if r.Generated &gt; 1 {
+		g = 1 + rng.Intn(r.Generated)
+	}
+	total = d.clip(r.Context + g)
+	return total, clampPrompt(r.Context, total)
+}
+
+// Request implements LenSource: the request&#x27;s final length.
+func (d TraceDist) Request(rng *rand.Rand) int {
+	r := d.Reqs[rng.Intn(len(d.Reqs))]
+	return d.clip(r.Context + r.Generated)
+}
+
+// Describe implements LenSource.
+func (d TraceDist) Describe() string {
+	return fmt.Sprintf(&quot;trace(%s,requests=%d,min=%d,max=%d)&quot;, d.Name, len(d.Reqs), d.Min, d.Max)
+}
+
+//go:embed azure_conv_tokens.csv
+var azureConvTokens string
+
+// AzureConvTrace returns the (ContextTokens, GeneratedTokens) pairs of the
+// Azure LLM inference trace 2023, conversation service (19,366 requests,
+// CC-BY 4.0; see ../DATASETS.md).
+func AzureConvTrace() []TraceRequest {
+	var out []TraceRequest
+	for _, line := range strings.Split(azureConvTokens, &quot;\n&quot;) {
+		line = strings.TrimSpace(line)
+		if line == &quot;&quot; || strings.HasPrefix(line, &quot;#&quot;) {
+			continue
+		}
+		f := strings.Split(line, &quot;,&quot;)
+		c, err1 := strconv.Atoi(f[0])
+		g, err2 := strconv.Atoi(f[1])
+		if len(f) != 2 || err1 != nil || err2 != nil {
+			panic(&quot;pagedattn: bad trace line &quot; + line)
+		}
+		out = append(out, TraceRequest{c, g})
+	}
+	return out
+}
+
+// BlockPool models vLLM&#x27;s free KV-block queue (v1 FreeKVCacheBlockQueue
+// without prefix caching): allocation pops from the head, a finished
+// request&#x27;s blocks are appended to the tail in reverse order.
+type BlockPool struct {
+	free []int // FIFO; free[head:] are free
+	head int
+	n    int
+}
+
+// NewBlockPool returns a pool whose free queue is 0..n-1.
+func NewBlockPool(n int) *BlockPool {
+	p := &amp;BlockPool{free: make([]int, n), n: n}
+	for i := range p.free {
+		p.free[i] = i
+	}
+	return p
+}
+
+// NumBlocks returns the pool size.
+func (p *BlockPool) NumBlocks() int { return p.n }
+
+// NumFree returns the number of free blocks.
+func (p *BlockPool) NumFree() int { return len(p.free) - p.head }
+
+// Alloc pops the block at the head of the free queue.
+func (p *BlockPool) Alloc() int {
+	if p.NumFree() == 0 {
+		panic(&quot;pagedattn: KV block pool exhausted&quot;)
+	}
+	b := p.free[p.head]
+	p.head++
+	if p.head &gt; len(p.free)/2 &amp;&amp; p.head &gt; 1024 {
+		p.free = append([]int(nil), p.free[p.head:]...)
+		p.head = 0
+	}
+	return b
+}
+
+// Free returns a request&#x27;s blocks to the tail, last block first.
+func (p *BlockPool) Free(blocks []int) {
+	for i := len(blocks) - 1; i &gt;= 0; i-- {
+		p.free = append(p.free, blocks[i])
+	}
+}
+
+// ChurnConfig describes the serving history simulated before the measured
+// batch is allocated.
+type ChurnConfig struct {
+	Rounds    int     // admit/finish rounds
+	Occupancy float64 // admit background requests until this pool fraction is used
+	FinishP   float64 // probability that a live background request finishes per round
+}
+
+func blocksFor(tokens int) int { return (tokens + BlockSize - 1) / BlockSize }
+
+// BuildBlockTables simulates the allocator and returns, for every sequence
+// of the batch, its physical blocks in logical order.
+//
+// History: Rounds rounds in which background requests (final lengths from src)
+// are admitted until Occupancy of the pool is in use, then each live one
+// finishes with probability FinishP; finally all background requests finish.
+// This leaves the free queue in a serving-like scrambled order.
+//
+// Batch: every sequence first allocates its prompt blocks at once (prefill
+// of prompts[i] tokens, sequences admitted in random order), then the
+// decode tokens are generated one step
+// at a time for all sequences, a sequence taking a new block whenever it
+// crosses a block boundary (vLLM appends one block per BlockSize tokens).
+func BuildBlockTables(
+	rng *rand.Rand, pool *BlockPool, lens, prompts []int, src LenSource,
+	churn ChurnConfig,
+) [][]int {
+	var live [][]int
+	for r := 0; r &lt; churn.Rounds; r++ {
+		target := int(churn.Occupancy * float64(pool.NumBlocks()))
+		for pool.NumBlocks()-pool.NumFree() &lt; target {
+			nb := blocksFor(src.Request(rng))
+			if nb &gt; pool.NumFree() {
+				break
+			}
+			req := make([]int, nb)
+			for i := range req {
+				req[i] = pool.Alloc()
+			}
+			live = append(live, req)
+		}
+		kept := live[:0]
+		for _, req := range live {
+			if rng.Float64() &lt; churn.FinishP {
+				pool.Free(req)
+			} else {
+				kept = append(kept, req)
+			}
+		}
+		live = kept
+	}
+	rng.Shuffle(len(live), func(i, j int) { live[i], live[j] = live[j], live[i] })
+	for _, req := range live {
+		pool.Free(req)
+	}
+
+	n := len(lens)
+	tables := make([][]int, n)
+	cur := make([]int, n)
+	for _, i := range rng.Perm(n) {
+		prompt := prompts[i]
+		for j := 0; j &lt; blocksFor(prompt); j++ {
+			tables[i] = append(tables[i], pool.Alloc())
+		}
+		cur[i] = prompt
+	}
+	for {
+		progressed := false
+		for i := 0; i &lt; n; i++ {
+			if cur[i] &gt;= lens[i] {
+				continue
+			}
+			progressed = true
+			cur[i]++
+			if blocksFor(cur[i]) &gt; len(tables[i]) {
+				tables[i] = append(tables[i], pool.Alloc())
+			}
+		}
+		if !progressed {
+			break
+		}
+	}
+	return tables
+}
+
+// WorkList returns the (sequence, partition) items of pa_partial in launch
+// order (sequence-major) and the largest partition count.
+func WorkList(lens []int, partTokens int) (work []int32, maxParts int) {
+	for s, l := range lens {
+		np := (l + partTokens - 1) / partTokens
+		if np &gt; maxParts {
+			maxParts = np
+		}
+		for p := 0; p &lt; np; p++ {
+			work = append(work, int32(s), int32(p))
+		}
+	}
+	return work, maxParts
+}
+
+// Problem is a fully generated PagedAttention decode input.
+type Problem struct {
+	Batch, KVHeads, PartTokens int
+	NumBlocks, MaxBlocks       int
+	MaxParts                   int
+	Lens                       []int
+	Prompts                    []int
+	Tables                     [][]int
+	Work                       []int32 // pairs
+	BlockTable                 []int32 // [Batch][MaxBlocks], -1 = unused
+	Q                          []float32
+	K, V                       []float32 // [NumBlocks][KVHeads][BlockSize][HeadDim]
+}
+
+// QHeads returns the number of query heads.
+func (p *Problem) QHeads() int { return p.KVHeads * GQA }
+
+// BlockFloats returns the floats of one physical block (all KV heads).
+func (p *Problem) BlockFloats() int { return p.KVHeads * BlockSize * HeadDim }
+
+// NumWork returns the number of (sequence, partition) items.
+func (p *Problem) NumWork() int { return len(p.Work) / 2 }
+
+// Params collects every knob of the generator.
+type Params struct {
+	Batch      int
+	KVHeads    int
+	PartTokens int
+	PoolFactor float64 // pool blocks = PoolFactor * blocks the batch needs
+	Dist       LenDist // used when LenSource is &quot;lognormal&quot;
+	// LenSource: &quot;azure&quot; (Azure LLM inference trace 2023, conversation) or
+	// &quot;lognormal&quot; (Dist).
+	LenSource string
+	Churn     ChurnConfig
+	Seed      int64
+}
+
+// Source returns the length source selected by LenSource.
+func (pr Params) Source() LenSource {
+	switch pr.LenSource {
+	case &quot;&quot;, &quot;azure&quot;:
+		return TraceDist{Name: &quot;azure-conv-2023&quot;, Reqs: AzureConvTrace(), Min: pr.Dist.Min, Max: pr.Dist.Max}
+	case &quot;lognormal&quot;:
+		return pr.Dist
+	}
+	panic(fmt.Sprintf(&quot;pagedattn: unknown length source %q (azure, lognormal)&quot;, pr.LenSource))
+}
+
+// Generate builds the lengths, block tables, work list and the Q values.
+// K and V are only filled for the blocks the batch uses (and only if
+// withKV is set; otherwise the caller fills them block by block).
+func Generate(pr Params, withKV bool) *Problem {
+	if pr.PartTokens &lt;= 0 || pr.PartTokens%BlockSize != 0 || pr.PartTokens &gt; MaxPart {
+		panic(fmt.Sprintf(&quot;pagedattn: partition must be a multiple of %d and &lt;= %d, got %d&quot;,
+			BlockSize, MaxPart, pr.PartTokens))
+	}
+	rng := rand.New(rand.NewSource(pr.Seed))
+	p := &amp;Problem{Batch: pr.Batch, KVHeads: pr.KVHeads, PartTokens: pr.PartTokens}
+	src := pr.Source()
+	p.Lens = make([]int, pr.Batch)
+	p.Prompts = make([]int, pr.Batch)
+	for i := range p.Lens {
+		p.Lens[i], p.Prompts[i] = src.Sample(rng)
+	}
+	need := 0
+	for _, l := range p.Lens {
+		need += blocksFor(l)
+		if blocksFor(l) &gt; p.MaxBlocks {
+			p.MaxBlocks = blocksFor(l)
+		}
+	}
+	p.NumBlocks = int(math.Ceil(pr.PoolFactor * float64(need)))
+	if p.NumBlocks &lt; need {
+		p.NumBlocks = need
+	}
+	pool := NewBlockPool(p.NumBlocks)
+	p.Tables = BuildBlockTables(rng, pool, p.Lens, p.Prompts, src, pr.Churn)
+	p.BlockTable = make([]int32, pr.Batch*p.MaxBlocks)
+	for i := range p.BlockTable {
+		p.BlockTable[i] = -1
+	}
+	for s, t := range p.Tables {
+		for j, b := range t {
+			p.BlockTable[s*p.MaxBlocks+j] = int32(b)
+		}
+	}
+	p.Work, p.MaxParts = WorkList(p.Lens, pr.PartTokens)
+
+	p.Q = make([]float32, pr.Batch*p.QHeads()*HeadDim)
+	for i := range p.Q {
+		p.Q[i] = rng.Float32()*2 - 1
+	}
+	if withKV {
+		bf := p.BlockFloats()
+		p.K = make([]float32, p.NumBlocks*bf)
+		p.V = make([]float32, p.NumBlocks*bf)
+		for _, t := range p.Tables {
+			for _, b := range t {
+				FillBlock(pr.Seed, b, p.K[b*bf:(b+1)*bf], p.V[b*bf:(b+1)*bf])
+			}
+		}
+	}
+	return p
+}
+
+// FillBlock writes the deterministic K and V values of physical block b.
+func FillBlock(seed int64, b int, k, v []float32) {
+	rng := rand.New(rand.NewSource(seed*1000003 + int64(b)))
+	for i := range k {
+		k[i] = rng.Float32()*2 - 1
+	}
+	for i := range v {
+		v[i] = rng.Float32()*2 - 1
+	}
+}
+
+// CheckBounds verifies every index the kernels dereference: the work list,
+// the block-table entries of every touched logical block, and the largest
+// element offsets into each buffer.
+func (p *Problem) CheckBounds() error {
+	nq := p.QHeads()
+	for i := 0; i &lt; p.NumWork(); i++ {
+		s, part := int(p.Work[2*i]), int(p.Work[2*i+1])
+		if s &lt; 0 || s &gt;= p.Batch {
+			return fmt.Errorf(&quot;work %d: sequence %d out of range&quot;, i, s)
+		}
+		if part &lt; 0 || part &gt;= p.MaxParts || part*p.PartTokens &gt;= p.Lens[s] {
+			return fmt.Errorf(&quot;work %d: partition %d out of range&quot;, i, part)
+		}
+		blk0 := part * p.PartTokens / BlockSize
+		ntok := p.Lens[s] - part*p.PartTokens
+		if ntok &gt; p.PartTokens {
+			ntok = p.PartTokens
+		}
+		for b := 0; b &lt; blocksFor(ntok); b++ {
+			idx := s*p.MaxBlocks + blk0 + b
+			if blk0+b &gt;= p.MaxBlocks {
+				return fmt.Errorf(&quot;work %d: logical block %d &gt;= max %d&quot;, i, blk0+b, p.MaxBlocks)
+			}
+			phys := int(p.BlockTable[idx])
+			if phys &lt; 0 || phys &gt;= p.NumBlocks {
+				return fmt.Errorf(&quot;work %d: physical block %d out of pool %d&quot;, i, phys, p.NumBlocks)
+			}
+			last := ((phys*p.KVHeads+p.KVHeads-1)*BlockSize+BlockSize-1)*HeadDim + HeadDim - 1
+			if last &gt;= p.NumBlocks*p.BlockFloats() {
+				return fmt.Errorf(&quot;work %d: K/V offset %d out of buffer&quot;, i, last)
+			}
+		}
+		o := ((s*nq+nq-1)*p.MaxParts + part)
+		if o &gt;= p.Batch*nq*p.MaxParts {
+			return fmt.Errorf(&quot;work %d: partial-output index %d out of range&quot;, i, o)
+		}
+	}
+	seen := make(map[int32]bool)
+	for _, b := range p.BlockTable {
+		if b &lt; 0 {
+			continue
+		}
+		if seen[b] {
+			return fmt.Errorf(&quot;physical block %d used twice&quot;, b)
+		}
+		seen[b] = true
+	}
+	return nil
+}
+
+// Footprint returns the bytes the two kernels touch (read + written, each
+// byte counted once per buffer).
+type Footprint struct {
+	KV, Q, Index, Partial, Out uint64
+}
+
+// Total returns the total footprint.
+func (f Footprint) Total() uint64 { return f.KV + f.Q + f.Index + f.Partial + f.Out }
+
+// Footprint computes the touched bytes.
+func (p *Problem) Footprint() Footprint {
+	var f Footprint
+	tokens := 0
+	blocks := 0
+	for _, l := range p.Lens {
+		tokens += l
+		blocks += blocksFor(l)
+	}
+	f.KV = uint64(tokens) * uint64(p.KVHeads*HeadDim*4*2)
+	f.Q = uint64(len(p.Q) * 4)
+	f.Index = uint64(blocks*4 + p.Batch*4 + len(p.Work)*4)
+	nParts := p.NumWork()
+	f.Partial = uint64(nParts*p.QHeads()) * uint64(HeadDim*4+8)
+	f.Out = uint64(p.Batch * p.QHeads() * HeadDim * 4)
+	return f
+}
+
+// Reference computes the decode attention output [Batch][Hq][D] in float64
+// with the textbook softmax (no partitioning).
+func (p *Problem) Reference() []float32 {
+	nq := p.QHeads()
+	out := make([]float32, p.Batch*nq*HeadDim)
+	scale := 1 / math.Sqrt(HeadDim)
+	bf := p.BlockFloats()
+	for s := 0; s &lt; p.Batch; s++ {
+		l := p.Lens[s]
+		for qh := 0; qh &lt; nq; qh++ {
+			kvh := qh / GQA
+			q := p.Q[(s*nq+qh)*HeadDim : (s*nq+qh+1)*HeadDim]
+			scores := make([]float64, l)
+			m := math.Inf(-1)
+			for t := 0; t &lt; l; t++ {
+				b := p.Tables[s][t/BlockSize]
+				k := p.K[b*bf+(kvh*BlockSize+t%BlockSize)*HeadDim:]
+				dot := 0.0
+				for d := 0; d &lt; HeadDim; d++ {
+					dot += float64(q[d]) * float64(k[d])
+				}
+				scores[t] = dot * scale
+				m = math.Max(m, scores[t])
+			}
+			sum := 0.0
+			acc := make([]float64, HeadDim)
+			for t := 0; t &lt; l; t++ {
+				w := math.Exp(scores[t] - m)
+				sum += w
+				b := p.Tables[s][t/BlockSize]
+				v := p.V[b*bf+(kvh*BlockSize+t%BlockSize)*HeadDim:]
+				for d := 0; d &lt; HeadDim; d++ {
+					acc[d] += w * float64(v[d])
+				}
+			}
+			for d := 0; d &lt; HeadDim; d++ {
+				out[(s*nq+qh)*HeadDim+d] = float32(acc[d] / sum)
+			}
+		}
+	}
+	return out
+}
+</code></pre></details>
+    <details class="src"><summary>pagedattn/benchmark.go <span>分配 buffer、拷贝、launch 两个 kernel、报告 · 370 行</span></summary><pre><code class="language-go">// Package pagedattn implements the T17 W-A workload: one layer of
+// PagedAttention decode (vLLM, SOSP&#x27;23) with the Llama-3-8B attention shape
+// (32 query heads, 8 KV heads, head dim 128, GQA 4:1) and a FlashDecoding-
+// style split over the context:
+//
+//   - pa_partial: one work-group (256 threads) per (sequence, KV head,
+//     partition of PartTokens tokens). It reads the block table, gathers the
+//     K blocks, computes the scores of the 4 query heads that share the KV
+//     head, the partition-local softmax (v_exp_f32) and the P x V sum over
+//     the gathered V blocks; it writes an unnormalised partial output plus
+//     the partition max and exp-sum.
+//   - pa_reduce: one wavefront per (sequence, query head) merges the
+//     partitions (no atomics).
+//
+// All index structures (block tables, the (sequence, partition) work list)
+// are built on the host: block tables come from a simulation of vLLM&#x27;s free
+// block queue under a random admit/finish history, so each sequence&#x27;s blocks
+// are scattered over the whole KV pool. Buffers use the default allocator
+// (each buffer split into 48 contiguous parts, one per GPM).
+package pagedattn
+
+import (
+	// embed hsaco files
+	_ &quot;embed&quot;
+	&quot;fmt&quot;
+	&quot;log&quot;
+	&quot;math&quot;
+
+	&quot;github.com/sarchlab/mgpusim/v3/driver&quot;
+	&quot;github.com/sarchlab/mgpusim/v3/insts&quot;
+	&quot;github.com/sarchlab/mgpusim/v3/kernels&quot;
+)
+
+//go:embed kernels.hsaco
+var hsacoBytes []byte
+
+// PartialArgs are the arguments of pa_partial.
+type PartialArgs struct {
+	Q, KCache, VCache          driver.Ptr
+	TmpOut, MaxLogits, ExpSums driver.Ptr
+	KernargGap                 int32 // unused, see kernels.cl
+	GapPadding                 int32
+	BlockTables, SeqLens, Work driver.Ptr
+	ScaleLog2                  float32
+	NumKVHeads                 int32
+	MaxBlocks                  int32
+	PartTokens                 int32
+	MaxParts                   int32
+	Padding                    int32
+	HiddenGlobalOffsetX        int64
+	HiddenGlobalOffsetY        int64
+	HiddenGlobalOffsetZ        int64
+}
+
+// ReduceArgs are the arguments of pa_reduce.
+type ReduceArgs struct {
+	TmpOut, MaxLogits, ExpSums, SeqLens, Out driver.Ptr
+	NumQHeads                                int32
+	PartTokens                               int32
+	MaxParts                                 int32
+	Padding                                  int32
+	HiddenGlobalOffsetX                      int64
+	HiddenGlobalOffsetY                      int64
+	HiddenGlobalOffsetZ                      int64
+}
+
+const (
+	partialWGSize = 256
+	reduceWGSize  = 64
+)
+
+// Benchmark is the PagedAttention decode benchmark.
+type Benchmark struct {
+	driver  *driver.Driver
+	context *driver.Context
+	gpus    []int
+
+	partialCo, reduceCo *insts.HsaCo
+
+	Params Params
+	// Used only for the printed expected-remote estimate.
+	NumGPMs   int
+	CUsPerGPM int
+
+	verify bool
+	prob   *Problem
+
+	dQ, dK, dV, dBT, dLens, dWork driver.Ptr
+	dTmp, dML, dES, dOut          driver.Ptr
+}
+
+// DefaultParams returns a small default size (batch 2). The T17 target
+// shape is batch 32 with lengths from the Azure conversation trace (mean
+// about 1.26K tokens at a random point of the decode phase).
+func DefaultParams() Params {
+	return Params{
+		Batch:      2,
+		KVHeads:    8,
+		PartTokens: 64,
+		PoolFactor: 2.0,
+		Dist:       LenDist{Mean: 1024, Sigma: 0.8, Min: 16, Max: 8192},
+		LenSource:  &quot;azure&quot;,
+		Churn:      ChurnConfig{Rounds: 8, Occupancy: 0.9, FinishP: 0.5},
+		Seed:       1,
+	}
+}
+
+// NewBenchmark returns a PagedAttention decode benchmark.
+func NewBenchmark(d *driver.Driver) *Benchmark {
+	b := &amp;Benchmark{driver: d, Params: DefaultParams(), NumGPMs: 48, CUsPerGPM: 28}
+	b.context = d.Init()
+	b.partialCo = kernels.LoadProgramFromMemory(hsacoBytes, &quot;pa_partial&quot;)
+	b.reduceCo = kernels.LoadProgramFromMemory(hsacoBytes, &quot;pa_reduce&quot;)
+	if b.partialCo == nil || b.reduceCo == nil {
+		log.Panic(&quot;pagedattn: failed to load kernels&quot;)
+	}
+	return b
+}
+
+// SelectGPU selects the GPU (the runner&#x27;s unified GPU).
+func (b *Benchmark) SelectGPU(gpus []int) { b.gpus = gpus }
+
+// SetUnifiedMemory is not supported.
+func (b *Benchmark) SetUnifiedMemory() { panic(&quot;pagedattn does not support unified memory&quot;) }
+
+// EnableVerification keeps host copies of K and V for Verify (the runner
+// calls it before Run when -verify is set).
+func (b *Benchmark) EnableVerification() { b.verify = true }
+
+// Run generates the input, copies it and launches the two kernels.
+func (b *Benchmark) Run() {
+	b.driver.SelectGPU(b.context, b.gpus[0])
+	// Verify copies results back; make the magic D2H copy read through the
+	// write-back L2 (no simulated time; does not affect the kernels).
+	b.driver.SetMagicCopyCoherent(true)
+	b.prob = Generate(b.Params, b.verify)
+	if err := b.prob.CheckBounds(); err != nil {
+		log.Panicf(&quot;pagedattn: bounds check failed: %v&quot;, err)
+	}
+	b.report()
+	b.initMem()
+	b.exec()
+}
+
+func (b *Benchmark) alloc(bytes uint64, name string) driver.Ptr {
+	if bytes == 0 {
+		bytes = 4
+	}
+	p := b.driver.AllocateMemory(b.context, bytes)
+	b.driver.RegisterMemoryObject(b.context, p, bytes, name)
+	return p
+}
+
+func (b *Benchmark) initMem() {
+	p := b.prob
+	nq := p.QHeads()
+	kvBytes := uint64(p.NumBlocks) * uint64(p.BlockFloats()) * 4
+	b.dQ = b.alloc(uint64(len(p.Q))*4, &quot;pa_q&quot;)
+	b.dK = b.alloc(kvBytes, &quot;pa_k_cache&quot;)
+	b.dV = b.alloc(kvBytes, &quot;pa_v_cache&quot;)
+	b.dBT = b.alloc(uint64(len(p.BlockTable))*4, &quot;pa_block_tables&quot;)
+	b.dLens = b.alloc(uint64(p.Batch)*4, &quot;pa_seq_lens&quot;)
+	b.dWork = b.alloc(uint64(len(p.Work))*4, &quot;pa_work&quot;)
+	parts := uint64(p.Batch * nq * p.MaxParts)
+	b.dTmp = b.alloc(parts*HeadDim*4, &quot;pa_tmp_out&quot;)
+	b.dML = b.alloc(parts*4, &quot;pa_max_logits&quot;)
+	b.dES = b.alloc(parts*4, &quot;pa_exp_sums&quot;)
+	b.dOut = b.alloc(uint64(p.Batch*nq*HeadDim)*4, &quot;pa_out&quot;)
+
+	b.driver.MemCopyH2D(b.context, b.dQ, p.Q)
+	b.driver.MemCopyH2D(b.context, b.dBT, p.BlockTable)
+	lens := make([]int32, p.Batch)
+	for i, l := range p.Lens {
+		lens[i] = int32(l)
+	}
+	b.driver.MemCopyH2D(b.context, b.dLens, lens)
+	b.driver.MemCopyH2D(b.context, b.dWork, p.Work)
+
+	// Copy only the blocks in use (the rest of the pool is never read).
+	// Without verification the host never holds the whole pool.
+	bf := p.BlockFloats()
+	kb, vb := make([]float32, bf), make([]float32, bf)
+	for _, t := range p.Tables {
+		for _, blk := range t {
+			k, v := kb, vb
+			if p.K != nil {
+				k, v = p.K[blk*bf:(blk+1)*bf], p.V[blk*bf:(blk+1)*bf]
+			} else {
+				FillBlock(b.Params.Seed, blk, k, v)
+			}
+			off := driver.Ptr(uint64(blk) * uint64(bf) * 4)
+			b.driver.MemCopyH2D(b.context, b.dK+off, k)
+			b.driver.MemCopyH2D(b.context, b.dV+off, v)
+		}
+	}
+}
+
+func (b *Benchmark) exec() {
+	p := b.prob
+	q := b.driver.CreateCommandQueue(b.context)
+	pa := PartialArgs{
+		Q: b.dQ, KCache: b.dK, VCache: b.dV, BlockTables: b.dBT,
+		SeqLens: b.dLens, Work: b.dWork,
+		TmpOut: b.dTmp, MaxLogits: b.dML, ExpSums: b.dES,
+		ScaleLog2:  float32(math.Log2E / math.Sqrt(HeadDim)),
+		NumKVHeads: int32(p.KVHeads),
+		MaxBlocks:  int32(p.MaxBlocks),
+		PartTokens: int32(p.PartTokens),
+		MaxParts:   int32(p.MaxParts),
+	}
+	nWG := p.NumWork() * p.KVHeads
+	b.driver.EnqueueLaunchKernel(q, b.partialCo,
+		[3]uint32{uint32(nWG * partialWGSize), 1, 1},
+		[3]uint16{partialWGSize, 1, 1}, &amp;pa)
+
+	ra := ReduceArgs{
+		TmpOut: b.dTmp, MaxLogits: b.dML, ExpSums: b.dES, SeqLens: b.dLens,
+		Out:        b.dOut,
+		NumQHeads:  int32(p.QHeads()),
+		PartTokens: int32(p.PartTokens),
+		MaxParts:   int32(p.MaxParts),
+	}
+	nRed := p.Batch * p.QHeads()
+	b.driver.EnqueueLaunchKernel(q, b.reduceCo,
+		[3]uint32{uint32(nRed * reduceWGSize), 1, 1},
+		[3]uint16{reduceWGSize, 1, 1}, &amp;ra)
+	b.driver.DrainCommandQueue(q)
+}
+
+// Verify compares the output with the float64 host reference. The tolerance
+// is 1e-4 absolute + 1e-3 relative per element (outputs are convex
+// combinations of V values in [-1, 1]; fp32 accumulation over at most a few
+// thousand tokens stays well below it).
+func (b *Benchmark) Verify() {
+	p := b.prob
+	got := make([]float32, p.Batch*p.QHeads()*HeadDim)
+	b.driver.MemCopyD2H(b.context, got, b.dOut)
+	ref := p.Reference()
+	maxErr, bad := 0.0, 0
+	for i := range ref {
+		e := math.Abs(float64(got[i]) - float64(ref[i]))
+		if e &gt; maxErr {
+			maxErr = e
+		}
+		if !(e &lt;= 1e-4+1e-3*math.Abs(float64(ref[i]))) {
+			if bad &lt; 5 {
+				log.Printf(&quot;pagedattn: mismatch at %d: got %g want %g&quot;, i, got[i], ref[i])
+			}
+			bad++
+		}
+	}
+	fmt.Printf(&quot;PAGEDATTN,verify,elements=%d,max_abs_err=%.3g,mismatches=%d\n&quot;,
+		len(ref), maxErr, bad)
+	if bad &gt; 0 {
+		log.Fatalf(&quot;pagedattn: %d mismatches&quot;, bad)
+	}
+	log.Printf(&quot;Passed!&quot;)
+}
+
+// report prints the generated configuration, kernel/WG counts, footprint
+// and the host-side estimate of the remote fraction of KV bytes.
+func (b *Benchmark) report() {
+	p := b.prob
+	pr := b.Params
+	tokens, blocks, minL, maxL := 0, 0, math.MaxInt32, 0
+	for _, l := range p.Lens {
+		tokens += l
+		blocks += blocksFor(l)
+		if l &lt; minL {
+			minL = l
+		}
+		if l &gt; maxL {
+			maxL = l
+		}
+	}
+	nWG := p.NumWork() * p.KVHeads
+	nRed := p.Batch * p.QHeads()
+	fp := p.Footprint()
+	fmt.Printf(&quot;PAGEDATTN,config,batch=%d,q_heads=%d,kv_heads=%d,head_dim=%d,block=%d,&quot;+
+		&quot;part_tokens=%d,lengths=%s,pool_factor=%g,churn_rounds=%d,seed=%d\n&quot;,
+		p.Batch, p.QHeads(), p.KVHeads, HeadDim, BlockSize, p.PartTokens,
+		pr.Source().Describe(), pr.PoolFactor, pr.Churn.Rounds, pr.Seed)
+	fmt.Printf(&quot;PAGEDATTN,lens,tokens=%d,mean=%.1f,min=%d,max=%d,blocks=%d,pool_blocks=%d,&quot;+
+		&quot;max_parts=%d\n&quot;,
+		tokens, float64(tokens)/float64(p.Batch), minL, maxL, blocks, p.NumBlocks, p.MaxParts)
+	fmt.Printf(&quot;PAGEDATTN,kernels,count=2,pa_partial_wgs=%d,pa_reduce_wgs=%d,total_wgs=%d\n&quot;,
+		nWG, nRed, nWG+nRed)
+	fmt.Printf(&quot;PAGEDATTN,footprint,kv_bytes=%d,q_bytes=%d,index_bytes=%d,partial_bytes=%d,&quot;+
+		&quot;out_bytes=%d,total_bytes=%d,total_mb=%.1f,kv_pool_alloc_mb=%.1f\n&quot;,
+		fp.KV, fp.Q, fp.Index, fp.Partial, fp.Out, fp.Total(), float64(fp.Total())/1e6,
+		float64(2*p.NumBlocks*p.BlockFloats()*4)/1e6)
+	if b.NumGPMs &gt; 0 &amp;&amp; b.CUsPerGPM &gt; 0 {
+		fmt.Printf(&quot;PAGEDATTN,estimate,kv_remote_fraction=%.3f,active_gpms_partial=%d\n&quot;,
+			b.expectedKVRemote(), activeGPMs(nWG, b.NumGPMs, b.CUsPerGPM))
+	}
+}
+
+// wgGPM mirrors driver.distributeWGToGPUs: contiguous ranges of
+// CUsPerGPM*ceil(n/totalCUs) work-groups per GPM.
+func wgGPM(wg, n, gpms, cus int) int {
+	per := cus * ((n-1)/(gpms*cus) + 1)
+	g := wg / per
+	if g &gt;= gpms {
+		g = gpms - 1
+	}
+	return g
+}
+
+func activeGPMs(n, gpms, cus int) int {
+	per := cus * ((n-1)/(gpms*cus) + 1)
+	a := (n + per - 1) / per
+	if a &gt; gpms {
+		a = gpms
+	}
+	return a
+}
+
+// pageGPM mirrors the default unified allocator: a buffer of numPages pages
+// is split into gpms contiguous parts of numPages/gpms pages (the last part
+// takes the remainder; buffers under gpms pages live on the first GPM).
+func pageGPM(byteOff, bufBytes uint64, gpms int) int {
+	const page = 4096
+	numPages := (bufBytes + page - 1) / page
+	per := numPages / uint64(gpms)
+	if per == 0 {
+		return 0
+	}
+	g := int(byteOff / page / per)
+	if g &gt;= gpms {
+		g = gpms - 1
+	}
+	return g
+}
+
+// expectedKVRemote returns the fraction of K/V bytes whose page lives on a
+// GPM other than the one running the reading pa_partial work-group.
+func (b *Benchmark) expectedKVRemote() float64 {
+	p := b.prob
+	nWG := p.NumWork() * p.KVHeads
+	bufBytes := uint64(p.NumBlocks) * uint64(p.BlockFloats()) * 4
+	headBytes := uint64(BlockSize * HeadDim * 4)
+	var remote, total float64
+	for wg := 0; wg &lt; nWG; wg++ {
+		item, kvh := wg/p.KVHeads, wg%p.KVHeads
+		s, part := int(p.Work[2*item]), int(p.Work[2*item+1])
+		g := wgGPM(wg, nWG, b.NumGPMs, b.CUsPerGPM)
+		ntok := p.Lens[s] - part*p.PartTokens
+		if ntok &gt; p.PartTokens {
+			ntok = p.PartTokens
+		}
+		blk0 := part * p.PartTokens / BlockSize
+		for j := 0; j &lt; blocksFor(ntok); j++ {
+			phys := uint64(p.Tables[s][blk0+j])
+			off := (phys*uint64(p.KVHeads) + uint64(kvh)) * headBytes
+			nt := ntok - j*BlockSize
+			if nt &gt; BlockSize {
+				nt = BlockSize
+			}
+			bytes := float64(nt * HeadDim * 4 * 2)
+			total += bytes
+			if pageGPM(off, bufBytes, b.NumGPMs) != g {
+				remote += bytes
+			}
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return remote / total
+}
+</code></pre></details>
+    <details class="src"><summary>moe/kernels.cl <span>MoE 的五个 kernel：gate、dispatch、up、down、combine · 317 行</span></summary><pre><code class="language-c">// MoE layer (DeepSeekMoE-style routed experts, decode batch), T17 W-B.
+//
+//   moe_gate     one WG per token: logits = x . Wg, softmax over experts,
+//                top-k by (prob + bias) in LDS; writes expert ids and weights
+//                (the softmax probabilities, not renormalised).
+//   (host)       groups the (token, k) pairs by expert: perm/offsets/tiles.
+//   moe_dispatch one WG per permuted slot: xs[slot] = x[perm_token[slot]].
+//   moe_up       one WG per (expert m-tile, F tile): act = silu(xs W1) * (xs W3)
+//   moe_down     one WG per (expert m-tile, H tile): ys = act W2
+//   moe_combine  one WG per token: out[t] = sum_k w[t][k] * ys[inv[t][k]]
+//
+// Simulator rules (T17): no atomics, no private arrays, only the implemented
+// DS opcodes, fp32. build_hsaco.sh checks the generated code.
+//
+// Layouts: x [T][H], wg [H][E] (x . wg), bias [E], w1/w3 [E][H][F],
+// w2 [E][F][H], xs/ys [S][H], act [S][F] with S = T * TOPK slots.
+// tiles [n_tiles][3] = (expert, first slot, rows) built on the host; rows
+// &lt;= TM.
+
+#define NE 64        // experts handled by moe_gate (compile-time)
+#define TM 32        // slots per GEMM tile
+#define TN 64        // output columns per GEMM tile
+#define TK 32        // reduction chunk staged in LDS
+#define NEG_INF (-3.0e38f)
+#define LOG2E 1.4426950408889634f
+// Element offsets are 32-bit unsigned (every buffer has &lt; 2^32 elements; the
+// host checks it): signed (long)int*int compiles to v_mad_i64_i32 (VOP3a
+// opcode 489) and 64-bit shifts of thread ids to v_alignbit_b32 (VOP3a 462),
+// neither of which the emulator implements.
+#define IDX(a, b) ((uint)(a) * (uint)(b))
+// 32-bit local id: shifts of the 64-bit get_local_id(0) become
+// v_alignbit_b32 (VOP3a opcode 462), which the emulator does not implement.
+#define LOCAL_ID ((int)__builtin_amdgcn_workitem_id_x())
+// Store 8 floats as four 8-byte stores. Two 16-byte stores make clang
+// insert &quot;s_nop 0&quot; (fiji store-data hazard), which hangs the timing CU
+// (check_hsaco.sh); the empty asm keeps the stores from being merged.
+#define STORE8(o, a, b, c, d, e, f, g, h)            \
+  do {                                               \
+    vstore2((float2)(a, b), 0, (o));                 \
+    __asm__ volatile(&quot;&quot; ::: &quot;memory&quot;);               \
+    vstore2((float2)(c, d), 0, (o) + 2);             \
+    __asm__ volatile(&quot;&quot; ::: &quot;memory&quot;);               \
+    vstore2((float2)(e, f), 0, (o) + 4);             \
+    __asm__ volatile(&quot;&quot; ::: &quot;memory&quot;);               \
+    vstore2((float2)(g, h), 0, (o) + 6);             \
+  } while (0)
+
+__kernel __attribute__((reqd_work_group_size(256, 1, 1)))
+void moe_gate(__global const float *x,
+              __global const float *wg,
+              __global const float *bias,
+              __global int *topk_idx,
+              __global float *topk_w,
+              const int hidden,
+              const int topk) {
+  // Sizes NE + 1: arrays 64 dwords apart make the compiler pair stores as
+  // ds_write2st64_b32, which the simulator does not implement.
+  __local float part[4 * NE];
+  __local float prob[NE + 1];
+  __local float sel[NE + 1];
+  __local float rv[NE + 1];
+  __local int ri[NE + 1];
+
+  const int lid = LOCAL_ID;
+  const int t = get_group_id(0);
+  const int e = lid &amp; (NE - 1);
+  const int s = lid &gt;&gt; 6; // 4 slices of the hidden dimension
+  const int chunk = hidden / 4;
+
+  // logits: wave s sums its slice; lanes are experts (coalesced rows of wg)
+  const __global float *xp = x + IDX(t, hidden) + s * chunk;
+  const __global float *wp = wg + IDX(s * chunk, NE) + e;
+  float acc = 0.0f;
+  for (uint h = 0; h &lt; (uint)chunk; ++h) {
+    acc += xp[h] * wp[h * NE];
+  }
+  part[e * 4 + s] = acc;
+  barrier(CLK_LOCAL_MEM_FENCE);
+
+  // softmax over the experts (wave 0)
+  if (lid &lt; NE) {
+    const float l = part[e * 4] + part[e * 4 + 1] + part[e * 4 + 2] + part[e * 4 + 3];
+    prob[e] = l;
+    rv[e] = l;
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (int st = NE / 2; st &gt; 0; st &gt;&gt;= 1) {
+    if (lid &lt; st) {
+      rv[lid] = fmax(rv[lid], rv[lid + st]);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+  const float mx = rv[0];
+  barrier(CLK_LOCAL_MEM_FENCE);
+  if (lid &lt; NE) {
+    const float p = native_exp2((prob[e] - mx) * LOG2E);
+    prob[e] = p;
+    rv[e] = p;
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (int st = NE / 2; st &gt; 0; st &gt;&gt;= 1) {
+    if (lid &lt; st) {
+      rv[lid] += rv[lid + st];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+  const float inv = native_recip(rv[0]);
+  barrier(CLK_LOCAL_MEM_FENCE);
+  if (lid &lt; NE) {
+    prob[e] *= inv;
+    sel[e] = prob[e] + bias[e];
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+
+  // top-k by repeated arg-max in LDS (ties: lower expert id)
+  for (int k = 0; k &lt; topk; ++k) {
+    if (lid &lt; NE) {
+      rv[e] = sel[e];
+      ri[e] = e;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int st = NE / 2; st &gt; 0; st &gt;&gt;= 1) {
+      if (lid &lt; st) {
+        const float a = rv[lid], b = rv[lid + st];
+        if (b &gt; a || (b == a &amp;&amp; ri[lid + st] &lt; ri[lid])) {
+          rv[lid] = b;
+          ri[lid] = ri[lid + st];
+        }
+      }
+      barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (lid == 0) {
+      const int best = ri[0];
+      topk_idx[t * topk + k] = best;
+      topk_w[t * topk + k] = prob[best];
+      sel[best] = NEG_INF;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+}
+
+__kernel __attribute__((reqd_work_group_size(256, 1, 1)))
+void moe_dispatch(__global const float *x,
+                  __global const int *perm_token,
+                  __global float *xs,
+                  const int hidden) {
+  const int slot = get_group_id(0);
+  const int lid = LOCAL_ID;
+  const uint src = IDX(perm_token[slot], hidden);
+  const uint dst = IDX(slot, hidden);
+  for (int h = lid * 4; h &lt; hidden; h += 256 * 4) {
+    vstore4(vload4(0, x + src + h), 0, xs + dst + h);
+  }
+}
+
+// Shared tiled GEMM body: C[TM][TN] = A[rows][K] * B[K][N] restricted to
+// rows of one expert. Thread = (row r = lid / 8, 8 columns c0 = (lid % 8) * 8).
+// a_lds [TM][TK], b_lds [TK][TN].
+
+inline void load_a_tile(__local float *a_lds, __global const float *a,
+                        int slot0, int rows, int lda, int k0, int lid) {
+  // TM * TK = 1024 floats, 4 per thread
+  const int r = lid &gt;&gt; 3;
+  const int kk = (lid &amp; 7) * 4;
+  float4 v = (float4)(0.0f);
+  if (r &lt; rows) {
+    v = vload4(0, a + IDX(slot0 + r, lda) + k0 + kk);
+  }
+  a_lds[r * TK + kk] = v.x;
+  a_lds[r * TK + kk + 1] = v.y;
+  a_lds[r * TK + kk + 2] = v.z;
+  a_lds[r * TK + kk + 3] = v.w;
+}
+
+inline void load_b_tile(__local float *b_lds, __global const float *b,
+                        int ldb, int k0, int n0, int lid) {
+  // TK * TN = 2048 floats, 8 contiguous per thread (8 threads per 256-B row);
+  // contiguous LDS stores avoid the unimplemented ds_write2st64_b32.
+  const int k = lid &gt;&gt; 3;           // 0..31
+  const int c = (lid &amp; 7) * 8;      // 0..56
+  const __global float *src = b + IDX(k0 + k, ldb) + n0 + c;
+  const float4 v0 = vload4(0, src);
+  const float4 v1 = vload4(0, src + 4);
+  __local float *dst = b_lds + k * TN + c;
+  dst[0] = v0.x;
+  dst[1] = v0.y;
+  dst[2] = v0.z;
+  dst[3] = v0.w;
+  dst[4] = v1.x;
+  dst[5] = v1.y;
+  dst[6] = v1.z;
+  dst[7] = v1.w;
+}
+
+__kernel __attribute__((reqd_work_group_size(256, 1, 1)))
+void moe_up(__global const float *xs,
+            __global const float *w1,
+            __global const float *w3,
+            __global const int *tiles,
+            __global float *act,
+            const int hidden,
+            const int ffn,
+            const int n_tiles_n) {
+  __local float a_lds[TM * TK];
+  __local float b1_lds[TK * TN];
+  __local float b3_lds[TK * TN];
+
+  const int lid = LOCAL_ID;
+  const int wgid = get_group_id(0);
+  const int mt = wgid / n_tiles_n;
+  const int n0 = (wgid % n_tiles_n) * TN;
+  const int e = tiles[3 * mt];
+  const int slot0 = tiles[3 * mt + 1];
+  const int rows = tiles[3 * mt + 2];
+  const __global float *b1 = w1 + IDX(e, hidden * ffn);
+  const __global float *b3 = w3 + IDX(e, hidden * ffn);
+
+  const int r = lid &gt;&gt; 3;
+  const int c0 = (lid &amp; 7) * 8;
+  float g0 = 0.0f, g1 = 0.0f, g2 = 0.0f, g3 = 0.0f;
+  float g4 = 0.0f, g5 = 0.0f, g6 = 0.0f, g7 = 0.0f;
+  float u0 = 0.0f, u1 = 0.0f, u2 = 0.0f, u3 = 0.0f;
+  float u4 = 0.0f, u5 = 0.0f, u6 = 0.0f, u7 = 0.0f;
+
+  for (int k0 = 0; k0 &lt; hidden; k0 += TK) {
+    load_a_tile(a_lds, xs, slot0, rows, hidden, k0, lid);
+    load_b_tile(b1_lds, b1, ffn, k0, n0, lid);
+    load_b_tile(b3_lds, b3, ffn, k0, n0, lid);
+    barrier(CLK_LOCAL_MEM_FENCE);
+    // fully unrolled: the loop exit test would be s_cmpk_eq_i32 (SOPK 2),
+    // which the emulator does not implement
+#pragma unroll
+    for (int k = 0; k &lt; TK; ++k) {
+      const float a = a_lds[r * TK + k];
+      const __local float *p1 = b1_lds + k * TN + c0;
+      const __local float *p3 = b3_lds + k * TN + c0;
+      g0 += a * p1[0]; g1 += a * p1[1]; g2 += a * p1[2]; g3 += a * p1[3];
+      g4 += a * p1[4]; g5 += a * p1[5]; g6 += a * p1[6]; g7 += a * p1[7];
+      u0 += a * p3[0]; u1 += a * p3[1]; u2 += a * p3[2]; u3 += a * p3[3];
+      u4 += a * p3[4]; u5 += a * p3[5]; u6 += a * p3[6]; u7 += a * p3[7];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+  if (r &lt; rows) {
+    __global float *o = act + IDX(slot0 + r, ffn) + n0 + c0;
+#define SWIGLU(g, u) ((g) * native_recip(1.0f + native_exp2(-(g) * LOG2E)) * (u))
+    vstore4((float4)(SWIGLU(g0, u0), SWIGLU(g1, u1), SWIGLU(g2, u2), SWIGLU(g3, u3)), 0, o);
+    vstore4((float4)(SWIGLU(g4, u4), SWIGLU(g5, u5), SWIGLU(g6, u6), SWIGLU(g7, u7)), 0, o + 4);
+#undef SWIGLU
+  }
+}
+
+__kernel __attribute__((reqd_work_group_size(256, 1, 1)))
+void moe_down(__global const float *act,
+              __global const float *w2,
+              __global const int *tiles,
+              __global float *ys,
+              const int hidden,
+              const int ffn,
+              const int n_tiles_n) {
+  __local float a_lds[TM * TK];
+  __local float b_lds[TK * TN];
+
+  const int lid = LOCAL_ID;
+  const int wgid = get_group_id(0);
+  const int mt = wgid / n_tiles_n;
+  const int n0 = (wgid % n_tiles_n) * TN;
+  const int e = tiles[3 * mt];
+  const int slot0 = tiles[3 * mt + 1];
+  const int rows = tiles[3 * mt + 2];
+  const __global float *b = w2 + IDX(e, ffn * hidden);
+
+  const int r = lid &gt;&gt; 3;
+  const int c0 = (lid &amp; 7) * 8;
+  float y0 = 0.0f, y1 = 0.0f, y2 = 0.0f, y3 = 0.0f;
+  float y4 = 0.0f, y5 = 0.0f, y6 = 0.0f, y7 = 0.0f;
+
+  for (int k0 = 0; k0 &lt; ffn; k0 += TK) {
+    load_a_tile(a_lds, act, slot0, rows, ffn, k0, lid);
+    load_b_tile(b_lds, b, hidden, k0, n0, lid);
+    barrier(CLK_LOCAL_MEM_FENCE);
+    // fully unrolled: the loop exit test would be s_cmpk_eq_i32 (SOPK 2),
+    // which the emulator does not implement
+#pragma unroll
+    for (int k = 0; k &lt; TK; ++k) {
+      const float a = a_lds[r * TK + k];
+      const __local float *p = b_lds + k * TN + c0;
+      y0 += a * p[0]; y1 += a * p[1]; y2 += a * p[2]; y3 += a * p[3];
+      y4 += a * p[4]; y5 += a * p[5]; y6 += a * p[6]; y7 += a * p[7];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+  if (r &lt; rows) {
+    __global float *o = ys + IDX(slot0 + r, hidden) + n0 + c0;
+    STORE8(o, y0, y1, y2, y3, y4, y5, y6, y7);
+  }
+}
+
+__kernel __attribute__((reqd_work_group_size(256, 1, 1)))
+void moe_combine(__global const float *ys,
+                 __global const int *inv_slot,
+                 __global const float *topk_w,
+                 __global float *out,
+                 const int hidden,
+                 const int topk) {
+  const int t = get_group_id(0);
+  const int lid = LOCAL_ID;
+  for (int h = lid * 4; h &lt; hidden; h += 256 * 4) {
+    float4 acc = (float4)(0.0f);
+    for (int k = 0; k &lt; topk; ++k) {
+      const float w = topk_w[t * topk + k];
+      const int slot = inv_slot[t * topk + k];
+      acc += w * vload4(0, ys + IDX(slot, hidden) + h);
+    }
+    vstore4(acc, 0, out + IDX(t, hidden) + h);
+  }
+}
+</code></pre></details>
+    <details class="src"><summary>moe/host.go <span>权重生成、偏置标定、按 expert 分组（路由）、参考实现 · 350 行</span></summary><pre><code class="language-go">package moe
+
+import (
+	&quot;fmt&quot;
+	&quot;math&quot;
+	&quot;math/rand&quot;
+	&quot;sort&quot;
+)
+
+// Constants compiled into kernels.cl.
+const (
+	NumExperts = 64 // NE: routed experts (DeepSeekMoE 16B has 64)
+	TileM      = 32 // TM: slots per GEMM tile
+	TileN      = 64 // TN: output columns per GEMM tile
+	TileK      = 32 // TK: reduction chunk
+)
+
+// Params collects every knob of the generator.
+type Params struct {
+	Tokens int // decode batch
+	Hidden int // model dimension (multiple of 64)
+	FFN    int // expert intermediate dimension (multiple of 64)
+	TopK   int
+	// Skew is the target max/mean expert load. A per-expert bias added to
+	// the routing score (not to the combine weight) is scaled until the
+	// host-side routing reaches it; 0 disables the bias (&quot;uniform&quot;).
+	Skew float64
+	Seed int64
+}
+
+// Problem holds the generated inputs (expert weights are generated per
+// expert on demand, see ExpertWeights).
+type Problem struct {
+	Params
+	X     []float32 // [T][H]
+	Wg    []float32 // [H][E]
+	Bias  []float32 // [E]
+	BiasZ []float64 // [E] unscaled bias direction
+	BiasK float64   // chosen bias scale
+}
+
+// Validate checks the shape constraints of the kernels.
+func (p Params) Validate() error {
+	switch {
+	case p.Tokens &lt;= 0 || p.TopK &lt;= 0 || p.TopK &gt; NumExperts:
+		return fmt.Errorf(&quot;moe: bad tokens %d / top-k %d&quot;, p.Tokens, p.TopK)
+	case p.Hidden &lt;= 0 || p.Hidden%TileN != 0 || p.Hidden%TileK != 0 || p.Hidden%4 != 0:
+		return fmt.Errorf(&quot;moe: hidden %d must be a multiple of %d&quot;, p.Hidden, TileN)
+	case p.FFN &lt;= 0 || p.FFN%TileN != 0 || p.FFN%TileK != 0:
+		return fmt.Errorf(&quot;moe: ffn %d must be a multiple of %d&quot;, p.FFN, TileN)
+	case uint64(NumExperts)*uint64(p.Hidden)*uint64(p.FFN) &gt;= 1&lt;&lt;32:
+		return fmt.Errorf(&quot;moe: expert weights exceed 2^32 elements (32-bit kernel offsets)&quot;)
+	case uint64(p.Tokens*p.TopK)*uint64(p.Hidden+p.FFN) &gt;= 1&lt;&lt;32:
+		return fmt.Errorf(&quot;moe: activations exceed 2^32 elements&quot;)
+	}
+	return nil
+}
+
+func uniform(rng *rand.Rand, out []float32, a float64) {
+	for i := range out {
+		out[i] = float32((rng.Float64()*2 - 1) * a)
+	}
+}
+
+// ExpertWeights returns expert e&#x27;s W1, W3 ([H][F]) and W2 ([F][H]),
+// uniform with variance 1/fan_in, deterministic in (seed, e).
+func ExpertWeights(seed int64, e, hidden, ffn int) (w1, w3, w2 []float32) {
+	rng := rand.New(rand.NewSource(seed*7919 + int64(e) + 1))
+	w1 = make([]float32, hidden*ffn)
+	w3 = make([]float32, hidden*ffn)
+	w2 = make([]float32, ffn*hidden)
+	uniform(rng, w1, math.Sqrt(3/float64(hidden)))
+	uniform(rng, w3, math.Sqrt(3/float64(hidden)))
+	uniform(rng, w2, math.Sqrt(3/float64(ffn)))
+	return
+}
+
+// Generate builds x, the gate weights and the calibrated bias.
+func Generate(pr Params) *Problem {
+	if err := pr.Validate(); err != nil {
+		panic(err)
+	}
+	rng := rand.New(rand.NewSource(pr.Seed))
+	p := &amp;Problem{Params: pr}
+	p.X = make([]float32, pr.Tokens*pr.Hidden)
+	uniform(rng, p.X, 1)
+	p.Wg = make([]float32, pr.Hidden*NumExperts)
+	uniform(rng, p.Wg, math.Sqrt(3/float64(pr.Hidden)))
+	p.BiasZ = make([]float64, NumExperts)
+	for e := range p.BiasZ {
+		p.BiasZ[e] = rng.NormFloat64()
+	}
+	probs := p.GateProbs()
+	p.BiasK = CalibrateBias(probs, p.BiasZ, pr.TopK, pr.Skew)
+	p.Bias = make([]float32, NumExperts)
+	for e := range p.Bias {
+		p.Bias[e] = float32(p.BiasK * p.BiasZ[e])
+	}
+	return p
+}
+
+// GateProbs returns the softmax gate probabilities [T][E] in float64.
+func (p *Problem) GateProbs() [][]float64 {
+	out := make([][]float64, p.Tokens)
+	for t := range out {
+		l := make([]float64, NumExperts)
+		m := math.Inf(-1)
+		for e := 0; e &lt; NumExperts; e++ {
+			s := 0.0
+			for h := 0; h &lt; p.Hidden; h++ {
+				s += float64(p.X[t*p.Hidden+h]) * float64(p.Wg[h*NumExperts+e])
+			}
+			l[e] = s
+			m = math.Max(m, s)
+		}
+		sum := 0.0
+		for e := range l {
+			l[e] = math.Exp(l[e] - m)
+			sum += l[e]
+		}
+		for e := range l {
+			l[e] /= sum
+		}
+		out[t] = l
+	}
+	return out
+}
+
+// TopK returns the k experts with the largest prob+bias (ties: lower id).
+func TopK(prob []float64, bias []float64, k int) []int {
+	idx := make([]int, len(prob))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		return prob[idx[a]]+bias[idx[a]] &gt; prob[idx[b]]+bias[idx[b]]
+	})
+	return idx[:k]
+}
+
+// Loads returns the number of (token, k) pairs routed to each expert.
+func Loads(topk [][]int) []int {
+	l := make([]int, NumExperts)
+	for _, r := range topk {
+		for _, e := range r {
+			l[e]++
+		}
+	}
+	return l
+}
+
+// MaxOverMean returns max/mean of the expert loads.
+func MaxOverMean(loads []int) float64 {
+	sum, mx := 0, 0
+	for _, l := range loads {
+		sum += l
+		if l &gt; mx {
+			mx = l
+		}
+	}
+	return float64(mx) / (float64(sum) / float64(len(loads)))
+}
+
+func route(probs [][]float64, z []float64, k int, scale float64) [][]int {
+	bias := make([]float64, len(z))
+	for i := range z {
+		bias[i] = scale * z[i]
+	}
+	out := make([][]int, len(probs))
+	for t, pr := range probs {
+		out[t] = TopK(pr, bias, k)
+	}
+	return out
+}
+
+// CalibrateBias returns the bias scale whose routing gets closest to the
+// target max/mean load (bisection over [0, 1]; the probabilities are about
+// 1/E, so a scale of 1 dominates them). target &lt;= the unbiased ratio gives 0.
+func CalibrateBias(probs [][]float64, z []float64, k int, target float64) float64 {
+	if target &lt;= 0 {
+		return 0
+	}
+	ratio := func(s float64) float64 { return MaxOverMean(Loads(route(probs, z, k, s))) }
+	if ratio(0) &gt;= target {
+		return 0
+	}
+	lo, hi := 0.0, 1.0
+	if ratio(hi) &lt; target {
+		return hi
+	}
+	for i := 0; i &lt; 40; i++ {
+		mid := (lo + hi) / 2
+		if ratio(mid) &lt; target {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return hi
+}
+
+// Routing is the host-built permutation (grouped by expert).
+type Routing struct {
+	Loads     []int
+	Offsets   []int   // [E+1] first slot of each expert
+	PermToken []int32 // [S] token of each slot
+	InvSlot   []int32 // [T*K] slot of (token, k)
+	Tiles     []int32 // [n][3] (expert, first slot, rows &lt;= TileM)
+}
+
+// NumTiles returns the number of GEMM row tiles.
+func (r *Routing) NumTiles() int { return len(r.Tiles) / 3 }
+
+// MaxTiles bounds the tile count for any routing of s slots.
+func MaxTiles(s int) int { return s/TileM + NumExperts }
+
+// BuildRouting groups the (token, k) pairs by expert (stable in token
+// order), the counting sort a real MoE runtime does on the GPU.
+func BuildRouting(topkIdx []int32, tokens, k int) (*Routing, error) {
+	r := &amp;Routing{Loads: make([]int, NumExperts), Offsets: make([]int, NumExperts+1)}
+	if len(topkIdx) != tokens*k {
+		return nil, fmt.Errorf(&quot;moe: %d top-k entries for %d x %d&quot;, len(topkIdx), tokens, k)
+	}
+	for i, e := range topkIdx {
+		if e &lt; 0 || int(e) &gt;= NumExperts {
+			return nil, fmt.Errorf(&quot;moe: top-k entry %d = expert %d out of range&quot;, i, e)
+		}
+		r.Loads[e]++
+	}
+	for e := 0; e &lt; NumExperts; e++ {
+		r.Offsets[e+1] = r.Offsets[e] + r.Loads[e]
+	}
+	next := append([]int(nil), r.Offsets[:NumExperts]...)
+	r.PermToken = make([]int32, tokens*k)
+	r.InvSlot = make([]int32, tokens*k)
+	for t := 0; t &lt; tokens; t++ {
+		seen := map[int32]bool{}
+		for j := 0; j &lt; k; j++ {
+			e := topkIdx[t*k+j]
+			if seen[e] {
+				return nil, fmt.Errorf(&quot;moe: token %d routed twice to expert %d&quot;, t, e)
+			}
+			seen[e] = true
+			s := next[e]
+			next[e]++
+			r.PermToken[s] = int32(t)
+			r.InvSlot[t*k+j] = int32(s)
+		}
+	}
+	for e := 0; e &lt; NumExperts; e++ {
+		for s := r.Offsets[e]; s &lt; r.Offsets[e+1]; s += TileM {
+			rows := r.Offsets[e+1] - s
+			if rows &gt; TileM {
+				rows = TileM
+			}
+			r.Tiles = append(r.Tiles, int32(e), int32(s), int32(rows))
+		}
+	}
+	return r, nil
+}
+
+// Check verifies every index the kernels dereference.
+func (r *Routing) Check(tokens, k int) error {
+	s := tokens * k
+	for i, t := range r.PermToken {
+		if t &lt; 0 || int(t) &gt;= tokens {
+			return fmt.Errorf(&quot;perm[%d] = token %d out of range&quot;, i, t)
+		}
+	}
+	for i, v := range r.InvSlot {
+		if v &lt; 0 || int(v) &gt;= s || int(r.PermToken[v]) != i/k {
+			return fmt.Errorf(&quot;inv[%d] = slot %d inconsistent&quot;, i, v)
+		}
+	}
+	covered := 0
+	for i := 0; i &lt; r.NumTiles(); i++ {
+		e, s0, rows := r.Tiles[3*i], int(r.Tiles[3*i+1]), int(r.Tiles[3*i+2])
+		if e &lt; 0 || int(e) &gt;= NumExperts || rows &lt;= 0 || rows &gt; TileM ||
+			s0 &lt; r.Offsets[e] || s0+rows &gt; r.Offsets[e+1] {
+			return fmt.Errorf(&quot;tile %d (%d, %d, %d) out of range&quot;, i, e, s0, rows)
+		}
+		covered += rows
+	}
+	if covered != s {
+		return fmt.Errorf(&quot;tiles cover %d of %d slots&quot;, covered, s)
+	}
+	if r.NumTiles() &gt; MaxTiles(s) {
+		return fmt.Errorf(&quot;%d tiles &gt; bound %d&quot;, r.NumTiles(), MaxTiles(s))
+	}
+	return nil
+}
+
+func silu(x float64) float64 { return x / (1 + math.Exp(-x)) }
+
+// Reference computes out [T][H] in float64 for the given routing decision
+// (topkIdx/topkW as produced by the gate kernel).
+func (p *Problem) Reference(topkIdx []int32, topkW []float32) []float32 {
+	out := make([]float64, p.Tokens*p.Hidden)
+	H, F := p.Hidden, p.FFN
+	byExpert := map[int][]int{} // expert -&gt; list of t*K+j
+	for i, e := range topkIdx {
+		byExpert[int(e)] = append(byExpert[int(e)], i)
+	}
+	act := make([]float64, F)
+	for e, list := range byExpert {
+		w1, w3, w2 := ExpertWeights(p.Seed, e, H, F)
+		for _, i := range list {
+			t := i / p.TopK
+			x := p.X[t*H : (t+1)*H]
+			for f := 0; f &lt; F; f++ {
+				g, u := 0.0, 0.0
+				for h := 0; h &lt; H; h++ {
+					g += float64(x[h]) * float64(w1[h*F+f])
+					u += float64(x[h]) * float64(w3[h*F+f])
+				}
+				act[f] = silu(g) * u
+			}
+			w := float64(topkW[i])
+			for h := 0; h &lt; H; h++ {
+				y := 0.0
+				for f := 0; f &lt; F; f++ {
+					y += act[f] * float64(w2[f*H+h])
+				}
+				out[t*H+h] += w * y
+			}
+		}
+	}
+	res := make([]float32, len(out))
+	for i, v := range out {
+		res[i] = float32(v)
+	}
+	return res
+}
+
+// HostTopK returns the [T*K] expert ids the gate kernel selects (float64
+// host gate: softmax probabilities + bias, ties to the lower id).
+func (p *Problem) HostTopK() []int32 {
+	probs := p.GateProbs()
+	bias := make([]float64, NumExperts)
+	for e := range bias {
+		bias[e] = float64(p.Bias[e])
+	}
+	out := make([]int32, 0, p.Tokens*p.TopK)
+	for t := range probs {
+		for _, e := range TopK(probs[t], bias, p.TopK) {
+			out = append(out, int32(e))
+		}
+	}
+	return out
+}
+</code></pre></details>
+    <details class="src"><summary>moe/benchmark.go <span>gate → 读回 → host 路由 → 其余四个 kernel；权重远程比例估算 · 348 行</span></summary><pre><code class="language-go">// Package moe implements the T17 W-B workload: one MoE layer of routed
+// experts in a decode batch, shaped like DeepSeekMoE 16B scaled down
+// (default hidden 1024, expert dimension 704, 64 routed experts, top-6,
+// 256 tokens; no shared expert).
+//
+// Kernels (no atomics, pull only, kernels.cl):
+//
+//	moe_gate     WG per token: gate GEMV, softmax, top-k (prob + bias) in LDS
+//	(host)       the gate&#x27;s top-k is copied back (coherent magic copy, not
+//	             timed), grouped by expert on the host (permutation, inverse,
+//	             GEMM row tiles; cross-checked against a float64 host gate)
+//	             and copied to the GPU
+//	moe_dispatch WG per slot: gather x rows into expert order
+//	moe_up       WG per (row tile, 64 columns of F): SwiGLU(xs W1, xs W3)
+//	moe_down     WG per (row tile, 64 columns of H): act W2
+//	moe_combine  WG per token: pull its top-k expert outputs, weighted sum
+//
+// Expert load skew: a per-expert bias z_e * k (z_e ~ N(0,1) from the seed)
+// is added to the routing score only (DeepSeek-V3 style bias, combine
+// weights stay the softmax probabilities); k is calibrated on the host so
+// the max/mean expert load reaches Params.Skew (0 = no bias).
+package moe
+
+import (
+	// embed hsaco files
+	_ &quot;embed&quot;
+	&quot;fmt&quot;
+	&quot;log&quot;
+	&quot;math&quot;
+
+	&quot;github.com/sarchlab/mgpusim/v3/driver&quot;
+	&quot;github.com/sarchlab/mgpusim/v3/insts&quot;
+	&quot;github.com/sarchlab/mgpusim/v3/kernels&quot;
+)
+
+//go:embed kernels.hsaco
+var hsacoBytes []byte
+
+// HiddenArgs are the hidden kernel arguments (exported: the driver
+// serialises the argument structs by reflection).
+type HiddenArgs struct {
+	HiddenGlobalOffsetX int64
+	HiddenGlobalOffsetY int64
+	HiddenGlobalOffsetZ int64
+}
+
+// GateArgs are the arguments of moe_gate.
+type GateArgs struct {
+	X, Wg, Bias, TopKIdx, TopKW driver.Ptr
+	Hidden, TopK                int32
+	HiddenArgs
+}
+
+// DispatchArgs are the arguments of moe_dispatch.
+type DispatchArgs struct {
+	X, PermToken, Xs driver.Ptr
+	Hidden, Pad      int32
+	HiddenArgs
+}
+
+// UpArgs are the arguments of moe_up.
+type UpArgs struct {
+	Xs, W1, W3, Tiles, Act    driver.Ptr
+	Hidden, FFN, NTilesN, Pad int32
+	HiddenArgs
+}
+
+// DownArgs are the arguments of moe_down.
+type DownArgs struct {
+	Act, W2, Tiles, Ys        driver.Ptr
+	Hidden, FFN, NTilesN, Pad int32
+	HiddenArgs
+}
+
+// CombineArgs are the arguments of moe_combine.
+type CombineArgs struct {
+	Ys, InvSlot, TopKW, Out driver.Ptr
+	Hidden, TopK            int32
+	HiddenArgs
+}
+
+const wgSize = 256
+
+// Benchmark is the MoE layer benchmark.
+type Benchmark struct {
+	driver  *driver.Driver
+	context *driver.Context
+	gpus    []int
+
+	gate, dispatch, up, down, combine *insts.HsaCo
+
+	Params    Params
+	NumGPMs   int
+	CUsPerGPM int
+
+	verify   bool
+	prob     *Problem
+	routing  *Routing
+	hostTopK []int32
+	gpuTopK  []int32
+	gpuTopW  []float32
+	selDiff  int
+
+	dX, dWg, dBias, dIdx, dW, dW1, dW3, dW2   driver.Ptr
+	dPerm, dInv, dTiles, dXs, dAct, dYs, dOut driver.Ptr
+}
+
+// DefaultParams returns a small default size; the T17 target shape is
+// Tokens 256, Hidden 1024, FFN 704, TopK 6.
+func DefaultParams() Params {
+	return Params{Tokens: 32, Hidden: 256, FFN: 192, TopK: 6, Skew: 1.75, Seed: 1}
+}
+
+// NewBenchmark returns an MoE benchmark.
+func NewBenchmark(d *driver.Driver) *Benchmark {
+	b := &amp;Benchmark{driver: d, Params: DefaultParams(), NumGPMs: 48, CUsPerGPM: 28}
+	b.context = d.Init()
+	b.gate = kernels.LoadProgramFromMemory(hsacoBytes, &quot;moe_gate&quot;)
+	b.dispatch = kernels.LoadProgramFromMemory(hsacoBytes, &quot;moe_dispatch&quot;)
+	b.up = kernels.LoadProgramFromMemory(hsacoBytes, &quot;moe_up&quot;)
+	b.down = kernels.LoadProgramFromMemory(hsacoBytes, &quot;moe_down&quot;)
+	b.combine = kernels.LoadProgramFromMemory(hsacoBytes, &quot;moe_combine&quot;)
+	for _, co := range []*insts.HsaCo{b.gate, b.dispatch, b.up, b.down, b.combine} {
+		if co == nil {
+			log.Panic(&quot;moe: failed to load kernels&quot;)
+		}
+	}
+	return b
+}
+
+// SelectGPU selects the GPU (the runner&#x27;s unified GPU).
+func (b *Benchmark) SelectGPU(gpus []int) { b.gpus = gpus }
+
+// SetUnifiedMemory is not supported.
+func (b *Benchmark) SetUnifiedMemory() { panic(&quot;moe does not support unified memory&quot;) }
+
+// EnableVerification makes Run keep what Verify needs.
+func (b *Benchmark) EnableVerification() { b.verify = true }
+
+func (b *Benchmark) alloc(bytes uint64, name string) driver.Ptr {
+	p := b.driver.AllocateMemory(b.context, bytes)
+	b.driver.RegisterMemoryObject(b.context, p, bytes, name)
+	return p
+}
+
+// Run launches the five kernels with the host routing step in between.
+func (b *Benchmark) Run() {
+	b.driver.SelectGPU(b.context, b.gpus[0])
+	b.prob = Generate(b.Params)
+	b.initMem()
+	q := b.driver.CreateCommandQueue(b.context)
+	p := b.prob
+	T, K, H, F := p.Tokens, p.TopK, p.Hidden, p.FFN
+	S := T * K
+
+	// The gate output is copied back, grouped by expert on the host and the
+	// index arrays copied to the GPU (magic copies, no simulated time). The
+	// D2H copy must be coherent: the gate output is still dirty in the
+	// write-back L2, and a plain magic copy reads DRAM only.
+	b.driver.SetMagicCopyCoherent(true)
+	ga := GateArgs{X: b.dX, Wg: b.dWg, Bias: b.dBias, TopKIdx: b.dIdx, TopKW: b.dW,
+		Hidden: int32(H), TopK: int32(K)}
+	b.launch(q, b.gate, T, &amp;ga)
+	b.driver.DrainCommandQueue(q)
+
+	b.gpuTopK = make([]int32, S)
+	b.gpuTopW = make([]float32, S)
+	b.driver.MemCopyD2H(b.context, b.gpuTopK, b.dIdx)
+	b.driver.MemCopyD2H(b.context, b.gpuTopW, b.dW)
+	// Cross-check against the float64 host gate (near-ties may differ).
+	b.hostTopK = p.HostTopK()
+	b.selDiff = 0
+	for i := range b.hostTopK {
+		if b.gpuTopK[i] != b.hostTopK[i] {
+			b.selDiff++
+		}
+	}
+	r, err := BuildRouting(b.gpuTopK, T, K)
+	if err == nil {
+		err = r.Check(T, K)
+	}
+	if err != nil {
+		log.Panicf(&quot;moe: routing from the GPU gate output: %v&quot;, err)
+	}
+	b.routing = r
+	b.driver.MemCopyH2D(b.context, b.dPerm, r.PermToken)
+	b.driver.MemCopyH2D(b.context, b.dInv, r.InvSlot)
+	b.driver.MemCopyH2D(b.context, b.dTiles, r.Tiles)
+	b.report()
+	fmt.Printf(&quot;MOE,gate_check,host_vs_gpu_topk_diffs=%d,of=%d\n&quot;, b.selDiff, S)
+
+	da := DispatchArgs{X: b.dX, PermToken: b.dPerm, Xs: b.dXs, Hidden: int32(H)}
+	b.launch(q, b.dispatch, S, &amp;da)
+	ua := UpArgs{Xs: b.dXs, W1: b.dW1, W3: b.dW3, Tiles: b.dTiles, Act: b.dAct,
+		Hidden: int32(H), FFN: int32(F), NTilesN: int32(F / TileN)}
+	b.launch(q, b.up, r.NumTiles()*(F/TileN), &amp;ua)
+	dn := DownArgs{Act: b.dAct, W2: b.dW2, Tiles: b.dTiles, Ys: b.dYs,
+		Hidden: int32(H), FFN: int32(F), NTilesN: int32(H / TileN)}
+	b.launch(q, b.down, r.NumTiles()*(H/TileN), &amp;dn)
+	ca := CombineArgs{Ys: b.dYs, InvSlot: b.dInv, TopKW: b.dW, Out: b.dOut,
+		Hidden: int32(H), TopK: int32(K)}
+	b.launch(q, b.combine, T, &amp;ca)
+	b.driver.DrainCommandQueue(q)
+}
+
+func (b *Benchmark) launch(q *driver.CommandQueue, co *insts.HsaCo, wgs int, args interface{}) {
+	b.driver.EnqueueLaunchKernel(q, co, [3]uint32{uint32(wgs * wgSize), 1, 1},
+		[3]uint16{wgSize, 1, 1}, args)
+}
+
+func (b *Benchmark) initMem() {
+	p := b.prob
+	T, K, H, F := p.Tokens, p.TopK, p.Hidden, p.FFN
+	S := T * K
+	b.dX = b.alloc(uint64(T*H*4), &quot;moe_x&quot;)
+	b.dWg = b.alloc(uint64(H*NumExperts*4), &quot;moe_wg&quot;)
+	b.dBias = b.alloc(NumExperts*4, &quot;moe_bias&quot;)
+	b.dIdx = b.alloc(uint64(S*4), &quot;moe_topk_idx&quot;)
+	b.dW = b.alloc(uint64(S*4), &quot;moe_topk_w&quot;)
+	wBytes := uint64(NumExperts) * uint64(H*F) * 4
+	b.dW1 = b.alloc(wBytes, &quot;moe_w1&quot;)
+	b.dW3 = b.alloc(wBytes, &quot;moe_w3&quot;)
+	b.dW2 = b.alloc(wBytes, &quot;moe_w2&quot;)
+	b.dPerm = b.alloc(uint64(S*4), &quot;moe_perm_token&quot;)
+	b.dInv = b.alloc(uint64(S*4), &quot;moe_inv_slot&quot;)
+	b.dTiles = b.alloc(uint64(MaxTiles(S)*3*4), &quot;moe_tiles&quot;)
+	b.dXs = b.alloc(uint64(S*H*4), &quot;moe_xs&quot;)
+	b.dAct = b.alloc(uint64(S*F*4), &quot;moe_act&quot;)
+	b.dYs = b.alloc(uint64(S*H*4), &quot;moe_ys&quot;)
+	b.dOut = b.alloc(uint64(T*H*4), &quot;moe_out&quot;)
+
+	b.driver.MemCopyH2D(b.context, b.dX, p.X)
+	b.driver.MemCopyH2D(b.context, b.dWg, p.Wg)
+	b.driver.MemCopyH2D(b.context, b.dBias, p.Bias)
+	per := uint64(H*F) * 4
+	for e := 0; e &lt; NumExperts; e++ {
+		w1, w3, w2 := ExpertWeights(p.Seed, e, H, F)
+		off := driver.Ptr(uint64(e) * per)
+		b.driver.MemCopyH2D(b.context, b.dW1+off, w1)
+		b.driver.MemCopyH2D(b.context, b.dW3+off, w3)
+		b.driver.MemCopyH2D(b.context, b.dW2+off, w2)
+	}
+}
+
+// Verify checks the gate kernel against the float64 host gate (same top-k,
+// weights within 1e-5) and the layer output against the float64 reference
+// computed with the GPU&#x27;s routing. Tolerance: 1e-4 absolute + 1e-3
+// relative. In timing mode it relies on the coherent magic D2H copy.
+func (b *Benchmark) Verify() {
+	p := b.prob
+	K := p.TopK
+	probs := p.GateProbs()
+	selDiff, wErr := b.selDiff, 0.0
+	for i := range b.gpuTopK {
+		wErr = math.Max(wErr, math.Abs(float64(b.gpuTopW[i])-probs[i/K][b.gpuTopK[i]]))
+	}
+	got := make([]float32, p.Tokens*p.Hidden)
+	b.driver.MemCopyD2H(b.context, got, b.dOut)
+	ref := p.Reference(b.gpuTopK, b.gpuTopW)
+	maxErr, bad := 0.0, 0
+	for i := range ref {
+		e := math.Abs(float64(got[i]) - float64(ref[i]))
+		maxErr = math.Max(maxErr, e)
+		if !(e &lt;= 1e-4+1e-3*math.Abs(float64(ref[i]))) {
+			if bad &lt; 5 {
+				log.Printf(&quot;moe: mismatch at %d: got %g want %g&quot;, i, got[i], ref[i])
+			}
+			bad++
+		}
+	}
+	fmt.Printf(&quot;MOE,verify,gate_selection_diffs=%d,gate_weight_max_err=%.3g,&quot;+
+		&quot;elements=%d,max_abs_err=%.3g,mismatches=%d\n&quot;,
+		selDiff, wErr, len(ref), maxErr, bad)
+	if bad &gt; 0 || selDiff &gt; 0 || wErr &gt; 1e-5 {
+		log.Fatalf(&quot;moe: verification failed&quot;)
+	}
+	log.Printf(&quot;Passed!&quot;)
+}
+
+func (b *Benchmark) report() {
+	p, r := b.prob, b.routing
+	T, K, H, F := p.Tokens, p.TopK, p.Hidden, p.FFN
+	S := T * K
+	active, minL, maxL := 0, S, 0
+	for _, l := range r.Loads {
+		if l &gt; 0 {
+			active++
+		}
+		minL = int(math.Min(float64(minL), float64(l)))
+		maxL = int(math.Max(float64(maxL), float64(l)))
+	}
+	fmt.Printf(&quot;MOE,config,tokens=%d,hidden=%d,ffn=%d,experts=%d,topk=%d,skew_target=%g,&quot;+
+		&quot;bias_scale=%.4g,seed=%d\n&quot;, T, H, F, NumExperts, K, p.Skew, p.BiasK, p.Seed)
+	fmt.Printf(&quot;MOE,loads,max_over_mean=%.3f,max=%d,min=%d,mean=%.2f,active_experts=%d,tiles=%d\n&quot;,
+		MaxOverMean(r.Loads), maxL, minL, float64(S)/NumExperts, active, r.NumTiles())
+	nUp, nDown := r.NumTiles()*(F/TileN), r.NumTiles()*(H/TileN)
+	fmt.Printf(&quot;MOE,kernels,count=5,gate_wgs=%d,dispatch_wgs=%d,up_wgs=%d,down_wgs=%d,&quot;+
+		&quot;combine_wgs=%d,total_wgs=%d\n&quot;, T, S, nUp, nDown, T, T+S+nUp+nDown+T)
+	weights := uint64(active) * uint64(H*F*3) * 4
+	acts := uint64(S*H*4)*2*2 + uint64(S*F*4)*2 + uint64(T*H*4)*2
+	gateB := uint64(H*NumExperts*4) + uint64(T*H*4)
+	fmt.Printf(&quot;MOE,footprint,expert_weight_bytes=%d,activation_bytes=%d,gate_bytes=%d,&quot;+
+		&quot;total_mb=%.1f\n&quot;, weights, acts, gateB, float64(weights+acts+gateB)/1e6)
+	if b.NumGPMs &gt; 0 &amp;&amp; b.CUsPerGPM &gt; 0 {
+		fmt.Printf(&quot;MOE,estimate,up_weight_remote_fraction=%.3f,down_weight_remote_fraction=%.3f\n&quot;,
+			b.weightRemote(F, nUp, false), b.weightRemote(H, nDown, true))
+	}
+}
+
+// weightRemote estimates the fraction of expert-weight bytes read by
+// moe_up (W1 and W3 [E][H][F]) or moe_down (W2 [E][F][H]) from a page on a
+// GPM other than the reading WG&#x27;s (default allocator, contiguous WG ranges).
+func (b *Benchmark) weightRemote(ncols, nWG int, down bool) float64 {
+	p, r := b.prob, b.routing
+	H, F := p.Hidden, p.FFN
+	rows, ld := H, F
+	if down {
+		rows, ld = F, H
+	}
+	bufBytes := uint64(NumExperts) * uint64(H*F) * 4
+	ntn := ncols / TileN
+	per := b.CUsPerGPM * ((nWG-1)/(b.NumGPMs*b.CUsPerGPM) + 1)
+	pagesPerGPM := (bufBytes + 4095) / 4096 / uint64(b.NumGPMs)
+	var remote, total float64
+	for wg := 0; wg &lt; nWG; wg++ {
+		g := wg / per
+		if g &gt;= b.NumGPMs {
+			g = b.NumGPMs - 1
+		}
+		e := uint64(r.Tiles[3*(wg/ntn)])
+		n0 := uint64((wg % ntn) * TileN)
+		for k := 0; k &lt; rows; k++ {
+			off := (e*uint64(H*F) + uint64(k)*uint64(ld) + n0) * 4
+			owner := 0
+			if pagesPerGPM &gt; 0 {
+				owner = int(off / 4096 / pagesPerGPM)
+				if owner &gt;= b.NumGPMs {
+					owner = b.NumGPMs - 1
+				}
+			}
+			total += TileN * 4
+			if owner != g {
+				remote += TileN * 4
+			}
+		}
+	}
+	return remote / total
+}
+</code></pre></details>
+    <details class="src"><summary>rgat/kernels.cl <span>R-GAT 的两个 kernel：rgat_proj、rgat_agg · 232 行</span></summary><pre><code class="language-c">// R-GAT style sampled aggregation (MLPerf Inference RGAT on IGBH), T17 W-C.
+// One layer = for every relation r (src type -&gt; dst type) of the sampled
+// block, two kernels (no atomics, pull only):
+//
+//   rgat_proj  WG per (32 sampled source rows, 64 output columns):
+//              h_r[k] = x_src[src_ids[k]] . W_r     (gather + projection)
+//   rgat_agg   WG per destination node i of the block, for every head
+//              hd (columns C_hd = [hd*d, (hd+1)*d), d = f_h / heads):
+//              er    = x_dst[dst_ids[i]] . v_r[hd]  (v_r[hd] = W_r[:,C_hd]
+//                                                    a_r[C_hd], host)
+//              el_j  = h_r[j][C_hd] . a_l[C_hd]     for sampled neighbours j
+//              e_ij  = LeakyReLU(el_j + er, 0.2), softmax over j
+//              out[i][C_hd] = (acc ? prev[i][C_hd] : 0)
+//                             + sum_j alpha_ij h_r[j][C_hd]
+//              (ReLU on the last relation of a hidden layer; the heads are
+//              concatenated, GATConv concat=True)
+//
+// The relations into one destination type run one after another; each
+// writes its own output buffer, prev = the previous relation&#x27;s (each row is
+// read and written by its own WG). No buffer is read before it is written:
+// with magic copies the timing model never invalidates the L1 caches
+// between kernels, so a read-modify-write of one buffer across kernels
+// could hit a stale L1V line.
+//
+// Simulator rules (T17): no atomics, no private arrays, only implemented DS
+// opcodes, fp32. 32-bit element offsets (every buffer &lt; 2^32 elements; the
+// host checks it).
+
+#define MAXDEG 32
+#define TM 32
+#define TN 64
+#define TK 32
+#define NEG_INF (-3.0e38f)
+#define LOG2E 1.4426950408889634f
+#define IDX(a, b) ((uint)(a) * (uint)(b))
+#define LOCAL_ID ((int)__builtin_amdgcn_workitem_id_x())
+// Store 8 floats as four 8-byte stores. Two 16-byte stores make clang
+// insert &quot;s_nop 0&quot; (fiji store-data hazard), which hangs the timing CU
+// (check_hsaco.sh); the empty asm keeps the stores from being merged.
+#define STORE8(o, a, b, c, d, e, f, g, h)            \
+  do {                                               \
+    vstore2((float2)(a, b), 0, (o));                 \
+    __asm__ volatile(&quot;&quot; ::: &quot;memory&quot;);               \
+    vstore2((float2)(c, d), 0, (o) + 2);             \
+    __asm__ volatile(&quot;&quot; ::: &quot;memory&quot;);               \
+    vstore2((float2)(e, f), 0, (o) + 4);             \
+    __asm__ volatile(&quot;&quot; ::: &quot;memory&quot;);               \
+    vstore2((float2)(g, h), 0, (o) + 6);             \
+  } while (0)
+
+__kernel __attribute__((reqd_work_group_size(256, 1, 1)))
+void rgat_proj(__global const float *x,
+               __global const int *src_ids,
+               __global const float *w,
+               __global float *h,
+               const int n_rows,
+               const int f_in,
+               const int f_out,
+               const int n_tiles_n) {
+  __local float a_lds[TM * TK];
+  __local float b_lds[TK * TN];
+
+  const int lid = LOCAL_ID;
+  const int wg = get_group_id(0);
+  const int row0 = (wg / n_tiles_n) * TM;
+  const int n0 = (wg % n_tiles_n) * TN;
+  const int r = lid &gt;&gt; 3;
+  const int c0 = (lid &amp; 7) * 8;
+
+  // the gathered feature row this thread loads into a_lds (row r, 4 floats)
+  const int ar = lid &gt;&gt; 3;
+  const int ak = (lid &amp; 7) * 4;
+  const bool a_valid = row0 + ar &lt; n_rows;
+  const uint a_base = a_valid ? IDX(src_ids[row0 + ar], f_in) : 0;
+  // b tile: row bk, 8 contiguous columns
+  const int bk = lid &gt;&gt; 3;
+  const int bc = (lid &amp; 7) * 8;
+
+  float y0 = 0.0f, y1 = 0.0f, y2 = 0.0f, y3 = 0.0f;
+  float y4 = 0.0f, y5 = 0.0f, y6 = 0.0f, y7 = 0.0f;
+  for (int k0 = 0; k0 &lt; f_in; k0 += TK) {
+    float4 v = (float4)(0.0f);
+    if (a_valid) {
+      v = vload4(0, x + a_base + k0 + ak);
+    }
+    a_lds[ar * TK + ak] = v.x;
+    a_lds[ar * TK + ak + 1] = v.y;
+    a_lds[ar * TK + ak + 2] = v.z;
+    a_lds[ar * TK + ak + 3] = v.w;
+    const __global float *src = w + IDX(k0 + bk, f_out) + n0 + bc;
+    const float4 b0 = vload4(0, src);
+    const float4 b1 = vload4(0, src + 4);
+    __local float *dst = b_lds + bk * TN + bc;
+    dst[0] = b0.x;
+    dst[1] = b0.y;
+    dst[2] = b0.z;
+    dst[3] = b0.w;
+    dst[4] = b1.x;
+    dst[5] = b1.y;
+    dst[6] = b1.z;
+    dst[7] = b1.w;
+    barrier(CLK_LOCAL_MEM_FENCE);
+#pragma unroll
+    for (int k = 0; k &lt; TK; ++k) {
+      const float a = a_lds[r * TK + k];
+      const __local float *p = b_lds + k * TN + c0;
+      y0 += a * p[0]; y1 += a * p[1]; y2 += a * p[2]; y3 += a * p[3];
+      y4 += a * p[4]; y5 += a * p[5]; y6 += a * p[6]; y7 += a * p[7];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+  if (row0 + r &lt; n_rows) {
+    __global float *o = h + IDX(row0 + r, f_out) + n0 + c0;
+    STORE8(o, y0, y1, y2, y3, y4, y5, y6, y7);
+  }
+}
+
+__kernel __attribute__((reqd_work_group_size(256, 1, 1)))
+void rgat_agg(__global const float *h_src,
+              __global const float *x_dst,
+              __global const int *dst_ids,
+              __global const int *row_ptr,
+              __global const int *col_idx,
+              __global const float *attn_l,
+              __global const float *v_r,
+              __global const float *prev,
+              __global float *out,
+              const int f_in,
+              const int f_h,
+              const int use_acc,
+              const int act,
+              const int heads) {
+  // one LDS array, score at offset 0 (see build_hsaco.sh)
+  __local float lds[MAXDEG + 320 + 64 * MAXDEG];
+  __local float *score = lds;               // [MAXDEG]
+  __local float *rpart = lds + MAXDEG;      // [64][5]
+  __local float *part = lds + MAXDEG + 320; // [lane][neighbour]
+
+  const int i = get_group_id(0);
+  const int lid = LOCAL_ID;
+  const int wave = lid &gt;&gt; 6;
+  const int lane = lid &amp; 63;
+  const int beg = row_ptr[(uint)i];
+  int deg = row_ptr[(uint)i + 1u] - beg;
+  if (deg &gt; MAXDEG) {
+    deg = MAXDEG;
+  }
+
+  // heads one after another; the barriers inside keep the LDS reuse safe
+  // (score/part/rpart of head hd+1 are written only after every thread has
+  // passed a barrier that follows its use of head hd)
+  const int dh = f_h / heads;
+  for (int hd = 0; hd &lt; heads; ++hd) {
+    const int c0 = hd * dh;
+    const __global float *vh = v_r + IDX(hd, f_in);
+    // el_j partial sums: wave w takes neighbours w, w+4, ...
+    for (int j = wave; j &lt; deg; j += 4) {
+      const __global float *hj = h_src + IDX(col_idx[beg + j], f_h);
+      float s = 0.0f;
+      for (int c = c0 + lane; c &lt; c0 + dh; c += 64) {
+        s += hj[c] * attn_l[c];
+      }
+      part[lane * MAXDEG + j] = s;
+    }
+    // er_i = x_dst . v_r over f_in, all 256 threads; partials stored with a
+    // stride of 5 so no two operands are a multiple of 64 dwords apart
+    // (ds_read2st64_b32 is not implemented)
+    {
+      const __global float *xi = x_dst + IDX(dst_ids[i], f_in);
+      float s = 0.0f;
+      for (int c = lid; c &lt; f_in; c += 256) {
+        s += xi[c] * vh[c];
+      }
+      rpart[lane * 5 + wave] = s;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (lid &lt; 64) {
+      rpart[lid * 5 + 4] = rpart[lid * 5] + rpart[lid * 5 + 1] +
+                           rpart[lid * 5 + 2] + rpart[lid * 5 + 3];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int st = 32; st &gt; 0; st &gt;&gt;= 1) {
+      if (lid &lt; st) {
+        rpart[lid * 5 + 4] += rpart[(lid + st) * 5 + 4];
+      }
+      barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (lid &lt; deg) {
+      float s = 0.0f;
+  #pragma unroll
+      for (int c = 0; c &lt; 64; ++c) {
+        s += part[c * MAXDEG + lid];
+      }
+      score[lid] = s;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    if (lid == 0) {
+      const float er = rpart[4];
+      float m = NEG_INF;
+      for (int j = 0; j &lt; deg; ++j) {
+        float e = score[j] + er;
+        e = e &gt; 0.0f ? e : 0.2f * e;
+        score[j] = e;
+        m = fmax(m, e);
+      }
+      float sum = 0.0f;
+      for (int j = 0; j &lt; deg; ++j) {
+        const float p = native_exp2((score[j] - m) * LOG2E);
+        score[j] = p;
+        sum += p;
+      }
+      const float inv = deg &gt; 0 ? native_recip(sum) : 0.0f;
+      for (int j = 0; j &lt; deg; ++j) {
+        score[j] *= inv;
+      }
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    for (int c = c0 + lid; c &lt; c0 + dh; c += 256) {
+      const uint o = IDX(i, f_h) + c;
+      float acc = use_acc ? prev[o] : 0.0f;
+      for (int j = 0; j &lt; deg; ++j) {
+        acc += score[j] * h_src[IDX(col_idx[beg + j], f_h) + c];
+      }
+      if (act) {
+        acc = fmax(acc, 0.0f);
+      }
+      out[o] = acc;
+    }
+  }
+}
+</code></pre></details>
+    <details class="src"><summary>rgat/graph.go <span>读 IGBH（.npy）、11 种关系、入边 CSR、合成图 · 309 行</span></summary><pre><code class="language-go">package rgat
+
+import (
+	&quot;encoding/binary&quot;
+	&quot;fmt&quot;
+	&quot;math&quot;
+	&quot;math/rand&quot;
+	&quot;os&quot;
+	&quot;path/filepath&quot;
+	&quot;regexp&quot;
+	&quot;strconv&quot;
+	&quot;strings&quot;
+)
+
+// Relation is one edge type of the heterogeneous graph; messages flow from
+// Src nodes to Dst nodes. Edge k goes from SrcIDs[k] to DstIDs[k].
+type Relation struct {
+	Name     string
+	Src, Dst string
+	SrcIDs   []int32
+	DstIDs   []int32
+}
+
+// FeatureReader returns feature rows of one node type.
+type FeatureReader interface {
+	Row(id int, out []float32)
+}
+
+// Graph is a heterogeneous graph with FeatDim-dimensional node features.
+type Graph struct {
+	Name     string
+	Types    []string
+	NumNodes map[string]int
+	FeatDim  int
+	Rels     []Relation
+	Feats    map[string]FeatureReader
+
+	in []csr // per relation: in-neighbours by destination
+}
+
+type csr struct {
+	ptr []int32 // [numDst+1]
+	src []int32
+}
+
+// IGBH relations: the six edge files of IGBH, &quot;cites&quot; symmetrised and the
+// other five also used in the reverse direction (&quot;rev_&quot; prefix), as the
+// MLPerf Inference RGAT / IGB heterogeneous DGL loader does (11 relations).
+var igbhEdges = []struct{ dir, name, src, dst string }{
+	{&quot;paper__cites__paper&quot;, &quot;cites&quot;, &quot;paper&quot;, &quot;paper&quot;},
+	{&quot;paper__written_by__author&quot;, &quot;written_by&quot;, &quot;paper&quot;, &quot;author&quot;},
+	{&quot;author__affiliated_to__institute&quot;, &quot;affiliated_to&quot;, &quot;author&quot;, &quot;institute&quot;},
+	{&quot;paper__topic__fos&quot;, &quot;topic&quot;, &quot;paper&quot;, &quot;fos&quot;},
+	{&quot;paper__published__journal&quot;, &quot;published&quot;, &quot;paper&quot;, &quot;journal&quot;},
+	{&quot;paper__venue__conference&quot;, &quot;venue&quot;, &quot;paper&quot;, &quot;conference&quot;},
+}
+
+// LoadIGBH reads an IGB heterogeneous dataset (processed/ directory of the
+// igb_heterogeneous_&lt;size&gt;.tar.gz release). Features are read row by row
+// from the .npy files on demand.
+func LoadIGBH(dir string) (*Graph, error) {
+	if _, err := os.Stat(filepath.Join(dir, &quot;processed&quot;)); err == nil {
+		dir = filepath.Join(dir, &quot;processed&quot;)
+	}
+	g := &amp;Graph{Name: &quot;igbh:&quot; + dir, NumNodes: map[string]int{}, Feats: map[string]FeatureReader{}}
+	for _, t := range []string{&quot;paper&quot;, &quot;author&quot;, &quot;institute&quot;, &quot;fos&quot;, &quot;journal&quot;, &quot;conference&quot;} {
+		f, err := openNpyMatrix(filepath.Join(dir, t, &quot;node_feat.npy&quot;), &quot;&lt;f4&quot;)
+		if err != nil {
+			return nil, err
+		}
+		if g.FeatDim == 0 {
+			g.FeatDim = f.cols
+		} else if f.cols != g.FeatDim {
+			return nil, fmt.Errorf(&quot;igbh: %s features have %d dims, not %d&quot;, t, f.cols, g.FeatDim)
+		}
+		g.Types = append(g.Types, t)
+		g.NumNodes[t] = f.rows
+		g.Feats[t] = f
+	}
+	for _, e := range igbhEdges {
+		src, dst, err := readEdgeIndex(filepath.Join(dir, e.dir, &quot;edge_index.npy&quot;))
+		if err != nil {
+			return nil, err
+		}
+		if e.name == &quot;cites&quot; {
+			g.Rels = append(g.Rels, Relation{e.name, e.src, e.dst,
+				append(append([]int32{}, src...), dst...), append(append([]int32{}, dst...), src...)})
+			continue
+		}
+		g.Rels = append(g.Rels,
+			Relation{e.name, e.src, e.dst, src, dst},
+			Relation{&quot;rev_&quot; + e.name, e.dst, e.src, dst, src})
+	}
+	return g, g.finish()
+}
+
+// finish checks the edge ids and builds the in-neighbour CSRs.
+func (g *Graph) finish() error {
+	g.in = make([]csr, len(g.Rels))
+	for ri, r := range g.Rels {
+		ns, nd := g.NumNodes[r.Src], g.NumNodes[r.Dst]
+		ptr := make([]int32, nd+1)
+		for k := range r.DstIDs {
+			s, d := r.SrcIDs[k], r.DstIDs[k]
+			if s &lt; 0 || int(s) &gt;= ns || d &lt; 0 || int(d) &gt;= nd {
+				return fmt.Errorf(&quot;%s: edge %d (%d -&gt; %d) out of range&quot;, r.Name, k, s, d)
+			}
+			ptr[d+1]++
+		}
+		for i := 1; i &lt;= nd; i++ {
+			ptr[i] += ptr[i-1]
+		}
+		next := append([]int32(nil), ptr[:nd]...)
+		src := make([]int32, len(r.SrcIDs))
+		for k := range r.DstIDs {
+			d := r.DstIDs[k]
+			src[next[d]] = r.SrcIDs[k]
+			next[d]++
+		}
+		g.in[ri] = csr{ptr, src}
+	}
+	return nil
+}
+
+// NumEdges returns the number of edges of all relations.
+func (g *Graph) NumEdges() int {
+	n := 0
+	for _, r := range g.Rels {
+		n += len(r.SrcIDs)
+	}
+	return n
+}
+
+// ---- .npy reading (little-endian, C order)
+
+var npyShape = regexp.MustCompile(`&#x27;shape&#x27;:\s*\(([0-9,\s]*)\)`)
+var npyDescr = regexp.MustCompile(`&#x27;descr&#x27;:\s*&#x27;([^&#x27;]*)&#x27;`)
+
+type npyMatrix struct {
+	path       string
+	f          *os.File
+	off        int64
+	rows, cols int
+}
+
+func npyHeader(f *os.File) (descr string, shape []int, off int64, err error) {
+	head := make([]byte, 10)
+	if _, err = f.ReadAt(head, 0); err != nil {
+		return
+	}
+	if string(head[1:6]) != &quot;NUMPY&quot; {
+		return &quot;&quot;, nil, 0, fmt.Errorf(&quot;%s: not an npy file&quot;, f.Name())
+	}
+	var hlen int64
+	switch head[6] {
+	case 1:
+		hlen, off = int64(binary.LittleEndian.Uint16(head[8:10])), 10
+	default:
+		b := make([]byte, 4)
+		if _, err = f.ReadAt(b, 8); err != nil {
+			return
+		}
+		hlen, off = int64(binary.LittleEndian.Uint32(b)), 12
+	}
+	h := make([]byte, hlen)
+	if _, err = f.ReadAt(h, off); err != nil {
+		return
+	}
+	off += hlen
+	hs := string(h)
+	if strings.Contains(hs, &quot;&#x27;fortran_order&#x27;: True&quot;) {
+		return &quot;&quot;, nil, 0, fmt.Errorf(&quot;%s: fortran order not supported&quot;, f.Name())
+	}
+	m := npyDescr.FindStringSubmatch(hs)
+	s := npyShape.FindStringSubmatch(hs)
+	if m == nil || s == nil {
+		return &quot;&quot;, nil, 0, fmt.Errorf(&quot;%s: bad npy header %q&quot;, f.Name(), hs)
+	}
+	descr = m[1]
+	for _, p := range strings.Split(s[1], &quot;,&quot;) {
+		if p = strings.TrimSpace(p); p != &quot;&quot; {
+			v, e := strconv.Atoi(p)
+			if e != nil {
+				return &quot;&quot;, nil, 0, e
+			}
+			shape = append(shape, v)
+		}
+	}
+	return descr, shape, off, nil
+}
+
+func openNpyMatrix(path, wantDescr string) (*npyMatrix, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	descr, shape, off, err := npyHeader(f)
+	if err != nil {
+		return nil, err
+	}
+	if descr != wantDescr || len(shape) != 2 {
+		return nil, fmt.Errorf(&quot;%s: dtype %s shape %v, want %s 2-D&quot;, path, descr, shape, wantDescr)
+	}
+	return &amp;npyMatrix{path, f, off, shape[0], shape[1]}, nil
+}
+
+// Row reads one float32 row.
+func (m *npyMatrix) Row(id int, out []float32) {
+	buf := make([]byte, 4*m.cols)
+	if _, err := m.f.ReadAt(buf, m.off+int64(id)*int64(len(buf))); err != nil {
+		panic(fmt.Sprintf(&quot;%s row %d: %v&quot;, m.path, id, err))
+	}
+	for i := range out[:m.cols] {
+		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(buf[4*i:]))
+	}
+}
+
+func readEdgeIndex(path string) (src, dst []int32, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	descr, shape, off, err := npyHeader(f)
+	if err != nil {
+		return nil, nil, err
+	}
+	if descr != &quot;&lt;i8&quot; || len(shape) != 2 || shape[1] != 2 {
+		return nil, nil, fmt.Errorf(&quot;%s: dtype %s shape %v, want &lt;i8 (E, 2)&quot;, path, descr, shape)
+	}
+	buf := make([]byte, 16*shape[0])
+	if _, err = f.ReadAt(buf, off); err != nil {
+		return nil, nil, err
+	}
+	src = make([]int32, shape[0])
+	dst = make([]int32, shape[0])
+	for k := range src {
+		s := int64(binary.LittleEndian.Uint64(buf[16*k:]))
+		d := int64(binary.LittleEndian.Uint64(buf[16*k+8:]))
+		if s &gt; math.MaxInt32 || d &gt; math.MaxInt32 {
+			return nil, nil, fmt.Errorf(&quot;%s: id beyond int32&quot;, path)
+		}
+		src[k], dst[k] = int32(s), int32(d)
+	}
+	return src, dst, nil
+}
+
+// ---- synthetic graph with the IGBH schema (tests, emulation checks)
+
+type synthFeat struct {
+	seed int64
+	dim  int
+	t    int
+}
+
+func (s synthFeat) Row(id int, out []float32) {
+	rng := rand.New(rand.NewSource(s.seed*1000003 + int64(s.t)*7919 + int64(id)))
+	for i := range out[:s.dim] {
+		out[i] = rng.Float32()*2 - 1
+	}
+}
+
+// SyntheticIGBH returns a small random graph with the IGBH node types and
+// relations: scale papers, and each paper cites, is written by, has topics,
+// etc. with small random degrees.
+func SyntheticIGBH(papers, dim int, seed int64) *Graph {
+	rng := rand.New(rand.NewSource(seed))
+	g := &amp;Graph{Name: fmt.Sprintf(&quot;synthetic(papers=%d)&quot;, papers), NumNodes: map[string]int{},
+		Feats: map[string]FeatureReader{}, FeatDim: dim}
+	counts := map[string]int{&quot;paper&quot;: papers, &quot;author&quot;: 3 * papers, &quot;institute&quot;: papers/10 + 1,
+		&quot;fos&quot;: papers + 1, &quot;journal&quot;: papers/10 + 1, &quot;conference&quot;: papers/100 + 1}
+	for i, t := range []string{&quot;paper&quot;, &quot;author&quot;, &quot;institute&quot;, &quot;fos&quot;, &quot;journal&quot;, &quot;conference&quot;} {
+		g.Types = append(g.Types, t)
+		g.NumNodes[t] = counts[t]
+		g.Feats[t] = synthFeat{seed, dim, i}
+	}
+	edges := func(n int, dst string, maxDeg int) (s, d []int32) {
+		for i := 0; i &lt; n; i++ {
+			k := rng.Intn(maxDeg + 1)
+			seen := map[int]bool{}
+			for j := 0; j &lt; k; j++ {
+				t := rng.Intn(g.NumNodes[dst])
+				if !seen[t] {
+					seen[t] = true
+					s, d = append(s, int32(i)), append(d, int32(t))
+				}
+			}
+		}
+		return
+	}
+	for _, e := range igbhEdges {
+		maxDeg := 8
+		if e.name == &quot;venue&quot; || e.name == &quot;published&quot; {
+			maxDeg = 1
+		}
+		s, d := edges(g.NumNodes[e.src], e.dst, maxDeg)
+		if e.name == &quot;cites&quot; {
+			g.Rels = append(g.Rels, Relation{e.name, e.src, e.dst,
+				append(append([]int32{}, s...), d...), append(append([]int32{}, d...), s...)})
+			continue
+		}
+		g.Rels = append(g.Rels, Relation{e.name, e.src, e.dst, s, d},
+			Relation{&quot;rev_&quot; + e.name, e.dst, e.src, d, s})
+	}
+	if err := g.finish(); err != nil {
+		panic(err)
+	}
+	return g
+}
+</code></pre></details>
+    <details class="src"><summary>rgat/sample.go <span>DGL 式多层邻居采样、模型参数、参考实现 · 321 行</span></summary><pre><code class="language-go">package rgat
+
+import (
+	&quot;fmt&quot;
+	&quot;math&quot;
+	&quot;math/rand&quot;
+	&quot;sort&quot;
+)
+
+// Block is the sampled bipartite graph of one relation in one layer.
+type Block struct {
+	Layer            int
+	Rel              int
+	RelName          string
+	SrcType, DstType string
+	// DstNodes are the layer&#x27;s destination nodes of DstType (global ids);
+	// the block&#x27;s destination i is DstNodes[i].
+	DstNodes []int32
+	// SrcNodes are the unique sampled sources (global ids, sorted).
+	SrcNodes []int32
+	// RowPtr/ColIdx: sampled neighbours of destination i, as indices into
+	// SrcNodes.
+	RowPtr []int32
+	ColIdx []int32
+	// Row indices into the layer&#x27;s input tables (raw features by global id
+	// for layer 0, the previous layer&#x27;s output rows otherwise).
+	SrcRows []int32
+	DstRows []int32
+	// Accumulate into the output rows (not the first relation of DstType),
+	// and apply ReLU (last relation of DstType in a hidden layer).
+	UseAcc, Act bool
+}
+
+// Sample is a sampled mini-batch: Dst[l][t] lists the destination nodes of
+// type t of layer l (layer 0 reads the raw features, the last layer
+// produces the seeds&#x27; outputs), Blocks[l] the blocks of layer l.
+type Sample struct {
+	Seeds   []int32
+	Fanouts []int // per layer, input layer first (DGL order)
+	Dst     []map[string][]int32
+	Blocks  [][]Block
+}
+
+// SampleBlocks samples like DGL&#x27;s MultiLayerNeighborSampler on a
+// heterograph: from the last layer to the first, every destination node
+// samples up to fanout in-neighbours per relation, without replacement; the
+// destination nodes of layer l-1 are those of layer l followed by the newly
+// sampled sources (sorted), per type.
+func SampleBlocks(g *Graph, seedType string, seeds []int32, fanouts []int, rng *rand.Rand) *Sample {
+	L := len(fanouts)
+	s := &amp;Sample{Seeds: seeds, Fanouts: fanouts, Dst: make([]map[string][]int32, L),
+		Blocks: make([][]Block, L)}
+	s.Dst[L-1] = map[string][]int32{seedType: append([]int32(nil), seeds...)}
+	for l := L - 1; l &gt;= 0; l-- {
+		newSrc := map[string]map[int32]bool{}
+		for ri, r := range g.Rels {
+			dsts := s.Dst[l][r.Dst]
+			if len(dsts) == 0 {
+				continue
+			}
+			adj := g.in[ri]
+			b := Block{Layer: l, Rel: ri, RelName: r.Name, SrcType: r.Src, DstType: r.Dst,
+				DstNodes: dsts, RowPtr: make([]int32, len(dsts)+1)}
+			var nbrs [][]int32
+			uniq := map[int32]bool{}
+			for _, d := range dsts {
+				cand := adj.src[adj.ptr[d]:adj.ptr[d+1]]
+				pick := cand
+				if len(cand) &gt; fanouts[l] {
+					idx := rng.Perm(len(cand))[:fanouts[l]]
+					sort.Ints(idx)
+					pick = make([]int32, fanouts[l])
+					for k, i := range idx {
+						pick[k] = cand[i]
+					}
+				}
+				nbrs = append(nbrs, pick)
+				for _, v := range pick {
+					uniq[v] = true
+				}
+			}
+			if len(uniq) == 0 {
+				continue
+			}
+			for v := range uniq {
+				b.SrcNodes = append(b.SrcNodes, v)
+			}
+			sort.Slice(b.SrcNodes, func(i, j int) bool { return b.SrcNodes[i] &lt; b.SrcNodes[j] })
+			pos := make(map[int32]int32, len(b.SrcNodes))
+			for i, v := range b.SrcNodes {
+				pos[v] = int32(i)
+			}
+			for i, p := range nbrs {
+				for _, v := range p {
+					b.ColIdx = append(b.ColIdx, pos[v])
+				}
+				b.RowPtr[i+1] = int32(len(b.ColIdx))
+			}
+			if newSrc[r.Src] == nil {
+				newSrc[r.Src] = map[int32]bool{}
+			}
+			for _, v := range b.SrcNodes {
+				newSrc[r.Src][v] = true
+			}
+			s.Blocks[l] = append(s.Blocks[l], b)
+		}
+		if l &gt; 0 {
+			prev := map[string][]int32{}
+			for t, dsts := range s.Dst[l] {
+				prev[t] = append([]int32(nil), dsts...)
+			}
+			for t, set := range newSrc {
+				in := map[int32]bool{}
+				for _, v := range prev[t] {
+					in[v] = true
+				}
+				var add []int32
+				for v := range set {
+					if !in[v] {
+						add = append(add, v)
+					}
+				}
+				sort.Slice(add, func(i, j int) bool { return add[i] &lt; add[j] })
+				prev[t] = append(prev[t], add...)
+			}
+			s.Dst[l-1] = prev
+		}
+	}
+	// input rows, accumulation and activation flags
+	for l := 0; l &lt; L; l++ {
+		pos := map[string]map[int32]int32{}
+		if l &gt; 0 {
+			for t, nodes := range s.Dst[l-1] {
+				pos[t] = map[int32]int32{}
+				for i, v := range nodes {
+					pos[t][v] = int32(i)
+				}
+			}
+		}
+		row := func(t string, v int32) int32 {
+			if l == 0 {
+				return v
+			}
+			p, ok := pos[t][v]
+			if !ok {
+				panic(fmt.Sprintf(&quot;rgat: node %s/%d missing from layer %d&quot;, t, v, l-1))
+			}
+			return p
+		}
+		seen := map[string]int{}
+		last := map[string]int{}
+		for i, b := range s.Blocks[l] {
+			last[b.DstType] = i
+		}
+		for i := range s.Blocks[l] {
+			b := &amp;s.Blocks[l][i]
+			b.UseAcc = seen[b.DstType] &gt; 0
+			seen[b.DstType]++
+			b.Act = l &lt; L-1 &amp;&amp; last[b.DstType] == i
+			b.SrcRows = make([]int32, len(b.SrcNodes))
+			for k, v := range b.SrcNodes {
+				b.SrcRows[k] = row(b.SrcType, v)
+			}
+			b.DstRows = make([]int32, len(b.DstNodes))
+			for k, v := range b.DstNodes {
+				b.DstRows[k] = row(b.DstType, v)
+			}
+		}
+	}
+	return s
+}
+
+// Model holds the per-layer, per-relation weights. Hidden is the projected
+// width with the heads concatenated (GATConv concat=True): head hd owns the
+// columns [hd*d, (hd+1)*d), d = Hidden/Heads, and its attention vectors are
+// those columns of AL and AR.
+type Model struct {
+	Hidden int
+	Heads  int
+	FIn    []int                // per layer
+	W      map[[2]int][]float32 // (layer, relation) -&gt; [FIn][Hidden]
+	AL, AR map[[2]int][]float32 // attention vectors [Hidden]
+	V      map[[2]int][]float32 // per head W[:,head] . AR[head], [Heads][FIn]
+}
+
+// NewModel draws uniform weights with variance 1/fan_in for every block.
+func NewModel(s *Sample, featDim, hidden, heads int, seed int64) *Model {
+	m := &amp;Model{Hidden: hidden, Heads: heads, W: map[[2]int][]float32{}, AL: map[[2]int][]float32{},
+		AR: map[[2]int][]float32{}, V: map[[2]int][]float32{}}
+	for l := range s.Blocks {
+		fin := featDim
+		if l &gt; 0 {
+			fin = hidden
+		}
+		m.FIn = append(m.FIn, fin)
+		for _, b := range s.Blocks[l] {
+			k := [2]int{l, b.Rel}
+			rng := rand.New(rand.NewSource(seed*104729 + int64(l)*131 + int64(b.Rel)))
+			w := make([]float32, fin*hidden)
+			a := math.Sqrt(3 / float64(fin))
+			for i := range w {
+				w[i] = float32((rng.Float64()*2 - 1) * a)
+			}
+			al := make([]float32, hidden)
+			ar := make([]float32, hidden)
+			aa := math.Sqrt(3 / float64(hidden))
+			for i := range al {
+				al[i] = float32((rng.Float64()*2 - 1) * aa)
+				ar[i] = float32((rng.Float64()*2 - 1) * aa)
+			}
+			d := hidden / heads
+			v := make([]float32, heads*fin)
+			for hd := 0; hd &lt; heads; hd++ {
+				for i := 0; i &lt; fin; i++ {
+					s := 0.0
+					for c := hd * d; c &lt; (hd+1)*d; c++ {
+						s += float64(w[i*hidden+c]) * float64(ar[c])
+					}
+					v[hd*fin+i] = float32(s)
+				}
+			}
+			m.W[k], m.AL[k], m.AR[k], m.V[k] = w, al, ar, v
+		}
+	}
+	return m
+}
+
+// Reference computes every layer&#x27;s outputs in float64: out[l][t] is
+// [len(Dst[l][t])][Hidden]. feat(t, id) returns a raw feature row.
+func Reference(s *Sample, m *Model, feat func(t string, id int32) []float32) []map[string][]float64 {
+	L := len(s.Blocks)
+	H := m.Hidden
+	outs := make([]map[string][]float64, L)
+	for l := 0; l &lt; L; l++ {
+		fin := m.FIn[l]
+		input := func(t string, rowIdx int32, id int32) []float64 {
+			x := make([]float64, fin)
+			if l == 0 {
+				for i, v := range feat(t, id) {
+					x[i] = float64(v)
+				}
+				return x
+			}
+			copy(x, outs[l-1][t][int(rowIdx)*H:(int(rowIdx)+1)*H])
+			return x
+		}
+		outs[l] = map[string][]float64{}
+		for t, nodes := range s.Dst[l] {
+			outs[l][t] = make([]float64, len(nodes)*H)
+		}
+		for _, b := range s.Blocks[l] {
+			k := [2]int{l, b.Rel}
+			w, al, ar := m.W[k], m.AL[k], m.AR[k]
+			h := make([][]float64, len(b.SrcNodes))
+			for j := range b.SrcNodes {
+				x := input(b.SrcType, b.SrcRows[j], b.SrcNodes[j])
+				h[j] = make([]float64, H)
+				for c := 0; c &lt; H; c++ {
+					s := 0.0
+					for i := 0; i &lt; fin; i++ {
+						s += x[i] * float64(w[i*H+c])
+					}
+					h[j][c] = s
+				}
+			}
+			out := outs[l][b.DstType]
+			d := H / m.Heads
+			for i := range b.DstNodes {
+				xd := input(b.DstType, b.DstRows[i], b.DstNodes[i])
+				beg, end := b.RowPtr[i], b.RowPtr[i+1]
+				row := out[i*H : (i+1)*H]
+				if !b.UseAcc {
+					for c := range row {
+						row[c] = 0
+					}
+				}
+				for hd := 0; hd &lt; m.Heads; hd++ {
+					c0, c1 := hd*d, (hd+1)*d
+					er := 0.0
+					for c := c0; c &lt; c1; c++ {
+						p := 0.0
+						for q := 0; q &lt; fin; q++ {
+							p += xd[q] * float64(w[q*H+c])
+						}
+						er += p * float64(ar[c])
+					}
+					sc := make([]float64, end-beg)
+					mx := math.Inf(-1)
+					for e := beg; e &lt; end; e++ {
+						el := 0.0
+						for c := c0; c &lt; c1; c++ {
+							el += h[b.ColIdx[e]][c] * float64(al[c])
+						}
+						v := el + er
+						if v &lt; 0 {
+							v *= 0.2
+						}
+						sc[e-beg] = v
+						mx = math.Max(mx, v)
+					}
+					sum := 0.0
+					for q := range sc {
+						sc[q] = math.Exp(sc[q] - mx)
+						sum += sc[q]
+					}
+					for e := beg; e &lt; end; e++ {
+						for c := c0; c &lt; c1; c++ {
+							row[c] += sc[e-beg] / sum * h[b.ColIdx[e]][c]
+						}
+					}
+				}
+				if b.Act {
+					for c := range row {
+						row[c] = math.Max(row[c], 0)
+					}
+				}
+			}
+		}
+	}
+	return outs
+}
+</code></pre></details>
+    <details class="src"><summary>rgat/benchmark.go <span>分配特征表、逐层逐关系 launch、报告 · 439 行</span></summary><pre><code class="language-go">// Package rgat implements the T17 W-C workload: R-GAT style sampled
+// mini-batch inference (MLPerf Inference RGAT) on IGBH.
+//
+// Host side: the heterogeneous graph (IGBH from -rgat-data, or a synthetic
+// graph with the IGBH schema), neighbour sampling like DGL&#x27;s
+// MultiLayerNeighborSampler (default 512 paper seeds, fanouts (10, 5), per
+// relation, without replacement), the per-block index arrays and the
+// weights. GPU side, per layer and per relation (kernels.cl): rgat_proj
+// gathers the sampled source rows and projects them, rgat_agg computes the
+// attention, the neighbour softmax and the weighted sum for each
+// destination, adding into the destination type&#x27;s output rows (relations
+// summed, ReLU after the hidden layer). No atomics, pull only. Single
+// attention head, no bias (simplifications of MLPerf&#x27;s 4-head R-GAT).
+//
+// Raw features live in one buffer per node type (the whole table is
+// allocated, as on a real GPU; only the rows the sample touches are
+// copied). Buffers use the default allocator.
+package rgat
+
+import (
+	// embed hsaco files
+	_ &quot;embed&quot;
+	&quot;fmt&quot;
+	&quot;log&quot;
+	&quot;math&quot;
+	&quot;math/rand&quot;
+	&quot;sort&quot;
+	&quot;strings&quot;
+
+	&quot;github.com/sarchlab/mgpusim/v3/driver&quot;
+	&quot;github.com/sarchlab/mgpusim/v3/insts&quot;
+	&quot;github.com/sarchlab/mgpusim/v3/kernels&quot;
+)
+
+//go:embed kernels.hsaco
+var hsacoBytes []byte
+
+// Kernel tile constants (kernels.cl).
+const (
+	MaxDeg = 32
+	TileM  = 32
+	TileN  = 64
+	TileK  = 32
+	wgSize = 256
+)
+
+// ProjArgs are the arguments of rgat_proj.
+type ProjArgs struct {
+	X, SrcIDs, W, H           driver.Ptr
+	NRows, FIn, FOut, NTilesN int32
+	HiddenGlobalOffsetX       int64
+	HiddenGlobalOffsetY       int64
+	HiddenGlobalOffsetZ       int64
+}
+
+// AggArgs are the arguments of rgat_agg.
+type AggArgs struct {
+	HSrc, XDst, DstIDs, RowPtr, ColIdx, AttnL, VR, Prev, Out driver.Ptr
+	FIn, FH, UseAcc, Act                                     int32
+	Heads, Padding                                           int32
+	HiddenGlobalOffsetX                                      int64
+	HiddenGlobalOffsetY                                      int64
+	HiddenGlobalOffsetZ                                      int64
+}
+
+// Params are the size knobs.
+type Params struct {
+	DataDir     string // IGBH directory; empty = synthetic graph
+	SynthPapers int    // synthetic graph size
+	SynthDim    int    // synthetic feature dimension
+	Seeds       int
+	Fanouts     []int // input layer first
+	Hidden      int   // projected width, all heads concatenated
+	Heads       int   // attention heads; each takes Hidden/Heads columns
+	Seed        int64
+}
+
+// DefaultParams returns a small synthetic default.
+func DefaultParams() Params {
+	return Params{SynthPapers: 2000, SynthDim: 128, Seeds: 32, Fanouts: []int{10, 5},
+		Hidden: 64, Heads: 1, Seed: 1}
+}
+
+// Benchmark is the R-GAT benchmark.
+type Benchmark struct {
+	driver  *driver.Driver
+	context *driver.Context
+	gpus    []int
+
+	proj, agg *insts.HsaCo
+	Params    Params
+
+	graph  *Graph
+	sample *Sample
+	model  *Model
+	outs   []map[string]driver.Ptr // per layer, per type
+	launch []launchInfo
+}
+
+type launchInfo struct {
+	name string
+	wgs  int
+}
+
+// NewBenchmark returns the benchmark with the small default.
+func NewBenchmark(d *driver.Driver) *Benchmark {
+	b := &amp;Benchmark{driver: d, Params: DefaultParams()}
+	b.context = d.Init()
+	b.proj = kernels.LoadProgramFromMemory(hsacoBytes, &quot;rgat_proj&quot;)
+	b.agg = kernels.LoadProgramFromMemory(hsacoBytes, &quot;rgat_agg&quot;)
+	if b.proj == nil || b.agg == nil {
+		log.Panic(&quot;rgat: failed to load kernels&quot;)
+	}
+	return b
+}
+
+// SelectGPU selects the GPU.
+func (b *Benchmark) SelectGPU(gpus []int) { b.gpus = gpus }
+
+// SetUnifiedMemory is not supported.
+func (b *Benchmark) SetUnifiedMemory() { panic(&quot;rgat does not support unified memory&quot;) }
+
+// Prepare loads the graph, samples and builds the model (host only).
+func Prepare(pr Params) (*Graph, *Sample, *Model, error) {
+	for _, f := range pr.Fanouts {
+		if f &lt; 1 || f &gt; MaxDeg {
+			return nil, nil, nil, fmt.Errorf(&quot;rgat: fanout %d outside 1..%d&quot;, f, MaxDeg)
+		}
+	}
+	if pr.Hidden &lt;= 0 || pr.Hidden%TileN != 0 {
+		return nil, nil, nil, fmt.Errorf(&quot;rgat: hidden %d must be a multiple of %d&quot;, pr.Hidden, TileN)
+	}
+	if pr.Heads &lt; 1 || pr.Hidden%pr.Heads != 0 {
+		return nil, nil, nil, fmt.Errorf(&quot;rgat: heads %d must divide hidden %d&quot;, pr.Heads, pr.Hidden)
+	}
+	var g *Graph
+	var err error
+	if pr.DataDir != &quot;&quot; {
+		g, err = LoadIGBH(pr.DataDir)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	} else {
+		g = SyntheticIGBH(pr.SynthPapers, pr.SynthDim, pr.Seed)
+	}
+	if g.FeatDim%TileK != 0 {
+		return nil, nil, nil, fmt.Errorf(&quot;rgat: feature dim %d not a multiple of %d&quot;, g.FeatDim, TileK)
+	}
+	for _, t := range g.Types {
+		if uint64(g.NumNodes[t])*uint64(g.FeatDim) &gt;= 1&lt;&lt;32 {
+			return nil, nil, nil, fmt.Errorf(&quot;rgat: %s table exceeds 2^32 elements&quot;, t)
+		}
+	}
+	rng := rand.New(rand.NewSource(pr.Seed))
+	if pr.Seeds &gt; g.NumNodes[&quot;paper&quot;] {
+		return nil, nil, nil, fmt.Errorf(&quot;rgat: %d seeds &gt; %d papers&quot;, pr.Seeds, g.NumNodes[&quot;paper&quot;])
+	}
+	seeds := make([]int32, pr.Seeds)
+	for i, v := range rng.Perm(g.NumNodes[&quot;paper&quot;])[:pr.Seeds] {
+		seeds[i] = int32(v)
+	}
+	s := SampleBlocks(g, &quot;paper&quot;, seeds, pr.Fanouts, rng)
+	m := NewModel(s, g.FeatDim, pr.Hidden, pr.Heads, pr.Seed)
+	if err := s.Check(g, m); err != nil {
+		return nil, nil, nil, err
+	}
+	return g, s, m, nil
+}
+
+// Check verifies every index the kernels dereference.
+func (s *Sample) Check(g *Graph, m *Model) error {
+	for l, blocks := range s.Blocks {
+		for _, b := range blocks {
+			rows := func(t string) int {
+				if l == 0 {
+					return g.NumNodes[t]
+				}
+				return len(s.Dst[l-1][t])
+			}
+			for _, r := range b.SrcRows {
+				if r &lt; 0 || int(r) &gt;= rows(b.SrcType) {
+					return fmt.Errorf(&quot;layer %d %s: src row %d out of range&quot;, l, b.RelName, r)
+				}
+			}
+			for _, r := range b.DstRows {
+				if r &lt; 0 || int(r) &gt;= rows(b.DstType) {
+					return fmt.Errorf(&quot;layer %d %s: dst row %d out of range&quot;, l, b.RelName, r)
+				}
+			}
+			if len(b.RowPtr) != len(b.DstNodes)+1 || int(b.RowPtr[len(b.DstNodes)]) != len(b.ColIdx) {
+				return fmt.Errorf(&quot;layer %d %s: bad row pointer&quot;, l, b.RelName)
+			}
+			for i := range b.DstNodes {
+				if d := b.RowPtr[i+1] - b.RowPtr[i]; d &lt; 0 || int(d) &gt; MaxDeg || int(d) &gt; s.Fanouts[l] {
+					return fmt.Errorf(&quot;layer %d %s: degree %d&quot;, l, b.RelName, d)
+				}
+			}
+			for _, c := range b.ColIdx {
+				if c &lt; 0 || int(c) &gt;= len(b.SrcNodes) {
+					return fmt.Errorf(&quot;layer %d %s: neighbour %d out of range&quot;, l, b.RelName, c)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (b *Benchmark) alloc(bytes int, name string) driver.Ptr {
+	if bytes == 0 {
+		bytes = 4
+	}
+	p := b.driver.AllocateMemory(b.context, uint64(bytes))
+	b.driver.RegisterMemoryObject(b.context, p, uint64(bytes), name)
+	return p
+}
+
+func (b *Benchmark) upload(name string, data interface{}, n int) driver.Ptr {
+	p := b.alloc(4*n, name)
+	if n &gt; 0 {
+		b.driver.MemCopyH2D(b.context, p, data)
+	}
+	return p
+}
+
+// Run samples on the host, uploads and launches every kernel.
+func (b *Benchmark) Run() {
+	b.driver.SelectGPU(b.context, b.gpus[0])
+	// Verify copies results back through the write-back L2 (no time).
+	b.driver.SetMagicCopyCoherent(true)
+	g, s, m, err := Prepare(b.Params)
+	if err != nil {
+		log.Panic(err)
+	}
+	b.graph, b.sample, b.model = g, s, m
+	H := m.Hidden
+	q := b.driver.CreateCommandQueue(b.context)
+
+	// raw feature tables: allocate whole, copy the touched rows
+	tables := map[string]driver.Ptr{}
+	touched := b.touchedRows()
+	for _, t := range g.Types {
+		tables[t] = b.alloc(4*g.NumNodes[t]*g.FeatDim, &quot;rgat_feat_&quot;+t)
+		row := make([]float32, g.FeatDim)
+		for _, id := range touched[t] {
+			g.Feats[t].Row(int(id), row)
+			b.driver.MemCopyH2D(b.context,
+				tables[t]+driver.Ptr(uint64(id)*uint64(g.FeatDim)*4), row)
+		}
+	}
+	b.outs = make([]map[string]driver.Ptr, len(s.Blocks))
+	for l := range s.Blocks {
+		// Every relation writes its own output buffer: out_r = out_{r-1} +
+		// its contribution (the previous relation&#x27;s buffer is passed as
+		// prev). No buffer is read before a kernel writes it, so no L1V
+		// can hold a stale line of it: with magic copies the timing model
+		// never invalidates the L1 caches between kernels.
+		b.outs[l] = map[string]driver.Ptr{}
+		input := func(t string) driver.Ptr {
+			if l == 0 {
+				return tables[t]
+			}
+			return b.outs[l-1][t]
+		}
+		fin := m.FIn[l]
+		for _, blk := range s.Blocks[l] {
+			k := [2]int{l, blk.Rel}
+			nm := fmt.Sprintf(&quot;rgat_l%d_%s&quot;, l, blk.RelName)
+			dSrc := b.upload(nm+&quot;_src_rows&quot;, blk.SrcRows, len(blk.SrcRows))
+			dDst := b.upload(nm+&quot;_dst_rows&quot;, blk.DstRows, len(blk.DstRows))
+			dPtr := b.upload(nm+&quot;_row_ptr&quot;, blk.RowPtr, len(blk.RowPtr))
+			dCol := b.upload(nm+&quot;_col_idx&quot;, blk.ColIdx, len(blk.ColIdx))
+			dW := b.upload(nm+&quot;_w&quot;, m.W[k], len(m.W[k]))
+			dAL := b.upload(nm+&quot;_attn_l&quot;, m.AL[k], len(m.AL[k]))
+			dV := b.upload(nm+&quot;_v&quot;, m.V[k], len(m.V[k]))
+			dH := b.alloc(4*len(blk.SrcNodes)*H, nm+&quot;_h&quot;)
+			prev := driver.Ptr(0)
+			if blk.UseAcc {
+				prev = b.outs[l][blk.DstType]
+			}
+			dOut := b.alloc(4*len(s.Dst[l][blk.DstType])*H, nm+&quot;_out&quot;)
+			b.outs[l][blk.DstType] = dOut
+
+			ntn := H / TileN
+			nProj := (len(blk.SrcNodes) + TileM - 1) / TileM * ntn
+			pa := ProjArgs{X: input(blk.SrcType), SrcIDs: dSrc, W: dW, H: dH,
+				NRows: int32(len(blk.SrcNodes)), FIn: int32(fin), FOut: int32(H), NTilesN: int32(ntn)}
+			b.driver.EnqueueLaunchKernel(q, b.proj, [3]uint32{uint32(nProj * wgSize), 1, 1},
+				[3]uint16{wgSize, 1, 1}, &amp;pa)
+			aa := AggArgs{HSrc: dH, XDst: input(blk.DstType), DstIDs: dDst, RowPtr: dPtr,
+				ColIdx: dCol, AttnL: dAL, VR: dV, Prev: prev, Out: dOut,
+				FIn: int32(fin), FH: int32(H), UseAcc: b2i(blk.UseAcc), Act: b2i(blk.Act),
+				Heads: int32(m.Heads)}
+			b.driver.EnqueueLaunchKernel(q, b.agg, [3]uint32{uint32(len(blk.DstNodes) * wgSize), 1, 1},
+				[3]uint16{wgSize, 1, 1}, &amp;aa)
+			b.launch = append(b.launch, launchInfo{&quot;proj_&quot; + nm[5:], nProj},
+				launchInfo{&quot;agg_&quot; + nm[5:], len(blk.DstNodes)})
+		}
+	}
+	b.report(touched)
+	b.driver.DrainCommandQueue(q)
+}
+
+func b2i(v bool) int32 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func sortedTypes(m map[string][]int32) []string {
+	var k []string
+	for t := range m {
+		k = append(k, t)
+	}
+	sort.Strings(k)
+	return k
+}
+
+// touchedRows returns, per type, the raw-feature rows layer 0 reads.
+func (b *Benchmark) touchedRows() map[string][]int32 {
+	set := map[string]map[int32]bool{}
+	add := func(t string, ids []int32) {
+		if set[t] == nil {
+			set[t] = map[int32]bool{}
+		}
+		for _, v := range ids {
+			set[t][v] = true
+		}
+	}
+	for _, blk := range b.sample.Blocks[0] {
+		add(blk.SrcType, blk.SrcNodes)
+		add(blk.DstType, blk.DstNodes)
+	}
+	out := map[string][]int32{}
+	for t, s := range set {
+		for v := range s {
+			out[t] = append(out[t], v)
+		}
+		sort.Slice(out[t], func(i, j int) bool { return out[t][i] &lt; out[t][j] })
+	}
+	return out
+}
+
+func (b *Benchmark) report(touched map[string][]int32) {
+	g, s, m, pr := b.graph, b.sample, b.model, b.Params
+	fan := make([]string, len(pr.Fanouts))
+	for i, f := range pr.Fanouts {
+		fan[i] = fmt.Sprint(f)
+	}
+	fmt.Printf(&quot;RGAT,config,graph=%s,types=%d,relations=%d,edges=%d,feat_dim=%d,seeds=%d,&quot;+
+		&quot;fanouts=%s,hidden=%d,heads=%d,head_dim=%d,seed=%d\n&quot;, g.Name, len(g.Types), len(g.Rels),
+		g.NumEdges(), g.FeatDim, pr.Seeds, strings.Join(fan, &quot;:&quot;), m.Hidden, m.Heads,
+		m.Hidden/m.Heads, pr.Seed)
+	for l := range s.Blocks {
+		var parts []string
+		edges, srcRows := 0, 0
+		for _, t := range sortedTypes(s.Dst[l]) {
+			parts = append(parts, fmt.Sprintf(&quot;%s:%d&quot;, t, len(s.Dst[l][t])))
+		}
+		for _, blk := range s.Blocks[l] {
+			edges += len(blk.ColIdx)
+			srcRows += len(blk.SrcNodes)
+		}
+		fmt.Printf(&quot;RGAT,layer%d,dst=%s,blocks=%d,edges=%d,projected_rows=%d\n&quot;,
+			l, strings.Join(parts, &quot;;&quot;), len(s.Blocks[l]), edges, srcRows)
+	}
+	featRows := 0
+	for _, ids := range touched {
+		featRows += len(ids)
+	}
+	featBytes := uint64(featRows) * uint64(g.FeatDim) * 4
+	var gather, hBytes, wBytes uint64
+	totalWG, projWG, aggWG := 0, 0, 0
+	for _, li := range b.launch {
+		totalWG += li.wgs
+		if strings.HasPrefix(li.name, &quot;proj_&quot;) {
+			projWG += li.wgs
+		} else {
+			aggWG += li.wgs
+		}
+	}
+	for l, blocks := range s.Blocks {
+		for _, blk := range blocks {
+			gather += uint64(len(blk.SrcNodes)) * uint64(m.FIn[l]) * 4 * uint64(m.Hidden/TileN)
+			hBytes += uint64(len(blk.SrcNodes)) * uint64(m.Hidden) * 4
+			wBytes += uint64(m.FIn[l]*m.Hidden) * 4
+		}
+	}
+	allocMB := 0.0
+	for _, t := range g.Types {
+		allocMB += float64(g.NumNodes[t]*g.FeatDim*4) / 1e6
+	}
+	fmt.Printf(&quot;RGAT,kernels,count=%d,proj_wgs=%d,agg_wgs=%d,total_wgs=%d\n&quot;,
+		len(b.launch), projWG, aggWG, totalWG)
+	var per []string
+	for _, li := range b.launch {
+		per = append(per, fmt.Sprintf(&quot;%s:%d&quot;, li.name, li.wgs))
+	}
+	fmt.Printf(&quot;RGAT,kernel_wgs,%s\n&quot;, strings.Join(per, &quot;;&quot;))
+	fmt.Printf(&quot;RGAT,footprint,feature_rows=%d,feature_bytes=%d,projected_bytes=%d,weight_bytes=%d,&quot;+
+		&quot;total_mb=%.1f,feature_gather_traffic_mb=%.1f,feature_tables_alloc_mb=%.1f\n&quot;,
+		featRows, featBytes, hBytes, wBytes, float64(featBytes+hBytes+wBytes)/1e6,
+		float64(gather)/1e6, allocMB)
+}
+
+// Verify compares the seeds&#x27; outputs with the float64 reference
+// (tolerance 1e-4 absolute + 1e-3 relative).
+func (b *Benchmark) Verify() {
+	s, m, g := b.sample, b.model, b.graph
+	feat := func(t string, id int32) []float32 {
+		row := make([]float32, g.FeatDim)
+		g.Feats[t].Row(int(id), row)
+		return row
+	}
+	ref := Reference(s, m, feat)
+	L := len(s.Blocks)
+	bad, maxErr, n := 0, 0.0, 0
+	for _, t := range sortedTypes(s.Dst[L-1]) {
+		want := ref[L-1][t]
+		got := make([]float32, len(want))
+		b.driver.MemCopyD2H(b.context, got, b.outs[L-1][t])
+		for i := range want {
+			e := math.Abs(float64(got[i]) - want[i])
+			maxErr = math.Max(maxErr, e)
+			if !(e &lt;= 1e-4+1e-3*math.Abs(want[i])) {
+				if bad &lt; 5 {
+					log.Printf(&quot;rgat: %s[%d] got %g want %g&quot;, t, i, got[i], want[i])
+				}
+				bad++
+			}
+			n++
+		}
+	}
+	fmt.Printf(&quot;RGAT,verify,elements=%d,max_abs_err=%.3g,mismatches=%d\n&quot;, n, maxErr, bad)
+	if bad &gt; 0 {
+		log.Fatalf(&quot;rgat: %d mismatches&quot;, bad)
+	}
+	log.Printf(&quot;Passed!&quot;)
+}
+</code></pre></details>
+    <details class="src"><summary>build_hsaco.sh <span>编译脚本（clang → gfx803 code object v2） · 60 行</span></summary><pre><code class="language-bash">#!/usr/bin/env bash
+# Rebuild &lt;dir&gt;/kernels.hsaco from &lt;dir&gt;/kernels.cl for the T17 workloads and
+# check each result with check_hsaco.sh (fails on scratch, atomics and
+# unimplemented flat/ds opcodes). Needs clang with the amdgcn target, ld.lld,
+# llvm-objdump, llvm-readelf and the ROCm device libs (yss2, not macOS).
+#
+# Usage: build_hsaco.sh [dir ...]      (default: every subdirectory with a
+#                                       kernels.cl)
+#
+# check_hsaco.sh covers memory, LDS, SMEM and scratch. ALU opcodes the
+# emulator lacks are found by opcheck (needs Go; run it where the simulator
+# sources are):
+#   llvm-objdump -d --mcpu=fiji &lt;dir&gt;/kernels.hsaco &gt; k.dis
+#   go run ./benchmarks/t17/opcheck -emu emu k.dis      (from mgpusim/)
+#
+# Patterns that clang 14 turns into instructions the simulator lacks, and
+# the source-level way around them used in these kernels:
+#   LDS arrays/strides of 64 dwords     -&gt; ds_*2st64_b32: interleave/pad
+#   4 contiguous aligned LDS loads      -&gt; ds_read_b128: strided layout
+# Implemented since commit &quot;simulator: implement v_mad_i64_i32, ...&quot; (the
+# kernels written before still avoid them): s_load_dwordx16 (&gt;= 64
+# contiguous kernarg bytes), v_mad_i64_i32 (signed long index math),
+# v_alignbit_b32 (64-bit id shifts), s_ashr_i64, s_addk_i32, s_cmpk_eq_i32.
+# Fixed since commits &quot;timing/cu: advance PC for scheduler-internal SOPP
+# instructions&quot; and &quot;insts, emu: decode v_mad_u64_u32 (VOP3 488) as VOP3b&quot;
+# (the kernels written before still avoid them): s_nop in a kernel body
+# (clang&#x27;s fiji store-data hazard padding; used to hang the timing CU) and
+# v_mad_u64_u32 (unsigned 64-bit int*int + 64; used to be decoded with a
+# 32-bit dst).
+set -euo pipefail
+
+SCRIPT_DIR=&quot;$(cd &quot;$(dirname &quot;${BASH_SOURCE[0]}&quot;)&quot; &amp;&amp; pwd)&quot;
+CLANG=&quot;${CLANG:-clang}&quot;
+LD_LLD=&quot;${LD_LLD:-ld.lld}&quot;
+GPU=&quot;${GPU:-fiji}&quot;
+ROCM_DEVICE_LIB_PATH=&quot;${ROCM_DEVICE_LIB_PATH:-/usr/lib/x86_64-linux-gnu/amdgcn/bitcode}&quot;
+
+dirs=(&quot;$@&quot;)
+if ((${#dirs[@]} == 0)); then
+  for d in &quot;$SCRIPT_DIR&quot;/*/; do
+    [[ -f &quot;$d/kernels.cl&quot; ]] &amp;&amp; dirs+=(&quot;$(basename &quot;$d&quot;)&quot;)
+  done
+fi
+
+OBJ_DIR=&quot;$(mktemp -d &quot;${TMPDIR:-/tmp}/t17-hsaco.XXXXXX&quot;)&quot;
+trap &#x27;rm -rf &quot;$OBJ_DIR&quot;&#x27; EXIT
+
+for d in &quot;${dirs[@]}&quot;; do
+  [[ &quot;$d&quot; = /* ]] || d=&quot;$SCRIPT_DIR/$d&quot;
+  name=&quot;$(basename &quot;$d&quot;)&quot;
+  out=&quot;$OBJ_DIR/$name.hsaco&quot;
+  &quot;$CLANG&quot; -x cl -target amdgcn-amd-amdhsa -mcpu=&quot;$GPU&quot; -mcode-object-version=2 \
+    -cl-std=CL2.0 --rocm-device-lib-path=&quot;$ROCM_DEVICE_LIB_PATH&quot; \
+    -c &quot;$d/kernels.cl&quot; -o &quot;$OBJ_DIR/$name.o&quot;
+  &quot;$LD_LLD&quot; -shared &quot;$OBJ_DIR/$name.o&quot; -o &quot;$out&quot;
+  # Only install the code object if it passes the check.
+  GPU=&quot;$GPU&quot; &quot;$SCRIPT_DIR/check_hsaco.sh&quot; &quot;$out&quot;
+  cp &quot;$out&quot; &quot;$d/kernels.hsaco&quot;
+  echo &quot;built $d/kernels.hsaco&quot;
+done
+</code></pre></details>
+    <details class="src"><summary>check_hsaco.sh <span>检查生成的指令是否都被模拟器支持 · 77 行</span></summary><pre><code class="language-bash">#!/usr/bin/env bash
+# Check that a code object only uses memory instructions the simulator
+# implements (T17 step 0). Fails (exit 1) on:
+#   - MUBUF/MTBUF/scratch instructions (buffer_*, tbuffer_*, scratch_*);
+#     the simulator has no MUBUF/scratch support (emu/alu.go Run panics on the
+#     format, timing/cu/scratchpadpreparer.go too);
+#   - any atomic (flat_atomic_*, global_atomic_*, ds_*atomic-like ops);
+#   - flat_* opcodes the emulator does not implement (emu/alu_flat.go
+#     implements load ubyte/ushort/dword/x2/x4 and store dword/x2/x3/x4);
+#   - ds_* outside the 7 implemented opcodes (emu/aluds.go);
+#   - s_load/s_store/s_buffer_* other than s_load_dword/x2/x4/x8/x16
+#     (emu/alu.go runSMEM and timing/cu/scalarunit.go implement SMEM 0-4);
+#   - a kernel whose private segment (scratch) size is not 0;
+#   - a scheduler-internal SOPP op other than s_nop, s_endpgm, s_barrier,
+#     s_waitcnt inside a kernel body: emu/alu.go runSOPP has no case for
+#     them (emulation panics) and the timing CU treats them as no-ops
+#     (s_sethalt/s_setkill/s_trap/s_set_gpr_idx_* are not modeled). s_nop is
+#     accepted: the timing scheduler used to complete it without advancing
+#     the PC (hang), fixed in &quot;timing/cu: advance PC for scheduler-internal
+#     SOPP instructions&quot;. Padding after s_endpgm is never executed and is
+#     ignored.
+# Needs llvm-objdump and llvm-readelf (yss2). Usage: check_hsaco.sh a.hsaco...
+set -euo pipefail
+
+OBJDUMP=&quot;${LLVM_OBJDUMP:-llvm-objdump}&quot;
+READELF=&quot;${LLVM_READELF:-llvm-readelf}&quot;
+MCPU=&quot;${GPU:-fiji}&quot;
+
+ALLOWED_DS=&#x27;^(ds_write_b32|ds_write2_b32|ds_read_b32|ds_read2_b32|ds_write2_b64|ds_read_b64|ds_read2_b64)$&#x27;
+ALLOWED_SMEM=&#x27;^(s_load_dword|s_load_dwordx2|s_load_dwordx4|s_load_dwordx8|s_load_dwordx16)$&#x27;
+ALLOWED_FLAT=&#x27;^(flat_load_ubyte|flat_load_ushort|flat_load_dword|flat_load_dwordx2|flat_load_dwordx4|flat_store_dword|flat_store_dwordx2|flat_store_dwordx3|flat_store_dwordx4)$&#x27;
+
+status=0
+for f in &quot;$@&quot;; do
+  mnems=&quot;$(&quot;$OBJDUMP&quot; -d --mcpu=&quot;$MCPU&quot; &quot;$f&quot; |
+    grep -oE &#x27;^[[:space:]]+[a-z][a-z0-9_]*&#x27; | sed -E &#x27;s/^[[:space:]]+//&#x27; | sort | uniq -c)&quot;
+  bad=&quot;&quot;
+  while read -r count m; do
+    [[ -z &quot;$m&quot; ]] &amp;&amp; continue
+    case &quot;$m&quot; in
+      buffer_* | tbuffer_* | scratch_* | global_* | *atomic*)
+        bad+=&quot;  $m ($count)&quot;$&#x27;\n&#x27; ;;
+      flat_*)
+        [[ &quot;$m&quot; =~ $ALLOWED_FLAT ]] || bad+=&quot;  $m ($count)&quot;$&#x27;\n&#x27; ;;
+      ds_*)
+        [[ &quot;$m&quot; =~ $ALLOWED_DS ]] || bad+=&quot;  $m ($count)&quot;$&#x27;\n&#x27; ;;
+      s_load_* | s_store_* | s_buffer_* | s_dcache_* | s_memtime | s_memrealtime)
+        [[ &quot;$m&quot; =~ $ALLOWED_SMEM ]] || bad+=&quot;  $m ($count)&quot;$&#x27;\n&#x27; ;;
+    esac
+  done &lt;&lt;&lt;&quot;$mnems&quot;
+
+  # scheduler-internal ops in a kernel body (labels start a kernel,
+  # s_endpgm ends its body; the padding after it is never executed)
+  internal=&quot;$(&quot;$OBJDUMP&quot; -d --mcpu=&quot;$MCPU&quot; &quot;$f&quot; | awk &#x27;
+    /^[0-9a-f]+ &lt;.*&gt;:$/ { body = 1; next }
+    { m = $1 }
+    m == &quot;s_endpgm&quot; { body = 0; next }
+    body &amp;&amp; m ~ /^s_(setkill|sethalt|sleep|setprio|trap|icache_inv|incperflevel|decperflevel|ttracedata|set_gpr_idx_off|set_gpr_idx_mode)$/ {
+      n[m]++ }
+    END { for (k in n) printf &quot;  %s in a kernel body (%d): not implemented\n&quot;, k, n[k] }&#x27;)&quot;
+  bad+=&quot;${internal:+$internal$&#x27;\n&#x27;}&quot;
+
+  priv=&quot;$(&quot;$READELF&quot; --notes &quot;$f&quot; | grep -E &#x27;PrivateSegmentFixedSize&#x27; |
+    awk &#x27;$2 != 0&#x27; || true)&quot;
+  if [[ -n &quot;$priv&quot; ]]; then
+    bad+=&quot;  private segment (scratch) in use: ${priv//$&#x27;\n&#x27;/; }&quot;$&#x27;\n&#x27;
+  fi
+
+  if [[ -n &quot;$bad&quot; ]]; then
+    echo &quot;check_hsaco: $f uses instructions the simulator does not implement:&quot; &gt;&amp;2
+    printf &#x27;%s&#x27; &quot;$bad&quot; &gt;&amp;2
+    status=1
+  else
+    echo &quot;check_hsaco: $f OK&quot;
+  fi
+done
+exit &quot;$status&quot;
+</code></pre></details>
+  </div>
+  <p class="foot">本页由 Cowork 根据源代码整理，所有数字来自 STATUS.md 和 results_index/t17。</p>
+</article>
+</main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+(function(){
+  if(!window.hljs)return;
+  document.querySelectorAll('details.src').forEach(function(d){
+    d.addEventListener('toggle',function(){
+      if(!d.open)return;
+      var c=d.querySelector('code');
+      if(c&&!c.dataset.done){try{hljs.highlightElement(c)}catch(e){} c.dataset.done='1'}
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>T15 oracle 上限实验</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: long technical document; left table of contents on wide screens, single column on phones; source files in collapsible blocks. */
+:root{
+  --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6774; --line:#d8dee5;
+  --accent:#1d5b7f; --accent-soft:#e3eef5; --on-accent:#ffffff; --code-bg:#f6f8fa;
+  --warn:#9a6a00; --warn-soft:#f7eed6;
+  --k-kw:#8a3ffc; --k-str:#1a7f37; --k-com:#6e7781; --k-num:#0550ae; --k-fn:#953800; --k-type:#0a6b72;
+  --f-display:"Noto Serif SC","Songti SC",serif; --f-body:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif; --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161b; --surface:#182028; --fg:#e4e9ee; --muted:#9aa7b4; --line:#2b3641;
+  --accent:#6fb0d6; --accent-soft:#1c3444; --on-accent:#0d1620; --code-bg:#121a21; --warn:#e2b54d; --warn-soft:#3a2f12;
+  --k-kw:#c4a2ff; --k-str:#7ee2a8; --k-com:#8b98a5; --k-num:#79c0ff; --k-fn:#ffb77c; --k-type:#6fd3d8; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161b; --surface:#182028; --fg:#e4e9ee; --muted:#9aa7b4; --line:#2b3641;
+  --accent:#6fb0d6; --accent-soft:#1c3444; --on-accent:#0d1620; --code-bg:#121a21; --warn:#e2b54d; --warn-soft:#3a2f12;
+  --k-kw:#c4a2ff; --k-str:#7ee2a8; --k-com:#8b98a5; --k-num:#79c0ff; --k-fn:#ffb77c; --k-type:#6fd3d8; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15.5px;line-height:1.7}
+.wrap{max-width:1180px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:24px 64px;display:grid;grid-template-columns:220px minmax(0,1fr);gap:28px}
+@media (max-width:860px){.wrap{grid-template-columns:minmax(0,1fr)} nav.toc{position:static!important;max-height:none!important}}
+nav.toc{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 32px);overflow:auto;font-size:13.5px;display:flex;flex-direction:column;gap:2px}
+nav.toc a{color:var(--muted);text-decoration:none;padding:3px 8px;border-left:2px solid transparent}
+nav.toc a:hover,nav.toc a:focus-visible{color:var(--fg);border-left-color:var(--accent);outline:none}
+nav.toc a.l2{padding-left:20px;font-size:13px}
+nav.toc .back{margin-bottom:10px;color:var(--accent);font-weight:700}
+main{min-width:0;display:flex;flex-direction:column;gap:22px}
+article{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:26px clamp(16px,3.6vw,36px);display:flex;flex-direction:column;gap:14px;min-width:0;scroll-margin-top:12px}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.35}
+h1{font-family:var(--f-display);font-size:clamp(26px,3.6vw,34px)}
+h2{font-family:var(--f-display);font-size:clamp(21px,2.6vw,26px)}
+h3{font-size:16.5px;margin-top:6px;scroll-margin-top:12px}
+p{margin:0;max-width:78ch}
+ul,ol{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:5px;max-width:80ch}
+.kicker{font-size:12px;letter-spacing:.12em;color:var(--accent);font-weight:700}
+.lede{color:var(--muted)}
+code,.mono{font-family:var(--f-mono);font-size:.9em}
+p code,li code,td code{background:var(--code-bg);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:7px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-weight:700;color:var(--muted);font-size:12.5px;background:var(--bg)}
+tr:last-child td{border-bottom:none}
+td.num{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.note{background:var(--warn-soft);border-radius:6px;padding:10px 14px;font-size:14.5px;max-width:none}
+.note b{color:var(--warn)}
+.fact{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.fact div{border:1px solid var(--line);border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.fact b{font-family:var(--f-mono);font-weight:500;font-size:17px}
+.fact span{color:var(--muted);font-size:13px}
+pre.diagram{font-family:var(--f-mono);font-size:12.5px;line-height:1.5;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:12px 14px;overflow-x:auto;margin:0}
+details.src{border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+details.src summary{cursor:pointer;padding:9px 14px;font-family:var(--f-mono);font-size:13.5px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+details.src summary span{color:var(--muted);font-family:var(--f-body);font-size:13px}
+details.src summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+details.src pre{margin:0;max-height:640px;overflow:auto;border-top:1px solid var(--line);background:var(--code-bg)}
+details.src code{display:block;padding:12px 14px;font-family:var(--f-mono);font-size:12.5px;line-height:1.55;white-space:pre;tab-size:4;color:var(--fg)}
+.hljs-keyword,.hljs-built_in,.hljs-meta .hljs-keyword{color:var(--k-kw)}
+.hljs-string,.hljs-meta .hljs-string{color:var(--k-str)}
+.hljs-comment{color:var(--k-com);font-style:italic}
+.hljs-number,.hljs-literal{color:var(--k-num)}
+.hljs-title,.hljs-title.function_{color:var(--k-fn)}
+.hljs-type,.hljs-meta{color:var(--k-type)}
+.srclist{display:flex;flex-direction:column;gap:8px}
+.foot{font-size:13px;color:var(--muted)}
+
+.figure{display:flex;flex-direction:column;gap:6px;min-width:0}
+.figure h3{margin:0}
+.figcap{font-size:13.5px;color:var(--muted);max-width:none}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}
+.grid2>*{min-width:0}
+svg.chart{width:100%;height:auto;display:block}
+svg .grid{stroke:var(--line);stroke-width:1}
+svg .axis{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--muted);stroke-width:1.5;stroke-dasharray:4 3}
+svg .tick{fill:var(--muted);font-size:12px;font-family:var(--f-mono)}
+svg .lab{fill:var(--fg);font-size:13px;font-family:var(--f-body)}
+svg .val{fill:var(--fg);font-size:12.5px;font-family:var(--f-mono)}
+svg .bar{fill:color-mix(in oklab,var(--accent) 38%,var(--surface))}
+svg .bar-em{fill:var(--accent)}
+svg .bar-m{fill:var(--muted)}
+svg .dot{fill:var(--accent);stroke:var(--surface);stroke-width:1.5}
+svg .dot-o{fill:var(--surface);stroke:var(--accent);stroke-width:2}
+svg .conn{stroke:var(--line);stroke-width:3}
+svg .rttbar{fill:color-mix(in oklab,var(--accent) 18%,var(--surface))}
+svg .seg1{fill:color-mix(in oklab,var(--accent) 25%,var(--surface))}
+svg .seg2{fill:color-mix(in oklab,var(--accent) 55%,var(--surface))}
+svg .seg3{fill:var(--accent)}
+svg .bound{stroke:var(--fg);stroke-width:2}
+svg .line{fill:none;stroke:var(--accent);stroke-width:2.5}
+svg .line2{fill:none;stroke:var(--muted);stroke-width:2.5;stroke-dasharray:6 4}
+svg .sbox{fill:var(--bg);stroke:var(--line);stroke-width:1.5}
+svg .sbox-hl{fill:var(--accent-soft);stroke:var(--accent);stroke-width:2}
+svg .arrow{stroke:var(--muted);stroke-width:2}
+svg .arrowhead{fill:var(--muted)}
+svg .loop{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 4}
+.keyrow{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted)}
+.keyrow span{display:flex;align-items:center;gap:6px}
+.k{display:inline-block;width:14px;height:10px;border-radius:2px}
+.bar-k{background:color-mix(in oklab,var(--accent) 38%,var(--surface))}.em-k{background:var(--accent)}.m-k{background:var(--muted)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.card{border:1px solid var(--line);border-radius:6px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
+.card b.n{font-family:var(--f-mono);font-size:12px;color:var(--accent)}
+.card p{font-size:14.5px}
+
+main a{color:var(--accent)}
+p code,li code,td code{overflow-wrap:anywhere}
+.hm{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;max-width:420px}
+.hm-cell{aspect-ratio:1;max-width:100%;display:grid;place-items:center;font-family:var(--f-mono);font-size:12px;border-radius:3px;
+  background:color-mix(in oklab,var(--accent) var(--p),var(--surface));color:var(--fg)}
+.hm-dark{color:var(--on-accent)}
+.hm-sm .hm-cell{font-size:10.5px}
+.hm-idle{background:var(--bg);color:var(--muted);font-size:10.5px;border:1px solid var(--line)}
+.hm-cpu{background:var(--bg);color:var(--muted);font-size:10.5px;border:1px dashed var(--line)}
+.hm-legend{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);font-family:var(--f-mono)}
+.hm-legend i{display:block;width:120px;height:10px;border-radius:2px;background:linear-gradient(90deg,color-mix(in oklab,var(--accent) 8%,var(--surface)),color-mix(in oklab,var(--accent) 88%,var(--surface)))}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:18px}
+.grid3>*{min-width:0}
+svg .dot-b{fill:var(--muted);stroke:var(--surface);stroke-width:1.5}
+svg .fit{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4}
+svg .line3{fill:none;stroke:var(--fg);stroke-width:2;stroke-dasharray:2 3}
+svg .dot-f{fill:var(--fg);stroke:var(--surface);stroke-width:1.5}
+svg .band{fill:color-mix(in oklab,var(--accent) 16%,var(--surface))}
+td.hl,th.hl{background:var(--accent-soft)}
+td.diff{color:var(--warn);font-weight:700}
+pre.json{font-family:var(--f-mono);font-size:12.5px;line-height:1.55;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:12px 14px;overflow-x:auto;margin:0;white-space:pre}
+.steps{counter-reset:st;list-style:none;padding:0;display:flex;flex-direction:column;gap:8px;max-width:none}
+.steps li{counter-increment:st;border:1px solid var(--line);border-radius:6px;padding:10px 14px 10px 46px;position:relative}
+.steps li::before{content:counter(st);position:absolute;left:12px;top:9px;width:24px;height:24px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-family:var(--f-mono);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="目录"><a class="back" href="worklog_1019.html">← 工作总览</a><a class="back" href="index.html" style="margin-top:-8px">← 返回汇报</a><a href="#o1">要回答的问题</a><a href="#o2">6 组 oracle</a><a href="#o3">实验设置</a><a href="#o4">指标和判断方法</a><a href="#o5">结果</a><a href="#o6">上限来自窗口还是距离</a><a href="#o7">方法问题：截断运行的有效性</a><a href="#o8">两个反常</a></nav>
+<main>
+<article id="top"><div class="kicker">工作总览 · 第 8 项 T15</div><h1>T15 oracle 上限实验：wafer 层最多还能快多少</h1><p>T15 用 oracle 实验量出 wafer 层的优化空间：每一组把远程路径的一部分变成“免费”，看程序能快多少。14 个 workload × 6 组，mi200 冻结版，短片段。</p><div class="fact"><div><b>1.48×</b><span>O1（全部本地）上限的 GMEAN</span></div><div><b>4 / 14</b><span>O1 上限 &gt; 1.05 的 workload</span></div><div><b>1.17× / 1.11×</b><span>O2b（RDMA 窗口） / O3（距离）的 GMEAN</span></div><div><b>82 / 84</b><span>完成的格子（截至 10-17）</span></div></div></article>
+<article id="o1"><h2>要回答的问题</h2><p>背景：用户担心现在的数据放置让大部分访存发生在本地，wafer 层（远程路径）可能没有足够的优化空间；如果先把本地做好，空间会更小。与其争论，不如直接量出来：把远程路径的某一部分“变成免费”，看程序能快多少。这类实验叫 oracle，它们都是有意偏离真实配置的分析实验，不代表能实现的设计。</p><ol class="steps">
+<li>每个 workload 在 wafer 层<b>最多还能快多少</b>？（上限）</li>
+<li>这个上限里，多少来自<b>端点窗口</b>（同时在途的请求数被卡住），多少来自<b>距离</b>（每跳的延迟）？</li>
+<li>现有 CuPath 的 m2、Complete <b>拿到了上限的百分之多少</b>？</li>
+<li>远程访问占<b>访问个数</b>的多少、占<b>访存时间</b>的多少？</li>
+</ol></article><article id="o2"><h2>6 组 oracle</h2><div class="tw"><table><thead><tr><th>组</th><th>名称</th><th>相对 mi200.json 的改动</th><th>把什么变成免费</th><th>保留了什么</th></tr></thead><tbody><tr><td>B</td><td>baseline</td><td>无</td><td>—</td><td>—</td></tr><tr><td>O1</td><td>全部本地</td><td><code>-force-local-data-access</code>：L1V 缺失一律走本地 L2 / DRAM</td><td>整条远程路径（RDMA、mesh、远端 L2）</td><td>远程页的地址转换（仍去中心 IOMMU）；本地 HBM 只有 31% 峰值</td></tr><tr><td>O2a</td><td>L1 窗口放大</td><td><code>-l1v-mshr-entries=256 -l1v-max-concurrent-trans=256</code>（16 → 256）</td><td>发起方 L1V 的在途上限</td><td>RDMA 仍是 64</td></tr><tr><td>O2b</td><td>RDMA 窗口放大</td><td><code>-rdma-max-outstanding=4096 -rdma-pipeline-width=64</code>（64 → 4096，8 → 64）</td><td>RDMA 的在途上限和流水线宽度</td><td>L1V 仍是每 CU 16</td></tr><tr><td>O2</td><td>端点不受限</td><td>O2a + O2b</td><td>两端的窗口</td><td>距离、链路、owner 端</td></tr><tr><td>O3</td><td>距离几乎免费</td><td><code>-switch-latency=1</code>（32 → 1 周期/跳）</td><td>每跳的延迟</td><td>RDMA 端点固定的 10 周期等开销；窗口仍是 64</td></tr><tr><td>m2 / Complete</td><td>现有机制</td><td>10-15 mi200 消融的结果（同样的 <code>-max-wg</code>）</td><td>—</td><td>—</td></tr></tbody></table></div></article><article id="o3"><h2>实验设置</h2><div class="tw"><table><thead><tr><th>项</th><th>设置</th></tr></thead><tbody><tr><td>配置</td><td>冻结版 mi200（<code>isca27-mi200-v1</code>）</td></tr><tr><td>运行方式</td><td>runall2 的 baseline（显式关闭全部 CuPath 机制，和 10-15 消融的 baseline 参数逐个相同），oracle 的改动用 <code>--extra-benchmark-flags</code> 加在末尾</td></tr><tr><td>统计</td><td><code>-report-l2-source -l2-source-tile-width=7</code>：每次 L2 缺失的来源、延迟、跳数</td></tr><tr><td>workload / 长度</td><td>14 个；<code>-max-wg 32768</code>（spmv 1,536）短片段，和消融一致</td></tr><tr><td>运行数</td><td>14 × 6 = 84。长的放 yss3（kmeans 单个约 12.5 小时、MT 3.8 h、MM 1.9 h、AES 1.7 h、PR 1.5 h，共 30 个），短的放 yss2（54 个，每个 2–55 分钟）</td></tr><tr><td>进度</td><td>截至 10-17 完成 82 / 84，没有失败；kmeans 的 O2、O2b 还在跑</td></tr><tr><td>O2a / O2b 取值</td><td>诊断 A 显示 L1V 16 / 32 / 64 对 L2 带宽没影响、RDMA 到 256 仍线性，所以 256 和 4096 都远超已测到的范围</td></tr></tbody></table></div></article><article id="o4"><h2>指标和判断方法</h2><div class="tw"><table><thead><tr><th>指标</th><th>定义</th></tr></thead><tbody><tr><td>远程访问占比</td><td>远程的 L1V 缺失数 ÷ 全部 L1V 缺失数</td></tr><tr><td>远程延迟占比</td><td>远程访问的总延迟 ÷ 全部 L1V 缺失的总延迟（同一份统计）</td></tr><tr><td>加速比</td><td>B 的 total_time ÷ 该组 total_time</td></tr><tr><td>拿到上限的比例</td><td>(机制加速比 − 1) ÷ (O1 加速比 − 1)</td></tr><tr><td>分类（看结果前定好）</td><td>O1 上限 &gt; 1.05 的是“wafer 敏感”，否则是“本地型”；论文里两组的 GMEAN 都报</td></tr><tr><td>有效性</td><td>每格和 B 比较 kernel 数、完成的 WG 数、总指令数；指令数差超过 1% 判“oracle 无效”</td></tr></tbody></table></div></article><article id="o5"><h2>结果</h2><div class="tw"><table><thead><tr><th>workload</th><th>远程访问占比</th><th>远程延迟占比</th><th>O1</th><th>O2a</th><th>O2b</th><th>O2</th><th>O3</th><th>m2</th><th>Complete</th><th>m2 / Complete 拿到上限的</th></tr></thead><tbody><tr><td>floydwarshall</td><td>9.5%</td><td>94%</td><td><b>11.1×</b>（−20%）</td><td>1.90×</td><td>2.46×</td><td>2.52×</td><td>0.98×</td><td>2.51×</td><td>2.54×</td><td>15% / 15%</td></tr><tr><td>matrixmultiplication</td><td>48%</td><td>99.7%</td><td><b>3.61×</b>（+6%）</td><td>0.99×</td><td>1.72×</td><td>1.83×</td><td>1.10×</td><td>2.06×</td><td>3.84×</td><td>41% / 109%</td></tr><tr><td>kmeans</td><td>81%</td><td>99%</td><td><b>3.17×</b>（−5%）</td><td>1.08×</td><td>跑中</td><td>跑中</td><td><b>2.24×</b></td><td>2.81×</td><td>2.84×</td><td>83% / 85%</td></tr><tr><td>im2col</td><td>96%</td><td>99.9%</td><td><b>1.92×</b>（−39%）</td><td>0.94×</td><td>1.84×</td><td>1.85×</td><td>1.63×</td><td>1.09×</td><td>1.19×</td><td>10% / 21%</td></tr><tr><td>pagerank</td><td>83%</td><td>99.4%</td><td>0.97×（反常）</td><td>0.83×</td><td>0.97×</td><td>0.97×</td><td>1.03×</td><td>1.00×</td><td>1.02×</td><td>—</td></tr><tr><td>matrixtranspose</td><td>98%</td><td>99.7%</td><td>1.00×（反常）</td><td>1.00×</td><td>1.00×</td><td>1.00×</td><td>1.01×</td><td>1.00×</td><td>1.00×</td><td>—</td></tr><tr><td>spmv</td><td>21%</td><td>61%</td><td>1.01×</td><td>0.96×</td><td>1.00×</td><td>0.96×</td><td>1.01×</td><td>1.00×</td><td>0.98×</td><td>—</td></tr><tr><td>其余 7 个（本地型）</td><td>0–0.8%</td><td>0–5.5%</td><td>1.00×</td><td>≈ 1.0×</td><td>≈ 1.0×</td><td>≈ 1.0×</td><td>1.00–1.02×</td><td>≈ 1.0×</td><td>≈ 1.0×</td><td>—</td></tr><tr><td><b>GMEAN（14 个）</b></td><td></td><td></td><td><b>1.48×</b></td><td>1.02×</td><td>1.17×</td><td>1.16×</td><td>1.11×</td><td>1.22×</td><td>1.28×</td><td></td></tr></tbody></table></div><p>截断运行、不按指令数过滤。O1 括号里是 O1 和 B 的总指令数差异。“其余 7 个”是 aes、bitonicsort、fastwalshtransform、fft、fir、relu、simpleconvolution。</p><div class="grid2"><div class="figure"><h3>floydwarshall</h3><svg class="chart" viewBox="0 0 430 204" role="img" aria-label="floydwarshall"><line x1="78.0" y1="8" x2="78.0" y2="174" class="grid"/><text x="78.0" y="190" class="tick" text-anchor="middle">0</text><line x1="127.3" y1="8" x2="127.3" y2="174" class="grid"/><text x="127.3" y="190" class="tick" text-anchor="middle">2</text><line x1="176.7" y1="8" x2="176.7" y2="174" class="grid"/><text x="176.7" y="190" class="tick" text-anchor="middle">4</text><line x1="226.0" y1="8" x2="226.0" y2="174" class="grid"/><text x="226.0" y="190" class="tick" text-anchor="middle">6</text><line x1="275.3" y1="8" x2="275.3" y2="174" class="grid"/><text x="275.3" y="190" class="tick" text-anchor="middle">8</text><line x1="324.7" y1="8" x2="324.7" y2="174" class="grid"/><text x="324.7" y="190" class="tick" text-anchor="middle">10</text><line x1="374.0" y1="8" x2="374.0" y2="174" class="grid"/><text x="374.0" y="190" class="tick" text-anchor="middle">12</text><line x1="102.7" y1="4" x2="102.7" y2="174" class="ref"/><text x="70" y="25" class="lab" text-anchor="end">O2a</text><g><title>floydwarshall O2a：1.9×</title><rect x="78" y="14" width="46.9" height="16" rx="3" class="bar"/></g><text x="130.9" y="26" class="val">1.9×</text><text x="70" y="51" class="lab" text-anchor="end">O2b</text><g><title>floydwarshall O2b：2.46×</title><rect x="78" y="40" width="60.7" height="16" rx="3" class="bar"/></g><text x="144.7" y="52" class="val">2.46×</text><text x="70" y="77" class="lab" text-anchor="end">O3</text><g><title>floydwarshall O3：0.98×</title><rect x="78" y="66" width="24.2" height="16" rx="3" class="bar"/></g><text x="108.2" y="78" class="val">0.98×</text><text x="70" y="103" class="lab" text-anchor="end">O1</text><g><title>floydwarshall O1：11.1×</title><rect x="78" y="92" width="273.8" height="16" rx="3" class="bar-em"/></g><text x="357.8" y="104" class="val">11.1×</text><text x="70" y="129" class="lab" text-anchor="end">m2</text><g><title>floydwarshall m2：2.51×</title><rect x="78" y="118" width="61.9" height="16" rx="3" class="bar-m"/></g><text x="145.9" y="130" class="val">2.51×</text><text x="70" y="155" class="lab" text-anchor="end">Complete</text><g><title>floydwarshall Complete：2.54×</title><rect x="78" y="144" width="62.7" height="16" rx="3" class="bar-m"/></g><text x="146.7" y="156" class="val">2.54×</text></svg></div><div class="figure"><h3>matrixmultiplication</h3><svg class="chart" viewBox="0 0 430 204" role="img" aria-label="matrixmultiplication"><line x1="78.0" y1="8" x2="78.0" y2="174" class="grid"/><text x="78.0" y="190" class="tick" text-anchor="middle">0</text><line x1="152.0" y1="8" x2="152.0" y2="174" class="grid"/><text x="152.0" y="190" class="tick" text-anchor="middle">1</text><line x1="226.0" y1="8" x2="226.0" y2="174" class="grid"/><text x="226.0" y="190" class="tick" text-anchor="middle">2</text><line x1="300.0" y1="8" x2="300.0" y2="174" class="grid"/><text x="300.0" y="190" class="tick" text-anchor="middle">3</text><line x1="374.0" y1="8" x2="374.0" y2="174" class="grid"/><text x="374.0" y="190" class="tick" text-anchor="middle">4</text><line x1="152.0" y1="4" x2="152.0" y2="174" class="ref"/><text x="70" y="25" class="lab" text-anchor="end">O2a</text><g><title>matrixmultiplication O2a：0.99×</title><rect x="78" y="14" width="73.3" height="16" rx="3" class="bar"/></g><text x="157.3" y="26" class="val">0.99×</text><text x="70" y="51" class="lab" text-anchor="end">O2b</text><g><title>matrixmultiplication O2b：1.72×</title><rect x="78" y="40" width="127.3" height="16" rx="3" class="bar"/></g><text x="211.3" y="52" class="val">1.72×</text><text x="70" y="77" class="lab" text-anchor="end">O3</text><g><title>matrixmultiplication O3：1.1×</title><rect x="78" y="66" width="81.4" height="16" rx="3" class="bar"/></g><text x="165.4" y="78" class="val">1.1×</text><text x="70" y="103" class="lab" text-anchor="end">O1</text><g><title>matrixmultiplication O1：3.61×</title><rect x="78" y="92" width="267.1" height="16" rx="3" class="bar-em"/></g><text x="351.1" y="104" class="val">3.61×</text><text x="70" y="129" class="lab" text-anchor="end">m2</text><g><title>matrixmultiplication m2：2.06×</title><rect x="78" y="118" width="152.4" height="16" rx="3" class="bar-m"/></g><text x="236.4" y="130" class="val">2.06×</text><text x="70" y="155" class="lab" text-anchor="end">Complete</text><g><title>matrixmultiplication Complete：3.84×</title><rect x="78" y="144" width="284.2" height="16" rx="3" class="bar-m"/></g><text x="368.2" y="156" class="val">3.84×</text></svg></div><div class="figure"><h3>kmeans</h3><svg class="chart" viewBox="0 0 430 178" role="img" aria-label="kmeans"><line x1="78.0" y1="8" x2="78.0" y2="148" class="grid"/><text x="78.0" y="164" class="tick" text-anchor="middle">0</text><line x1="152.0" y1="8" x2="152.0" y2="148" class="grid"/><text x="152.0" y="164" class="tick" text-anchor="middle">1</text><line x1="226.0" y1="8" x2="226.0" y2="148" class="grid"/><text x="226.0" y="164" class="tick" text-anchor="middle">2</text><line x1="300.0" y1="8" x2="300.0" y2="148" class="grid"/><text x="300.0" y="164" class="tick" text-anchor="middle">3</text><line x1="374.0" y1="8" x2="374.0" y2="148" class="grid"/><text x="374.0" y="164" class="tick" text-anchor="middle">4</text><line x1="152.0" y1="4" x2="152.0" y2="148" class="ref"/><text x="70" y="25" class="lab" text-anchor="end">O2a</text><g><title>kmeans O2a：1.08×</title><rect x="78" y="14" width="79.9" height="16" rx="3" class="bar"/></g><text x="163.9" y="26" class="val">1.08×</text><text x="70" y="51" class="lab" text-anchor="end">O3</text><g><title>kmeans O3：2.24×</title><rect x="78" y="40" width="165.8" height="16" rx="3" class="bar"/></g><text x="249.8" y="52" class="val">2.24×</text><text x="70" y="77" class="lab" text-anchor="end">O1</text><g><title>kmeans O1：3.17×</title><rect x="78" y="66" width="234.6" height="16" rx="3" class="bar-em"/></g><text x="318.6" y="78" class="val">3.17×</text><text x="70" y="103" class="lab" text-anchor="end">m2</text><g><title>kmeans m2：2.81×</title><rect x="78" y="92" width="207.9" height="16" rx="3" class="bar-m"/></g><text x="291.9" y="104" class="val">2.81×</text><text x="70" y="129" class="lab" text-anchor="end">Complete</text><g><title>kmeans Complete：2.84×</title><rect x="78" y="118" width="210.2" height="16" rx="3" class="bar-m"/></g><text x="294.2" y="130" class="val">2.84×</text></svg></div><div class="figure"><h3>im2col</h3><svg class="chart" viewBox="0 0 430 204" role="img" aria-label="im2col"><line x1="78.0" y1="8" x2="78.0" y2="174" class="grid"/><text x="78.0" y="190" class="tick" text-anchor="middle">0</text><line x1="137.2" y1="8" x2="137.2" y2="174" class="grid"/><text x="137.2" y="190" class="tick" text-anchor="middle">0.5</text><line x1="196.4" y1="8" x2="196.4" y2="174" class="grid"/><text x="196.4" y="190" class="tick" text-anchor="middle">1</text><line x1="255.6" y1="8" x2="255.6" y2="174" class="grid"/><text x="255.6" y="190" class="tick" text-anchor="middle">1.5</text><line x1="314.8" y1="8" x2="314.8" y2="174" class="grid"/><text x="314.8" y="190" class="tick" text-anchor="middle">2</text><line x1="374.0" y1="8" x2="374.0" y2="174" class="grid"/><text x="374.0" y="190" class="tick" text-anchor="middle">2.5</text><line x1="196.4" y1="4" x2="196.4" y2="174" class="ref"/><text x="70" y="25" class="lab" text-anchor="end">O2a</text><g><title>im2col O2a：0.94×</title><rect x="78" y="14" width="111.3" height="16" rx="3" class="bar"/></g><text x="195.3" y="26" class="val">0.94×</text><text x="70" y="51" class="lab" text-anchor="end">O2b</text><g><title>im2col O2b：1.84×</title><rect x="78" y="40" width="217.9" height="16" rx="3" class="bar"/></g><text x="301.9" y="52" class="val">1.84×</text><text x="70" y="77" class="lab" text-anchor="end">O3</text><g><title>im2col O3：1.63×</title><rect x="78" y="66" width="193.0" height="16" rx="3" class="bar"/></g><text x="277.0" y="78" class="val">1.63×</text><text x="70" y="103" class="lab" text-anchor="end">O1</text><g><title>im2col O1：1.92×</title><rect x="78" y="92" width="227.3" height="16" rx="3" class="bar-em"/></g><text x="311.3" y="104" class="val">1.92×</text><text x="70" y="129" class="lab" text-anchor="end">m2</text><g><title>im2col m2：1.09×</title><rect x="78" y="118" width="129.1" height="16" rx="3" class="bar-m"/></g><text x="213.1" y="130" class="val">1.09×</text><text x="70" y="155" class="lab" text-anchor="end">Complete</text><g><title>im2col Complete：1.19×</title><rect x="78" y="144" width="140.9" height="16" rx="3" class="bar-m"/></g><text x="224.9" y="156" class="val">1.19×</text></svg></div></div><div class="keyrow"><span><i class="k bar-k"></i>oracle（O2a L1V 窗口、O2b RDMA 窗口、O3 距离）</span><span><i class="k em-k"></i>O1 全部本地（上限）</span><span><i class="k m-k"></i>现有机制 m2、Complete</span></div><div class="figure"><h3>现有机制拿到了上限的多少</h3><svg class="chart" viewBox="0 0 900 264" role="img" aria-label="现有机制拿到了上限的多少"><line x1="190.0" y1="8" x2="190.0" y2="220" class="grid"/><text x="190.0" y="236" class="tick" text-anchor="middle">0%</text><line x1="323.3" y1="8" x2="323.3" y2="220" class="grid"/><text x="323.3" y="236" class="tick" text-anchor="middle">25%</text><line x1="456.7" y1="8" x2="456.7" y2="220" class="grid"/><text x="456.7" y="236" class="tick" text-anchor="middle">50%</text><line x1="590.0" y1="8" x2="590.0" y2="220" class="grid"/><text x="590.0" y="236" class="tick" text-anchor="middle">75%</text><line x1="723.3" y1="8" x2="723.3" y2="220" class="grid"/><text x="723.3" y="236" class="tick" text-anchor="middle">100%</text><line x1="723.3" y1="6" x2="723.3" y2="220" class="ref"/><text x="510" y="258" class="lab" text-anchor="middle">(加速比 − 1) ÷ (O1 − 1)，%</text><text x="182" y="26" class="lab" text-anchor="end">floydwarshall m2</text><g><title>floydwarshall m2：拿到 O1 上限的 15%</title><rect x="190" y="15" width="80.0" height="16" rx="3" class="bar"/></g><text x="276.0" y="27" class="val">15%</text><text x="182" y="52" class="lab" text-anchor="end">floydwarshall Complete</text><g><title>floydwarshall Complete：拿到 O1 上限的 15%</title><rect x="190" y="41" width="80.0" height="16" rx="3" class="bar-em"/></g><text x="276.0" y="53" class="val">15%</text><text x="182" y="78" class="lab" text-anchor="end">MM m2</text><g><title>MM m2：拿到 O1 上限的 41%</title><rect x="190" y="67" width="218.7" height="16" rx="3" class="bar"/></g><text x="414.7" y="79" class="val">41%</text><text x="182" y="104" class="lab" text-anchor="end">MM Complete</text><g><title>MM Complete：拿到 O1 上限的 109%</title><rect x="190" y="93" width="581.3" height="16" rx="3" class="bar-em"/></g><text x="777.3" y="105" class="val">109%</text><text x="182" y="130" class="lab" text-anchor="end">kmeans m2</text><g><title>kmeans m2：拿到 O1 上限的 83%</title><rect x="190" y="119" width="442.7" height="16" rx="3" class="bar"/></g><text x="638.7" y="131" class="val">83%</text><text x="182" y="156" class="lab" text-anchor="end">kmeans Complete</text><g><title>kmeans Complete：拿到 O1 上限的 85%</title><rect x="190" y="145" width="453.3" height="16" rx="3" class="bar-em"/></g><text x="649.3" y="157" class="val">85%</text><text x="182" y="182" class="lab" text-anchor="end">im2col m2</text><g><title>im2col m2：拿到 O1 上限的 10%</title><rect x="190" y="171" width="53.3" height="16" rx="3" class="bar"/></g><text x="249.3" y="183" class="val">10%</text><text x="182" y="208" class="lab" text-anchor="end">im2col Complete</text><g><title>im2col Complete：拿到 O1 上限的 21%</title><rect x="190" y="197" width="112.0" height="16" rx="3" class="bar-em"/></g><text x="308.0" y="209" class="val">21%</text></svg><p class="figcap">MM 的 Complete 超过 100%：Remote Reuse 把远程数据放进本地 L2，比 O1 的“读本地 DRAM”还快。floydwarshall 和 im2col 剩余的空间最大。</p></div></article><article id="o6"><h2>上限来自窗口还是距离</h2><div class="tw"><table><thead><tr><th>workload</th><th>主要来源</th><th>依据</th></tr></thead><tbody><tr><td>floydwarshall</td><td>端点窗口</td><td>O2b 2.46×，O3 只有 0.98×</td></tr><tr><td>matrixmultiplication</td><td>端点窗口</td><td>O2b 1.72×，O3 1.10×</td></tr><tr><td>kmeans</td><td>距离</td><td>O3 2.24×（O2b 还在跑）</td></tr><tr><td>im2col</td><td>两者都有</td><td>O2b 1.84×，O3 1.63×</td></tr><tr><td>（全部）</td><td>L1V 窗口不是瓶颈</td><td>O2a 的 GMEAN 1.02×，pagerank 甚至 0.83×</td></tr></tbody></table></div></article><article id="o7"><h2>方法问题：截断运行的有效性</h2><div class="tw"><table><thead><tr><th>口径</th><th>O1</th><th>O2a</th><th>O2b</th><th>O2</th><th>O3</th><th>m2</th><th>Complete</th></tr></thead><tbody><tr><td>严格（只算指令数差 ≤ 1% 的格子）</td><td class="num">0.997</td><td class="num">0.967</td><td class="num">0.997</td><td class="num">1.085</td><td class="num">1.009</td><td class="num">1.218</td><td class="num">1.276</td></tr><tr><td>不过滤</td><td class="num"><b>1.478</b></td><td class="num">1.019</td><td class="num">1.168</td><td class="num">1.159</td><td class="num">1.112</td><td class="num">1.218</td><td class="num">1.276</td></tr></tbody></table></div><p>截断运行在全局完成 32,768 个 WG 的那一刻退出。O1 等组跑得快慢不同，退出时各个 GPM 正在执行的 WG 进度不同，完成的指令数也就不同；远程多的 workload 指令数差得多（im2col −39%），于是被严格规则判为无效，严格口径的 GMEAN 几乎都是 1.0。这不一定说明 oracle 本身有问题，而是截断口径的问题。</p><ul><li>改成按“每条指令的时间”或“每个 WG 的时间”比较；</li><li>远程多的 workload 改为完整跑完（kmeans 完整跑要十几个小时）；</li><li>论文里两种口径都给出。</li></ul><p class="note"><b>待决定</b>：截断运行的有效性规则。T16 已经说明截断运行看不到 kernel 尾部，T17 的新 workload 都是完整运行，以后的 oracle 也应该在完整运行上做。</p></article><article id="o8"><h2>两个反常</h2><div class="tw"><table><thead><tr><th>workload</th><th>现象</th><th>可能的原因（没查）</th></tr></thead><tbody><tr><td>pagerank</td><td>远程访问 83%，全部变本地反而慢 3%；O2a 慢 17%</td><td>本地 HBM（31% 峰值）成为新瓶颈；或 <code>-force-local-data-access</code> 没有覆盖全部访存</td></tr><tr><td>matrixtranspose</td><td>远程访问 98%，全部变本地完全没变化（1.00×）</td><td>同上（例如写操作没有被改成本地）；或截断口径的问题</td></tr><tr><td>floydwarshall</td><td>O1 指令数少 20%</td><td>O1 改变了截断时的进度；11.1× 可能高估</td></tr></tbody></table></div><p>查清之前，pagerank 和 matrixtranspose 的 O1 不使用。</p></article>
+</main></div></body></html>
