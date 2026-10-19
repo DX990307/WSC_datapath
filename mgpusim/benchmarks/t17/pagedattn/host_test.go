@@ -284,3 +284,73 @@ func TestAzureTrace(t *testing.T) {
 		t.Fatalf("mean decode-time length %f, want about 1260", m)
 	}
 }
+
+// P12 -pa-steps: Steps <= 1 is the T17 input; with more steps the first step
+// keeps the T17 lengths, block tables and work list.
+func TestGenerateSteps(t *testing.T) {
+	pr := DefaultParams()
+	pr.Batch = 24
+	base := Generate(pr, false)
+	if base.NumSteps() != 1 || base.StepLens != nil {
+		t.Fatalf("default has %d steps", base.NumSteps())
+	}
+	pr1 := pr
+	pr1.Steps = 1
+	one := Generate(pr1, false)
+	if !equalInts32(one.BlockTable, base.BlockTable) || !equalInts32(one.Work, base.Work) ||
+		one.MaxParts != base.MaxParts || one.MaxBlocks != base.MaxBlocks {
+		t.Fatal("Steps=1 differs from the default input")
+	}
+	for i := range one.Q {
+		if one.Q[i] != base.Q[i] {
+			t.Fatal("Steps=1 changes Q")
+		}
+	}
+
+	pr3 := pr
+	pr3.Steps = 3
+	p := Generate(pr3, false)
+	if p.NumSteps() != 3 {
+		t.Fatalf("steps %d", p.NumSteps())
+	}
+	if err := p.CheckBounds(); err != nil {
+		t.Fatal(err)
+	}
+	if !equalInts32(p.Work, base.Work) {
+		t.Fatal("step 0 work differs from the default")
+	}
+	for s := range p.Lens {
+		for st := 0; st < 3; st++ {
+			lens, _ := p.StepInput(st)
+			if lens[s] != base.Lens[s]+st {
+				t.Fatalf("seq %d step %d len %d", s, st, lens[s])
+			}
+		}
+		n := len(base.Tables[s])
+		for j := 0; j < n; j++ {
+			if p.Tables[s][j] != base.Tables[s][j] {
+				t.Fatalf("seq %d block %d changed", s, j)
+			}
+		}
+		if len(p.Tables[s]) != blocksFor(base.Lens[s]+2) {
+			t.Fatalf("seq %d has %d blocks", s, len(p.Tables[s]))
+		}
+	}
+	for i := range p.Q {
+		if p.Q[i] != base.Q[i] {
+			t.Fatal("Steps=3 changes Q")
+		}
+	}
+}
+
+func equalInts32(a, b []int32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

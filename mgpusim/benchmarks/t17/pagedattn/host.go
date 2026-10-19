@@ -313,6 +313,14 @@ type Problem struct {
 	BlockTable                 []int32 // [Batch][MaxBlocks], -1 = unused
 	Q                          []float32
 	K, V                       []float32 // [NumBlocks][KVHeads][BlockSize][HeadDim]
+
+	// Decode steps (Params.Steps > 1): step s runs with StepLens[s] =
+	// Lens + s and StepWork[s]; step 0 is Lens and Work. A sequence takes a
+	// new block from the pool when it crosses a block boundary, so Tables
+	// and BlockTable hold the blocks of the last step (earlier steps read a
+	// prefix). Nil when Steps <= 1.
+	StepLens [][]int
+	StepWork [][]int32
 }
 
 // QHeads returns the number of query heads.
@@ -336,6 +344,9 @@ type Params struct {
 	LenSource string
 	Churn     ChurnConfig
 	Seed      int64
+	// Steps is the number of consecutive decode steps (P12); 0 or 1 = one
+	// step, the T17 input unchanged.
+	Steps int
 }
 
 // Source returns the length source selected by LenSource.
@@ -378,6 +389,9 @@ func Generate(pr Params, withKV bool) *Problem {
 	}
 	pool := NewBlockPool(p.NumBlocks)
 	p.Tables = BuildBlockTables(rng, pool, p.Lens, p.Prompts, src, pr.Churn)
+	if pr.Steps > 1 {
+		p.growSteps(pool, pr.Steps)
+	}
 	p.BlockTable = make([]int32, pr.Batch*p.MaxBlocks)
 	for i := range p.BlockTable {
 		p.BlockTable[i] = -1
@@ -388,6 +402,16 @@ func Generate(pr Params, withKV bool) *Problem {
 		}
 	}
 	p.Work, p.MaxParts = WorkList(p.Lens, pr.PartTokens)
+	if pr.Steps > 1 {
+		p.StepWork = make([][]int32, pr.Steps)
+		for st := range p.StepWork {
+			w, mp := WorkList(p.StepLens[st], pr.PartTokens)
+			p.StepWork[st] = w
+			if mp > p.MaxParts {
+				p.MaxParts = mp
+			}
+		}
+	}
 
 	p.Q = make([]float32, pr.Batch*p.QHeads()*HeadDim)
 	for i := range p.Q {
@@ -406,6 +430,44 @@ func Generate(pr Params, withKV bool) *Problem {
 	return p
 }
 
+// growSteps continues the decode for steps-1 more tokens per sequence (all
+// sequences step together, in sequence order), taking a block from the pool
+// at every block boundary, and sets StepLens and MaxBlocks. It uses no
+// random numbers, so the first step is the same input as Steps = 1 (except
+// for the wider block table when a sequence grows past MaxBlocks).
+func (p *Problem) growSteps(pool *BlockPool, steps int) {
+	p.StepLens = make([][]int, steps)
+	for st := 0; st < steps; st++ {
+		p.StepLens[st] = make([]int, len(p.Lens))
+		for i, l := range p.Lens {
+			cur := l + st
+			p.StepLens[st][i] = cur
+			if blocksFor(cur) > len(p.Tables[i]) {
+				p.Tables[i] = append(p.Tables[i], pool.Alloc())
+			}
+			if blocksFor(cur) > p.MaxBlocks {
+				p.MaxBlocks = blocksFor(cur)
+			}
+		}
+	}
+}
+
+// NumSteps returns the number of decode steps.
+func (p *Problem) NumSteps() int {
+	if len(p.StepLens) == 0 {
+		return 1
+	}
+	return len(p.StepLens)
+}
+
+// StepInput returns the lengths and work list of step st.
+func (p *Problem) StepInput(st int) ([]int, []int32) {
+	if len(p.StepLens) == 0 {
+		return p.Lens, p.Work
+	}
+	return p.StepLens[st], p.StepWork[st]
+}
+
 // FillBlock writes the deterministic K and V values of physical block b.
 func FillBlock(seed int64, b int, k, v []float32) {
 	rng := rand.New(rand.NewSource(seed*1000003 + int64(b)))
@@ -421,17 +483,30 @@ func FillBlock(seed int64, b int, k, v []float32) {
 // the block-table entries of every touched logical block, and the largest
 // element offsets into each buffer.
 func (p *Problem) CheckBounds() error {
+	for st := 0; st < p.NumSteps(); st++ {
+		lens, work := p.StepInput(st)
+		if err := p.checkWork(lens, work); err != nil {
+			if p.NumSteps() > 1 {
+				return fmt.Errorf("step %d: %w", st, err)
+			}
+			return err
+		}
+	}
+	return p.checkTable()
+}
+
+func (p *Problem) checkWork(lens []int, work []int32) error {
 	nq := p.QHeads()
-	for i := 0; i < p.NumWork(); i++ {
-		s, part := int(p.Work[2*i]), int(p.Work[2*i+1])
+	for i := 0; i < len(work)/2; i++ {
+		s, part := int(work[2*i]), int(work[2*i+1])
 		if s < 0 || s >= p.Batch {
 			return fmt.Errorf("work %d: sequence %d out of range", i, s)
 		}
-		if part < 0 || part >= p.MaxParts || part*p.PartTokens >= p.Lens[s] {
+		if part < 0 || part >= p.MaxParts || part*p.PartTokens >= lens[s] {
 			return fmt.Errorf("work %d: partition %d out of range", i, part)
 		}
 		blk0 := part * p.PartTokens / BlockSize
-		ntok := p.Lens[s] - part*p.PartTokens
+		ntok := lens[s] - part*p.PartTokens
 		if ntok > p.PartTokens {
 			ntok = p.PartTokens
 		}
@@ -454,6 +529,10 @@ func (p *Problem) CheckBounds() error {
 			return fmt.Errorf("work %d: partial-output index %d out of range", i, o)
 		}
 	}
+	return nil
+}
+
+func (p *Problem) checkTable() error {
 	seen := make(map[int32]bool)
 	for _, b := range p.BlockTable {
 		if b < 0 {

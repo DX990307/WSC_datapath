@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 
 	"github.com/sarchlab/mgpusim/v3/driver"
 	"github.com/sarchlab/mgpusim/v3/insts"
@@ -35,6 +36,11 @@ import (
 
 //go:embed kernels.hsaco
 var hsacoBytes []byte
+
+// PrintGroups (P12, default off) prints the GEMM row tiles, so that the
+// moe_up / moe_down work-group w (tile w / n-tiles, column block w % n-tiles)
+// can be mapped to its expert: "MOE,tiles,<expert>:<first slot>:<rows>;...".
+var PrintGroups bool
 
 // HiddenArgs are the hidden kernel arguments (exported: the driver
 // serialises the argument structs by reflection).
@@ -187,6 +193,14 @@ func (b *Benchmark) Run() {
 	b.driver.MemCopyH2D(b.context, b.dInv, r.InvSlot)
 	b.driver.MemCopyH2D(b.context, b.dTiles, r.Tiles)
 	b.report()
+	if PrintGroups {
+		tiles := make([]string, r.NumTiles())
+		for i := range tiles {
+			tiles[i] = fmt.Sprintf("%d:%d:%d", r.Tiles[3*i], r.Tiles[3*i+1], r.Tiles[3*i+2])
+		}
+		fmt.Printf("MOE,tiles,up_ntiles=%d,down_ntiles=%d,tiles=%s\n",
+			F/TileN, H/TileN, strings.Join(tiles, ";"))
+	}
 	fmt.Printf("MOE,gate_check,host_vs_gpu_topk_diffs=%d,of=%d\n", b.selDiff, S)
 
 	da := DispatchArgs{X: b.dX, PermToken: b.dPerm, Xs: b.dXs, Hidden: int32(H)}

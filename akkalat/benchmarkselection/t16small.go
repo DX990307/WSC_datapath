@@ -28,6 +28,11 @@ import (
 	"github.com/sarchlab/mgpusim/v3/driver"
 )
 
+// P12: more pagerank iterations for the history-stability measurement
+// (ping-pong between the two rank buffers); 1 = the T16 input.
+var t16PagerankItersFlag = flag.Int("t16-pagerank-iters", 1,
+	"pagerank-t16small: MaxIterations (P12); 1 = the T16 input")
+
 var t16WGPerCUFlag = flag.Float64("t16-wg-per-cu", 0,
 	"T16 *-t16small inputs: target work-groups per CU of each kernel "+
 		"(0 = the per-workload proposal in t16SmallDefaultWGPerCU)")
@@ -75,9 +80,9 @@ func t16SmallBenchmark(name string, d *driver.Driver) benchmarks.Benchmark {
 		pr := pagerank.NewBenchmark(d)
 		pr.NumNodes = uint32(wgs)
 		pr.NumConnections = uint32(math.Round(t16PagerankDegree * float64(wgs)))
-		pr.MaxIterations = 1
-		params = fmt.Sprintf("NumNodes=%d NumConnections=%d MaxIterations=1",
-			pr.NumNodes, pr.NumConnections)
+		pr.MaxIterations = uint32(*t16PagerankItersFlag)
+		params = fmt.Sprintf("NumNodes=%d NumConnections=%d MaxIterations=%d",
+			pr.NumNodes, pr.NumConnections, pr.MaxIterations)
 		b = pr
 	case "im2col-t16small":
 		// WGs = ceil(F*F/8) * ceil(27/8) with F = H - 2.

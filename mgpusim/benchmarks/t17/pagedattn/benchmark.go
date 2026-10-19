@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 
 	"github.com/sarchlab/mgpusim/v3/driver"
 	"github.com/sarchlab/mgpusim/v3/insts"
@@ -69,6 +70,11 @@ const (
 	reduceWGSize  = 64
 )
 
+// PrintGroups (P12, default off) prints each decode step's work list, so
+// that pa_partial work-group w = item*KVHeads + kvHead can be mapped to its
+// (sequence, partition): "PAGEDATTN,work,step=<s>,items=<seq>:<part>;...".
+var PrintGroups bool
+
 // Benchmark is the PagedAttention decode benchmark.
 type Benchmark struct {
 	driver  *driver.Driver
@@ -87,6 +93,15 @@ type Benchmark struct {
 
 	dQ, dK, dV, dBT, dLens, dWork driver.Ptr
 	dTmp, dML, dES, dOut          driver.Ptr
+
+	// Decode steps 1.. (Params.Steps > 1): their own lengths, work lists,
+	// partial and final outputs (so no kernel reads a line that an earlier
+	// step's kernel left in an L1, which the model does not invalidate).
+	steps []stepBuffers
+}
+
+type stepBuffers struct {
+	dLens, dWork, dTmp, dML, dES, dOut driver.Ptr
 }
 
 // DefaultParams returns a small default size (batch 2). The T17 target
@@ -175,6 +190,26 @@ func (b *Benchmark) initMem() {
 	}
 	b.driver.MemCopyH2D(b.context, b.dLens, lens)
 	b.driver.MemCopyH2D(b.context, b.dWork, p.Work)
+	b.steps = nil
+	for st := 1; st < p.NumSteps(); st++ {
+		lens, work := p.StepInput(st)
+		sfx := fmt.Sprintf("_s%d", st)
+		sb := stepBuffers{
+			dLens: b.alloc(uint64(p.Batch)*4, "pa_seq_lens"+sfx),
+			dWork: b.alloc(uint64(len(work))*4, "pa_work"+sfx),
+			dTmp:  b.alloc(parts*HeadDim*4, "pa_tmp_out"+sfx),
+			dML:   b.alloc(parts*4, "pa_max_logits"+sfx),
+			dES:   b.alloc(parts*4, "pa_exp_sums"+sfx),
+			dOut:  b.alloc(uint64(p.Batch*nq*HeadDim)*4, "pa_out"+sfx),
+		}
+		l32 := make([]int32, p.Batch)
+		for i, l := range lens {
+			l32[i] = int32(l)
+		}
+		b.driver.MemCopyH2D(b.context, sb.dLens, l32)
+		b.driver.MemCopyH2D(b.context, sb.dWork, work)
+		b.steps = append(b.steps, sb)
+	}
 
 	// Copy only the blocks in use (the rest of the pool is never read).
 	// Without verification the host never holds the whole pool.
@@ -198,24 +233,48 @@ func (b *Benchmark) initMem() {
 func (b *Benchmark) exec() {
 	p := b.prob
 	q := b.driver.CreateCommandQueue(b.context)
+	for st := 0; st < p.NumSteps(); st++ {
+		sb := stepBuffers{dLens: b.dLens, dWork: b.dWork, dTmp: b.dTmp,
+			dML: b.dML, dES: b.dES, dOut: b.dOut}
+		if st > 0 {
+			sb = b.steps[st-1]
+		}
+		_, work := p.StepInput(st)
+		if PrintGroups {
+			items := make([]string, len(work)/2)
+			for i := range items {
+				items[i] = fmt.Sprintf("%d:%d", work[2*i], work[2*i+1])
+			}
+			fmt.Printf("PAGEDATTN,work,step=%d,kv_heads=%d,items=%s\n",
+				st, p.KVHeads, strings.Join(items, ";"))
+		}
+		b.enqueueStep(q, sb, len(work)/2)
+	}
+	b.driver.DrainCommandQueue(q)
+}
+
+// enqueueStep launches pa_partial (items x KV heads work-groups) and
+// pa_reduce for one decode step.
+func (b *Benchmark) enqueueStep(q *driver.CommandQueue, sb stepBuffers, items int) {
+	p := b.prob
 	pa := PartialArgs{
 		Q: b.dQ, KCache: b.dK, VCache: b.dV, BlockTables: b.dBT,
-		SeqLens: b.dLens, Work: b.dWork,
-		TmpOut: b.dTmp, MaxLogits: b.dML, ExpSums: b.dES,
+		SeqLens: sb.dLens, Work: sb.dWork,
+		TmpOut: sb.dTmp, MaxLogits: sb.dML, ExpSums: sb.dES,
 		ScaleLog2:  float32(math.Log2E / math.Sqrt(HeadDim)),
 		NumKVHeads: int32(p.KVHeads),
 		MaxBlocks:  int32(p.MaxBlocks),
 		PartTokens: int32(p.PartTokens),
 		MaxParts:   int32(p.MaxParts),
 	}
-	nWG := p.NumWork() * p.KVHeads
+	nWG := items * p.KVHeads
 	b.driver.EnqueueLaunchKernel(q, b.partialCo,
 		[3]uint32{uint32(nWG * partialWGSize), 1, 1},
 		[3]uint16{partialWGSize, 1, 1}, &pa)
 
 	ra := ReduceArgs{
-		TmpOut: b.dTmp, MaxLogits: b.dML, ExpSums: b.dES, SeqLens: b.dLens,
-		Out:        b.dOut,
+		TmpOut: sb.dTmp, MaxLogits: sb.dML, ExpSums: sb.dES, SeqLens: sb.dLens,
+		Out:        sb.dOut,
 		NumQHeads:  int32(p.QHeads()),
 		PartTokens: int32(p.PartTokens),
 		MaxParts:   int32(p.MaxParts),
@@ -224,7 +283,6 @@ func (b *Benchmark) exec() {
 	b.driver.EnqueueLaunchKernel(q, b.reduceCo,
 		[3]uint32{uint32(nRed * reduceWGSize), 1, 1},
 		[3]uint16{reduceWGSize, 1, 1}, &ra)
-	b.driver.DrainCommandQueue(q)
 }
 
 // Verify compares the output with the float64 host reference. The tolerance
@@ -233,6 +291,9 @@ func (b *Benchmark) exec() {
 // thousand tokens stays well below it).
 func (b *Benchmark) Verify() {
 	p := b.prob
+	if p.NumSteps() > 1 {
+		log.Fatalf("pagedattn: -verify supports one decode step only (got %d)", p.NumSteps())
+	}
 	got := make([]float32, p.Batch*p.QHeads()*HeadDim)
 	b.driver.MemCopyD2H(b.context, got, b.dOut)
 	ref := p.Reference()
@@ -289,6 +350,15 @@ func (b *Benchmark) report() {
 		"out_bytes=%d,total_bytes=%d,total_mb=%.1f,kv_pool_alloc_mb=%.1f\n",
 		fp.KV, fp.Q, fp.Index, fp.Partial, fp.Out, fp.Total(), float64(fp.Total())/1e6,
 		float64(2*p.NumBlocks*p.BlockFloats()*4)/1e6)
+	if p.NumSteps() > 1 {
+		last, lw := p.StepInput(p.NumSteps() - 1)
+		lastTok, lastWG := 0, len(lw)/2*p.KVHeads
+		for _, l := range last {
+			lastTok += l
+		}
+		fmt.Printf("PAGEDATTN,steps,steps=%d,last_tokens=%d,last_pa_partial_wgs=%d,"+
+			"max_blocks=%d,max_parts=%d\n", p.NumSteps(), lastTok, lastWG, p.MaxBlocks, p.MaxParts)
+	}
 	if b.NumGPMs > 0 && b.CUsPerGPM > 0 {
 		fmt.Printf("PAGEDATTN,estimate,kv_remote_fraction=%.3f,active_gpms_partial=%d\n",
 			b.expectedKVRemote(), activeGPMs(nWG, b.NumGPMs, b.CUsPerGPM))

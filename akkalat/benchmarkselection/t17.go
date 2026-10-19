@@ -27,6 +27,10 @@ var (
 	paPoolFactorFlag  = flag.Float64("pa-pool-factor", paDefaults.PoolFactor, "pagedattn: KV pool blocks / blocks the batch needs")
 	paChurnRoundsFlag = flag.Int("pa-churn-rounds", paDefaults.Churn.Rounds, "pagedattn: allocate/free rounds before the batch is allocated")
 	paSeedFlag        = flag.Int64("pa-seed", paDefaults.Seed, "pagedattn: input generator seed")
+	paStepsFlag       = flag.Int("pa-steps", 1,
+		"pagedattn: consecutive decode steps (P12; every sequence grows by one token per step); 1 = the T17 input")
+	t17PrintGroupsFlag = flag.Bool("t17-print-groups", false,
+		"pagedattn, moe: print the work list / GEMM tiles that map work-groups to sequences / experts (P12)")
 )
 
 func newPagedAttn(d *driver.Driver) *pagedattn.Benchmark {
@@ -43,6 +47,8 @@ func newPagedAttn(d *driver.Driver) *pagedattn.Benchmark {
 	p.PoolFactor = *paPoolFactorFlag
 	p.Churn.Rounds = *paChurnRoundsFlag
 	p.Seed = *paSeedFlag
+	p.Steps = *paStepsFlag
+	pagedattn.PrintGroups = *t17PrintGroupsFlag
 	b.CUsPerGPM = runner.CUsPerGPM()
 	return b
 }
@@ -70,6 +76,7 @@ func newMoE(d *driver.Driver) *moe.Benchmark {
 		Skew:   *moeSkewFlag,
 		Seed:   *moeSeedFlag,
 	}
+	moe.PrintGroups = *t17PrintGroupsFlag
 	b.CUsPerGPM = runner.CUsPerGPM()
 	return b
 }
