@@ -24,7 +24,8 @@ python3 akkalat/isca27_name.py check "$EXP_ID" >&2 || exit 1
 
 ROOT="$(pwd)"
 OUT="$ROOT/results/$EXP_ID"
-BIN="$HOME/isca27bin/baseline_$COMMIT"
+# ISCA27_BINDIR overrides where the binaries live (default ~/isca27bin).
+BIN="${ISCA27_BINDIR:-$HOME/isca27bin}/baseline_$COMMIT"
 
 CONFIGS=()
 IFS=',' read -ra NAMES <<<"$CONFIG_NAMES"

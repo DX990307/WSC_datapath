@@ -68,6 +68,7 @@ type Runner struct {
 	sharingTraceWriter  *pageSharingTraceWriter
 	observationDRAM     *windowedPhysicalDRAMObserver
 	gpmTracer           *gpmTracer
+	p12                 *p12Tracer
 
 	Timing                     bool
 	Verify                     bool
@@ -639,6 +640,7 @@ func (r *Runner) flushMetrics() {
 	r.reportOnce.Do(func() {
 		r.reportStats()
 		r.writeGPMTrace()
+		r.writeP12Traces()
 		r.closeSharingTrace()
 	})
 }

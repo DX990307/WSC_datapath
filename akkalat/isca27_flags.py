@@ -34,6 +34,11 @@ KNOWN_REASONS = {
     "-max-wg=": "benchmark 截断参数（不算配置修改）",
     "-report-gpm-trace": "统计开关（T16）：每个 kernel × GPM 的 WG 数、完成时间、本地/远程访问",
     "-gpm-trace-file=": "统计开关的参数：T16 per-GPM CSV 的文件名",
+    "-report-wg-footprint": "统计开关（P12）：每个 WG 读过的 4 KB 页集合",
+    "-wg-footprint-file=": "统计开关的参数：P12 WG 足迹文件名",
+    "-wg-footprint-max-pages=": "统计开关的参数：P12 每个 WG 最多记录的页数",
+    "-report-m1-sharing": "统计开关（P12）：远程 line 跨 GPM 共享和在途重复请求",
+    "-m1-sharing-file=": "统计开关的参数：P12 M1 统计文件名前缀",
 }
 
 
