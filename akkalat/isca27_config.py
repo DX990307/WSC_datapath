@@ -52,6 +52,13 @@ STAT_FLAGS = {
 }
 
 
+# Oracle switches (T15 O1; T17 O1 in P12): intentional deviations for analysis
+# runs, not benchmark parameters.
+ORACLE_FLAGS = {
+    "-force-local-data-access": "oracle（有意偏离 mi200.json 的分析实验）：L1V miss 一律走本地 L2/DRAM",
+}
+
+
 def preset_keys(preset):
     """Flag names the preset sets (gpm-preset, num-memory-banks, ...)."""
     return {f.lstrip("-").split("=", 1)[0] for f in GPM_PRESET_FLAGS.get(preset, [])}
@@ -123,7 +130,8 @@ def deviation(config_list, bench, base=None):
         if name in used or name in paper:
             reason = "命令行覆盖配置文件"
         else:
-            reason = STAT_FLAGS.get(f"-{name}", "benchmark 参数（不算配置修改）")
+            reason = STAT_FLAGS.get(f"-{name}") or ORACLE_FLAGS.get(
+                f"-{name}", "benchmark 参数（不算配置修改）")
         out.append({"flag": flag, "change": "added", "reason": reason})
         i += 1
     return out
