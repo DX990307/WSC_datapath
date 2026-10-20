@@ -31,8 +31,9 @@ var (
 	ivfSeedFlag   = flag.Int64("ivf-seed", ivfDefaults.Seed, "ivfflat: input generator seed")
 
 	gupsDefaults = gups.DefaultParams()
-	gupsLogFlag  = flag.Int("gups-log-table", gupsDefaults.LogTable, "gups: log2 of the 64-bit-word table size (updates = 4x)")
+	gupsLogFlag  = flag.Int("gups-log-table", gupsDefaults.LogTable, "gups: log2 of the 64-bit-word table size")
 	gupsWGsFlag  = flag.Int("gups-wgs", gupsDefaults.WGs, "gups: work-groups of 256 threads")
+	gupsMultFlag = flag.Int("gups-update-mult", gupsDefaults.UpdateMult, "gups: updates per table word (HPCC: 4)")
 
 	arPerCUFlag = flag.Int("ar-per-cu", allreduce.DefaultParams().PerCU,
 		"allreduce: reduce-scatter work-groups per CU (copy = 48*CUs*256*this floats)")
@@ -54,7 +55,7 @@ func newIVFFlat(d *driver.Driver) *ivfflat.Benchmark {
 
 func newGUPS(d *driver.Driver) *gups.Benchmark {
 	b := gups.NewBenchmark(d)
-	b.Params = gups.Params{LogTable: *gupsLogFlag, WGs: *gupsWGsFlag}
+	b.Params = gups.Params{LogTable: *gupsLogFlag, WGs: *gupsWGsFlag, UpdateMult: *gupsMultFlag}
 	return b
 }
 

@@ -4,13 +4,18 @@ import "fmt"
 
 // Params is the input size.
 type Params struct {
-	LogTable int // table of 2^LogTable 64-bit words; 4x as many updates
+	LogTable int // table of 2^LogTable 64-bit words
 	WGs      int // work-groups of 256 threads
+	// UpdateMult: updates = UpdateMult * table words (HPCC and upstream: 4).
+	// Larger values lengthen the run without growing the table (e.g. to keep
+	// it within the L2 TLB reach: 512 entries x 4 KB = 2 MB per GPM).
+	UpdateMult int
 }
 
 // Validate checks the parameters.
 func (p Params) Validate() error {
-	if p.LogTable < 4 || p.LogTable > 30 || p.WGs <= 0 {
+	if p.LogTable < 4 || p.LogTable > 30 || p.WGs <= 0 || p.UpdateMult <= 0 ||
+		p.Updates() >= 1<<32 {
 		return fmt.Errorf("gups: bad parameters %+v", p)
 	}
 	return nil
@@ -19,8 +24,8 @@ func (p Params) Validate() error {
 // TableSize is 2^LogTable.
 func (p Params) TableSize() int { return 1 << p.LogTable }
 
-// Updates is 4 * TableSize.
-func (p Params) Updates() uint64 { return 4 * uint64(p.TableSize()) }
+// Updates is UpdateMult * TableSize.
+func (p Params) Updates() uint64 { return uint64(p.UpdateMult) * uint64(p.TableSize()) }
 
 // Threads is WGs * 256.
 func (p Params) Threads() int { return p.WGs * 256 }

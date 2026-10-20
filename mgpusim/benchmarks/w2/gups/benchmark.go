@@ -6,7 +6,13 @@
 // CAS (HPCC allows <= 1% wrong table entries; the simulator has no global
 // atomics); each thread's stream start state is computed on the host
 // (upstream: square-table jump on the GPU, timed); the update count is split
-// evenly as q or q+1 per thread instead of t*U/T bounds.
+// evenly as q or q+1 per thread instead of t*U/T bounds; UpdateMult can
+// raise the update count above 4*N.
+//
+// Simulator note: every update touches a random 4 KB page, so tables larger
+// than the per-GPM L2 TLB reach (512 x 4 KB = 2 MB) make the run TLB / GMMU
+// bound (8 MB table: L2 TLB queues full, ~10x slower per access than a 2 MB
+// table).
 package gups
 
 import (
@@ -42,7 +48,7 @@ type KernelArgs struct {
 // With few updates per thread the lanes of a wave hold nearby, correlated
 // LFSR states and collide (emu: 1.1% wrong entries at 12 updates per
 // thread, 0.04% at 48).
-func DefaultParams() Params { return Params{LogTable: 22, WGs: 1344} }
+func DefaultParams() Params { return Params{LogTable: 22, WGs: 1344, UpdateMult: 4} }
 
 // Benchmark is the GUPS benchmark.
 type Benchmark struct {
@@ -92,8 +98,8 @@ func (b *Benchmark) Run() {
 	b.driver.MemCopyH2D(b.context, b.dTable, p.InitialTable())
 	b.driver.MemCopyH2D(b.context, dStarts, p.Starts())
 	q, r := p.Partition()
-	fmt.Printf("GUPS,config,table_words=%d,table_mb=%.1f,updates=%d,threads=%d,wgs=%d,"+
-		"updates_per_thread=%d+%d\n", p.TableSize(), float64(tb)/1e6, p.Updates(),
+	fmt.Printf("GUPS,config,table_words=%d,table_mb=%.1f,updates=%d,update_mult=%d,threads=%d,wgs=%d,"+
+		"updates_per_thread=%d+%d\n", p.TableSize(), float64(tb)/1e6, p.Updates(), p.UpdateMult,
 		p.Threads(), p.WGs, q, r)
 	cq := b.driver.CreateCommandQueue(b.context)
 	args := KernelArgs{Table: b.dTable, Starts: dStarts, Mask: uint32(p.TableSize() - 1), Q: q, R: r}

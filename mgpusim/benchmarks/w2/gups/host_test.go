@@ -5,7 +5,7 @@ import "testing"
 // Applying each thread's slice of the stream from its host start state in
 // any order gives the serial reference (XOR commutes).
 func TestStartsReproduceStream(t *testing.T) {
-	p := Params{LogTable: 10, WGs: 3}
+	p := Params{LogTable: 10, WGs: 3, UpdateMult: 4}
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
