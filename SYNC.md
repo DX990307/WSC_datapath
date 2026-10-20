@@ -257,3 +257,6 @@
 - 用户：服务器没用满，并行数改成按每个 workload 第一个跑完的运行的峰值内存来定（总内存 − 30 GB 以内、少于 120 个、可用内存 < 30 GB 时不启动），取代每台 15 个的上限。
 - 用户：T18 在 HPCA 论文规模（hpca 配置、`-max-wg 78600`）下和 HPCA 的 baseline / Complete 比较，只用远程型 7 个，共 28 个运行。
 
+
+### 2026-10-20 [claude-code] 按用户要求新建代码仓库的 main 分支
+- 用户 10-20：把最新代码推到 main。WSC_datapath 原来没有 main（默认分支是 `mechanism_1` @ `0be4bdf`，HPCA 版本，未改动）。新建 `main` = `isca27/t18-merge` @ `ca8b831`（mi200 配置、T16 tracer、T17 workload、P12 tracer 到 `0b85bef`、T18），不含 T19 和 P12 最后一个分析脚本提交。之后只在用户要求时更新 main；其余规则不变（任务分支 `isca27/*`，不 force push）。
