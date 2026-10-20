@@ -279,3 +279,7 @@
 ### 2026-10-20 [claude-code] 用户：T18 作为新 M1，旧 m2（Remote Aggregation）作为 M2
 - 用户 10-20：两个设计分开。新 M1 = T18（在途合并 + owner 端合并多播 + 按距离分窗口），新 M2 = 旧 m2（同页打包 + 预取）。两者都在请求方去重，**去重归谁等消融结果再定**：如果某个机制效果太好，就把去重归到相对弱的那个。旧 m1（Local Pairing）不再作为机制。
 - 实现：分支 `isca27/m1m2`（从 `ca8b831`）让 M1、M2 能同时打开，去重的归属做成开关；关闭时逐位一致。正式消融等用户确认计划。
+
+### 2026-10-20 [claude-code] 用户确认：先跑新 Complete，消融放最后
+- 新 Complete = 新 M1（T18 全开 W=1024 + 按距离分 credit）+ M2（旧 m2）+ 旧 m3（Remote Reuse），去掉旧 m1；去重暂时两边都做。保留 HPCA 版 Complete 作参照。
+- 计划（用户 10-20 确认）：整合分支 `isca27/m1m2` 跑通 → 和 4 个移植分支合并、回归、推送 → 16 个新 benchmark × {baseline、新 Complete、HPCA Complete}，中小规模（每个约 0.5–1 小时），共 48 个。注意旧 m3 在 kernel 边界不失效（P08 a），多 kernel 的结果可能偏乐观，结果里标明。
