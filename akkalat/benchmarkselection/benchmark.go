@@ -502,6 +502,9 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		if b := p12SmallBenchmark(name, driver); b != nil {
 			return b
 		}
+		if b := w2cBenchmark(name, driver); b != nil {
+			return b
+		}
 		panic("Unknown benchmark")
 	}
 
