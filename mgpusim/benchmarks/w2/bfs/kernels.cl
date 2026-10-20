@@ -1,12 +1,14 @@
 // Breadth-first search (gpu_benchmarks tier2/rodinia_bfs), W2 port.
-// Level-synchronous, one thread per vertex, two kernels per level as in
-// Rodinia:
+// Level-synchronous, two kernels per level as in Rodinia:
 //
-//   bfs_expand  for every frontier vertex u: for each neighbour nb with
+//   bfs_expand  one 64-lane wave per vertex (4 per WG; upstream: a thread),
+//               lanes stride the adjacency list (a thread per vertex makes a
+//               hub vertex of the skewed R-MAT input a single long serial
+//               loop). For every frontier vertex u: for each neighbour nb with
 //               !visited[nb], next[nb] = 1  (upstream: atomicExch(&cost[nb],
 //               cost[u]+1); every writer stores the same value, so a plain
 //               store is equivalent)
-//   bfs_update  per vertex: newly = !visited[v] && next[v];
+//   bfs_update  one thread per vertex: newly = !visited[v] && next[v];
 //               frontier_out[v] = newly; visited_out[v] = visited[v] | newly;
 //               if newly, cost[v] = level + 1
 //               (upstream also does atomicExch(updated, 1); the host knows
@@ -33,11 +35,11 @@ void bfs_expand(__global const int *row_ptr,
                 __global const int *visited,
                 __global int *next,
                 const int num_nodes) {
-  const int tid = get_group_id(0) * 256 + LOCAL_ID;
-  if (tid >= num_nodes || !frontier[tid]) return;
-  const int e0 = row_ptr[tid];
-  const int e1 = row_ptr[tid + 1];
-  for (int e = e0; e < e1; ++e) {
+  const int lid = LOCAL_ID;
+  const int u = get_group_id(0) * 4 + (lid >> 6);
+  if (u >= num_nodes || !frontier[u]) return;
+  const int e1 = row_ptr[u + 1];
+  for (int e = row_ptr[u] + (lid & 63); e < e1; e += 64) {
     const int nb = col_idx[e];
     if (!visited[nb]) next[nb] = 1;
   }

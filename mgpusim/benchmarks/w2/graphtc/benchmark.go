@@ -1,6 +1,6 @@
 // Package graphtc is the W2 port of gpu_benchmarks tier2/graph_tc:
-// triangle counting by sorted-adjacency intersection, one thread per
-// undirected edge (u < v). The input is a synthetic R-MAT / Kronecker graph
+// triangle counting by adjacency intersection, one wave per undirected
+// edge (u < v; upstream: a thread per edge, see kernels.cl). The input is a synthetic R-MAT / Kronecker graph
 // (rmatgraph; upstream uses a uniform random graph) so adj(v) reads are
 // skewed and data dependent. The host sums the per-edge counts and divides
 // by 3 (upstream does the same). Registered as -benchmark=graphtc.
@@ -21,7 +21,11 @@ import (
 //go:embed kernels.hsaco
 var hsacoBytes []byte
 
-const wgSize = 256
+const (
+	wgSize = 256
+	// EdgesPerWG is the edges per WG (one 64-lane wave per edge).
+	EdgesPerWG = 4
+)
 
 // Args are the arguments of tc_count.
 type Args struct {
@@ -147,7 +151,7 @@ func (b *Benchmark) Run() {
 	dSrc := b.upload(b.src, "tc_edge_src")
 	dDst := b.upload(b.dst, "tc_edge_dst")
 	b.dCounts = b.upload(make([]int32, ne), "tc_edge_counts")
-	wgs := (ne + wgSize - 1) / wgSize
+	wgs := (ne + EdgesPerWG - 1) / EdgesPerWG
 	fmt.Printf("GRAPHTC,config,scale=%d,edge_factor=%d,seed=%d,vertices=%d,csr_entries=%d,"+
 		"edges_uv=%d,max_degree=%d,wgs=%d,footprint_mb=%.1f\n",
 		b.Params.Scale, b.Params.EdgeFactor, b.Params.Seed, g.N, g.NumEntries(), ne,

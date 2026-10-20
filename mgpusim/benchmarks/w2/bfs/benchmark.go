@@ -1,6 +1,6 @@
 // Package bfs is the W2 port of gpu_benchmarks tier2/rodinia_bfs: Rodinia's
-// level-synchronous BFS (one thread per vertex, an expand and an update
-// kernel per level) on a synthetic R-MAT / Kronecker graph (rmatgraph;
+// level-synchronous BFS (an expand kernel, a wave per vertex, and an
+// update kernel, a thread per vertex, per level) on a synthetic R-MAT / Kronecker graph (rmatgraph;
 // upstream uses a uniform random directed graph, 20 edges per node). The
 // atomicExch stores are plain stores (all writers store the same value);
 // per-level buffers are fresh and the level count comes from the host
@@ -22,7 +22,11 @@ import (
 //go:embed kernels.hsaco
 var hsacoBytes []byte
 
-const wgSize = 256
+const (
+	wgSize = 256
+	// VertsPerWG is bfs_expand's vertices per WG (a wave per vertex).
+	VertsPerWG = 4
+)
 
 // ExpandArgs are the arguments of bfs_expand.
 type ExpandArgs struct {
@@ -154,6 +158,7 @@ func (b *Benchmark) Run() {
 	visited := b.upload(init, "bfs_visited_l0")
 	zeros := make([]int32, n)
 	wgs := (n + wgSize - 1) / wgSize
+	ewgs := (n + VertsPerWG - 1) / VertsPerWG
 	q := b.driver.CreateCommandQueue(b.context)
 	for l := 0; l < levels; l++ {
 		next := b.upload(zeros, fmt.Sprintf("bfs_next_l%d", l))
@@ -161,7 +166,7 @@ func (b *Benchmark) Run() {
 		fOut := b.alloc(n, fmt.Sprintf("bfs_frontier_l%d", l+1))
 		ea := ExpandArgs{RowPtr: dRow, ColIdx: dCol, Frontier: frontier, Visited: visited,
 			Next: next, NumNodes: int32(n)}
-		b.driver.EnqueueLaunchKernel(q, b.expand, [3]uint32{uint32(wgs * wgSize), 1, 1},
+		b.driver.EnqueueLaunchKernel(q, b.expand, [3]uint32{uint32(ewgs * wgSize), 1, 1},
 			[3]uint16{wgSize, 1, 1}, &ea)
 		ua := UpdateArgs{Next: next, Visited: visited, VisitedOut: vOut, FrontierOut: fOut,
 			Cost: b.dCost, NewCost: int32(l + 1), NumNodes: int32(n)}
@@ -170,10 +175,10 @@ func (b *Benchmark) Run() {
 		frontier, visited = fOut, vOut
 	}
 	fmt.Printf("BFS,config,scale=%d,edge_factor=%d,seed=%d,vertices=%d,csr_entries=%d,"+
-		"max_degree=%d,source=%d,reached=%d,levels=%d,kernels=%d,wgs_per_kernel=%d,total_wgs=%d,"+
+		"max_degree=%d,source=%d,reached=%d,levels=%d,kernels=%d,expand_wgs=%d,update_wgs=%d,total_wgs=%d,"+
 		"graph_mb=%.1f,level_buffers_mb=%.1f\n",
 		b.Params.Scale, b.Params.EdgeFactor, b.Params.Seed, n, g.NumEntries(), g.MaxDegree(),
-		b.source, reached, levels, 2*levels, wgs, 2*levels*wgs,
+		b.source, reached, levels, 2*levels, ewgs, wgs, levels*(ewgs+wgs),
 		float64(4*(n+1+g.NumEntries()+n))/1e6, float64(12*n*levels)/1e6)
 	b.driver.DrainCommandQueue(q)
 }

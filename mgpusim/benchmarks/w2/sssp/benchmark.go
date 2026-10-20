@@ -26,6 +26,8 @@ var hsacoBytes []byte
 
 const (
 	wgSize = 256
+	// VertsPerWG is the vertices per WG (a wave per vertex).
+	VertsPerWG = 4
 	// Inf is the unreached distance (INT_MAX, as upstream).
 	Inf = math.MaxInt32
 	// MaxWeight is upstream's weight range 1..100.
@@ -156,7 +158,7 @@ func (b *Benchmark) Run() {
 	}
 	d0[b.source] = 0
 	dist := b.upload(d0, "sssp_dist_r0")
-	wgs := (n + wgSize - 1) / wgSize
+	wgs := (n + VertsPerWG - 1) / VertsPerWG
 	q := b.driver.CreateCommandQueue(b.context)
 	for r := 0; r < rounds; r++ {
 		out := b.alloc(n, fmt.Sprintf("sssp_dist_r%d", r+1))
