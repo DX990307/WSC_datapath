@@ -44,8 +44,8 @@
 | [`tasks/T15_headroom_oracle.md`](tasks/T15_headroom_oracle.md) | oracle 实验：量出 wafer 层的优化空间（全部本地 / 端点不受限 / 距离几乎免费） | `[已定]` | mi200 冻结后 |
 | [`tasks/T16_position_imbalance.md`](tasks/T16_position_imbalance.md) | W1：GPM 在 mesh 上的位置是否造成负载不均（阶段 1 只测量） | 阶段 1 `[已定]`，阶段 2 `[提案]` | 和 T15 一起 |
 | [`tasks/T17_latest_workloads.md`](tasks/T17_latest_workloads.md) | 新 workload：PagedAttention、MoE、R-GAT（DLRM 备选），不用 atomic、统一 pull，每个实验 3–5 小时 | `[已定]` | 10-27 前跑出 baseline |
-| [`tasks/T18_new_m2_two_sided_merge.md`](tasks/T18_new_m2_two_sided_merge.md) | 新 m2：请求方 cuckoo 在途表 + 按距离分配窗口 + owner 端合并多播（前提：地址转换由 HDPAT 解决） | `[提案]`，先做 P12 的测量 | 10/26 起实现 |
-| [`tasks/T19_filter_guided_wg_stealing.md`](tasks/T19_filter_guided_wg_stealing.md) | cuckoo filter 指导的就近 WG 窃取（亲和性 + 历史足迹） | `[提案]`，先做 P12 的测量 | 10/26 起实现 |
+| [`tasks/T18_new_m2_two_sided_merge.md`](tasks/T18_new_m2_two_sided_merge.md) | 新 m2：请求跟踪表规模化 + owner 端跨 GPM 合并多播（相对 HPCA 版 m2 的新增部分；前提：地址转换由 HDPAT 解决） | 实现完成（`isca27/t18-merge` @ `ca8b831`），正式评估运行中 | 10-20 |
+| [`tasks/T19_filter_guided_wg_stealing.md`](tasks/T19_filter_guided_wg_stealing.md) | cuckoo filter 指导的就近 WG 窃取 | `[下一篇论文]`（10-20：ISCA'27 只做通信，见 `next_paper_scheduling.md`）；代码已实现（`isca27/t19-steal` @ `eaa9c73`），冒烟结果在 STATUS | — |
 | [`guides/G1_port_workload_to_mgpusim.md`](guides/G1_port_workload_to_mgpusim.md) | **操作指南**：怎么把新 workload 移植进 MGPUSim（以 GCN 为例） | 参考资料 | — |
 
 ## 时间线

@@ -413,3 +413,31 @@ T14 的 all-to-all 每个 kernel 都跑完了，`metrics.csv` 里有每个 GPM �
 - **机制 2（T19）**：cuckoo filter 指导的就近 WG 窃取。按 trace 估算的完美均衡上限：PagedAttention 1.74×、MoE 1.61×（铺满 48 个 GPM 时 2.94×）、R-GAT 1.16×（6.18×）。filter 用来挑“数据我已经有了”的 WG（历史足迹 vs 在途表 / L2），和 T18 共用在途表。
 - 用户明确不做：页迁移和复制。
 - **先测（P12）**：WG 足迹 tracer → 亲和性、历史稳定性；M1 共享统计；T17 的 O1 / O2b / O3。
+
+## 10-20 范围决定（用户）：ISCA'27 只做通信，调度留给下一篇
+
+- 以 CuPath（HPCA'27 投稿版，1 WA + 5 WR）为底，这篇只做远程数据通路：在途窗口（cuckoo 在途表）、按目的地准入、owner 端合并 / 攒批 / mesh 多播（T18）。前提：地址转换由 HDPAT 解决。
+- thread / data scheduling 的内容（compute-to-data、多 kernel 空间并发、WG 窃取、中心度放置、incast 去同步）全部移到 `next_paper_scheduling.md`，T19 标为 `[下一篇论文]`。
+- 对 10-19 "按距离分配名额"的更正：均匀读时共享池本来就按 RTT 分配，它只在热点 owner 占满窗口时有用，而且是通用的队头阻塞问题，不是 wafer 特有；现有 T17 数据里不明显。不作为卖点，先测（P12 第 4 项）。
+- 机制 1 的 wafer 特色应落在：端点受限而非链路受限（链路换端点）、owner 端合并 + 沿 mesh 分叉的多播（读者多、路径重叠）。
+- P12 改版：T17 的 O1/O2b/O3、E1 延迟分段、M1 共享统计、名额占用时间序列、incast + 背景流量和 owner 攒批两个微基准；WG 足迹 / 亲和性 / 历史稳定性移到下一篇。
+
+## 10-20 论文文字要改的地方：术语、64 项的依据、引用（Cowork，回应老板 10-20 的意见）
+
+**老板 10-20 的三点**：(1) "RDMA 的 buffer 限制"要说明真实硬件也有这个限制，或有等效限制；(2) RDMA 是 MGPUSim 术语，不是通用术语；(3) 还没回答"这个方案为什么对 wafer-scale GPU 是独特的"。
+
+**术语**：论文里不再用 RDMA。RDMA 引擎 → GPM 网络接口（network interface）；`-rdma-max-outstanding` → 远程请求跟踪表（remote request tracker，RRT）的项数；owner 端新表叫 owner merge table（OMT）。HPCA 稿 background.tex 的 "RDMA Request Processing" 一段、design.tex 的 "RDMA-In-Flight" filter 类型都要改名。汇报网页和 isca27 文档已统一（代码里的 flag 名不改）。
+
+**64 项的依据**（细节见 `tasks/T18_new_m2_two_sided_merge.md`）：
+- 上游 MGPUSim 没有这个上限；64 是我们 fork 在 `a185a7e`（2026-07-11）加的。论文里要把它写成有意设定的 baseline 参数，不能当作模拟器自带的特性。
+- 等效限制：芯片间接口都用有限的表跟踪在途请求（PCIe tag、xGMI / NVLink 的 credit 和请求跟踪），按"填满自己的链路"来配。比较要按在途字节和带宽 × 往返，不能按 tag 个数（PCIe Gen4 ×16 的 768 个 tag ≈ 384 KB 在途，自己的链路只需要约 32 KB）。
+- 校准：64 项时每 CU 远程带宽约 1.6 GB/s，MI250X 同封装两个 GCD 之间实测约 1.4 GB/s（153 GB/s，理论的 77%）→ 64 项 ≈ 今天多芯片 GPU 的端点。
+- wafer 独特：我们一个 GPM 链路 768 GB/s、往返 155–945 ns，填满需要 120–730 KB 在途，64 项只有 4 KB，差 30–180 倍；需要的项数随距离（wafer 直径）增长，读同一 line 的 GPM 数随 GPM 数增长。要用 2×2 / 4×4 / 7×7 的规模实验证明收益随规模变大（未做，改配置要确认）。
+- 扫 64 / 256 / 1024 / 4096；冒烟里 1024 和 4096 相同，所以写"几百到几千项"。
+
+**引用替换**（background 里关于端点限制的部分）：
+- 去掉：kalia2016design、wei2018deconstructing、mittal2018revisiting（数据中心 RDMA 网卡，不能支撑片上 GPM 端点）。可以保留在"相关工作：网络里的请求合并 / 流控"里，但不作为 64 项的依据。
+- 加：Pearson 等 2023，arXiv 2302.14827（MI250X 节点内互连测量，GCD 间 kernel 直接读写 153 GB/s）；Schieffer 等 2024，arXiv 2410.00801（"Understanding Data Movement in AMD Multi-GPU Systems with Infinity Fabric"，MI250X）；Pal 等 HPCA'19（"Architecting Waferscale Processors – A GPU Case Study"，GPM 间带宽每 GPM 1.5 TB/s、延迟约 20 ns）。
+- 链路参数：我们 768 GB/s 每方向，比 Pal 等宽约 2 倍的说法要核对口径（每方向还是双向、每条链路还是每 GPM）；改成 384 GB/s 和每跳 20 周期的敏感性需要用户确认配置。
+
+**贡献结构（随 T18 实现更新）**：(1) 特征分析：wafer 的远程访问受端点限制，排队占 80% 以上，链路 < 3%；(2) 新 1：请求跟踪表规模化（cuckoo 索引，替代 CAM）；(3) 新 2：owner 端跨 GPM 合并 + 网内多播，消掉 incast；冒烟显示 (2)(3) 要一起才有效（FW：只放大 2.26×，全开 8.56×）。HPCA 版已有的请求方合并 / 同页打包不再算新贡献。

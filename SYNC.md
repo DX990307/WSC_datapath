@@ -260,3 +260,22 @@
 
 ### 2026-10-20 [claude-code] 按用户要求新建代码仓库的 main 分支
 - 用户 10-20：把最新代码推到 main。WSC_datapath 原来没有 main（默认分支是 `mechanism_1` @ `0be4bdf`，HPCA 版本，未改动）。新建 `main` = `isca27/t18-merge` @ `ca8b831`（mi200 配置、T16 tracer、T17 workload、P12 tracer 到 `0b85bef`、T18），不含 T19 和 P12 最后一个分析脚本提交。之后只在用户要求时更新 main；其余规则不变（任务分支 `isca27/*`，不 force push）。
+
+- 2026-10-20 · cowork · **范围决定（用户）：ISCA'27 以 CuPath 为底，只做通信（远程数据通路）；thread / data scheduling 留给下一篇。** 新文件 `next_paper_scheduling.md` 收集调度相关的 idea（compute-to-data、多 kernel 空间并发、WG 窃取、中心度放置、incast 去同步）和支持数据；T19 标为 `[下一篇论文]`，README 同步。T18 加了论文贡献结构草案、owner 端"故意攒批"候选、对"按距离分配名额"的更正（只在热点时有用、通用的队头阻塞、现有数据不明显，先测再定）。P12 改版：删掉 WG 足迹 / 亲和性 / 历史稳定性，改为 T17 的 O1/O2b/O3、E1 延迟分段、M1 共享统计、各目的地名额占用时间序列、两个 platbench 微基准（incast + 背景流量；owner 攒批 T = 0/100/300/1000 ns）。`ideas_from_T14.md` 加了 10-20 范围决定一节。网页"下一步"页和 `site/next_1019.html` 按新范围重写（机制 2 改成"留给下一篇"）。待用户决定：m3 去留、baseline 怎么接 HDPAT。
+
+- 2026-10-20 · cowork · **核查"RDMA 在途上限 64"的来源（只读代码和 HPCA 稿）**：(1) 上游 MGPUSim 的 RDMA 引擎**没有**在途上限（`transactionsFromInside/Outside` 是无界切片，只有端口缓冲 1024）；`-rdma-max-outstanding=64`（连同 `-rdma-pipeline-width=8`、`-rdma-pipeline-latency=10`）是我们 fork 在 `a185a7e`（2026-07-11，"Add adaptive memory and remote data path optimizations"）和 CuPath 远程通路机制一起加进来的。(2) HPCA 稿 background.tex 的"RDMA Request Processing"引用的是数据中心 RDMA 网卡的论文（kalia2016design、wei2018deconstructing、mittal2018revisiting），不能直接支撑片上 GPM 端点的 64 项请求表。老板 10-20 指出：RDMA 是 MGPUSim 术语、需要说明真实硬件有这个限制或等效限制、需要回答为什么对 wafer 独特。(3) HPCA 版 m2（design.tex "Remote Aggregation"）**已经**有请求方 cuckoo filter 的 RDMA-In-Flight 类型、同 line 合并、按页的 bitmap 分组包、owner 解码 bitmap；所以 T18 的"请求方在途表"相对 HPCA 版不新，T18 的新部分只有：跟踪表规模化（窗口做大）和 owner 端跨 GPM 合并 + mesh 多播。T18 文档需要相应修改。(4) 校准依据：Pearson（arXiv 2302.14827）MI250X 同封装 GCD 间 kernel load/store 153 GB/s（77%），折合每 CU 约 1.4 GB/s；我们 64 项时每 CU 约 1.6 GB/s。
+
+- 2026-10-20 · cowork · **按用户"改一下"：术语、64 项依据、T18 按"相对 HPCA 版新增了什么"重写；同步 Claude Code 10-20 的 T18 / T19 / P12 结果。**
+  - 术语：汇报网页全部页面和 isca27 新文档里 RDMA → "GPM 网络接口"，`-rdma-max-outstanding` → "远程请求跟踪表（RRT）项数"，owner 端表叫 OMT；`<code>` 里的 flag 名不改。
+  - `tasks/T18_new_m2_two_sided_merge.md` 重写：状态改为"实现完成（`ca8b831`），正式评估运行中"；HPCA 版已有（请求方在途记录、同 line 合并、同页打包）和 T18 新增（新 1 跟踪表规模化、新 2 owner 端跨 GPM 合并 + 网内多播）分开写；64 项的依据（fork 加的、数据中心 RDMA 引用不能用、PCIe 按字节比、MI250X 校准）；"为什么对 wafer 独特"的规模实验 2×2 / 4×4 / 7×7（未做，要配置确认）；冒烟和 P12 M1 结果摘要；还缺的实验（E1 分段、规模实验、链路 / switch 敏感性、CACTI）。
+  - `ideas_from_T14.md` 新增 10-20 一节：论文文字要改的地方（术语、64 项依据、引用替换：去掉 kalia2016design / wei2018deconstructing / mittal2018revisiting 作为端点限制的依据，改引 Pearson 2023 arXiv 2302.14827、Schieffer 2024 arXiv 2410.00801、Pal HPCA'19）。
+  - **`prompts/P12_measurements_for_T18_T19.md` 恢复成已执行的版本（= `HEAD`）**：Cowork 10-20 曾改写 P12（"只做测量、不实现"），但 P12 已经由 Claude Code 执行、T18 也已实现，改写版和现状冲突，所以撤回。改写版里还没做的项目（E1 分段、各目的地占用时间序列、incast + 背景流量 / owner 攒批微基准）并入 T18 文档"还缺的实验"，等用户决定是否写成 P13。
+  - `tasks/T19_filter_guided_wg_stealing.md`：状态改为"`[下一篇论文]`，代码已实现（`eaa9c73`），本篇不再推进"。**给 Claude Code**：用户 10-20 定了 ISCA'27 只做通信，STATUS 里 T19 的方向问题和评估计划（90–96 个运行）先不用等答复，除非用户另有指示。README 的 T18、T19 两行同步。
+  - 机制图 `figs/fig_t18_two_sided_merge.*`：标注 HPCA 已有 / 新增；跟踪表写成 "64 → 100s–1000s"（冒烟里 W=1024 和 4096 相同）；多播树写成 routing tree / DOR（实现是 YX，之前图里写 XY）；新增 "Why the tracker must grow on a wafer" 小图。
+  - 汇报网页（Artifact 第 27 版，`site/` 已备份）：`next_1019.html` 第 3 节加"实现和冒烟结果"表，第 5 节改成"测量：已做的和还缺的"并加 M1 结果表，时间表更新；主页"下一步"把 P12 框换成 T18 冒烟结果；baseline 写成"mi200 原样，地址转换不变（用户 10-19）"。
+  - **问 Claude Code**：冒烟里"W ≥ 1024 时每 GPM 只有 40–75 个在途"是时间平均还是峰值、是否只算网络在途？PagedAttention 3.34× 时在途却比 64 少，口径需要说明。
+  - 本条和上面的 Cowork 改动都还没提交，请 Claude Code 同步时以 `cowork: ...` 提交。
+
+### 2026-10-20 [claude-code] 用户：T18 作为新 M1，旧 m2（Remote Aggregation）作为 M2
+- 用户 10-20：两个设计分开。新 M1 = T18（在途合并 + owner 端合并多播 + 按距离分窗口），新 M2 = 旧 m2（同页打包 + 预取）。两者都在请求方去重，**去重归谁等消融结果再定**：如果某个机制效果太好，就把去重归到相对弱的那个。旧 m1（Local Pairing）不再作为机制。
+- 实现：分支 `isca27/m1m2`（从 `ca8b831`）让 M1、M2 能同时打开，去重的归属做成开关；关闭时逐位一致。正式消融等用户确认计划。

@@ -59,7 +59,7 @@ def xy(a,b):
 
 # ================================================================ T18 figure
 def fig_t18():
-    W,H=1000,660; s=S(W,H,'Two-sided request merging: requester in-flight cuckoo table with distance-aware credits, owner merge table with mesh multicast')
+    W,H=1000,672; s=S(W,H,'Two-sided request merging: requester in-flight cuckoo table with distance-aware credits, owner merge table with mesh multicast')
     owner=(5,1); reqs={'R1':(1,4),'R2':(1,6),'R3':(4,5)}
     roles={owner:'owner',**{v:k for k,v in reqs.items()}}
     # ---- (a) baseline
@@ -76,7 +76,7 @@ def fig_t18():
     s.text(30+7*31/2-2,44+7*31+40,'sends 3 separate responses',size=13,anchor='middle',fill=MUT)
     # ---- (b) merged
     bx=290
-    s.text(bx-10,26,'(b) Two-sided merge',size=15,weight='bold')
+    s.text(bx-10,26,'(b) Owner-side cross-GPM merge',size=15,weight='bold')
     P2,top2=mesh(s,bx,44,roles=roles)
     segs=set()
     for r in reqs.values():
@@ -98,47 +98,51 @@ def fig_t18():
         cx,cy=P2(*f); s.circle(cx,cy,4.6,fill=ORG)
     top2()
     s.text(bx+7*31/2-2,44+7*31+22,'owner reads once; one response',size=13,anchor='middle',fill=ORG,weight='bold')
-    s.text(bx+7*31/2-2,44+7*31+40,'forks along the XY tree (dots)',size=13,anchor='middle',fill=ORG,weight='bold')
+    s.text(bx+7*31/2-2,44+7*31+40,'forks along the routing tree (dots)',size=13,anchor='middle',fill=ORG,weight='bold')
     # ---- (e) entry formats (top right)
     ex=560
-    s.text(ex,26,'(c) Table entries',size=15,weight='bold')
+    s.text(ex,26,'(c) Table entries (cuckoo-indexed)',size=15,weight='bold')
     def entry(y,title,fields,col):
         s.text(ex,y,title,size=13.5,fill=INK,weight='bold')
         x=ex;
         for name,w,f in fields:
             s.rect(x,y+8,w,30,fill=f,stroke=col,sw=1.2,rx=0); s.text(x+w/2,y+28,name,size=12.5,anchor='middle'); x+=w
-    entry(58,'Requester in-flight table (IFT), per GPM',[('fingerprint',96,ACC_L),('dst GPM',70,'#fff'),('waiter list ptr',118,'#fff'),('V',30,'#fff')],ACC)
+    entry(58,'Remote request tracker (RRT), per GPM: 64 → 100s–1000s',[('fingerprint',96,ACC_L),('dst GPM',70,'#fff'),('waiter list ptr',118,'#fff'),('V',30,'#fff')],ACC)
     s.text(ex,120,'+ full line tag kept in a side array: checked before any merge',size=12.5,fill=MUT)
-    entry(150,'Owner merge table (OMT), per GPM',[('fingerprint',96,ACC_L),('requester bitmap (48 b)',178,ORG_L),('state',60,'#fff')],ACC)
+    entry(150,'Owner merge table (OMT), per GPM  [new]',[('fingerprint',96,ACC_L),('requester bitmap (48 b)',178,ORG_L),('state',60,'#fff')],ACC)
     # credits
-    s.text(ex,232,'Distance-aware credits (window W split by RTT)',size=13.5,weight='bold')
-    rows=[('1 hop',155),('3 hops',298),('6 hops',514),('12 hops',945)]
+    s.text(ex,232,'Why the tracker must grow on a wafer',size=13.5,weight='bold')
+    s.text(ex,250,'entries needed for 100 B/ns remote = 100 × RTT / 64 B',size=12,fill=MUT)
+    rows=[('1 hop',155),('4.3 hops (avg)',391),('6 hops',514),('12 hops',945)]
     for i,(n,rtt) in enumerate(rows):
-        y=246+i*24; s.text(ex,y+14,n,size=12.5,fill=MUT)
-        wbar=rtt/945*300; s.rect(ex+64,y+2,wbar,16,fill=ACC_L,stroke=ACC,sw=1,rx=2)
-        s.text(ex+64+wbar+6,y+15,f'RTT {rtt} ns',size=12,fill=MUT)
-    s.text(ex,352,'credits proportional to RTT: every destination can reach',size=12.5,fill=MUT); s.text(ex,368,'its bandwidth (Little\'s law)',size=12.5,fill=MUT)
+        y=258+i*24; need=100*rtt/64; s.text(ex,y+14,n,size=12.5,fill=MUT)
+        wbar=need/1480*270; s.rect(ex+104,y+2,wbar,16,fill=ACC_L,stroke=ACC,sw=1,rx=2)
+        s.text(ex+104+wbar+6,y+15,f'{need:,.0f}',size=12,fill=INK)
+    x64=ex+104+64/1480*270
+    s.line([(x64,254),(x64,356)],stroke=RED,sw=1.6,dash='4 3'); s.text(x64+4,368,'today: 64 entries (≈ MI250X-class endpoint)',size=12,fill=RED)
     # ---- (d) requester datapath (bottom)
     y0=392
     s.line([(14,y0-14),(W-14,y0-14)],stroke=LINE,sw=1)
-    s.text(20,y0+8,'(d) Requester side (RDMA of each GPM)',size=15,weight='bold')
-    s.text(690,y0+8,'(e) Owner side',size=15,weight='bold')
+    s.text(20,y0+8,'(d) Requester side (network interface of each GPM)',size=15,weight='bold')
+    s.text(690,y0+8,'(e) Owner side  [new]',size=15,weight='bold')
     by=y0+40
     s.rect(20,by+40,110,56,fill=FILL); s.text(75,by+64,'L1V miss',size=14,anchor='middle'); s.text(75,by+82,'(remote line)',size=12,anchor='middle',fill=MUT)
-    s.rect(170,by+20,150,96,fill=ACC_L,stroke=ACC,sw=1.6); s.text(245,by+48,'IFT lookup',size=14,anchor='middle',weight='bold',fill=ACC); s.text(245,by+68,'cuckoo, 2 hashes',size=12,anchor='middle',fill=MUT); s.text(245,by+86,'+ full-tag check',size=12,anchor='middle',fill=MUT)
+    s.rect(170,by+20,150,96,fill=ACC_L,stroke=ACC,sw=1.6); s.text(245,by+48,'RRT lookup',size=14,anchor='middle',weight='bold',fill=ACC); s.text(245,by+68,'cuckoo, 2 hashes',size=12,anchor='middle',fill=MUT); s.text(245,by+86,'+ full-tag check',size=12,anchor='middle',fill=MUT)
     s.line([(130,by+68),(168,by+68)],arrow='k')
     s.badge(150,by+52,1)
+    s.rect(178,by+4,124,18,fill='#e6e8eb',stroke='none',rx=3); s.text(240,by+17,'exists in CuPath (HPCA)',size=11,anchor='middle',fill=MUT)
     # hit path
     s.rect(370,by-10,170,50,fill=ORG_L,stroke=ORG,sw=1.4); s.text(455,by+12,'merge: append waiter',size=13.5,anchor='middle'); s.text(455,by+30,'no new request',size=12,anchor='middle',fill=MUT)
     s.line([(320,by+40),(345,by+40),(345,by+15),(368,by+15)],stroke=ORG,arrow='o'); s.text(350,by+56,'hit',size=12,fill=ORG,weight='bold')
     s.badge(357,by+2,2,fill=ORG)
     # miss path
-    s.rect(370,by+80,170,50,fill='#fff',stroke=INK); s.text(455,by+102,'allocate entry',size=13.5,anchor='middle'); s.text(455,by+120,'take credit of dst',size=12,anchor='middle',fill=MUT)
+    s.rect(370,by+80,170,50,fill='#fff',stroke=INK); s.text(455,by+102,'allocate entry',size=13.5,anchor='middle'); s.text(455,by+120,'100s–1000s of entries, no CAM',size=11,anchor='middle',fill=MUT)
     s.line([(320,by+96),(345,by+96),(345,by+105),(368,by+105)],arrow='k'); s.text(326,by+120,'miss',size=12,fill=INK,weight='bold')
     s.badge(357,by+132,3)
+    s.rect(372,by+134,166,18,fill=ACC,stroke='none',rx=3); s.text(455,by+147,'new: scaled tracker',size=11.5,anchor='middle',fill='#fff',weight='bold')
     s.line([(540,by+105),(588,by+105)],arrow='k'); s.text(548,by+96,'request',size=12,fill=MUT)
     # mesh cloud
-    s.rect(590,by+64,64,82,fill='#fff',stroke=MUT,dash='4 3'); s.text(622,by+102,'mesh',size=13,anchor='middle',fill=MUT); s.text(622,by+118,'XY',size=11.5,anchor='middle',fill=MUT)
+    s.rect(590,by+64,64,82,fill='#fff',stroke=MUT,dash='4 3'); s.text(622,by+102,'mesh',size=13,anchor='middle',fill=MUT); s.text(622,by+118,'DOR',size=11.5,anchor='middle',fill=MUT)
     # owner side
     s.line([(654,by+90),(690,by+90)],arrow='k')
     s.rect(692,by+40,150,96,fill=ACC_L,stroke=ACC,sw=1.6); s.text(767,by+68,'OMT lookup',size=14,anchor='middle',weight='bold',fill=ACC); s.text(767,by+88,'hit: set requester bit',size=12,anchor='middle',fill=MUT); s.text(767,by+106,'miss: allocate, read once',size=12,anchor='middle',fill=MUT)
@@ -147,11 +151,11 @@ def fig_t18():
     s.line([(842,by+88),(878,by+88)],arrow='k')
     # multicast return
     s.line([(930,by+136),(930,by+196),(622,by+196),(622,by+148)],stroke=ORG,sw=2.6,arrow='o')
-    s.text(776,by+188,'multicast to all bits in the bitmap (XY tree)',size=12.5,anchor='middle',fill=ORG,weight='bold')
+    s.text(776,by+188,'multicast to all bits in the bitmap (routing tree)',size=12.5,anchor='middle',fill=ORG,weight='bold')
     s.badge(940,by+166,5,fill=ORG)
     # response to requester: wake & delete
     s.line([(600,by+180),(245,by+180),(245,by+118)],stroke=ORG,sw=2.0,arrow='o')
-    s.text(420,by+200,'response: wake all waiters, delete IFT entry, return credit',size=12.5,anchor='middle',fill=INK)
+    s.text(40,by+204,'response carries only the line address: each waiting GPM',size=12.5,fill=INK); s.text(40,by+220,'claims it in its RRT, wakes the waiters, frees the entry',size=12.5,fill=INK)
     s.badge(258,by+156,6,fill=ORG)
     return s
 
@@ -213,7 +217,7 @@ def fig_t19():
         s.rect(122,yy,130,34,fill=ACC_L,stroke=ACC,sw=1.2); s.text(187,yy+15,'footprint filter',size=12,anchor='middle',fill=ACC,weight='bold'); s.text(187,yy+29,'pages read last launch',size=11,anchor='middle',fill=MUT)
         s.line([(252,yy+17),(368,by+81)],stroke=MUT,sw=1.1)
     s.rect(370,by+48,150,66,fill='#fff',stroke=INK,sw=1.4); s.text(445,by+76,'overlap score',size=14,anchor='middle',weight='bold'); s.text(445,by+96,'per candidate group',size=12,anchor='middle',fill=MUT)
-    s.rect(570,by+8,170,42,fill=ACC_L,stroke=ACC,sw=1.2); s.text(655,by+26,"thief's IFT (T18)",size=13,anchor='middle',fill=ACC,weight='bold'); s.text(655,by+42,'remote lines in flight',size=11.5,anchor='middle',fill=MUT)
+    s.rect(570,by+8,170,42,fill=ACC_L,stroke=ACC,sw=1.2); s.text(655,by+26,"thief's RRT (T18)",size=13,anchor='middle',fill=ACC,weight='bold'); s.text(655,by+42,'remote lines in flight',size=11.5,anchor='middle',fill=MUT)
     s.rect(570,by+112,170,42,fill=FILL,stroke=INK,sw=1.2); s.text(655,by+130,"thief's L2",size=13,anchor='middle'); s.text(655,by+146,'remote lines resident',size=11.5,anchor='middle',fill=MUT)
     s.line([(570,by+29),(546,by+29),(546,by+66),(522,by+66)],arrow='k'); s.line([(570,by+133),(546,by+133),(546,by+96),(522,by+96)],arrow='k')
     rx=790; s.text(rx,by+4,'score → decision',size=12.5,fill=MUT)
@@ -224,7 +228,7 @@ def fig_t19():
         if best: s.text(rx+64+ov*80+6,yy+22,'steal',size=12.5,fill=ORG,weight='bold')
     s.line([(520,by+81),(770,by+81)],stroke=MUT,sw=1.1,arrow='m',dash='4 3')
     s.text(20,by+176,"Footprint filters are cuckoo filters, so stale pages can be deleted when a group's footprint changes. Without history,",size=12.5,fill=MUT)
-    s.text(20,by+194,'fall back to the adjacent / same-group WGs. The thief\'s IFT is the same table that T18 uses for merging.',size=12.5,fill=MUT)
+    s.text(20,by+194,'fall back to the adjacent / same-group WGs. The thief\'s RRT is the same table that T18 uses for merging.',size=12.5,fill=MUT)
     return s
 
 if __name__=='__main__':
