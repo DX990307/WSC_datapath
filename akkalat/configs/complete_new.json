@@ -1,5 +1,5 @@
 {
-  "_description": "ISCA'27 new Complete = M1 (T18 full, W = 1024, distance credits) + M2 (old m2 flags) + old m3 Remote Reuse (requester L2 keeps remote lines: -remote-data-path-l2-enable=true, the only m3 flag of the HPCA complete config); old m1 (Local Pairing: resident filter, adaptive pair, fill forwarding) dropped. Dedup owner 'both' (M1 in-flight merge first, M2 filter dedup on an M1 miss). Extends mi200.json.",
+  "_description": "ISCA'27 new Complete = M1 (T18 full, W = 1024, distance credits) + M2 (old m2 flags) + old m3 Remote Reuse (requester L2 keeps remote lines: -remote-data-path-l2-enable=true, the only m3 flag of the HPCA complete config); old m1 (Local Pairing: resident filter, adaptive pair, fill forwarding) dropped. Dedup owner m1, not 'both': M1's inline in-flight-table lookup runs first and catches every duplicate of a line still in flight; M2's typed-filter dedup only added merges into lines whose data had already returned (FW 31 vs 34,797 M1 merges, PagedAttention 843 vs 222,467 in the 1d0cce4 smoke) while costing a filter lookup per request on the ports M3 also uses. Extends mi200.json.",
   "extends": "mi200.json",
   "typed-filter-slots-per-bucket": 4,
   "typed-filter-fingerprint-bits": 13,
@@ -32,5 +32,5 @@
   "t18-owner-multicast": true,
   "t18-window": 1024,
   "t18-dist-credits": true,
-  "cupath-dedup-owner": "both"
+  "cupath-dedup-owner": "m1"
 }

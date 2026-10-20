@@ -229,7 +229,7 @@ class M1M2ConfigTest(unittest.TestCase):
         want = dict(self.added("m2.json"))
         want.update(self.added("m1.json"))
         want["remote-data-path-l2-enable"] = "true"
-        want["cupath-dedup-owner"] = "both"
+        want["cupath-dedup-owner"] = "m1"
         got = self.added("complete_new.json")
         self.assertEqual(got, want)
         # old m1 (Local Pairing) stays off
