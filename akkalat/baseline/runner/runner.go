@@ -481,6 +481,7 @@ func (r *Runner) buildTimingPlatform() {
 			PrefetchEntries:          *prefetchPredictorEntriesFlag,
 			MaxBatchLines:            *remoteDataPathBatchLinesFlag,
 			MaxBatches:               *remoteDataPathBatchesFlag,
+			KernelBoundaryInvalidate: *remoteReuseKernelInvalidateFlag,
 		}).
 		WithT18(t18ConfigFromFlags())
 

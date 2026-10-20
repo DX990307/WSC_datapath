@@ -36,6 +36,10 @@ type RemoteDataPathConfig struct {
 	PrefetchEntries          int
 	MaxBatchLines            int
 	MaxBatches               int
+	// KernelBoundaryInvalidate enables the M3 (Remote Reuse) kernel-boundary
+	// invalidation of the HPCA paper, Section IV-C (requester-L2 replica
+	// lines are dropped when a kernel is launched). Off by default.
+	KernelBoundaryInvalidate bool
 }
 
 func normalizeRemoteDataPathConfig(c RemoteDataPathConfig) RemoteDataPathConfig {
@@ -238,6 +242,10 @@ type remoteLineEntry struct {
 	// M1+M2: the entry is in M1's in-flight table (and open for merging).
 	m1Indexed bool
 	m1Open    bool
+	// boundaryStale: the entry was in flight at an M3 kernel-boundary
+	// invalidation, so its data may predate the boundary; it never fills the
+	// requester L2 and takes no new merges.
+	boundaryStale bool
 }
 
 type remotePrefetchCandidate struct {

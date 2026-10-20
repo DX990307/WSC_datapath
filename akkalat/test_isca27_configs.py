@@ -230,12 +230,75 @@ class M1M2ConfigTest(unittest.TestCase):
         want.update(self.added("m1.json"))
         want["remote-data-path-l2-enable"] = "true"
         want["cupath-dedup-owner"] = "m1"
+        want["remote-reuse-kernel-invalidate"] = "true"
         got = self.added("complete_new.json")
         self.assertEqual(got, want)
         # old m1 (Local Pairing) stays off
         for key in ("l2-resident-filter-enable", "l2-fill-forwarding-enable",
                     "l2-adaptive-pair-enable"):
             self.assertEqual(got[key], "false", key)
+
+    def runall2_formal(self, name):
+        import sys
+        from runall2_args import parse_args
+        from runall2_config import build_remote_data_path_ablation_configs
+        from runall2_constants import DEFAULT_BENCHMARK_FLAGS
+        argv = sys.argv
+        sys.argv = ["runall2.py", "--remote-ablation"]
+        try:
+            args = parse_args()
+        finally:
+            sys.argv = argv
+        flags = dict(build_remote_data_path_ablation_configs(args))[name]
+        return flag_pairs(DEFAULT_BENCHMARK_FLAGS + flags)
+
+    def test_m3_is_runall2_m3_with_kernel_invalidation(self):
+        want = self.runall2_formal("m3")
+        want["remote-reuse-kernel-invalidate"] = "true"
+        self.assertEqual(self.added("m3.json"), want)
+
+    def test_ablations_are_complete_minus_one_mechanism(self):
+        complete = self.added("complete_new.json")
+        m1 = self.added("m1.json")
+        # M1 + M2: Complete without M3 (= the dedup-by-M1 composition)
+        want = dict(complete)
+        want["remote-data-path-l2-enable"] = "false"
+        del want["remote-reuse-kernel-invalidate"]
+        self.assertEqual(self.added("m1m2.json"), want)
+        self.assertEqual(self.added("m1m2.json"), self.added("m1m2_dedupM1.json"))
+        # M2 + M3: Complete without M1 (M2 keeps its own dedup, as in m2_old)
+        want = {k: v for k, v in complete.items()
+                if k not in m1 and k != "cupath-dedup-owner"}
+        self.assertEqual(self.added("m2m3.json"), want)
+        want = dict(self.added("m2.json"))
+        want["remote-data-path-l2-enable"] = "true"
+        want["remote-reuse-kernel-invalidate"] = "true"
+        self.assertEqual(self.added("m2m3.json"), want)
+        # M1 + M3: Complete without M2 = M3 alone + M1 (merge owned by M1)
+        want = dict(self.added("m3.json"))
+        want.update(m1)
+        want["cupath-dedup-owner"] = "m1"
+        self.assertEqual(self.added("m1m3.json"), want)
+        for key in ("remote-data-path-dedup-enable",
+                    "remote-data-path-batching-enable",
+                    "remote-filter-prefetch-enable"):
+            self.assertEqual(self.added("m1m3.json")[key], "false", key)
+
+    def test_isca27_m3_configs_enable_kernel_invalidation(self):
+        """Every ISCA'27 config that keeps remote lines in the requester L2
+        (M3) enables the kernel-boundary invalidation; the HPCA-flag replica
+        and every config without M3 leave it at the default (off)."""
+        for name in sorted(os.listdir(CONFIGS)):
+            if not name.endswith(".json"):
+                continue
+            got = self.load(name)
+            m3 = (got.get("remote-data-path-enable") == "true" and
+                  got.get("remote-data-path-l2-enable", "true") == "true")
+            inval = got.get("remote-reuse-kernel-invalidate", "false")
+            if m3 and name != "complete_hpca_flags.json":
+                self.assertEqual(inval, "true", name)
+            else:
+                self.assertEqual(inval, "false", name)
 
     def test_complete_hpca_flags_equals_runall2_complete(self):
         import sys

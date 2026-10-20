@@ -92,6 +92,13 @@ type Cache struct {
 	observationL2Accesses   uint64
 	remoteReplicaStats      RemoteReplicaStats
 	remoteReplicaGeneration uint64
+	// replicaBoundary is set by InvalidateRemoteReplicas (M3 kernel-boundary
+	// invalidation). A remote fill sent at or before it carries data read
+	// before the boundary and is dropped. Unused (false) when the feature is
+	// off, so the default path is unchanged.
+	replicaBoundarySet   bool
+	replicaBoundaryTime  sim.VTimeInSec
+	replicaBoundaryStats RemoteReplicaBoundaryStats
 
 	localMemoryPathStats LocalMemoryPathStats
 	fillForwarding       bool

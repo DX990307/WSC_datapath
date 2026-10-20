@@ -1,6 +1,8 @@
 package writeback
 
 import (
+	"sort"
+
 	cachepkg "github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
@@ -86,6 +88,11 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 		return false
 	}
 	if fill.Generation != c.remoteReplicaGeneration {
+		c.recordRemoteFillDropped(fill)
+		return false
+	}
+	if c.replicaBoundarySet && fill.SendTime <= c.replicaBoundaryTime {
+		c.replicaBoundaryStats.StaleFillDrops++
 		c.recordRemoteFillDropped(fill)
 		return false
 	}
@@ -301,4 +308,55 @@ func (c *Cache) discardTopPort(now sim.VTimeInSec) {
 			Build()
 		c.topSender.Send(rsp)
 	}
+}
+
+// RemoteReplicaBoundaryStats counts the work of the M3 kernel-boundary
+// invalidation. They stay zero (and are not reported) unless the invalidation
+// is enabled.
+type RemoteReplicaBoundaryStats struct {
+	Invalidations    uint64 // boundaries at which this slice was invalidated
+	LinesInvalidated uint64 // remote replica lines dropped at boundaries
+	StaleFillDrops   uint64 // fills sent before a boundary, dropped on arrival
+}
+
+// GetRemoteReplicaBoundaryStats returns the kernel-boundary counters.
+func (c *Cache) GetRemoteReplicaBoundaryStats() RemoteReplicaBoundaryStats {
+	return c.replicaBoundaryStats
+}
+
+// InvalidateRemoteReplicas implements the kernel-boundary invalidation of the
+// HPCA paper (Section IV-C) for Remote Reuse (M3): every line this requester
+// L2 slice keeps as a clean copy of a remote GPM's data is invalidated. Local
+// lines are untouched. Replica lines are never dirty (requester writes to
+// remote data bypass the requester L2 and are acknowledged by the owner before
+// the wavefront, and therefore the kernel, can complete), so no writeback is
+// needed. A fill whose data was read before the boundary but which arrives
+// afterwards is dropped (installRemoteDataFill). The invalidation is a flash
+// clear of the replica-tagged ways and takes no simulated time. It returns
+// the number of lines invalidated.
+func (c *Cache) InvalidateRemoteReplicas(now sim.VTimeInSec) int {
+	if c.remoteReplicaFilter == nil {
+		return 0
+	}
+	c.replicaBoundarySet = true
+	c.replicaBoundaryTime = now
+	c.replicaBoundaryStats.Invalidations++
+	// Deterministic order: retirements schedule filter updates.
+	blocks := make([]*cachepkg.Block, 0, len(c.remoteReplicaBlocks))
+	for block := range c.remoteReplicaBlocks {
+		blocks = append(blocks, block)
+	}
+	sort.Slice(blocks, func(i, j int) bool {
+		return blocks[i].CacheAddress < blocks[j].CacheAddress
+	})
+	n := 0
+	for _, block := range blocks {
+		c.untrackRemoteReplica(block)
+		c.untrackResidentBlock(block)
+		block.IsValid = false
+		block.IsDirty = false
+		n++
+	}
+	c.replicaBoundaryStats.LinesInvalidated += uint64(n)
+	return n
 }

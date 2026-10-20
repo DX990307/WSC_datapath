@@ -72,6 +72,7 @@ type Comp struct {
 	remoteSingleInflight       map[string]*remoteLineEntry
 	remoteBitmapInflight       map[string]*remoteBatch
 	remoteFillInflight         map[string]*remoteLineEntry
+	remoteReuseBoundaryStats   RemoteReuseBoundaryStats
 	remoteReady                []*remoteLineEntry
 	remoteEpochs               map[remoteLineIdentity]uint64
 	remoteUncacheable          map[remoteLineIdentity]bool

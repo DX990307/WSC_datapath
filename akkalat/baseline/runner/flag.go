@@ -176,6 +176,13 @@ var remoteFilterPrefetchEnableFlag = flag.Bool("remote-filter-prefetch-enable", 
 	"Allow Filter-approved candidates to piggyback existing remote batches.")
 var remoteDataPathL2EnableFlag = flag.Bool("remote-data-path-l2-enable", true,
 	"Enable requester-L2 Cuckoo probes and remote clean replicas when the remote data path is enabled.")
+var remoteReuseKernelInvalidateFlag = flag.Bool(
+	"remote-reuse-kernel-invalidate", false,
+	"M3 (Remote Reuse) kernel-boundary invalidation (HPCA paper IV-C): when "+
+		"a kernel is launched, drop every remote replica line kept in the "+
+		"requester L2 and keep in-flight remote lines out of it. Only has "+
+		"an effect with -remote-data-path-enable and "+
+		"-remote-data-path-l2-enable. Default off (pre-fix behavior).")
 var typedFilterAuthoritativeAuditFlag = flag.Bool(
 	"typed-filter-authoritative-audit", false,
 	"Enable timing-neutral exact-state checks for typed-Filter negative decisions.")

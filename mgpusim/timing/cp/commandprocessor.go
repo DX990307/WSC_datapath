@@ -70,6 +70,10 @@ type CommandProcessor struct {
 	bottomKernelLaunchReqIDToTopReqMap map[string]*protocol.LaunchKernelReq
 	bottomMemCopyH2DReqIDToTopReqMap   map[string]*protocol.MemCopyH2DReq
 	bottomMemCopyD2HReqIDToTopReqMap   map[string]*protocol.MemCopyD2HReq
+
+	// KernelLaunchHooks run when a kernel launch is accepted, before its
+	// first work-group is dispatched (a kernel boundary). Empty by default.
+	KernelLaunchHooks []func(now sim.VTimeInSec)
 }
 
 // CUInterfaceForCP defines the interface that a CP requires from CU.
@@ -325,6 +329,10 @@ func (p *CommandProcessor) processLaunchKernelReq(
 
 	if d == nil {
 		return false
+	}
+
+	for _, hook := range p.KernelLaunchHooks {
+		hook(now)
 	}
 
 	sampledrunner.ResetGPUSampledEngines(p.GPUID)

@@ -481,10 +481,33 @@ func (b R9NanoGPUBuilder) Build(name string, id uint64) *GPU {
 	b.connectL1ToL2()
 	b.connectL1TLBToL2TLB()
 	b.connectL2TLBtoGMMU()
+	b.installRemoteReuseKernelInvalidation()
 
 	b.populateExternalPorts()
 
 	return b.gpu
+}
+
+// installRemoteReuseKernelInvalidation hooks the M3 kernel-boundary
+// invalidation (-remote-reuse-kernel-invalidate) into the GPM's command
+// processor: when a kernel launch is accepted, every requester L2 slice drops
+// its remote replica lines and the RDMA engine retires in-flight remote lines
+// from L2 admission. Nothing is installed when the flag is off or when the
+// requester L2 does not keep remote lines.
+func (b *R9NanoGPUBuilder) installRemoteReuseKernelInvalidation() {
+	if !b.remoteDataPath.KernelBoundaryInvalidate ||
+		!b.remoteDataPath.Enabled || b.remoteDataPath.DisableRequesterL2 {
+		return
+	}
+	l2s := append([]*writeback.Cache(nil), b.l2Caches...)
+	rdmaEngine := b.rdmaEngine
+	b.cp.KernelLaunchHooks = append(b.cp.KernelLaunchHooks,
+		func(now sim.VTimeInSec) {
+			for _, l2 := range l2s {
+				l2.InvalidateRemoteReplicas(now)
+			}
+			rdmaEngine.MarkRemoteReuseKernelBoundary()
+		})
 }
 
 func (b *R9NanoGPUBuilder) populateExternalPorts() {

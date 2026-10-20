@@ -1581,7 +1581,7 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 
 	shouldFill := entry.fromRemote &&
 		!c.remoteConfig.DisableRequesterL2 &&
-		entry.admit &&
+		entry.admit && !entry.boundaryStale &&
 		!c.remoteUncacheable[entry.key.remoteLineIdentity]
 	if shouldFill && c.remoteCacheModules != nil {
 		if entry.fillComplete {

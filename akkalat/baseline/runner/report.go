@@ -769,6 +769,11 @@ func (r *Runner) reportRemoteDataPathStats() {
 		r.metricsCollector.Collect(where, "remote_response_fanout_width_stalls", float64(stats.ResponseFanoutWidthStalls))
 		r.metricsCollector.Collect(where, "remote_owner_issue_width_stalls", float64(stats.OwnerIssueWidthStalls))
 		r.metricsCollector.Collect(where, "remote_owner_response_width_stalls", float64(stats.OwnerResponseWidthStalls))
+		if *remoteReuseKernelInvalidateFlag {
+			b := gpu.RDMAEngine.GetRemoteReuseBoundaryStats()
+			r.metricsCollector.Collect(where, "remote_reuse_kernel_boundaries", float64(b.Boundaries))
+			r.metricsCollector.Collect(where, "remote_reuse_boundary_stale_entries", float64(b.StaleEntries))
+		}
 
 		for _, component := range gpu.L2Caches {
 			l2, ok := component.(*writeback.Cache)
@@ -810,6 +815,12 @@ func (r *Runner) reportRemoteDataPathStats() {
 			r.metricsCollector.Collect(l2Where, "remote_requester_l2_unused_pattern_retirements", float64(l2Stats.UnusedPatternRetirements))
 			r.metricsCollector.Collect(l2Where, "remote_speculative_invalid_only_attempts", float64(l2Stats.SpeculativeInvalidOnlyAttempts))
 			r.metricsCollector.Collect(l2Where, "remote_speculative_invalid_only_drops", float64(l2Stats.SpeculativeInvalidOnlyDrops))
+			if *remoteReuseKernelInvalidateFlag {
+				b := l2.GetRemoteReplicaBoundaryStats()
+				r.metricsCollector.Collect(l2Where, "remote_reuse_boundary_invalidations", float64(b.Invalidations))
+				r.metricsCollector.Collect(l2Where, "remote_reuse_boundary_lines_invalidated", float64(b.LinesInvalidated))
+				r.metricsCollector.Collect(l2Where, "remote_reuse_boundary_stale_fill_drops", float64(b.StaleFillDrops))
+			}
 		}
 	}
 }
