@@ -153,9 +153,9 @@ func TestObsOwnerMergeMulticastAndSamePage(t *testing.T) {
 	}
 	s := summaryOf(t, prefix+"_summary.csv")
 	for k, v := range map[string]string{
-		"owner_same_line_concurrent": "1",
+		"owner_same_line_concurrent":           "1",
 		"owner_same_line_concurrent_other_gpm": "1",
-		"agg_same_page_le_2cyc": "0", "agg_same_page_le_4cyc": "1",
+		"agg_same_page_le_2cyc":                "0", "agg_same_page_le_4cyc": "1",
 		"multicast_deliveries": "2", "multicast_reread_lines": "1",
 		"agg_sent_lines": "2", "agg_same_cycle_same_page_lines": "0",
 	} {
@@ -196,5 +196,30 @@ func TestObsL2FreeAndLinks(t *testing.T) {
 	if lr["bytes"] != "800" || lr["util"] != "0.05" ||
 		lr["max_window_util"] != "0.5" {
 		t.Errorf("link row %v", lr)
+	}
+}
+
+func TestObsL2InvalidateWay(t *testing.T) {
+	EnableObsStats(ObsConfig{Reuse: true})
+	defer DisableObsStats()
+	id := ObsL2Register("GPU[0].L2[0]", 1, 2)
+	ObsL2Fill(id, 0, 0, obsT(100))          // way0 invalid 0..100
+	ObsL2ReadHit(id, 0, 0, obsT(300))       // read at 300
+	ObsL2InvalidateWay(id, 0, 0, obsT(400)) // dead 300..400, invalid 400..
+	ObsL2InvalidateWay(id, 0, 1, obsT(400)) // way1 already invalid: no-op
+	ObsL2Fill(id, 0, 0, obsT(600))          // invalid 400..600, tail 600..1000
+	// way1 never used: invalid 0..1000
+	prefix := filepath.Join(t.TempDir(), "x")
+	if err := ObsWrite(prefix, "w", 1000); err != nil {
+		t.Fatal(err)
+	}
+	r := readObsCSV(t, prefix+"_l2free.csv")[0]
+	for k, v := range map[string]string{
+		"invalid_frac": "0.65", "dead_frac": "0.05", "tail_frac": "0.2",
+		"free_frac": "0.7", "lifetimes": "1", "fills": "2",
+	} {
+		if r[k] != v {
+			t.Errorf("l2free %s = %s, want %s", k, r[k], v)
+		}
 	}
 }

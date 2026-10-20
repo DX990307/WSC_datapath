@@ -352,6 +352,7 @@ func (c *Cache) InvalidateRemoteReplicas(now sim.VTimeInSec) int {
 	})
 	n := 0
 	for _, block := range blocks {
+		c.obsL2InvalidateBlock(block)
 		c.untrackRemoteReplica(block)
 		c.untrackResidentBlock(block)
 		block.IsValid = false

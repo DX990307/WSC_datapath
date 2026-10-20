@@ -1068,6 +1068,29 @@ func ObsL2ReadHit(id, set, way int, now sim.VTimeInSec) {
 	c.readHits++
 }
 
+// ObsL2InvalidateWay records one L2 way becoming invalid without a new fill
+// (M3 kernel-boundary invalidation of a remote replica line).
+func ObsL2InvalidateWay(id, set, way int, now sim.VTimeInSec) {
+	if !obsL2FreeOn {
+		return
+	}
+	obsMu.Lock()
+	defer obsMu.Unlock()
+	s := obsS
+	if s == nil {
+		return
+	}
+	c, i := s.l2block(id, set, way)
+	if c == nil || !c.valid[i] {
+		return
+	}
+	t := obsNS(now)
+	c.deadNS += t - c.lastTouch[i]
+	c.lifetimes++
+	c.valid[i] = false
+	c.invalidSince[i] = t
+}
+
 // ObsL2Invalidate records every way of an L2 cache becoming invalid (flush).
 func ObsL2Invalidate(id int, now sim.VTimeInSec) {
 	if !obsL2FreeOn {

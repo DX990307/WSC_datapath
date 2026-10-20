@@ -69,3 +69,14 @@ func (c *Cache) obsL2Invalidate() {
 		memtrace.ObsL2Invalidate(id, c.Engine.CurrentTime())
 	}
 }
+
+// obsL2InvalidateBlock: one block becomes invalid without a new fill.
+func (c *Cache) obsL2InvalidateBlock(block *cache.Block) {
+	if !memtrace.ObsL2FreeEnabled() || block == nil {
+		return
+	}
+	if id := c.obsL2Index(); id >= 0 {
+		memtrace.ObsL2InvalidateWay(id, block.SetID, block.WayID,
+			c.Engine.CurrentTime())
+	}
+}
