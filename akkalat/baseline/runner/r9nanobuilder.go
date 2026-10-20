@@ -38,6 +38,7 @@ type R9NanoGPUBuilder struct {
 	numMemoryBank                  int
 	dramSize                       uint64
 	l2CacheSize                    uint64
+	l2BankLatency                  int
 	log2PageSize                   uint64
 	log2CacheLineSize              uint64
 	log2MemoryBankInterleavingSize uint64
@@ -129,6 +130,7 @@ func MakeR9NanoGPUBuilder() R9NanoGPUBuilder {
 		log2PageSize:                   12,
 		log2MemoryBankInterleavingSize: 12,
 		l2CacheSize:                    4 * mem.MB,
+		l2BankLatency:                  10,
 		dramSize:                       8 * mem.GB,
 		l1vMSHREntries:                 16,
 		l1vMaxConcurrentTrans:          16,
@@ -427,6 +429,12 @@ func (b R9NanoGPUBuilder) WithPerfAnalyzer(
 	a *analysis.PerfAnalyzer,
 ) R9NanoGPUBuilder {
 	b.perfAnalyzer = a
+	return b
+}
+
+// WithL2BankLatency sets the L2 data-bank pipeline latency in cycles.
+func (b R9NanoGPUBuilder) WithL2BankLatency(n int) R9NanoGPUBuilder {
+	b.l2BankLatency = n
 	return b
 }
 
@@ -797,6 +805,7 @@ func (b *R9NanoGPUBuilder) buildL2Caches() {
 		WithNumMSHREntry(b.gpmPreset.L2MSHRPerBank).
 		WithNumReqPerCycle(b.gpmPreset.L2ReqPerCyclePerBank).
 		WithDirectoryLatency(10).
+		WithBankLatency(b.l2BankLatency).
 		WithTypedFilter(
 			b.l2ResidentFilter || b.l2FilterPrefetch || b.l2AdaptivePair ||
 				b.remoteDataPath.Enabled).

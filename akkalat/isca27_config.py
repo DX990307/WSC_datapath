@@ -58,10 +58,12 @@ ORACLE_FLAGS = {
     "-force-local-data-access": "oracle（有意偏离 mi200.json 的分析实验）：L1V miss 一律走本地 L2/DRAM",
 }
 
-# Mesh size (P13 C2, scaling runs R5/R6): an intentional configuration
-# deviation that the user must confirm, not a benchmark parameter.
+# Mesh size (P13 C2, scaling runs R5/R6) and the L2 latency sensitivity (R7):
+# intentional configuration deviations that the user must confirm, not
+# benchmark parameters.
 MESH_FLAGS = {
     "-mesh-size": "规模实验（有意偏离 mi200.json，需要用户确认）：N×N mesh，CPU/IOMMU 在中心，N²−1 个 GPM",
+    "-l2-bank-latency": "敏感性实验（有意偏离 mi200.json，需要用户确认）：L2 数据 bank 流水延迟（周期），加长 L2 命中延迟",
 }
 
 

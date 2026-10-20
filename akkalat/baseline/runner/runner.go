@@ -441,6 +441,7 @@ func (r *Runner) buildTimingPlatform() {
 		WithL1VMSHREntries(*l1vMSHREntriesFlag).
 		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag).
 		WithL2CacheSizeMB(*l2CacheSizeMBFlag).
+		WithL2BankLatency(*l2BankLatencyFlag).
 		WithForceLocalDataAccess(*forceLocalDataAccessFlag).
 		WithL2ResidentFilter(*l2ResidentFilterEnableFlag).
 		WithL2FilterPrefetch(

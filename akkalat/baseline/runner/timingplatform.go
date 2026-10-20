@@ -50,6 +50,7 @@ type R9NanoPlatformBuilder struct {
 	l1vMSHREntries            int
 	l1vMaxConcurrentTrans     int
 	l2CacheSize               uint64
+	l2BankLatency             int
 	forceLocalDataAccess      bool
 	l2ResidentFilter          bool
 	l2FilterPrefetch          bool
@@ -106,6 +107,7 @@ func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 		l1vMSHREntries:            16,
 		l1vMaxConcurrentTrans:     16,
 		l2CacheSize:               4 * mem.MB,
+		l2BankLatency:             10,
 		prefetchPredictorEntries:  64,
 		l2AdaptivePairRegionLines: 2,
 		typedFilterConfig: writeback.TypedFilterConfig{
@@ -296,6 +298,15 @@ func (b R9NanoPlatformBuilder) WithL1VMaxConcurrentTrans(
 }
 
 // WithL2CacheSizeMB sets the total L2 capacity of each GPM.
+// WithL2BankLatency sets the L2 data-bank pipeline latency in cycles.
+func (b R9NanoPlatformBuilder) WithL2BankLatency(n int) R9NanoPlatformBuilder {
+	if n < 1 {
+		panic("L2 bank latency must be positive")
+	}
+	b.l2BankLatency = n
+	return b
+}
+
 func (b R9NanoPlatformBuilder) WithL2CacheSizeMB(
 	capacityMB int,
 ) R9NanoPlatformBuilder {
@@ -705,6 +716,7 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithNumMemoryBank(numMemoryBank).
 		WithGPMPreset(b.gpmPreset).
 		WithL2CacheSize(b.l2CacheSize).
+		WithL2BankLatency(b.l2BankLatency).
 		WithLog2MemoryBankInterleavingSize(
 			adaptivePairInterleavingLog2(b.l2AdaptivePairRegionLines)).
 		WithLog2PageSize(b.log2PageSize).
