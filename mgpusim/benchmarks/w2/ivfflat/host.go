@@ -157,26 +157,31 @@ func parallel(n int, f func(i int)) {
 	wg.Wait()
 }
 
-// nearest returns the indices of the m centroids closest to v.
+// nearest returns the indices of the m centroids closest to v, closest
+// first (ties: lower index); m selection passes, cheap for small m.
 func nearest(v, cent []float32, m int) []int {
 	n := len(cent) / Dim
 	d := make([]float64, n)
-	idx := make([]int, n)
 	for c := 0; c < n; c++ {
 		var s float64
 		for k := 0; k < Dim; k++ {
 			t := float64(v[k] - cent[c*Dim+k])
 			s += t * t
 		}
-		d[c], idx[c] = s, c
+		d[c] = s
 	}
-	sort.Slice(idx, func(a, b int) bool {
-		if d[idx[a]] != d[idx[b]] {
-			return d[idx[a]] < d[idx[b]]
+	out := make([]int, 0, m)
+	for len(out) < m {
+		best := -1
+		for c := 0; c < n; c++ {
+			if !math.IsInf(d[c], 1) && (best < 0 || d[c] < d[best]) {
+				best = c
+			}
 		}
-		return idx[a] < idx[b]
-	})
-	return idx[:m]
+		out = append(out, best)
+		d[best] = math.Inf(1)
+	}
+	return out
 }
 
 // Dist is the kernel's fp32 squared distance (8-dim slices summed in order,
