@@ -33,16 +33,16 @@ type t18Waiter struct {
 }
 
 type t18ReqEntry struct {
-	key      t18Key
-	dst      sim.Port
-	dstIdx   int
-	open     bool
-	inTable  bool
-	sent     bool
-	seq      uint64
-	sentAt   sim.VTimeInSec
-	netReq   mem.AccessReq
-	waiters  []t18Waiter
+	key     t18Key
+	dst     sim.Port
+	dstIdx  int
+	open    bool
+	inTable bool
+	sent    bool
+	seq     uint64
+	sentAt  sim.VTimeInSec
+	netReq  mem.AccessReq
+	waiters []t18Waiter
 }
 
 type t18L1Rsp struct {

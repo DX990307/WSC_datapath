@@ -76,35 +76,35 @@ type T18Stats struct {
 	OwnerTableSlots   uint64
 
 	// Requester.
-	ReqAccepted          uint64 // requests accepted from L1 (merged or not)
-	ReqMergeableReads    uint64 // full-line reads eligible for merging
-	ReqMerged            uint64 // reads merged into an open entry
-	ReqMergedInflight    uint64 // ... whose entry was already sent
-	ReqMergedQueued      uint64 // ... whose entry still waited for a credit
-	ReqNewEntries        uint64
-	ReqClosedByWrite     uint64
-	ReqTableFullStalls   uint64 // insert failures that stalled the request
-	ReqBypasses          uint64 // insert failures sent untracked
-	ReqWaiterFullStalls  uint64
-	ReqSent              uint64 // network transactions sent
-	ReqSentBorrowed      uint64 // ... sent on a borrowed credit
-	ReqResponses         uint64
-	ReqFanoutResponses   uint64 // responses to L1
-	ReqPeakWaiters       uint64
-	ReqPeakQueued        uint64
-	ReqPeakInflight      uint64
-	ReqTable             t18CuckooStats
-	ReqQueueAreaNS       float64 // integral of queued requests over time
-	ReqWindowFullNS      float64 // time with all W slots in flight
-	ReqInflightAreaNS    float64 // integral of in-flight transactions
-	ReqTimeNS            float64 // observation time (ns)
-	ReqLatencyTotalNS    float64 // L1 arrival -> response to L1, all waiters
-	HopDests             [t18MaxHops]uint64
-	HopCredits           [t18MaxHops]uint64
-	HopSent              [t18MaxHops]uint64
-	HopMerged            [t18MaxHops]uint64
-	HopInflightAreaNS    [t18MaxHops]float64
-	HopRTTTotalNS        [t18MaxHops]float64 // send -> response, per transaction
+	ReqAccepted         uint64 // requests accepted from L1 (merged or not)
+	ReqMergeableReads   uint64 // full-line reads eligible for merging
+	ReqMerged           uint64 // reads merged into an open entry
+	ReqMergedInflight   uint64 // ... whose entry was already sent
+	ReqMergedQueued     uint64 // ... whose entry still waited for a credit
+	ReqNewEntries       uint64
+	ReqClosedByWrite    uint64
+	ReqTableFullStalls  uint64 // insert failures that stalled the request
+	ReqBypasses         uint64 // insert failures sent untracked
+	ReqWaiterFullStalls uint64
+	ReqSent             uint64 // network transactions sent
+	ReqSentBorrowed     uint64 // ... sent on a borrowed credit
+	ReqResponses        uint64
+	ReqFanoutResponses  uint64 // responses to L1
+	ReqPeakWaiters      uint64
+	ReqPeakQueued       uint64
+	ReqPeakInflight     uint64
+	ReqTable            t18CuckooStats
+	ReqQueueAreaNS      float64 // integral of queued requests over time
+	ReqWindowFullNS     float64 // time with all W slots in flight
+	ReqInflightAreaNS   float64 // integral of in-flight transactions
+	ReqTimeNS           float64 // observation time (ns)
+	ReqLatencyTotalNS   float64 // L1 arrival -> response to L1, all waiters
+	HopDests            [t18MaxHops]uint64
+	HopCredits          [t18MaxHops]uint64
+	HopSent             [t18MaxHops]uint64
+	HopMerged           [t18MaxHops]uint64
+	HopInflightAreaNS   [t18MaxHops]float64
+	HopRTTTotalNS       [t18MaxHops]float64 // send -> response, per transaction
 
 	// Owner.
 	OwnerReads              uint64 // remote full-line reads seen
