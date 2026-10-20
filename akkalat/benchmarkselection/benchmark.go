@@ -250,7 +250,7 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = newNPBMG(driver)
 	case "floydwarshall":
 		floydwarshall := floydwarshall.NewBenchmark(driver)
-		floydwarshall.NumNodes = 11584
+		floydwarshall.NumNodes = uint32(*fwNodesFlag)
 		floydwarshall.NumIterations = 1
 		benchmark = floydwarshall
 	case "gpt":
@@ -388,7 +388,7 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = matrixmultiplication
 	case "matrixtranspose":
 		matrixtranspose := matrixtranspose.NewBenchmark(driver)
-		matrixtranspose.Width = 11520
+		matrixtranspose.Width = *mtWidthFlag
 		// matrixtranspose.Width = 4096 * 4
 		// matrixtranspose.Width = 4096 / 2
 		benchmark = matrixtranspose
@@ -411,8 +411,8 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = nw
 	case "pagerank":
 		pagerank := pagerank.NewBenchmark(driver)
-		pagerank.NumNodes = 1 << 20
-		pagerank.NumConnections = 132644864
+		pagerank.NumNodes = uint32(*prNodesFlag)
+		pagerank.NumConnections = uint32(*prConnectionsFlag)
 		pagerank.MaxIterations = 1
 		benchmark = pagerank
 	case "pagerank-pipeline-smoke":
