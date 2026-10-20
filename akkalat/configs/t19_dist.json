@@ -1,0 +1,24 @@
+{
+  "_description": "T19 (mechanism, distance-only): configs/mi200.json unchanged plus cuckoo-filter-less nearby WG stealing between the GPMs of unified kernels. Every key below is a T19 flag (default off / default value in the simulator); no mi200 or hpca parameter is changed. The parameter values repeat the simulator defaults so that the run is self-describing.",
+  "extends": "mi200.json",
+
+  "_t19-steal": "Turn on WG stealing: each GPM keeps MGPUSim's static contiguous range, but WGs not yet dispatched can be taken from the tail by other GPMs; GPMs with an empty range also get the launch. Steal requests and replies are real messages between the command processors over the wafer mesh.",
+  "t19-steal": true,
+  "_t19-chunk-wgs": "WGs per steal (k).",
+  "t19-chunk-wgs": 8,
+  "_t19-radius": "GPMs advertise their queued-WG count to GPMs within this many hops (near victims).",
+  "t19-radius": 2,
+  "_t19-fallback": "Steal from farther GPMs (nearest first) when no near GPM has enough work.",
+  "t19-fallback": true,
+  "_t19-min-victim-wgs": "0 = 2 x chunk: a victim keeps at least one chunk.",
+  "t19-min-victim-wgs": 0,
+  "_t19-adv-period-ns": "Near advertisement period; far GPMs are advertised every t19-far-adv-period-ns. A thief sees the count at the last period boundary at least t19-adv-fixed-ns + hops x t19-adv-hop-ns old (36 ns per hop = half of the 71.4 ns/hop RDMA round-trip slope measured in T14).",
+  "t19-adv-period-ns": 200,
+  "t19-far-adv-period-ns": 2000,
+  "t19-adv-hop-ns": 36,
+  "t19-adv-fixed-ns": 20,
+  "_t19-victim-cycles": "CP cycles the victim needs to serve a steal request.",
+  "t19-victim-cycles": 20,
+  "_t19-initial-split": "static = MGPUSim's split (as mi200). balanced is an option for a separate, user-approved experiment only.",
+  "t19-initial-split": "static"
+}

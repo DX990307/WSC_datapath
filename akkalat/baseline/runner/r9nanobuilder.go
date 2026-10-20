@@ -503,6 +503,11 @@ func (b *R9NanoGPUBuilder) populateExternalPorts() {
 	// 	b.gpu.Domain.AddPort(name, gmmu.GetPortByName("Bottom"))
 	// }
 	b.gpu.Domain.AddPort("GMMU", b.gmmu.GetPortByName("Bottom"))
+
+	// T19: the CP's steal port joins the mesh only when enabled.
+	if t19Enabled() {
+		b.gpu.Domain.AddPort("CommandProcessorSteal", b.cp.CreateStealPort())
+	}
 }
 
 func (b *R9NanoGPUBuilder) createGPU(name string, id uint64) {

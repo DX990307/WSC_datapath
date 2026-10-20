@@ -1,0 +1,20 @@
+{
+  "_description": "T19 (mechanism, distance + filter): configs/t19_dist.json plus cuckoo-filter guidance of the victim/chunk choice. No mi200 or hpca parameter is changed.",
+  "extends": "t19_dist.json",
+
+  "_t19-filter": "Per-GPM recent-page cuckoo filter (aging by deletion) and per WG-group footprint cuckoo filters recorded on the first launch of a kernel (replaced when the pattern changes). Near candidates are ranked by footprint overlap, then group / WG-index affinity, then distance.",
+  "t19-filter": true,
+  "_t19-rpf-log2-buckets": "Recent-page filter: 512 buckets x 4 slots, 12-bit fingerprints, keeps the last 1024 distinct pages.",
+  "t19-rpf-log2-buckets": 9,
+  "t19-filter-slots": 4,
+  "t19-fp-bits": 12,
+  "t19-rpf-window": 1024,
+  "_t19-group-log2-buckets": "Group footprint filter: 64 buckets x 4 slots (fingerprint + 3 extra hash bits + primary flag = 16 bits per entry); 64 groups per home GPM, LRU.",
+  "t19-group-log2-buckets": 6,
+  "t19-group-table": 64,
+  "_t19-group-wgs": "0 = chunk size; a benchmark group hint overrides it.",
+  "t19-group-wgs": 0,
+  "t19-candidates": 1,
+  "t19-replace-below": 0.5,
+  "t19-probe-width": 16
+}

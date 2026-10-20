@@ -13,8 +13,10 @@ import (
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 	"github.com/sarchlab/mgpusim/v3/driver/internal"
+	"github.com/sarchlab/mgpusim/v3/insts"
 	"github.com/sarchlab/mgpusim/v3/kernels"
 	"github.com/sarchlab/mgpusim/v3/protocol"
+	"github.com/sarchlab/mgpusim/v3/wgsteal"
 	"github.com/tebeka/atexit"
 )
 
@@ -68,6 +70,10 @@ type Driver struct {
 	isCurrentlyMigratingOnePage     bool
 
 	RemotePMCPorts []sim.Port
+
+	// T19 WG stealing (wgsteal.go); nil unless enabled.
+	wgSteal      *wgsteal.Coordinator
+	wgGroupHints map[*insts.HsaCo]func(int) int
 }
 
 // Run starts a new threads that handles all commands in the command queues
@@ -384,6 +390,10 @@ func (d *Driver) processUnifiedMultiGPULaunchKernelCommand(
 	cmd *LaunchUnifiedMultiGPUKernelCommand,
 	queue *CommandQueue,
 ) bool {
+	if d.wgSteal != nil {
+		return d.processStealLaunch(now, cmd, queue)
+	}
+
 	wgDist := d.distributeWGToGPUs(queue, cmd)
 
 	dev := d.devices[queue.GPUID]

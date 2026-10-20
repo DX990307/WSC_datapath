@@ -5,6 +5,7 @@ import (
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/mgpusim/v3/insts"
 	"github.com/sarchlab/mgpusim/v3/kernels"
+	"github.com/sarchlab/mgpusim/v3/wgsteal"
 )
 
 // FlushReq requests the GPU to flush all the cache to the main memory
@@ -38,6 +39,12 @@ type LaunchKernelReq struct {
 	PacketAddress uint64
 	HsaCo         *insts.HsaCo
 	WGFilter      kernels.WGFilterFunc
+
+	// WGSteal (T19, nil unless enabled) is the launch's shared WG queue
+	// state. When set, the dispatcher takes WGs from it instead of
+	// walking the grid with WGFilter (which then only describes the
+	// static split).
+	WGSteal *wgsteal.Launch
 }
 
 // Meta returns the meta data associated with the message.

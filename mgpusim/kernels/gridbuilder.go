@@ -192,3 +192,33 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// BuildWG builds the work-group with the given flattened ID (x fastest,
+// then y, then z; the order in which NextWG walks the grid), with its work
+// items and wavefronts, exactly as NextWG would. Used by T19 WG stealing,
+// where a GPM dispatches WGs by ID from a dynamic queue.
+func BuildWG(info KernelLaunchInfo, flatID int) *WorkGroup {
+	pkt := info.Packet
+	nx := int(pkt.GridSizeX-1)/int(pkt.WorkgroupSizeX) + 1
+	ny := int(pkt.GridSizeY-1)/int(pkt.WorkgroupSizeY) + 1
+	b := &gridBuilderImpl{
+		hsaco:      info.CodeObject,
+		packet:     pkt,
+		packetAddr: info.PacketAddr,
+	}
+	wg := NewWorkGroup()
+	wg.Packet = pkt
+	wg.CodeObject = info.CodeObject
+	wg.SizeX = int(pkt.WorkgroupSizeX)
+	wg.SizeY = int(pkt.WorkgroupSizeY)
+	wg.SizeZ = int(pkt.WorkgroupSizeZ)
+	wg.IDX = flatID % nx
+	wg.IDY = (flatID / nx) % ny
+	wg.IDZ = flatID / (nx * ny)
+	wg.CurrSizeX = min(int(pkt.GridSizeX)-wg.IDX*wg.SizeX, wg.SizeX)
+	wg.CurrSizeY = min(int(pkt.GridSizeY)-wg.IDY*wg.SizeY, wg.SizeY)
+	wg.CurrSizeZ = min(int(pkt.GridSizeZ)-wg.IDZ*wg.SizeZ, wg.SizeZ)
+	b.spawnWorkItems(wg)
+	b.formWavefronts(wg)
+	return wg
+}

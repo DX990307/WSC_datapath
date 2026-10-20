@@ -70,6 +70,8 @@ type CommandProcessor struct {
 	bottomKernelLaunchReqIDToTopReqMap map[string]*protocol.LaunchKernelReq
 	bottomMemCopyH2DReqIDToTopReqMap   map[string]*protocol.MemCopyH2DReq
 	bottomMemCopyD2HReqIDToTopReqMap   map[string]*protocol.MemCopyD2HReq
+
+	steal *cpSteal // T19 WG stealing, nil unless enabled
 }
 
 // CUInterfaceForCP defines the interface that a CP requires from CU.
@@ -108,6 +110,9 @@ func (p *CommandProcessor) Tick(now sim.VTimeInSec) bool {
 	madeProgress = p.tickDispatchers(now) || madeProgress
 	madeProgress = p.processReqFromDriver(now) || madeProgress
 	madeProgress = p.processRspFromInternal(now) || madeProgress
+	if p.steal != nil {
+		madeProgress = p.tickSteal(now) || madeProgress
+	}
 
 	return madeProgress
 }

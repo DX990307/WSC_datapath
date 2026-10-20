@@ -51,6 +51,8 @@ type DispatcherImpl struct {
 
 	monitor     *monitoring.Monitor
 	progressBar *monitoring.ProgressBar
+
+	steal *stealState // T19, nil unless enabled
 }
 
 // Name returns the name of the dispatcher
@@ -183,6 +185,11 @@ func (d *DispatcherImpl) analysisKernelSampled() (wgNumToSkip, wfPerWG uint64) {
 // StartDispatching lets the dispatcher to start dispatch another kernel.
 func (d *DispatcherImpl) StartDispatching(req *protocol.LaunchKernelReq) {
 	d.mustNotBeDispatchingAnotherKernel()
+	if d.steal != nil {
+		d.selectAlg(req)
+	} else if req.WGSteal != nil {
+		panic("T19 launch on a dispatcher without WG stealing")
+	}
 
 	info := kernels.KernelLaunchInfo{
 		CodeObject: req.HsaCo,
@@ -192,6 +199,12 @@ func (d *DispatcherImpl) StartDispatching(req *protocol.LaunchKernelReq) {
 	}
 	d.alg.StartNewKernel(info)
 	d.dispatching = req
+	if req.WGSteal != nil && (*sampledrunner.SampledRunnerFlag ||
+		*sampledrunner.BranchSampledFlag ||
+		*sampledrunner.LoopSampledFlag ||
+		*sampledrunner.KernelSampledFlag) {
+		panic("T19 WG stealing does not support sampled simulation")
+	}
 	packet := info.Packet
 	workgroupSize := int(packet.WorkgroupSizeX) *
 		int(packet.WorkgroupSizeY) *
@@ -262,6 +275,9 @@ func (d *DispatcherImpl) Tick(now sim.VTimeInSec) (madeProgress bool) {
 	}
 
 	if d.dispatching != nil {
+		if d.steal != nil && d.stealMode() {
+			madeProgress = d.trySteal(now) || madeProgress
+		}
 		if d.kernelCompleted() {
 			madeProgress = d.completeKernel(now) || madeProgress
 		} else {
@@ -299,6 +315,9 @@ func (d *DispatcherImpl) processMessagesFromCU(now sim.VTimeInSec) bool {
 		for _, rspToID := range msg.RspTo {
 			location := d.inflightWGs[rspToID]
 			d.alg.FreeResources(location)
+			if d.steal != nil && d.stealMode() {
+				d.steal.alg.coord.WGDone(d.steal.alg.launch, location.wg)
+			}
 			delete(d.inflightWGs, rspToID)
 			d.numCompletedWGs++
 			d.numCompletedWFs += uint64(len(location.locations))
@@ -376,6 +395,10 @@ func (d *DispatcherImpl) kernelCompleted() bool {
 		return false
 	}
 
+	if d.steal != nil && d.stealMode() && !d.stealDone() {
+		return false
+	}
+
 	return true
 }
 
@@ -388,6 +411,9 @@ func (d *DispatcherImpl) completeKernel(now sim.VTimeInSec) (
 
 	err := d.respondingPort.Send(rsp)
 	if err == nil {
+		if d.steal != nil && d.stealMode() {
+			d.steal.alg.launch.Done(d.steal.alg.gpm, now)
+		}
 		d.dispatching = nil
 
 		if d.monitor != nil {

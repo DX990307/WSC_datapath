@@ -25,6 +25,7 @@ import (
 	"github.com/sarchlab/mgpusim/v3/samples/sampledrunner"
 	"github.com/sarchlab/mgpusim/v3/timing/cp"
 	"github.com/sarchlab/mgpusim/v3/timing/rdma"
+	"github.com/sarchlab/mgpusim/v3/wgsteal"
 	"github.com/tebeka/atexit"
 )
 
@@ -69,6 +70,7 @@ type Runner struct {
 	observationDRAM     *windowedPhysicalDRAMObserver
 	gpmTracer           *gpmTracer
 	p12                 *p12Tracer
+	wgSteal             *wgsteal.Coordinator
 
 	Timing                     bool
 	Verify                     bool
@@ -161,6 +163,7 @@ func (r *Runner) Init() *Runner {
 
 	r.createUnifiedGPUs()
 	r.configureMagicCopyCoherence()
+	r.setupWGSteal()
 
 	r.defineMetrics()
 

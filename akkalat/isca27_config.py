@@ -52,6 +52,20 @@ STAT_FLAGS = {
 }
 
 
+# Mechanism switches (T19): off by default in the simulator; a run that sets
+# them is a mechanism run, not a configuration change.
+MECH_PREFIXES = {
+    "t19-": "机制开关（T19，默认关闭）：WG 窃取 / cuckoo filter 指导；不改 mi200 参数",
+}
+
+
+def mech_reason(name):
+    for prefix, reason in MECH_PREFIXES.items():
+        if name.startswith(prefix):
+            return reason
+    return None
+
+
 # Oracle switches (T15 O1; T17 O1 in P12): intentional deviations for analysis
 # runs, not benchmark parameters.
 ORACLE_FLAGS = {
@@ -111,6 +125,8 @@ def deviation(config_list, bench, base=None):
             continue
         if name in keys:
             reason = PRESET_REASON.get(preset, UNKNOWN_REASON)
+        elif mech_reason(name) and name not in paper:
+            reason = mech_reason(name)
         else:
             reason = f"配置文件 {config_list}"
         out.append({"flag": f"-{name}", "change": "changed" if name in paper and name in used
@@ -129,6 +145,8 @@ def deviation(config_list, bench, base=None):
         flag = f"-{name}" + (f" {value}" if value else "")
         if name in used or name in paper:
             reason = "命令行覆盖配置文件"
+        elif mech_reason(name):
+            reason = mech_reason(name)
         else:
             reason = STAT_FLAGS.get(f"-{name}") or ORACLE_FLAGS.get(
                 f"-{name}", "benchmark 参数（不算配置修改）")

@@ -146,6 +146,22 @@ class ISCA27ConfigTest(unittest.TestCase):
             self.assertEqual(d["reason"], isca27_config.PRESET_REASON["hpca"], d)
         self.assertEqual(by_flag["-num-memory-banks"]["paper"], "8")
 
+    def test_t19_configs_only_add_mechanism_flags(self):
+        # T19: mi200 + T19 flags; every difference from mi200.json is a T19
+        # mechanism flag (added), no mi200/hpca parameter changes.
+        for name in ("t19_dist.json", "t19_filter.json"):
+            out = isca27_config.deviation(os.path.join(CONFIGS, name), [])
+            self.assertTrue(out, name)
+            for d in out:
+                self.assertTrue(d["flag"].startswith("-t19-"), d)
+                self.assertEqual(d["change"], "added", d)
+                self.assertEqual(d["reason"], isca27_config.MECH_PREFIXES["t19-"], d)
+        on = isca27_config.merged(os.path.join(CONFIGS, "t19_filter.json"))
+        self.assertEqual(on["t19-steal"], "true")
+        self.assertEqual(on["t19-filter"], "true")
+        dist = isca27_config.merged(os.path.join(CONFIGS, "t19_dist.json"))
+        self.assertNotIn("t19-filter", dist)
+
 
 if __name__ == "__main__":
     unittest.main()

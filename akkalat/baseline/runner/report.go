@@ -68,6 +68,7 @@ func (r *Runner) reportStats() {
 	}
 	// r.reportGMMUCounts()
 	// r.reportL2TLBCounts()
+	r.reportWGSteal()
 	r.dumpMetrics()
 }
 
