@@ -24,6 +24,9 @@ type Cache struct {
 	bottomPort  sim.Port
 	controlPort sim.Port
 
+	// obsL2ID: P13 L2 free-capacity statistic index + 1 (0 unknown, -1 none).
+	obsL2ID int
+
 	dirStageBuffer           sim.Buffer
 	dirToBankBuffers         []sim.Buffer
 	writeBufferToBankBuffers []sim.Buffer

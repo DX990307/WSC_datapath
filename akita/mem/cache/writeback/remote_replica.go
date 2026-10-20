@@ -149,6 +149,7 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 		panic(err)
 	}
 
+	c.obsL2Fill(block)
 	block.PID = fill.PID
 	block.Tag = line
 	block.IsValid = true

@@ -53,6 +53,9 @@ func (c *Comp) processBitmapReqFromOutside(
 			WithInfo(req.Info).
 			Build()
 		sub := &remoteOwnerSubReq{batch: batch, line: line, read: read}
+		if memtrace.ObsEnabled() {
+			memtrace.ObsOwnerRecv(req.ID, address, req.RecvTime)
+		}
 		batch.remaining++
 		c.remoteOwnerPendingReq = append(c.remoteOwnerPendingReq, sub)
 		c.remoteOwnerSubReqs[read.ID] = sub
@@ -88,6 +91,10 @@ func (c *Comp) processRemoteOwnerPendingReqs(now sim.VTimeInSec) bool {
 	if err := c.ToL2.Send(sub.read); err != nil {
 		return false
 	}
+	if memtrace.ObsEnabled() {
+		memtrace.ObsOwnerL2(sub.batch.req.ID, sub.read.Address, now,
+			sub.read.ID, false)
+	}
 	c.remoteOwnerPendingReq = c.remoteOwnerPendingReq[1:]
 	return true
 }
@@ -111,6 +118,9 @@ func (c *Comp) processRemoteOwnerSubRsp(
 	sub.batch.readyData[sub.line] = append([]byte(nil), dataRsp.Data...)
 	sub.batch.remaining--
 	delete(c.remoteOwnerSubReqs, rsp.GetRspTo())
+	if memtrace.ObsEnabled() {
+		memtrace.ObsOwnerL2Rsp(rsp.GetRspTo(), rsp.Meta().RecvTime)
+	}
 	c.ToL2.Retrieve(now)
 	if !sub.batch.readyQueued {
 		sub.batch.readyQueued = true
@@ -141,6 +151,12 @@ func (c *Comp) processRemoteOwnerPendingRsps(now sim.VTimeInSec) bool {
 	rsp.SendTime = now
 	if err := c.ToOutside.Send(rsp); err != nil {
 		return false
+	}
+	if memtrace.ObsEnabled() {
+		for line := range batch.readyData {
+			memtrace.ObsOwnerSend(batch.req.ID,
+				batch.req.PagePAddr+line*remoteLineBytes, now, false)
+		}
 	}
 	memtrace.RegisterMemoryPathNetworkMessage(
 		nil, rsp.RespondTo, rsp.ID, "return")

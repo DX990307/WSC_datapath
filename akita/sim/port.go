@@ -140,6 +140,14 @@ func (p *LimitNumMsgPort) Retrieve(now VTimeInSec) Msg {
 	return msg
 }
 
+// NumBuffered returns the number of messages waiting in the incoming buffer
+// (read only; statistics).
+func (p *LimitNumMsgPort) NumBuffered() int {
+	p.bufLock.RLock()
+	defer p.bufLock.RUnlock()
+	return p.buf.Size()
+}
+
 // Peek returns the first message in the port without removing it.
 func (p *LimitNumMsgPort) Peek() Msg {
 	p.bufLock.RLock()

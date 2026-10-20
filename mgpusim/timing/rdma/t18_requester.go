@@ -481,6 +481,9 @@ func (c *Comp) t18ReqIssue(now sim.VTimeInSec) bool {
 		if err := c.ToOutside.Send(e.netReq); err != nil {
 			break
 		}
+		if obsIsRead(e.netReq) {
+			c.obsNetSend(e.dst, e.netReq.Meta().ID, e.netReq.GetAddress(), 1, now)
+		}
 		c.t18Integrate(now)
 		s.reqQueues[best][0] = nil
 		s.reqQueues[best] = s.reqQueues[best][1:]
@@ -532,6 +535,10 @@ func (c *Comp) t18ReqRsp(
 	case *mem.WriteDoneRsp:
 	default:
 		panic(fmt.Sprintf("T18 requester: unexpected response %T", rsp))
+	}
+	if data != nil && memtrace.ObsEnabled() {
+		memtrace.ObsReqArrive(c.Name(), rsp.GetRspTo(), e.key.line,
+			rsp.Meta().RecvTime)
 	}
 	c.t18Integrate(now)
 	delete(s.reqByNetID, rsp.GetRspTo())
@@ -587,6 +594,9 @@ func (c *Comp) t18Fanout(now sim.VTimeInSec) bool {
 		r.msg.Meta().SendTime = now
 		if err := c.ToL1.Send(r.msg); err != nil {
 			break
+		}
+		if memtrace.ObsEnabled() {
+			memtrace.ObsL1Done(obsRspTo(r.msg), now)
 		}
 		s.fanout[0] = t18L1Rsp{}
 		s.fanout = s.fanout[1:]

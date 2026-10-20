@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
 )
 
@@ -87,6 +88,14 @@ func (c *Comp) t18OwnerReqFromOutside(
 			return false, false
 		}
 		e.reqs = append(e.reqs, t18OwnerReq{src: read.Src, rspTo: read.ID})
+		if memtrace.ObsEnabled() {
+			l2ID := ""
+			if e.l2Req != nil {
+				l2ID = e.l2Req.ID
+			}
+			memtrace.ObsOwnerRecv(read.ID, read.Address, read.RecvTime)
+			memtrace.ObsOwnerL2(read.ID, read.Address, now, l2ID, true)
+		}
 		s.stats.OwnerReads++
 		s.stats.OwnerMerged++
 		c.ToOutside.Retrieve(now)
@@ -120,6 +129,10 @@ func (c *Comp) t18OwnerReqFromOutside(
 	}
 	e.l2Req = l2Req
 	e.reqs = append(e.reqs, t18OwnerReq{src: read.Src, rspTo: read.ID})
+	if memtrace.ObsEnabled() {
+		memtrace.ObsOwnerRecv(read.ID, read.Address, read.RecvTime)
+		memtrace.ObsOwnerL2(read.ID, read.Address, now, l2Req.ID, false)
+	}
 	s.ownerByL2ID[l2Req.ID] = e
 	s.ownerLive++
 	if uint64(s.ownerLive) > s.stats.OwnerPeakLive {
@@ -162,6 +175,9 @@ func (c *Comp) t18OwnerL2Rsp(now sim.VTimeInSec, rsp mem.AccessRsp) bool {
 		panic(fmt.Sprintf("T18 owner: unexpected L2 response %T", rsp))
 	}
 	e.data = append([]byte(nil), dataRsp.Data...)
+	if memtrace.ObsEnabled() {
+		memtrace.ObsOwnerL2Rsp(rsp.GetRspTo(), rsp.Meta().RecvTime)
+	}
 	delete(s.ownerByL2ID, rsp.GetRspTo())
 	if s.ownerTable.Contains(e) {
 		s.ownerTable.Delete(e)
@@ -250,6 +266,9 @@ func (c *Comp) t18OwnerSend(now sim.VTimeInSec) bool {
 				break
 			}
 			for _, r := range e.reqs {
+				if memtrace.ObsEnabled() {
+					memtrace.ObsOwnerSend(r.rspTo, e.key.line, now, true)
+				}
 				if r.sub != nil {
 					c.t18ChildSentByMulticast(r.sub)
 				}
@@ -271,6 +290,9 @@ func (c *Comp) t18OwnerSend(now sim.VTimeInSec) bool {
 				Build()
 			if err := c.ToOutside.Send(msg); err != nil {
 				break
+			}
+			if memtrace.ObsEnabled() {
+				memtrace.ObsOwnerSend(r.rspTo, e.key.line, now, false)
 			}
 			if len(e.reqs) == 1 {
 				s.stats.OwnerSingleResponses++

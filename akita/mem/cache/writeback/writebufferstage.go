@@ -552,6 +552,7 @@ func (wb *writeBufferStage) allocateGranularitySibling(
 		action: writeBufferFetch,
 	}
 
+	wb.cache.obsL2Fill(victim)
 	wb.cache.untrackRemoteReplica(victim)
 	wb.cache.untrackResidentBlock(victim)
 	victim.IsLocked = true
