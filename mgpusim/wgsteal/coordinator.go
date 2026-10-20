@@ -275,7 +275,15 @@ func (c *Coordinator) groupFootprint(l *Launch, group, flat int, create bool) *g
 		if !create {
 			return nil
 		}
-		home := l.members[l.staticSlotOf(flat)]
+		// Only the tail of each static range can be stolen, so a home GPM
+		// keeps footprints only for the groups of its last
+		// GroupTablePerGPM x GroupWGs WGs; recording the head groups would
+		// only evict the tail groups from the finite table.
+		slot := l.staticSlotOf(flat)
+		if flat < l.static[slot+1]-c.cfg.GroupTablePerGPM*c.cfg.GroupWGs {
+			return nil
+		}
+		home := l.members[slot]
 		if len(c.homeGroups[home]) >= c.cfg.GroupTablePerGPM {
 			c.evictLRU(home)
 		}

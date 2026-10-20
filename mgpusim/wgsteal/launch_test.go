@@ -232,3 +232,64 @@ func TestSplitStaticMatchesDriver(t *testing.T) {
 		t.Fatalf("balanced split %v", d[:6])
 	}
 }
+
+// Footprints are kept only for the stealable tail of each static range,
+// and a later launch can score a tail chunk against the thief's pages.
+func TestGroupFootprintTailOnly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Filter = true
+	cfg.ChunkWGs = 4
+	cfg.GroupTablePerGPM = 2 // tail region = 2 groups x 4 WGs = 8 WGs
+	c, err := NewCoordinator(cfg, meshGPMs()[:2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := []int{0, 1}
+	dist := []int{0, 64, 128}
+	for launch := 0; launch < 2; launch++ {
+		l := c.NewLaunch("k", members, dist, nil, sim.VTimeInSec(launch))
+		for g := 0; g < 2; g++ {
+			for {
+				flat, ok := l.Pop(g, sim.VTimeInSec(launch))
+				if !ok {
+					break
+				}
+				wg := &kernels.WorkGroup{}
+				c.RegisterWG(wg, l, flat)
+				c.OnRead(g, wg, uint64(1000+flat)<<12) // one page per WG
+				c.WGDone(l, wg)
+			}
+			l.Done(g, sim.VTimeInSec(launch))
+		}
+	}
+	kh := c.hist["k"]
+	if len(kh.groups) != 4 {
+		t.Fatalf("%d groups tracked, want 4 (2 tail groups per GPM)", len(kh.groups))
+	}
+	for id := range kh.groups {
+		if id != 14 && id != 15 && id != 30 && id != 31 {
+			t.Fatalf("group %d is not a tail group", id)
+		}
+	}
+	tot := c.Totals()
+	if tot.GroupsRecorded != 4 || tot.GroupsKept != 4 || tot.GroupsReplaced != 0 {
+		t.Fatalf("recorded %d kept %d replaced %d", tot.GroupsRecorded, tot.GroupsKept, tot.GroupsReplaced)
+	}
+	// GPM 0 touched pages of WGs 120..127 (GPM 1's tail) -> its tail chunk
+	// scores 1 for GPM 0.
+	l := c.NewLaunch("k", members, dist, nil, 10)
+	for i := 0; i < 64; i++ {
+		l.Pop(0, 10) // empty GPM 0's own queue
+	}
+	for f := 120; f < 128; f++ {
+		c.rpf[0].Touch(uint64(1000 + f))
+	}
+	x := cand{v: 1, c: 0}
+	probe := 0
+	c.mu.Lock()
+	l.scoreCand(0, &x, &probe)
+	c.mu.Unlock()
+	if !x.hasScore || x.score != 1 || x.exact != 1 || probe == 0 {
+		t.Fatalf("tail chunk score %+v probe %d", x, probe)
+	}
+}
