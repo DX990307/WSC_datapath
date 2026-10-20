@@ -37,9 +37,12 @@ type KernelArgs struct {
 	HiddenArgs
 }
 
-// DefaultParams is a small smoke size: 2^16 words (512 KB), 2^18 updates,
-// 1344 work-groups.
-func DefaultParams() Params { return Params{LogTable: 16, WGs: 1344} }
+// DefaultParams is the smallest recommended size: 2^22 words (32 MB),
+// 2^24 updates, 1344 work-groups (one per CU), 48 updates per thread.
+// With few updates per thread the lanes of a wave hold nearby, correlated
+// LFSR states and collide (emu: 1.1% wrong entries at 12 updates per
+// thread, 0.04% at 48).
+func DefaultParams() Params { return Params{LogTable: 22, WGs: 1344} }
 
 // Benchmark is the GUPS benchmark.
 type Benchmark struct {
