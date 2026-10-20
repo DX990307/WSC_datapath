@@ -240,6 +240,14 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = newGUPS(driver)
 	case "allreduce":
 		benchmark = newAllReduce(driver)
+	case "lonestar_bh":
+		benchmark = newLonestarBH(driver)
+	case "altis_cfd":
+		benchmark = newAltisCFD(driver)
+	case "rodinia_lud":
+		benchmark = newRodiniaLUD(driver)
+	case "npb_mg":
+		benchmark = newNPBMG(driver)
 	case "floydwarshall":
 		floydwarshall := floydwarshall.NewBenchmark(driver)
 		floydwarshall.NumNodes = 11584

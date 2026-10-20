@@ -11,6 +11,11 @@
 #   - s_load/s_store/s_buffer_* other than s_load_dword/x2/x4/x8/x16
 #     (emu/alu.go runSMEM and timing/cu/scalarunit.go implement SMEM 0-4);
 #   - a kernel whose private segment (scratch) size is not 0;
+#   - an unsigned 32-bit vector compare (v_cmp*_u32) with a negative inline
+#     constant: the emulator reads the constant as a sign-extended 64-bit
+#     value and the VGPR zero-extended, so e.g. "v_cmp_ne_u32 vcc, -2, v0"
+#     is always true (found in the W2 altis_cfd port: clang emits it for
+#     "x == -2"); rewrite the test (e.g. signed compares or bit tests);
 #   - a scheduler-internal SOPP op other than s_nop, s_endpgm, s_barrier,
 #     s_waitcnt inside a kernel body: emu/alu.go runSOPP has no case for
 #     them (emulation panics) and the timing CU treats them as no-ops
@@ -59,6 +64,13 @@ for f in "$@"; do
       n[m]++ }
     END { for (k in n) printf "  %s in a kernel body (%d): not implemented\n", k, n[k] }')"
   bad+="${internal:+$internal$'\n'}"
+
+  negcmp="$("$OBJDUMP" -d --mcpu="$MCPU" "$f" |
+    grep -E '^[[:space:]]+v_cmpx?_[a-z]+_u32(_e32|_e64)?[[:space:]][^/]*, -[0-9]' |
+    sed -E 's/^[[:space:]]+//; s/[[:space:]]*\/\/.*$//' | sort | uniq -c || true)"
+  if [[ -n "$negcmp" ]]; then
+    bad+="  unsigned compare with a negative inline constant (emulator bug):"$'\n'"$negcmp"$'\n'
+  fi
 
   priv="$("$READELF" --notes "$f" | grep -E 'PrivateSegmentFixedSize' |
     awk '$2 != 0' || true)"
