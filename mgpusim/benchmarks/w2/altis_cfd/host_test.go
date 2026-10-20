@@ -68,3 +68,14 @@ func TestMesh(t *testing.T) {
 		t.Fatal("reference did not change the state")
 	}
 }
+
+func TestSimulate32MatchesReference(t *testing.T) {
+	m := NewMesh(3000, 256, true, 2)
+	st, _, _, _ := Simulate32(m, 2)
+	ref := Reference(m, 2)
+	for i := range ref {
+		if e := math.Abs(float64(st[i])-ref[i]) / (1 + math.Abs(ref[i])); e > 1e-5 {
+			t.Fatalf("state[%d] %g vs %g", i, st[i], ref[i])
+		}
+	}
+}

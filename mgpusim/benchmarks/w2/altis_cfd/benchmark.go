@@ -87,8 +87,8 @@ type Benchmark struct {
 	kCopy, kStep, kFlux, kRK *insts.HsaCo
 	Params                   Params
 
-	mesh   *Mesh
-	dState driver.Ptr
+	mesh                         *Mesh
+	dState, dOld, dFlux, dFactor driver.Ptr
 }
 
 // NewBenchmark returns the benchmark with the default size.
@@ -138,9 +138,9 @@ func (b *Benchmark) Run() {
 	b.mesh = m
 	n := m.Padded
 	b.dState = b.upload("cfd_state", m.Initial, 20*n)
-	dOld := b.upload("cfd_old", nil, 20*n)
-	dFlux := b.upload("cfd_flux", nil, 20*n)
-	dFactor := b.upload("cfd_factor", nil, 4*n)
+	b.dOld = b.upload("cfd_old", nil, 20*n)
+	b.dFlux = b.upload("cfd_flux", nil, 20*n)
+	b.dFactor = b.upload("cfd_factor", nil, 4*n)
 	dAreas := b.upload("cfd_areas", m.Areas, 4*n)
 	dNormals := b.upload("cfd_normals", m.Normals, 48*n)
 	dNbrs := b.upload("cfd_neighbors", m.Neighbors, 16*n)
@@ -149,14 +149,14 @@ func (b *Benchmark) Run() {
 	grid := [3]uint32{uint32(n), 1, 1}
 	wg := [3]uint16{uint16(pr.Block), 1, 1}
 	for it := 0; it < pr.Steps; it++ {
-		b.driver.EnqueueLaunchKernel(q, b.kCopy, grid, wg, &CopyArgs{N: int32(n), State: b.dState, Old: dOld})
+		b.driver.EnqueueLaunchKernel(q, b.kCopy, grid, wg, &CopyArgs{N: int32(n), State: b.dState, Old: b.dOld})
 		b.driver.EnqueueLaunchKernel(q, b.kStep, grid, wg,
-			&StepArgs{N: int32(n), Vars: b.dState, Areas: dAreas, Factor: dFactor})
+			&StepArgs{N: int32(n), Vars: b.dState, Areas: dAreas, Factor: b.dFactor})
 		for stage := 0; stage < 3; stage++ {
 			b.driver.EnqueueLaunchKernel(q, b.kFlux, grid, wg, &FluxArgs{N: int32(n), Nbrs: dNbrs,
-				Normals: dNormals, Vars: b.dState, Fluxes: dFlux, FF: dFF})
+				Normals: dNormals, Vars: b.dState, Fluxes: b.dFlux, FF: dFF})
 			b.driver.EnqueueLaunchKernel(q, b.kRK, grid, wg, &RKArgs{J: int32(stage), N: int32(n),
-				Old: dOld, Vars: b.dState, Factor: dFactor, Fluxes: dFlux})
+				Old: b.dOld, Vars: b.dState, Factor: b.dFactor, Fluxes: b.dFlux})
 		}
 	}
 	fmt.Printf("CFD,config,cells=%d,padded=%d,cube_side=%d,steps=%d,block=%d,shuffle=%v,kernels=%d,wgs_per_kernel=%d,"+
@@ -165,26 +165,43 @@ func (b *Benchmark) Run() {
 	b.driver.DrainCommandQueue(q)
 }
 
-// Verify compares the final state with the float64 reference.
+// Verify compares the final state, the last old state, flux and step
+// factors with the float32 host mirror of the kernels, and the final state
+// with the float64 reference (as upstream).
 func (b *Benchmark) Verify() {
 	m := b.mesh
+	n := m.Padded
 	want := Reference(m, b.Params.Steps)
-	got := make([]float32, len(want))
-	b.driver.MemCopyD2H(b.context, got, b.dState)
-	bad, maxErr := 0, 0.0
-	for i := range want {
-		e := math.Abs(float64(got[i]) - want[i])
-		rel := e / (1 + math.Abs(want[i]))
-		maxErr = math.Max(maxErr, rel)
-		if !(rel <= 1e-4) {
-			if bad < 5 {
-				log.Printf("altis_cfd: state[%d] got %g want %g", i, got[i], want[i])
+	st, old, fl, fac := Simulate32(m, b.Params.Steps)
+	bad, maxErr, maxErr32 := 0, 0.0, 0.0
+	get := func(p driver.Ptr, cnt int) []float32 {
+		o := make([]float32, cnt)
+		b.driver.MemCopyD2H(b.context, o, p)
+		return o
+	}
+	for _, c := range []struct {
+		name string
+		p    driver.Ptr
+		host []float32
+	}{{"state", b.dState, st}, {"old", b.dOld, old}, {"flux", b.dFlux, fl}, {"factor", b.dFactor, fac}} {
+		got := get(c.p, len(c.host))
+		for i := range c.host {
+			rel := math.Abs(float64(got[i])-float64(c.host[i])) / (1 + math.Abs(float64(c.host[i])))
+			maxErr32 = math.Max(maxErr32, rel)
+			if c.name == "state" {
+				maxErr = math.Max(maxErr, math.Abs(float64(got[i])-want[i])/(1+math.Abs(want[i])))
 			}
-			bad++
+			if !(rel <= 1e-4) {
+				if bad < 5 {
+					log.Printf("altis_cfd: %s[%d] (cell %d, var %d) got %g want %g", c.name, i, i%n, i/n, got[i], c.host[i])
+				}
+				bad++
+			}
 		}
 	}
-	fmt.Printf("CFD,verify,elements=%d,max_rel_err=%.3g,mismatches=%d\n", len(want), maxErr, bad)
-	if bad > 0 {
+	fmt.Printf("CFD,verify,elements=%d,max_rel_err_fp32_mirror=%.3g,max_rel_err_fp64_ref=%.3g,mismatches=%d\n",
+		16*n, maxErr32, maxErr, bad)
+	if bad > 0 || !(maxErr <= 1e-4) {
 		log.Fatalf("altis_cfd: %d mismatches", bad)
 	}
 	log.Printf("Passed!")

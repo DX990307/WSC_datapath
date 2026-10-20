@@ -364,3 +364,100 @@ func Reference(m *Mesh, steps int) []float64 {
 	}
 	return state
 }
+
+func sqrt32(x float32) float32 { return float32(math.Sqrt(float64(x))) }
+
+// Simulate32 mirrors the kernels in float32 (same expressions); it returns
+// the final state, old state, last flux and step factors.
+func Simulate32(m *Mesh, steps int) (st, old, fl, fac []float32) {
+	n := m.Padded
+	st = append([]float32(nil), m.Initial...)
+	old, fl, fac = make([]float32, 5*n), make([]float32, 5*n), make([]float32, n)
+	ff := FFBuffer()
+	const g1 = float32(1.4) - 1
+	for it := 0; it < steps; it++ {
+		copy(old, st)
+		for i := 0; i < n; i++ {
+			d := st[i]
+			vx, vy, vz := st[i+n]/d, st[i+2*n]/d, st[i+3*n]/d
+			s2 := vx*vx + vy*vy + vz*vz
+			p := g1 * (st[i+4*n] - 0.5*d*s2)
+			sos := sqrt32(1.4 * p / d)
+			fac[i] = 0.5 / (sqrt32(m.Areas[i]) * (sqrt32(s2) + sos))
+		}
+		for stage := 0; stage < 3; stage++ {
+			for i := 0; i < n; i++ {
+				di := st[i]
+				mi := [3]float32{st[i+n], st[i+2*n], st[i+3*n]}
+				dei := st[i+4*n]
+				vi := [3]float32{mi[0] / di, mi[1] / di, mi[2] / di}
+				s2 := vi[0]*vi[0] + vi[1]*vi[1] + vi[2]*vi[2]
+				spi := sqrt32(s2)
+				pi := g1 * (dei - 0.5*di*s2)
+				sosi := sqrt32(1.4 * pi / di)
+				fxi := [3]float32{vi[0]*mi[0] + pi, vi[0] * mi[1], vi[0] * mi[2]}
+				fyi := [3]float32{fxi[1], vi[1]*mi[1] + pi, vi[1] * mi[2]}
+				fzi := [3]float32{fxi[2], fyi[2], vi[2]*mi[2] + pi}
+				dep := dei + pi
+				fei := [3]float32{vi[0] * dep, vi[1] * dep, vi[2] * dep}
+				var fd, fmx, fmy, fmz, fe float32
+				for j := 0; j < 4; j++ {
+					nb := m.Neighbors[i+j*n]
+					nr := [3]float32{m.Normals[i+j*n], m.Normals[i+(j+4)*n], m.Normals[i+(j+8)*n]}
+					nl := sqrt32(nr[0]*nr[0] + nr[1]*nr[1] + nr[2]*nr[2])
+					switch {
+					case nb >= 0:
+						k := int(nb)
+						dn := st[k]
+						mn := [3]float32{st[k+n], st[k+2*n], st[k+3*n]}
+						den := st[k+4*n]
+						vn := [3]float32{mn[0] / dn, mn[1] / dn, mn[2] / dn}
+						s2n := vn[0]*vn[0] + vn[1]*vn[1] + vn[2]*vn[2]
+						pn := g1 * (den - 0.5*dn*s2n)
+						sosn := sqrt32(1.4 * pn / dn)
+						fxn := [3]float32{vn[0]*mn[0] + pn, vn[0] * mn[1], vn[0] * mn[2]}
+						fyn := [3]float32{fxn[1], vn[1]*mn[1] + pn, vn[1] * mn[2]}
+						fzn := [3]float32{fxn[2], fyn[2], vn[2]*mn[2] + pn}
+						depn := den + pn
+						fen := [3]float32{vn[0] * depn, vn[1] * depn, vn[2] * depn}
+						f := -nl * 0.2 * 0.5 * (spi + sqrt32(s2n) + sosi + sosn)
+						fd += f * (di - dn)
+						fe += f * (dei - den)
+						fmx += f * (mi[0] - mn[0])
+						fmy += f * (mi[1] - mn[1])
+						fmz += f * (mi[2] - mn[2])
+						for d := 0; d < 3; d++ {
+							f = 0.5 * nr[d]
+							fd += f * (mn[d] + mi[d])
+							fe += f * (fen[d] + fei[d])
+							fmx += f * (fxn[d] + fxi[d])
+							fmy += f * (fyn[d] + fyi[d])
+							fmz += f * (fzn[d] + fzi[d])
+						}
+					case nb == -1:
+						fmx += nr[0] * pi
+						fmy += nr[1] * pi
+						fmz += nr[2] * pi
+					case nb == -2:
+						for d := 0; d < 3; d++ {
+							f := 0.5 * nr[d]
+							fd += f * (ff[1+d] + mi[d])
+							fe += f * (ff[14+d] + fei[d])
+							fmx += f * (ff[5+d] + fxi[d])
+							fmy += f * (ff[8+d] + fyi[d])
+							fmz += f * (ff[11+d] + fzi[d])
+						}
+					}
+				}
+				fl[i], fl[i+n], fl[i+2*n], fl[i+3*n], fl[i+4*n] = fd, fmx, fmy, fmz, fe
+			}
+			for i := 0; i < n; i++ {
+				f := fac[i] / float32(4-stage)
+				for k := 0; k < 5; k++ {
+					st[i+k*n] = old[i+k*n] + f*fl[i+k*n]
+				}
+			}
+		}
+	}
+	return st, old, fl, fac
+}
