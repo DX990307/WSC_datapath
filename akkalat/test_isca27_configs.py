@@ -147,5 +147,51 @@ class ISCA27ConfigTest(unittest.TestCase):
         self.assertEqual(by_flag["-num-memory-banks"]["paper"], "8")
 
 
+def flag_pairs(flags):
+    """{name: value} of "-name=value" / "-name" flags."""
+    out = {}
+    for f in flags:
+        name, _, value = f.lstrip("-").partition("=")
+        out[name] = value or "true"
+    return out
+
+
+class T18ConfigTest(unittest.TestCase):
+    """T18: the old-m2 file equals the runall2 formal m2; T18 files only add
+    -t18-* flags (mi200.json values are never changed)."""
+
+    def test_m2_old_config_equals_runall2_m2(self):
+        import sys
+        from runall2_args import parse_args
+        from runall2_config import build_remote_data_path_ablation_configs
+        from runall2_constants import DEFAULT_BENCHMARK_FLAGS
+        argv = sys.argv
+        sys.argv = ["runall2.py", "--remote-ablation"]
+        try:
+            args = parse_args()
+        finally:
+            sys.argv = argv
+        m2 = dict(build_remote_data_path_ablation_configs(args))["m2"]
+        want = flag_pairs(DEFAULT_BENCHMARK_FLAGS + m2)
+        base = isca27_config.load(os.path.join(CONFIGS, "mi200.json"))
+        got = isca27_config.load(os.path.join(CONFIGS, "m2_old.json"))
+        self.assertEqual({k: v for k, v in got.items() if k not in base}, want)
+        for key, value in base.items():
+            self.assertEqual(got[key], value, key)
+
+    def test_t18_configs_only_add_t18_flags(self):
+        names = [n for n in os.listdir(CONFIGS) if n.startswith("t18_")]
+        self.assertIn("t18_full.json", names)
+        for name in names:
+            values = isca27_config.load(os.path.join(CONFIGS, name))
+            base = isca27_config.load(os.path.join(CONFIGS, "mi200.json"))
+            added = [k for k in values if k not in base]
+            self.assertTrue(added, name)
+            for key in added:
+                self.assertTrue(key.startswith("t18-"), (name, key))
+            for key, value in base.items():
+                self.assertEqual(values[key], value, (name, key))
+
+
 if __name__ == "__main__":
     unittest.main()

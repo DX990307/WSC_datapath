@@ -365,6 +365,24 @@ def build_remote_data_path_ablation_configs(args):
         ),
         ("new_m1", m1_flags[:]),
     ]
+    # T18 (ISCA'27 new m2): baseline plus only -t18-* flags (the same flags as
+    # configs/t18_*.json). Opt-in by name; never part of the formal set.
+    t18_full = ["-t18-req-merge=true", "-t18-owner-merge=true",
+                "-t18-owner-multicast=true"]
+    t18_configs = [
+        ("t18_full", baseline_flags + t18_full),
+        ("t18_req_only", baseline_flags + ["-t18-req-merge=true"]),
+        ("t18_owner_only", baseline_flags + ["-t18-owner-merge=true",
+                                             "-t18-owner-multicast=true"]),
+        ("t18_full_dist", baseline_flags + t18_full + ["-t18-dist-credits=true"]),
+    ]
+    for window in (64, 256, 1024, 4096):
+        t18_configs.append((f"t18_full_w{window}",
+                            baseline_flags + t18_full + [f"-t18-window={window}"]))
+        t18_configs.append((f"t18_full_dist_w{window}",
+                            baseline_flags + t18_full +
+                            [f"-t18-window={window}", "-t18-dist-credits=true"]))
+    diagnostic_configs += t18_configs
     configs = formal_configs + diagnostic_configs
 
     selected_names = parse_csv(args.configs)

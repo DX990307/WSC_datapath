@@ -1,0 +1,5 @@
+{
+  "_description": "Window variant: requester in-flight limit W = 256 (owner-direction limit follows W, -t18-owner-window = 0). Tables default to 2 x W slots. Apply after t18_full.json (or alone for a window-only control). T18 (ISCA'27 new m2, two-sided merge of remote requests). Extends mi200.json; e.g. -config t18_w256.json. Adds only -t18-* flags to mi200.json; later files in a -config list override earlier ones.",
+  "extends": "mi200.json",
+  "t18-window": 256
+}
