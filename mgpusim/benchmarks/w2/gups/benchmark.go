@@ -20,6 +20,7 @@ import (
 	_ "embed"
 	"fmt"
 	"log"
+	"math"
 
 	"github.com/sarchlab/mgpusim/v3/driver"
 	"github.com/sarchlab/mgpusim/v3/insts"
@@ -109,7 +110,9 @@ func (b *Benchmark) Run() {
 }
 
 // Verify counts wrong table entries against the serial stream; HPCC
-// accepts <= 1% (lost updates of the non-atomic read-modify-write).
+// accepts <= 1% at 4 updates per word (lost updates of the non-atomic
+// read-modify-write); the limit scales with UpdateMult / 4 (same lost-update
+// rate per update).
 func (b *Benchmark) Verify() {
 	p := b.Params
 	ref := p.Reference()
@@ -123,8 +126,9 @@ func (b *Benchmark) Verify() {
 	}
 	frac := float64(bad) / float64(len(ref))
 	fmt.Printf("GUPS,verify,entries=%d,wrong=%d,wrong_fraction=%.5f\n", len(ref), bad, frac)
-	if frac > 0.01 {
-		log.Fatalf("gups: %.3f%% wrong entries > 1%%", 100*frac)
+	limit := 0.01 * math.Max(1, float64(p.UpdateMult)/4)
+	if frac > limit {
+		log.Fatalf("gups: %.3f%% wrong entries > %.3g%%", 100*frac, 100*limit)
 	}
 	log.Printf("Passed!")
 }
