@@ -1121,6 +1121,7 @@ func (c *Comp) sendRemoteEntryDirect(
 		return false
 	}
 
+	c.obsNetSend(entry.owner, req.ID, entry.key.lineAddr, 1, now)
 	entry.state = remoteLineInflight
 	entry.fromRemote = true
 	c.remoteSingleInflight[req.ID] = entry
@@ -1294,6 +1295,7 @@ func (c *Comp) flushRemoteBatch(
 		if err := c.ToOutside.Send(req); err != nil {
 			return false
 		}
+		c.obsNetSend(batch.dst, req.ID, entry.key.lineAddr, 1, now)
 		c.recordRemoteBatchMetrics(now, batch, req.Meta().TrafficBytes)
 		c.removeRemoteBatch(batch)
 		entry.state = remoteLineInflight
@@ -1327,6 +1329,13 @@ func (c *Comp) flushRemoteBatch(
 	}
 	if err := c.ToOutside.Send(req); err != nil {
 		return false
+	}
+	if memtrace.ObsEnabled() {
+		memtrace.ObsNetPacket(batch.lineCount())
+		for _, line := range batch.lineOrder {
+			c.obsNetSend(batch.dst, req.ID, batch.lines[line].key.lineAddr,
+				batch.lineCount(), now)
+		}
 	}
 	c.recordRemoteBatchMetrics(now, batch, req.Meta().TrafficBytes)
 	c.removeRemoteBatch(batch)
@@ -1472,6 +1481,10 @@ func (c *Comp) processRemoteSingleRsp(
 	entry.data = append([]byte(nil), dataRsp.Data...)
 	entry.state = remoteLineReady
 	entry.fromRemote = true
+	if memtrace.ObsEnabled() {
+		memtrace.ObsReqArrive(c.Name(), rsp.GetRspTo(), entry.key.lineAddr,
+			rsp.Meta().RecvTime)
+	}
 	c.m1UnindexLine(entry)
 	if c.m1Composed() {
 		c.m1Release(now, rsp.GetRspTo())
@@ -1517,6 +1530,10 @@ func (c *Comp) processBitmapRspFromOutside(
 		entry.data = append([]byte(nil), data...)
 		entry.state = remoteLineReady
 		entry.fromRemote = true
+		if memtrace.ObsEnabled() {
+			memtrace.ObsReqArrive(c.Name(), rsp.GetRspTo(),
+				entry.key.lineAddr, rsp.Meta().RecvTime)
+		}
 		c.m1UnindexLine(entry)
 		c.queueRemoteReady(entry)
 		batch.responseBitmap |= lineBit
@@ -1560,6 +1577,9 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 			Build()
 		if err := c.ToL1.Send(rsp); err != nil {
 			return false
+		}
+		if memtrace.ObsEnabled() {
+			memtrace.ObsL1Done(waiter.req.ID, now)
 		}
 		latencyNS := remoteDurationNS(now - waiter.req.SendTime)
 		c.RemoteDataPathStats.LogicalReadLatencyTotalNS += latencyNS

@@ -69,6 +69,7 @@ type Runner struct {
 	observationDRAM     *windowedPhysicalDRAMObserver
 	gpmTracer           *gpmTracer
 	p12                 *p12Tracer
+	obs                 *obsRunner
 
 	Timing                     bool
 	Verify                     bool
@@ -643,6 +644,7 @@ func (r *Runner) flushMetrics() {
 		r.reportStats()
 		r.writeGPMTrace()
 		r.writeP12Traces()
+		r.writeObsStats()
 		r.closeSharingTrace()
 	})
 }

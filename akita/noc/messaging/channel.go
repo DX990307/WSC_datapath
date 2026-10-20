@@ -16,6 +16,7 @@ type channelEnd struct {
 	postPipelineBuf sim.Buffer
 	pipeline        pipelining.Pipeline
 	busy            bool
+	obsLink         int // P13 link statistic: index + 1 (0: not registered)
 }
 
 // Channel connects two ports and can deliver messages with configurable
@@ -245,6 +246,13 @@ func (c *Channel) deliverOneEnd(
 
 		srcEnd.postPipelineBuf.Pop()
 		madeProgress = true
+		if memtrace.ObsLinksEnabled() {
+			if srcEnd.obsLink == 0 {
+				srcEnd.obsLink = memtrace.ObsLinkRegister(
+					srcEnd.port.Name(), dstEnd.port.Name()) + 1
+			}
+			memtrace.ObsLinkFlit(srcEnd.obsLink-1, now)
+		}
 		if flit, ok := msg.(*Flit); ok {
 			memtrace.RecordMemoryPathNetworkFlitStage(
 				c.Name(),

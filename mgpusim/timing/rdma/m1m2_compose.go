@@ -2,6 +2,7 @@ package rdma
 
 import (
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
 )
 
@@ -355,6 +356,13 @@ func (c *Comp) t18OwnerChildRead(
 			return false, false
 		}
 		e.reqs = append(e.reqs, t18OwnerReq{src: src, rspTo: sub.batch.req.ID, sub: sub})
+		if memtrace.ObsEnabled() {
+			l2ID := ""
+			if e.l2Req != nil {
+				l2ID = e.l2Req.ID
+			}
+			memtrace.ObsOwnerL2(sub.batch.req.ID, read.Address, now, l2ID, true)
+		}
 		s.stats.OwnerReads++
 		s.stats.OwnerMerged++
 		s.stats.OwnerBatchChildMerged++
@@ -373,6 +381,9 @@ func (c *Comp) t18OwnerChildRead(
 	}
 	e.l2Req = read
 	e.reqs = append(e.reqs, t18OwnerReq{src: src, rspTo: sub.batch.req.ID, sub: sub})
+	if memtrace.ObsEnabled() {
+		memtrace.ObsOwnerL2(sub.batch.req.ID, read.Address, now, read.ID, false)
+	}
 	s.ownerByL2ID[read.ID] = e
 	s.stats.OwnerReads++
 	s.stats.OwnerL2Reads++

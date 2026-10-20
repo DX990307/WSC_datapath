@@ -402,6 +402,7 @@ func (ds *directoryStage) handleReadHit(
 
 	ok := ds.readFromBank(trans, block)
 	if ok {
+		ds.cache.obsL2ReadHit(block)
 		ds.recordMemoryPathCacheResult(now, trans, "read-hit")
 		memtrace.ObservationTransitionByRequest(
 			trans.read.Meta().ID, "l2_lookup_result", "l2_bank", now)
@@ -719,6 +720,10 @@ func (ds *directoryStage) writeToBank(
 	addr := trans.write.Address
 	cachelineID, _ := getCacheLineID(addr, ds.cache.log2BlockSize)
 
+	if !block.IsValid || block.Tag != cachelineID ||
+		block.PID != trans.write.PID {
+		ds.cache.obsL2Fill(block)
+	}
 	ds.cache.untrackRemoteReplica(block)
 	ds.cache.untrackResidentBlock(block)
 	ds.cache.directory.Visit(block)
@@ -786,6 +791,7 @@ func (ds *directoryStage) updateVictimBlockMetaData(
 	cacheLineID uint64,
 	pid vm.PID,
 ) {
+	ds.cache.obsL2Fill(victim)
 	ds.cache.untrackRemoteReplica(victim)
 	ds.cache.untrackResidentBlock(victim)
 	victim.Tag = cacheLineID
@@ -874,6 +880,7 @@ func (ds *directoryStage) fetch(
 	ds.cache.trackGranularityPending(now, pid, cacheLineID)
 	trans.mshrEntry = mshrEntry
 	trans.block = block
+	ds.cache.obsL2Fill(block)
 	ds.cache.untrackRemoteReplica(block)
 	ds.cache.untrackResidentBlock(block)
 	block.IsLocked = true
@@ -978,6 +985,7 @@ func (ds *directoryStage) recordMemoryPathCacheResult(
 	)
 	memtrace.MarkObservationL2Result(
 		req.Meta().ID, ds.cache.Name(), result)
+	memtrace.ObsL2Result(req.Meta().ID, result)
 }
 
 func accessReqInfo(req mem.AccessReq) interface{} {

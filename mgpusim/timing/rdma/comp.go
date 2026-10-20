@@ -93,6 +93,9 @@ type Comp struct {
 	t18       *t18State
 	t18Topo   *t18Topology
 	t18Window int
+
+	// ISCA'27 P13 occupancy statistic; nil when off (obs_occupancy.go).
+	obsOcc *obsOccState
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -120,6 +123,9 @@ func (c *Comp) SetRequestFilters(
 func (c *Comp) Tick(now sim.VTimeInSec) bool {
 	madeProgress := false
 
+	if c.obsOcc != nil {
+		c.obsOccTick(now)
+	}
 	madeProgress = c.processFromCtrlPort(now) || madeProgress
 	if c.isDraining {
 		madeProgress = c.drainRDMA(now) || madeProgress
@@ -548,6 +554,7 @@ func (c *Comp) processReqFromL1(
 		case *mem.WriteReq:
 			c.RemoteDataPathStats.ObservedRemoteWrites++
 		}
+		c.obsAdmit(req, dst)
 	}
 	if !previouslySeen && memtrace.ObservationRemoteTraceEnabled() {
 		// Admission is recorded on the first processing attempt rather than
@@ -595,6 +602,9 @@ func (c *Comp) processReqFromL1(
 
 	err := c.ToOutside.Send(cloned)
 	if err == nil {
+		if obsIsRead(req) {
+			c.obsNetSend(dst, cloned.Meta().ID, req.GetAddress(), 1, now)
+		}
 		memtrace.IssueRemoteRequest(memtrace.ObservationRemoteRequestIssue{
 			LogicalRequestID:    req.Meta().ID,
 			IssueTime:           now,
@@ -675,6 +685,12 @@ func (c *Comp) processReqFromOutside(
 	cloned.Meta().SendTime = now
 	err := c.ToL2.Send(cloned)
 	if err == nil {
+		if obsIsRead(req) && memtrace.ObsEnabled() {
+			memtrace.ObsOwnerRecv(req.Meta().ID, req.GetAddress(),
+				req.Meta().RecvTime)
+			memtrace.ObsOwnerL2(req.Meta().ID, req.GetAddress(), now,
+				cloned.Meta().ID, false)
+		}
 		memtrace.ObservationTransitionByRequest(
 			req.Meta().ID, "owner_rdma_receive",
 			"owner_rdma_request", req.Meta().RecvTime)
@@ -734,6 +750,11 @@ func (c *Comp) processRspFromL2(
 
 	err := c.ToOutside.Send(rspToOutside)
 	if err == nil {
+		if _, isData := rsp.(*mem.DataReadyRsp); isData && memtrace.ObsEnabled() {
+			memtrace.ObsOwnerL2Rsp(rsp.GetRspTo(), rsp.Meta().RecvTime)
+			memtrace.ObsOwnerSend(trans.fromOutside.Meta().ID,
+				trans.fromOutside.(mem.AccessReq).GetAddress(), now, false)
+		}
 		memtrace.ObservationTransitionByRequest(
 			trans.toInside.Meta().ID, "owner_rdma_response_receive",
 			"owner_rdma_response", rsp.Meta().RecvTime)
@@ -807,6 +828,14 @@ func (c *Comp) processRspFromOutside(
 
 	err := c.ToL1.Send(rspToInside)
 	if err == nil {
+		if memtrace.ObsEnabled() {
+			if _, isData := rsp.(*mem.DataReadyRsp); isData {
+				memtrace.ObsReqArrive(c.Name(), rsp.GetRspTo(),
+					trans.fromInside.(mem.AccessReq).GetAddress(),
+					rsp.Meta().RecvTime)
+			}
+			memtrace.ObsL1Done(trans.fromInside.Meta().ID, now)
+		}
 		memtrace.CompleteRemoteRequest(
 			memtrace.ObservationRemoteRequestCompletion{
 				LogicalRequestID:   trans.fromInside.Meta().ID,

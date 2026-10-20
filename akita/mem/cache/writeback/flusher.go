@@ -174,6 +174,7 @@ func (f *flusher) finalizeFlushing(now sim.VTimeInSec) bool {
 		Build()
 	f.cache.controlPortSender.Send(rsp)
 
+	f.cache.obsL2Invalidate()
 	f.cache.mshr.Reset()
 	f.cache.directory.Reset()
 	f.cache.resetRemoteReplicas()
