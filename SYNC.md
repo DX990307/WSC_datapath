@@ -310,3 +310,16 @@
 
 ### 2026-10-20 [claude-code] 用户确认 Complete 的定义
 - 用户 10-20：**Complete = T18（新 M1）+ M2（旧 m2：去重 + 同页打包 + 预取）+ M3（旧 m3：Remote Reuse）**，即代码里的 `complete_new`（`isca27/m1m2`）。Cowork 10-20 写的“Complete = T18 + m3”请按此更正（`observations/README.md` 等处）。
+
+- 2026-10-20 · cowork · **用户定了机制编号：M1 = T18，M2 = 旧 m2（HPCA 版 Remote Aggregation），M3 = 旧 m3（Remote Reuse，不作为重点）；Complete = M1 + M2 + M3；Local Pairing 不进论文。** 相应修改：
+  - `observations/README.md`：论文 observation 整理成 6 条（O1 远程代价；O2 端点受限；O3 规模；O4 跨 GPM 共享和 owner 端瓶颈；O5 请求方聚合机会——HPCA 稿 O3 保留给 M2 重算；O6 远程复用——M3）；图 F1–F8；E1 改成 HPCA 版 CuPath / M1 / Complete，E2 分机制级和 M1 内部两层；R8 改成 M3、M1 + M2、Complete（可选"M1 不开请求方合并"）；加了"M1 + M2 集成"的建议；CSV 去掉编号前缀。
+  - `prompts/P13_observation_data.md`：同步编号；A 加第 6 项统计（请求方聚合机会）；C1 改成"Complete 的集成和 M3 修复"，**集成方案先写出来、⏸ 等用户确认再实现**（现在 T18 和旧 m2 不能同时打开，请求方的同 line 合并重叠）。
+  - T18 文档标题改为"T18（论文里的 M1）"，加"在论文里的位置"一段；`ideas_from_T14.md` 第 (4) 条更新。
+
+- 2026-10-20 · cowork · **用户决定（D23）：论文配置改为每个 GPM 14 个 CU（`mi200_eighth.json`，1/8 个 MI250X GCD），原因是 28 CU 的实验跑不动。** 按 scale-model（SeyyedAghaei 等 HPCA'24）的规则：每个 CU 的资源不变，GPM 共享资源全部减半（L2 1 MB = 4 slice、4 个 HBM2e 通道、链路 384 GB/s、跟踪表 32 项、网络接口流水宽度 4、L2 TLB 256 项 / 16 MSHR、GMMU 8 个遍历；中心 IOMMU TLB 1,024 项、128 个遍历），延迟、mesh、放置规则不变，输入随机器缩小。每个 GPM 的链路总带宽 4 × 384 ≈ 1.5 TB/s，和 Pal 等的每 GPM 1.5 TB/s 一致。改动：`CONFIG.md` 顶部加 10-20 说明（冻结前 mi200 仍是论文配置）；`00_background.md` 加 D23；新增 `prompts/P14_config_14cu.md`（新预设和配置文件、校准、workload 重新定规模（⏸ 用户确认）、28 对 14 CU 的弱缩放验证）；P13 顶部说明 A 照做、B / C 的运行等新配置确认后再跑；`observations/README.md` 和 T18 文档的配置和 W 值按新配置换算（W 全部减半）。README 索引加了 P14。**注意：Pal 等 HPCA'19 的 GPM 是 64 CU（8 CU 只是他们生成 trace 的 gem5-gpu 配置），论文里不能写"和 Pal 的 8 CU 对齐"。**
+
+- 2026-10-20 · cowork · **D23（改 14 CU）暂缓**：用户"先等会再搞，维持原来的 28 个 CU"，先试缩小 memory footprint。`CONFIG.md`、D23、P14、P13 顶部说明、`observations/README.md`、T18 文档都标了"暂缓"，论文配置仍是 `mi200.json`，W 值按原来的 64 / 256 / 1024 / 4096。**给 Claude Code：不要执行 P14；P13 的 A（统计代码）照常，B / C 的运行规模等用户定了新 footprint 再跑。**
+
+### 2026-10-20 [claude-code] 新 benchmark 的 6 小时规模（只做了短时间校准，没有正式运行）
+- 条件（用户 10-20）：每个运行 ≤ 6 小时；主要 kernel 铺满 48 个 GPM；每个 CU ≥ 5 个 WG。结果：`results_index/w2complete/sizes_6h.{md,csv}`。
+- 阻碍：新规模下 sssp、atax、shocsort、ivfflat、graphtc 在 timing 模式崩溃（emu 的 LDS 读越界，越界上限正好是 kernel 声明的 `__local` 大小，可能是模拟器对 inactive lane 也检查地址或多 WG 同驻时 LDS 基址错误），需要修模拟器，等用户决定。
