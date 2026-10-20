@@ -53,7 +53,7 @@ var obsFileFlag = flag.String("obs-file", "",
 		"<metric-file-name>_obs.")
 var obsLabelFlag = flag.String("obs-label", "",
 	"Workload label written in the -report-obs-* CSVs; default the "+
-		"basename of -metric-file-name.")
+		"basename of -metric-file-name (<exp_id> for results/<exp_id>/stats/metrics).")
 var obsSampleNSFlag = flag.Float64("obs-sample-ns", 1000,
 	"-report-obs-occupancy sample period and -report-obs-links window (ns).")
 var obsAggWindowFlag = flag.Int("obs-agg-window-cycles", 16,
@@ -103,7 +103,11 @@ func (r *Runner) addObsStats() {
 		o.prefix = *filenameFlag + "_obs"
 	}
 	if o.label == "" {
+		// results/<exp_id>/stats/metrics -> <exp_id>
 		o.label = filepath.Base(*filenameFlag)
+		if o.label == "metrics" {
+			o.label = filepath.Base(filepath.Dir(filepath.Dir(*filenameFlag)))
+		}
 	}
 	r.obs = o
 	for _, gpu := range r.platform.GPUs {
