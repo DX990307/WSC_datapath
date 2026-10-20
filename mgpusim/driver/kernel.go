@@ -140,6 +140,9 @@ func (d *Driver) enqueueLaunchUnifiedKernelCommand(
 		DPacketArray: dPacket,
 		PacketArray:  packet,
 	}
+	if d.wgSteal != nil {
+		cmd.wgGroupHint = d.wgGroupHints[co]
+	}
 	d.Enqueue(queue, cmd)
 }
 func (d *Driver) enqueueLaunchUnifiedKernel(

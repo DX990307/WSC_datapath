@@ -24,7 +24,8 @@ func (d *Driver) WGSteal() *wgsteal.Coordinator {
 
 // SetWGGroupHint lets a benchmark tell T19 which WGs of a kernel form a
 // group (e.g. the WGs of one MoE expert). Without a hint, groups are runs
-// of consecutive WG IDs. It has no effect when T19 is off.
+// of consecutive WG IDs. The hint applies to launches of co enqueued after
+// the call. It has no effect when T19 is off.
 func (d *Driver) SetWGGroupHint(co *insts.HsaCo, fn func(flat int) int) {
 	if d.wgGroupHints == nil {
 		d.wgGroupHints = map[*insts.HsaCo]func(int) int{}
@@ -64,8 +65,8 @@ func (d *Driver) processStealLaunch(
 		name = cmd.CodeObject.Symbol.Name
 	}
 	var groupFn wgsteal.GroupFunc
-	if fn := d.wgGroupHints[cmd.CodeObject]; fn != nil {
-		groupFn = wgsteal.GroupFunc(fn)
+	if cmd.wgGroupHint != nil {
+		groupFn = wgsteal.GroupFunc(cmd.wgGroupHint)
 	}
 	launch := d.wgSteal.NewLaunch(name, members, wgDist, groupFn, now)
 

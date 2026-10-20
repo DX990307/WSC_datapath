@@ -184,6 +184,10 @@ type LaunchUnifiedMultiGPUKernelCommand struct {
 	PacketArray  []*kernels.HsaKernelDispatchPacket
 	DPacketArray []Ptr
 	Reqs         []sim.Msg
+
+	// T19: the benchmark's WG group hint at enqueue time (nil if none or
+	// T19 is off).
+	wgGroupHint func(int) int
 }
 
 // GetID returns the ID of the command

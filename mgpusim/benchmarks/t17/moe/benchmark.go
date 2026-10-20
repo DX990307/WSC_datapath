@@ -203,6 +203,16 @@ func (b *Benchmark) Run() {
 	}
 	fmt.Printf("MOE,gate_check,host_vs_gpu_topk_diffs=%d,of=%d\n", b.selDiff, S)
 
+	// T19 (only when WG stealing is on): the WGs of one expert form a
+	// group (moe_up / moe_down WG w works on row tile w / n-tiles).
+	if b.driver.WGSteal() != nil {
+		expertOf := func(ntiles int) func(int) int {
+			return func(w int) int { return int(r.Tiles[3*(w/ntiles)]) }
+		}
+		b.driver.SetWGGroupHint(b.up, expertOf(F/TileN))
+		b.driver.SetWGGroupHint(b.down, expertOf(H/TileN))
+	}
+
 	da := DispatchArgs{X: b.dX, PermToken: b.dPerm, Xs: b.dXs, Hidden: int32(H)}
 	b.launch(q, b.dispatch, S, &da)
 	ua := UpArgs{Xs: b.dXs, W1: b.dW1, W3: b.dW3, Tiles: b.dTiles, Act: b.dAct,

@@ -248,6 +248,14 @@ func (b *Benchmark) exec() {
 			fmt.Printf("PAGEDATTN,work,step=%d,kv_heads=%d,items=%s\n",
 				st, p.KVHeads, strings.Join(items, ";"))
 		}
+		if b.driver.WGSteal() != nil {
+			// T19 (only when WG stealing is on): the WGs of one sequence
+			// form a group (pa_partial WG w = item * KV heads + head).
+			w, kv := work, p.KVHeads
+			b.driver.SetWGGroupHint(b.partialCo, func(flat int) int {
+				return int(w[2*(flat/kv)])
+			})
+		}
 		b.enqueueStep(q, sb, len(work)/2)
 	}
 	b.driver.DrainCommandQueue(q)
