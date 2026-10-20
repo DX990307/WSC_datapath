@@ -237,3 +237,10 @@
 - 代码：分支 `isca27/p12-measure`（从 `c9cdf64` 开出）：`1929100`（WG 足迹和 M1 共享两个 tracer，默认关）、`ed1aca0`（`-pa-steps` 等 benchmark 参数，默认不变）、`0b85bef`、`d32520a`（分析脚本）。回归：fir、MM、PagedAttention 默认小输入，改动前后 / tracer 关开 total_time 和排序后统计的 md5 完全一致。
 - 结果目录：yss2、yss3 的 `~/akita-exp-test/p12/src/results/`（`1019_diag_p12-*`、`1019_diag_p12reg-*`、`1020_det_p12-*`）。
 - **两个仓库都没有推送**（这次的要求是由用户审阅后自己推送）：代码 `isca27/p12-measure` 头 `d32520a`；文档是本条日志所在的提交。
+
+### 2026-10-20 [claude-code] T18 实现完成（⏸ 评估配置确认）；P12 推送
+- 用户 10-19 决定开始实现 T18、T19（真实版，同时做）。
+- 代码：`isca27/p12-measure` 推到 `d32520a`；`isca27/t18-merge` 推到 `ca8b831`（请求方 cuckoo 在途表、按 RTT 分 credit、owner 端合并 + switch 网内多播，默认关闭，回归逐位一致）。`isca27/t19-steal` 在本地开发中。
+- 文档：STATUS 加 T18、T19 行，T18 冒烟结果，T18 评估配置确认和 4 个问题，日志。
+- ⏸ 等用户：P12 第 5 步 oracle 配置确认；T18 评估配置确认（121 个运行）和 4 个问题。
+
