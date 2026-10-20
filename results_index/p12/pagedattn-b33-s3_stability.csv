@@ -1,0 +1,13 @@
+workload,name,kernel_a,kernel_b,lag,mode,wgs_a,wgs_b,pairs,same_gpm_frac,jaccard_mean,jaccard_median,jaccard_p10,jaccard_p90,jaccard_frac_ge_0.5,jaccard_frac_ge_0.9,jaccard_frac_zero,contain_mean,contain_median,contain_frac_ge_0.9
+pagedattn-b33-s3,pa_partial,0,2,1,same_wg_index,5688,5688,5688,1.0000,0.9994,1.0000,1.0000,1.0000,1.0000,0.9986,0.0000,0.9994,1.0000,0.9986
+pagedattn-b33-s3,pa_partial,0,2,1,same_work_item,5688,5688,5688,1.0000,0.9994,1.0000,1.0000,1.0000,1.0000,0.9986,0.0000,0.9994,1.0000,0.9986
+pagedattn-b33-s3,pa_partial,0,2,1,same_wg_index_item_moved,5688,5688,0,,,,,,,,,,,
+pagedattn-b33-s3,pa_partial,2,4,1,same_wg_index,5688,5696,5688,1.0000,0.0852,0.0303,0.0303,0.0303,0.0577,0.0577,0.0450,0.1104,0.0588,0.0577
+pagedattn-b33-s3,pa_partial,2,4,1,same_work_item,5688,5696,5688,0.9466,0.9995,1.0000,1.0000,1.0000,1.0000,0.9972,0.0000,0.9995,1.0000,0.9972
+pagedattn-b33-s3,pa_partial,2,4,1,same_wg_index_item_moved,5688,5696,5360,1.0000,0.0293,0.0303,0.0303,0.0303,0.0000,0.0000,0.0478,0.0560,0.0588,0.0000
+pagedattn-b33-s3,pa_partial,0,4,2,same_wg_index,5688,5696,5688,1.0000,0.0853,0.0303,0.0303,0.0303,0.0577,0.0577,0.0450,0.1104,0.0588,0.0577
+pagedattn-b33-s3,pa_partial,0,4,2,same_work_item,5688,5696,5688,0.9466,0.9989,1.0000,1.0000,1.0000,1.0000,0.9958,0.0000,0.9989,1.0000,0.9958
+pagedattn-b33-s3,pa_partial,0,4,2,same_wg_index_item_moved,5688,5696,5360,1.0000,0.0293,0.0303,0.0303,0.0303,0.0000,0.0000,0.0478,0.0560,0.0588,0.0000
+pagedattn-b33-s3,pa_reduce,1,3,1,same_wg_index,1056,1056,1056,1.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000
+pagedattn-b33-s3,pa_reduce,3,5,1,same_wg_index,1056,1056,1056,1.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000
+pagedattn-b33-s3,pa_reduce,1,5,2,same_wg_index,1056,1056,1056,1.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000

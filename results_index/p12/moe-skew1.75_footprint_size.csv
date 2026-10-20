@@ -1,0 +1,6 @@
+workload,kernel,name,launch,wgs,total_wg,pages_mean,pages_median,pages_max,reads_mean,truncated_wgs,distinct_pages_kernel
+moe-skew1.75,0,moe_gate,0,256,256,66.0000,66.0000,66,5124.0000,0,321
+moe-skew1.75,1,moe_dispatch,0,1536,1536,1.0000,1.0000,1,64.0000,0,256
+moe-skew1.75,2,moe_up,0,781,781,1429.6338,1430,1440,17768.5634,0,91648
+moe-skew1.75,3,moe_down,0,1136,1136,719.8028,720.0000,727,6583.8873,0,46112
+moe-skew1.75,4,moe_combine,0,256,256,8.0078,8.0000,10,432.0000,0,1540

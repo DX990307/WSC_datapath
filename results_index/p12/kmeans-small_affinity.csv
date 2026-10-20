@@ -1,0 +1,7 @@
+workload,kernel,name,launch,class,groups,pairs,jaccard_mean,jaccard_median,jaccard_p10,jaccard_p90,jaccard_frac_ge_0.5,jaccard_frac_ge_0.9,jaccard_frac_zero,contain_mean,contain_median,contain_frac_ge_0.5,contain_frac_ge_0.9
+kmeans-small,0,kmeans_kernel_swap,0,adjacent,,5375,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.0000
+kmeans-small,0,kmeans_kernel_swap,0,random,,20000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.0000
+kmeans-small,1,kmeans_kernel_compute,0,adjacent,,5375,0.9377,1.0000,1.0000,1.0000,0.9377,0.9377,0.0623,0.9377,1.0000,0.9377,0.9377
+kmeans-small,1,kmeans_kernel_compute,0,random,,20000,0.0033,0.0000,0.0000,0.0000,0.0033,0.0033,0.9967,0.0033,0.0000,0.0033,0.0033
+kmeans-small,2,kmeans_kernel_compute,1,adjacent,,5375,0.9377,1.0000,1.0000,1.0000,0.9377,0.9377,0.0623,0.9377,1.0000,0.9377,0.9377
+kmeans-small,2,kmeans_kernel_compute,1,random,,20000,0.0031,0.0000,0.0000,0.0000,0.0031,0.0031,0.9970,0.0031,0.0000,0.0031,0.0031

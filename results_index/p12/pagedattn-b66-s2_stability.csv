@@ -1,0 +1,5 @@
+workload,name,kernel_a,kernel_b,lag,mode,wgs_a,wgs_b,pairs,same_gpm_frac,jaccard_mean,jaccard_median,jaccard_p10,jaccard_p90,jaccard_frac_ge_0.5,jaccard_frac_ge_0.9,jaccard_frac_zero,contain_mean,contain_median,contain_frac_ge_0.9
+pagedattn-b66-s2,pa_partial,0,2,1,same_wg_index,11928,11936,11928,1.0000,0.8135,1.0000,0.0303,1.0000,0.8089,0.8062,0.0080,0.8187,1.0000,0.8062
+pagedattn-b66-s2,pa_partial,0,2,1,same_work_item,11928,11936,11928,0.9940,0.9986,1.0000,1.0000,1.0000,1.0000,0.9953,0.0000,0.9986,1.0000,0.9953
+pagedattn-b66-s2,pa_partial,0,2,1,same_wg_index_item_moved,11928,11936,2280,1.0000,0.0294,0.0303,0.0303,0.0303,0.0000,0.0000,0.0421,0.0563,0.0588,0.0000
+pagedattn-b66-s2,pa_reduce,1,3,1,same_wg_index,2112,2112,2112,1.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000

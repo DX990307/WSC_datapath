@@ -1,0 +1,2 @@
+workload,name,kernel_a,kernel_b,lag,mode,wgs_a,wgs_b,pairs,same_gpm_frac,jaccard_mean,jaccard_median,jaccard_p10,jaccard_p90,jaccard_frac_ge_0.5,jaccard_frac_ge_0.9,jaccard_frac_zero,contain_mean,contain_median,contain_frac_ge_0.9
+kmeans-small,kmeans_kernel_compute,1,2,1,same_wg_index,5376,5376,5376,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,0.0000,1.0000,1.0000,1.0000

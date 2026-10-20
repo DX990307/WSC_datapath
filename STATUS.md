@@ -30,11 +30,31 @@
 | T15 oracle 上限实验 | ⏸ 配置确认，等用户 | 10-16 | 用冻结版 `isca27-mi200-v1`；6 组 × 14 个 workload = 84 个运行，见“需要用户决定” |
 | T16 位置导致的负载不均（阶段 1） | 完成（⏸ 等用户看结果） | 10-17 | 13 个运行全部成功；结果见“结果摘要 → T16 阶段 1”；按判断标准 W1 **差一点没成立**（真实 workload 只有 2 个满足） |
 | T17 新 workload | 第一轮 baseline 完成（⏸ 等用户看结果） | 10-17 | 4 个运行全部成功（rc=0，墙钟 3.2–3.75 小时）；结果见“结果摘要 → T17 第一轮”，CSV 和热力图在 `results_index/t17/`；R-GAT 85% 的时间只用了 ≤13 个 GPM（见“需要用户决定”） |
+| P12 T18/T19 的测量 | 1–4 完成；5（T17 的 O1/O2b/O3）⏸ 配置确认，等用户 | 10-20 | 两个只加统计的 tracer（WG 足迹、M1 共享），回归逐位一致；7 个测量运行（yss2 3 个、yss3 4 个）全部 rc=0；结果见“结果摘要 → P12 测量”，CSV 在 `results_index/p12/` |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
 
 <!-- 每条格式：- [ ] (T#) 问题 —— 可选方案 A / B，推荐 X，理由 -->
+- [ ] ⏸ (P12 第 5 步 / T17) **O1 / O2b / O3 配置确认（oracle 是有意偏离 `mi200.json` 的分析实验，等你确认后再跑，没有运行）**。参数和 T15 完全相同（从 yss2 `~/exp/cupath/results/1016_diag_oracle-{o1,o2b,o3}_mi200_61b6ae8/EXPERIMENT_METADATA.json` 只读核对：T15 = runall2 baseline 命令 + 末尾追加的 oracle 参数）。T17 用 `isca27_run.sh` + `configs/mi200.json`（10-17 已更正：这和 runall2 baseline 等价），oracle 参数写在命令行末尾（命令行覆盖配置文件）。
+  - **命令**（`<MMDD>` = 启动日期；在 yss2 或 yss3 的 `~/akita-exp-test/p12/src` 下，二进制 `ed1aca0`，模拟器时序代码和 T17 的 `95615c4`、`c9cdf64` 相同，回归见 P12）：
+    `ISCA27_BINDIR=~/akita-exp-test/p12/bin akkalat/isca27_run.sh <MMDD>_diag_t17-<w>_mi200+<o>_ed1aca0 ed1aca0 T17 mi200 <benchmark 参数> -report-gpm-trace -report-l2-source -l2-source-tile-width=7 <oracle 参数>`
+    - `<w>` = `pagedattn`：`-benchmark pagedattn -pa-batch=66`
+    - `<w>` = `moe-skew1.75`：`-benchmark moe -moe-tokens=256 -moe-hidden=1024 -moe-ffn=704 -moe-topk=6 -moe-skew=1.75`
+    - `<w>` = `rgat-s320`（现有版本，不改成铺满 48 个 GPM）：`-benchmark rgat -rgat-data=/home/daoxuanxu/akita-exp-test/datasets/igbh/tiny -rgat-seeds=320 -rgat-fanouts=10,5 -rgat-hidden=128 -rgat-heads=1`（数据集只在 yss2；放 yss3 要先复制 2.3 GB）
+
+    | 组 `<o>` | oracle 参数 | 和 `mi200.json` 的差异 |
+    |---|---|---|
+    | o1 | `-force-local-data-access` | 新增：L1V miss 一律走本地 L2/DRAM（地址转换和非 L1V 访存不变） |
+    | o2b | `-rdma-max-outstanding=4096 -rdma-pipeline-width=64` | `rdma-max-outstanding` 64 → 4096，`rdma-pipeline-width` 8 → 64 |
+    | o3 | `-switch-latency=1` | `switch-latency` 32 → 1（RDMA 端点固定的 10 周期等不变） |
+
+    其余差异都不算配置修改：benchmark 参数、统计开关 `-report-gpm-trace -report-l2-source -l2-source-tile-width=7`（和 T17 第一轮相同）。`config_deviation` 由 `isca27_config.py` 生成（`-force-local-data-access` 现在标为 oracle，`0b85bef`）。
+  - **个数和资源**：3 组 × 3 个 workload = 9 个运行。T17 的 B 墙钟 3.3–3.75 小时；T15 的 oracle 墙钟和 B 相近（fir：B 49 分钟、O1 52、O2b 51、O3 48），预计每个 3–5 小时，9 个并行约 4–5 小时。峰值内存（带 `-report-l2-source`）：MoE 21 GB、R-GAT 9.7 GB（P12 今天实测）、PagedAttention 约 28 GB（T17 规模确认时的估计，未实测）；O2b 在途多，可能更高。放置建议：R-GAT 3 个在 yss2，PA、MoE 各 3 个分在两台。
+  - **对照 B**：T17 第一轮（`95615c4`）。注意 P12 发现 R-GAT 每次运行的结果不完全一样（见下一条），MoE 的原始 T17 结果和 3 次复跑也差 0.002%。**建议同时用 `ed1aca0` 补跑 3 个 B**（同一二进制、同一批），R-GAT 的 oracle 差异小于约 0.2% 的不算。
+  - **R-GAT 方案 B（改成铺满 48 个 GPM）仍等你决定**（见下面 T17 那条）；没决定前按上面用现有版本。
+- [ ] (P12) **R-GAT 的模拟结果每次运行不完全一样**：同样的命令跑了 5 次（T17 原始 `95615c4` 15.153 ms；P12 复跑 `95615c4` 15.145、`c9cdf64` 15.149、`ed1aca0` 15.137、`ed1aca0` + P12 tracer 15.129 ms），差 0.16%，统计的 md5 也各不相同。fir、MM、PagedAttention（batch 2）、MoE（T17 规模，三个二进制）复跑完全一致。R-GAT 的 host 端（采样、上传顺序）我读了代码，没发现不确定的地方，原因还没查。MoE：三个二进制复跑都是 5.979603 ms、统计 md5 相同，但 T17 原始运行的最后一个 kernel 结束于 5.979726 ms（差 0.002%），原因也没查。—— A：先不查，R-GAT 的差异 < 0.2% 时当噪声处理；B：查原因（可能是模拟器里依赖 Go map 遍历顺序的地方）。推荐 A，oracle 的差异远大于 0.2%。
+- [ ] (P12) **`mgpusim/benchmarks/t17/pagedattn/azure_conv_tokens.csv` 没有进 git**：`mgpusim/.gitignore` 有 `*.csv`，所以 `DATASETS.md` 说“committed, embedded”的这个文件实际不在仓库里，干净的 checkout 编不过（`go:embed` 找不到）。这次是从 `wt-t17` 工作区复制过来编译的（md5 `570ff986b074…`）。—— 建议 `git add -f` 提交（158 KB），需要你同意。
 - [x] (T17) **用户 10-17 确认**：W-A batch 66、W-B 规格形状 ffn 704（1.75 和 0 各一个）、W-C 320 个种子；两个模拟器 bug（`s_nop`、`v_mad_u64_u32`）都修（修复和回归在做，T17 的 kernel 已经绕开，不影响这次运行）。原问题：**规模确认 + 配置确认**（第 2 步）。所有命令 = runall2 的 mi200 baseline 参数（和 `mi200.json` 没有差异，保留 `-magic-memory-copy`）+ benchmark 参数 + `-report-l2-source -heartbeat-file`；二进制来自 `isca27/t17-workloads` `db47df3`。按 1/8 规模试跑外推（墙钟和 L2 请求量成正比：W-A、W-B 约 0.21 分钟/MB，W-C 0.27–0.37）。
   - **W-A PagedAttention**：`-benchmark=pagedattn -pa-batch=66`（Azure 长度，9.36 万 token，8 KV 头 × 128，分段 64）。2 个 kernel：partial 11,928 WG（每 GPM 252，最后一个 84，无空闲）、reduce 2,112（10 个 GPM 空闲）。footprint 794 MB。预计约 3.0 小时，峰值约 28 GB。（备选 `-pa-batch=83`：两个 kernel 都没有空闲 GPM，约 3.7 小时、34 GB。）试跑：远程读 95–97%，远程延迟占 96–99.8%，前 3 个 owner 占 12–16%。
   - **W-B MoE**：规格形状 `-moe-tokens=256 -moe-hidden=1024 -moe-ffn=704 -moe-topk=6 -moe-skew=1.75`，对照 `-moe-skew=0`。5 个 kernel；up/gate/combine 的 WG 少于 1344，结构上就有 20–38 个 GPM 空闲。footprint 约 574 MB。预计 3.9 / 3.6 小时，12–20 GB。（备选 `-moe-ffn=512`：约 2.9 / 2.7 小时。）试跑：远程读 95%，远程延迟占 97%，前 3 个 owner 占 22–23%。
@@ -151,6 +171,81 @@
 ## 结果摘要
 
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
+
+### P12 测量（T18/T19）（10-20，mi200，二进制 `ed1aca0`，全部跑完；`results_index/p12/`）
+
+**新统计**（`isca27/p12-measure`，默认关，只挂被动的 tracing hook）：`-report-wg-footprint`（每个 WG 的向量 load 读过的 4 KB 页，CU 发出时记录，每 WG 最多 4096 页，这次都没超）；`-report-m1-sharing`（L1V 发往 RDMA 的远程读：1 µs / 10 µs 窗口内同一 line 被几个 GPM 读、两两跳数、到 owner 的跳数、YX 多播树大小；在途重复请求：请求方 L1V 发出到响应、owner 端 RDMA 转给 L2 到响应）。新 benchmark 参数：`-pa-steps`（连续 decode，默认 1）、`-t17-print-groups`（打印 PA 的工作表和 MoE 的 tile，WG → 序列 / expert）、`-t16-pagerank-iters`、`floydwarshall-p12small`。
+
+**回归**（yss2，mi200 baseline 参数，`-max-wg 4096`）：fir 改动前 `c9cdf64` / tracer 关 / tracer 开（`1929100`、`ed1aca0` 各一次）total_time 都是 26.568 µs，164,567 行排序后 md5 `d56a681494ae` 全部相同；MM 都是 345.433 µs，169,867 行 md5 `22a58b272d89` 全部相同（和 T16 的数一致）。PagedAttention 默认小输入（batch 2）：`c9cdf64`、`ed1aca0`、`ed1aca0 -pa-steps=1 -t17-print-groups` 都是 391.692 µs，142,320 行 md5 `616da3dcdbaf`。tracer 不影响墙钟（fir 11.5–12.2 分钟，MM 37.5–39.2 分钟）。另外 MoE 在 T17 规模下 `95615c4`、`c9cdf64`、`ed1aca0`（不开 P12 tracer）和开 P12 tracer 的运行都是 5.979603 ms。
+
+**运行**（规模、主机、墙钟见 `results_index/p12/runs.csv`）：PagedAttention batch 33 × 3 步（yss2，5.2 小时）和 batch 66 × 2 步（T17 规模，yss3，7.3 小时）；MoE skew 1.75、R-GAT 320 种子（T17 规模，yss2，3.1、3.2 小时）；pagerank 小输入 3 轮（yss3，4.2 小时）；kmeans 小输入（yss3，1.9 小时）；floydwarshall 2048 节点 × 8 个 pass（yss3，1.0 小时）。峰值内存 4–7.3 GB。
+
+**T19 亲和性**（页集合的 Jaccard 均值；containment = B 读的页里 A 也读过的比例）：
+
+| workload / kernel | 相邻 WG | 同组 | 随机两个 WG（基线） |
+|---|---|---|---|
+| MoE moe_up | 0.92 | 同 expert 0.9998；同 expert 同列块 0.97 | 0.019 |
+| MoE moe_down | 0.94 | 同 expert 0.9998；同 expert 同列块 0.97 | 0.016 |
+| R-GAT rgat_agg（相邻目标节点） | 0.41（containment 0.56） | — | 0.25 |
+| R-GAT rgat_proj | 0.84 | — | 0.67（所有 WG 读同一个 W） |
+| PagedAttention pa_partial（对照） | 0.016 | 同序列 0.016；同序列同 KV 头 0.031 | 0.0004 |
+| kmeans compute | 0.94 | — | 0.003 |
+| floydwarshall | 0.99 | — | 0.024 |
+| pagerank | 0.77 | — | 0.69 |
+
+- MoE 同一个 expert 的 WG 在页这一级几乎读同一组页（每个 WG 读约 1,430 / 720 页，即该 expert 的整个权重矩阵：64 列的列块横跨所有行），不同 expert 几乎不重叠；PagedAttention 几乎没有亲和性（同序列的 WG 只共享块表、Q 所在的 1 页），和预期一致。
+- R-GAT 聚合的相邻目标节点有一些重叠（0.41 对随机 0.25）。
+- pagerank 在页这一级没有区分度：rank 向量只有 63 页，每个 WG 读约 58 页，随机两个 WG 也有 0.69。页粒度太粗，要看 line 级（没做）。
+
+**T19 历史稳定性**（同一个 kernel 前后两次启动，同一个 WG 的足迹 Jaccard）：
+
+| workload | 按 WG 编号配对 | 说明 |
+|---|---|---|
+| kmeans（2 轮） | 1.000 | 每轮读同样的点 |
+| pagerank（3 轮） | 相邻两轮 0.029；隔一轮 1.000 | 两个 rank buffer 轮流读写（ping-pong） |
+| floydwarshall（8 个 pass） | 0.73 | 第 k 行、第 k 列每个 pass 都变 |
+| PagedAttention b33：step 0→1 | 0.999 | 这一步没有序列跨过 64 token 的分段边界 |
+| PagedAttention b33：step 1→2 | **0.085**；按（序列、分段、头）配对 **0.9995** | 一个序列跨过分段边界，工作表后面的项整体后移，94% 的 WG 换了工作项（这些 WG 0.03）；同一工作项 5.3% 换到了别的 GPM |
+| PagedAttention b66：step 0→1 | **0.81**；按工作项 0.999 | 19% 的 WG 换了工作项 |
+| MoE、R-GAT | — | 一个 batch 里同一个 kernel 不重复执行（R-GAT 的 15 次 proj/agg 是不同层、不同关系） |
+
+**T18 M1 共享**（1 µs 窗口 / 10 µs 窗口；远程读 = L1V 发往 RDMA 的读）：
+
+| workload | 远程读数 | 所在 line 被 ≥2 个 GPM 读的比例 | owner 每窗口每 line 只服务一次能省 | 读同一 line 的 GPM 两两跳数（最近一对） | 共享 line 上多播省掉的链路 / 占全部响应跳数 |
+|---|---|---|---|---|---|
+| PagedAttention b66 | 3,043 万 | 0.15% / 0.33% | 0.4% / 0.8% | 2.6（2.3） | 31% / 0.02% |
+| PagedAttention b33 | 2,260 万 | 0.46% / 0.81% | 0.6% / 1.1% | 1.8（1.7） | 47% / 0.1% |
+| MoE skew 1.75 | 1,549 万 | 3.0% / 5.7% | 10.7% / 19.3% | 3.0（2.6） | 36% / 0.5% |
+| R-GAT | 1,281 万 | 34% / 56% | 30% / 63% | 3.4（2.3） | 40% / 12% |
+| floydwarshall | 211 万 | 23% / 24% | 54% / 71% | 4.5（1.5） | 52% / 29% |
+| pagerank | 2,201 万 | 78% / 98% | 53% / 92% | 4.6（3.4） | 25% / 19% |
+| kmeans | 1,078 万 | 0 | 0 | — | — |
+
+**在途重复**（基线时序；请求方在途 = L1V 发出到收到响应，包含 RDMA 窗口前的排队）：
+
+| workload | 本 GPM 已有同 line 在途（别的 CU） | 只有别的 GPM 在途 | 别的 GPM 最近几跳（≤2 跳的比例） | owner 端同 line 在途 | 其中来自别的请求方 |
+|---|---|---|---|---|---|
+| PagedAttention b66 / b33 | 0.58% / 0.87% | 0.05% / 0.13% | 1.9（85%） | 0.10% / 0.17% | 0.01% / 0.05% |
+| MoE | 15.0% | 0.6% | 2.6（61%） | 2.5% | 0.8% |
+| R-GAT | 34.4% | 23.6% | 2.1（74%） | 8.8% | 6.2% |
+| floydwarshall | 49.2% | 11.8% | 1.5（90%） | 19.4% | 7.4% |
+| pagerank | 17.1% | 78.5% | 2.2（70%） | 6.9% | 6.4% |
+| kmeans | 0 | 0 | — | 0.05% | 0.02% |
+
+全 wafer 同时在途的远程读最多 1.5–2.1 万个（每 GPM 约 300–450，和 T17 的闭环模型一致）。
+
+**结论（T18）**：
+- **合并的空间取决于 workload**：PagedAttention（T17 的主力）和 kmeans 几乎没有（在途重复 < 1%）；MoE 中等（15%，几乎全是同一 GPM 的不同 CU）；R-GAT、floydwarshall、pagerank 很大（58–96% 的远程读发出时同一 line 已经在途）。
+- **请求方合并**（同一 GPM 的不同 CU，T18 设计 A）能直接去掉 MoE 15%、R-GAT 34%、FW 49%、pagerank 17% 的远程读，PagedAttention < 1%。
+- **跨 GPM 的重复在请求方排队时很多，但到 owner 端时大多已经错开**：pagerank 有 78.5% 的远程读发出时别的 GPM 有同 line 在途，但 owner 端同时在途的只有 6.4%（R-GAT 23.6% → 6.2%，FW 11.8% → 7.4%）。按现在的设计（owner 端只合并“正在服务”的请求），owner 端合并 + 多播在基线时序下只能拿到 6–8%；放大窗口后（O2b）请求到达 owner 更集中，可能变多，需要在 T18 的实现里再量。
+- 读同一 line 的 GPM 彼此不远（最近一对 1.5–2.6 跳，60–90% 在 2 跳内）；多播在共享 line 上省 25–52% 的链路，但占全部响应流量只有 PA 0.02%、MoE 0.5%、R-GAT 12%、FW 29%、pagerank 19%。
+- 所以对 PagedAttention，T18 的收益只能来自窗口（按距离分配 credit），不能来自合并或多播；合并和多播对 R-GAT、FW、pagerank 有意义。T17 的 O2b（第 5 步）还没跑，窗口这一半还没有直接证据。
+
+**结论（T19）**：
+- **亲和性存在，但集中在“同一组”**：MoE 同一个 expert 的 WG 页集合几乎相同（0.9998，随机 0.02），FW、kmeans 相邻 WG 0.94–0.99，R-GAT 聚合相邻目标节点中等（0.41 对 0.25），PagedAttention 没有（对照，0.016）。不需要历史，按编号相邻 / 同组挑就能拿到这些亲和性。
+- **按 WG 编号记录的历史不稳定**：数据不变时完全稳定（kmeans 1.0，PA 不跨边界时 0.999，pagerank 隔一轮 1.0），但 PagedAttention 只要一个序列跨过分段边界，后面的 WG 编号全部错位（step 1→2 只剩 0.085，b66 0.81），pagerank 的 ping-pong 让相邻两轮几乎不重叠（0.03）。按工作项（数据）对齐时是 0.999。也就是说 filter 里的历史应该按数据地址（页 / 区域）而不是 WG 编号记；或者只用“相邻 / 同组”这个不需要历史的规则。
+- 局限：页粒度对 pagerank 太粗；MoE 同 expert 在 line 级（不同列块读不同的列）的重叠会低于页级。
+
 
 ### T17 第一轮：新 workload 的 baseline（10-17，mi200，二进制 `95615c4`，全部跑完；`results_index/t17/`）
 
@@ -971,3 +1066,13 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 
 - **模拟器 bug**（`isca27/t17-workloads`，推到 `c9cdf64`）：`3a94d26` 调度器内部的 SOPP 指令（`s_nop`、`s_sleep`、`s_setprio` 等）推进 PC；`b5cff1b` `v_mad_u64_u32` 改成 VOP3b、64 位；`c9cdf64` 编译检查接受 `s_nop`（`s_sleep` 等 emu 没实现，仍然拒绝）。回归（yss2 测试目录，修复前 `95615c4` 对修复后 `c9cdf64`）：fir、MM（`-max-wg 4096`）、llmop gemm（含 488 的 kernel）total_time 和排序后统计的 md5 完全一致。`b5cff1b` 在回归跑完之前就推了，回归一致，不需要补救。T17 第一轮用的是修复前的 `95615c4`，因为回归一致，结果不受影响。
 - **T17**：4 个运行全部成功，结果见“结果摘要 → T17 第一轮”。新发现：R-GAT 的时间大部分在只用少数 GPM 的 kernel 上；T17 的负载不均来自数据，不是位置。两条都放进“需要用户决定”。
+
+### 2026-10-20 (P12) T18/T19 的测量：1–4 完成，5 停在配置确认（⏸）
+
+- **同步**：P12 的同步（第 0 步）已由之前的会话完成（`5d179e1`），没有重做；之后 Cowork 又提交了 `7844b79`（T18/T19 机制图），只读。
+- **配置确认（CONFIG.md 第 3 节，测量运行 = mi200 baseline + 统计开关，我自己确认）**：① blob 对比 `isca27-mi200-v1`（`67f1c03`）：`runall2_constants.py`、`runall2_config.py`、`shaderarray.go`、`r9nanobuilder.go`、`timingplatform.go`、`gpm_preset.go`、`config_file.go`、`configs/{hpca,mi200,mi300x_eighth}.json` 都没变；`flag.go` 是 T16 改的（只加 `-report-gpm-trace`），P12 没改；`runner.go` P12 只加了 2 行（tracer 字段和写文件的调用），`tracers.go` 加 1 行。② 命令：`akkalat/isca27_run.sh <exp_id> ed1aca0 P12 mi200 <benchmark 参数> -report-wg-footprint -report-m1-sharing -report-gpm-trace`（PA、MoE 另加 `-t17-print-groups`）。③ 差异：和 `mi200.json` 没有配置差异；只多了统计开关和 benchmark 参数（`meta.json` 的 `config_deviation` 已核对）；`config_used.json` 里 `magic-memory-copy=true`、`verify=false`。
+- **代码**（`isca27/p12-measure`，本地，没推送）：`1929100` 两个 tracer（`akkalat/baseline/runner/p12tracer.go` + 单元测试；`isca27_run.sh` 可选 `ISCA27_BINDIR`）；`ed1aca0` benchmark 参数（`-pa-steps`、`-t17-print-groups`、`-t16-pagerank-iters`、`floydwarshall-p12small`，带单元测试：`-pa-steps=1` 和默认输入完全相同）；`0b85bef`、`d32520a` 分析脚本（`akkalat/p12_footprint.py`、`p12_m1.py`、`p12_tables.py`），`isca27_config.py` 把 `-force-local-data-access` 标为 oracle。
+- **运行**：只在 `~/akita-exp-test/p12/`（yss2 和 yss3 各一份，用户 10-19 晚同意两台都用、每台最多 15 个），PID 记在各自的 `pids.txt`；回归 13 个、复现检查 6 个（yss2）、测量 7 个（yss2 3 个、yss3 4 个），全部 rc=0，没有 SIGBUS，结束后两台都没有我的进程在跑。结果见“结果摘要 → P12 测量”。
+- **新发现**：R-GAT 每次运行的结果差约 0.16%；MoE 的 T17 原始结果和复跑差 0.002%；`azure_conv_tokens.csv` 被 `.gitignore` 挡住没进仓库。都放进“需要用户决定”。
+- ⏸ 等用户：第 5 步 O1/O2b/O3 的配置确认；R-GAT 方案 B；上面三条新发现。
+

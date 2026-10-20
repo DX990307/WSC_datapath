@@ -1,0 +1,4 @@
+workload,kernel,name,launch,wgs,total_wg,pages_mean,pages_median,pages_max,reads_mean,truncated_wgs,distinct_pages_kernel
+kmeans-small,0,kmeans_kernel_swap,0,5376,5376,2.0000,2.0000,2,2048.0000,0,10752
+kmeans-small,1,kmeans_kernel_compute,0,5376,5376,32.0000,32.0000,32,1024.0000,0,10752
+kmeans-small,2,kmeans_kernel_compute,1,5376,5376,32.0000,32.0000,32,1024.0000,0,10752

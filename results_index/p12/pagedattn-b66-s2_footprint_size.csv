@@ -1,0 +1,5 @@
+workload,kernel,name,launch,wgs,total_wg,pages_mean,pages_median,pages_max,reads_mean,truncated_wgs,distinct_pages_kernel
+pagedattn-b66-s2,0,pa_partial,0,11928,11928,16.7344,17.0000,17,1762.8813,0,187944
+pagedattn-b66-s2,1,pa_reduce,0,2112,2112,3.6989,3.0000,9,180.7273,0,7596
+pagedattn-b66-s2,2,pa_partial,1,11936,11936,16.7346,17.0000,17,1762.9330,0,188072
+pagedattn-b66-s2,3,pa_reduce,1,2112,2112,3.7008,3.0000,9,180.8485,0,7600

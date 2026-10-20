@@ -1,0 +1,9 @@
+workload,kernel,name,launch,wgs,total_wg,pages_mean,pages_median,pages_max,reads_mean,truncated_wgs,distinct_pages_kernel
+floydwarshall-n2048-p8,0,floydWarshallPass,0,65536,65536,13.9961,13.5000,18,18.0000,0,4144
+floydwarshall-n2048-p8,1,floydWarshallPass,1,65536,65536,13.9961,13.5000,18,18.0000,0,4144
+floydwarshall-n2048-p8,2,floydWarshallPass,2,65536,65536,13.9961,13.5000,18,18.0000,0,4144
+floydwarshall-n2048-p8,3,floydWarshallPass,3,65536,65536,13.9961,13.5000,18,18.0000,0,4144
+floydwarshall-n2048-p8,4,floydWarshallPass,4,65536,65536,13.9961,13.5000,18,18.0000,0,4144
+floydwarshall-n2048-p8,5,floydWarshallPass,5,65536,65536,13.9961,13.5000,18,18.0000,0,4144
+floydwarshall-n2048-p8,6,floydWarshallPass,6,65536,65536,13.9961,13.5000,18,18.0000,0,4144
+floydwarshall-n2048-p8,7,floydWarshallPass,7,65536,65536,13.9961,13.5000,18,18.0000,0,4144

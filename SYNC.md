@@ -231,3 +231,9 @@
 - 2026-10-19 · cowork · **方向（用户决定）**：论文前提是地址转换已经由 HDPAT（用户的 HPCA'26 论文）解决，CuPath 解决数据访问。新增 `tasks/T18_new_m2_two_sided_merge.md`（m2 升级为两端合并：请求方改造的 cuckoo 在途表 + 按距离分配窗口 + owner 端请求者位图表和 mesh 多播；不缓存、不复制、不迁移）和 `tasks/T19_filter_guided_wg_stealing.md`（cuckoo filter 指导的就近 WG 窃取；T17 trace 估算的完美均衡上限 PA 1.74×、MoE 1.61×/2.94×、R-GAT 1.16×/6.18×），两者都是 `[提案]`。新增 `prompts/P12_measurements_for_T18_T19.md`：WG 足迹 tracer → 亲和性、历史稳定性；M1 共享统计；T17 的 O1/O2b/O3（oracle 要配置确认）。用户明确不做页迁移和复制。`ideas_from_T14.md` 新增三节（L2 偏小、地址转换核查、下一步方向）；README 加 T18、T19。汇报网页“下一步”页重写，新增子页 `site/next_1019.html`，导航加“新机制”；“想讨论的问题”第 1 条改成新主线。
 
 - 2026-10-19 · cowork · T18、T19 的论文风格机制图（英文，矢量）：`figs/fig_t18_two_sided_merge.{pdf,svg,png}`、`figs/fig_t19_neighbor_stealing.{pdf,svg,png}`，生成脚本 `figs/paperfig.py`（Python + cairosvg，改文字或布局后重新运行即可）。图里的表项名（IFT、OMT、footprint filter）是暂定名。汇报网页的 `site/next_1019.html` 已换成这两张图。
+
+### 2026-10-20 [claude-code] P12：T18/T19 的测量 1–4 完成，第 5 步停在配置确认（⏸）
+- 改了 `STATUS.md`（任务总览加 P12 一行；“需要用户决定”加 3 条：第 5 步 O1/O2b/O3 配置确认、R-GAT 运行间不确定、`azure_conv_tokens.csv` 没进 git；结果摘要加“P12 测量（T18/T19）”；日志）、本文件；新增 `results_index/p12/`（README、runs.csv、M1 汇总、每个 workload 的足迹亲和性 / 稳定性 CSV）。
+- 代码：分支 `isca27/p12-measure`（从 `c9cdf64` 开出）：`1929100`（WG 足迹和 M1 共享两个 tracer，默认关）、`ed1aca0`（`-pa-steps` 等 benchmark 参数，默认不变）、`0b85bef`、`d32520a`（分析脚本）。回归：fir、MM、PagedAttention 默认小输入，改动前后 / tracer 关开 total_time 和排序后统计的 md5 完全一致。
+- 结果目录：yss2、yss3 的 `~/akita-exp-test/p12/src/results/`（`1019_diag_p12-*`、`1019_diag_p12reg-*`、`1020_det_p12-*`）。
+- **两个仓库都没有推送**（这次的要求是由用户审阅后自己推送）：代码 `isca27/p12-measure` 头 `d32520a`；文档是本条日志所在的提交。

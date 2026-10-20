@@ -1,0 +1,4 @@
+workload,kernel,name,launch,wgs,total_wg,pages_mean,pages_median,pages_max,reads_mean,truncated_wgs,distinct_pages_kernel
+pagerank-small-i3,0,PageRankUpdateGpu,0,64512,64512,57.7900,58.0000,68,146.0807,0,16067
+pagerank-small-i3,1,PageRankUpdateGpu,1,64512,64512,57.7900,58.0000,68,146.0807,0,16067
+pagerank-small-i3,2,PageRankUpdateGpu,2,64512,64512,57.7900,58.0000,68,146.0807,0,16067
