@@ -323,3 +323,8 @@
 ### 2026-10-20 [claude-code] 新 benchmark 的 6 小时规模（只做了短时间校准，没有正式运行）
 - 条件（用户 10-20）：每个运行 ≤ 6 小时；主要 kernel 铺满 48 个 GPM；每个 CU ≥ 5 个 WG。结果：`results_index/w2complete/sizes_6h.{md,csv}`。
 - 阻碍：新规模下 sssp、atax、shocsort、ivfflat、graphtc 在 timing 模式崩溃（emu 的 LDS 读越界，越界上限正好是 kernel 声明的 `__local` 大小，可能是模拟器对 inactive lane 也检查地址或多 WG 同驻时 LDS 基址错误），需要修模拟器，等用户决定。
+
+### 2026-10-20 [claude-code] P13 第 0 步同步；用户新的实验要求
+- 读了 10-20 的 `[cowork]` 条目（范围只做通信、T19 放弃、机制编号、RDMA 64 的来源、observations/、P13、D23 暂缓）和改过的文件，Cowork 的改动已在 `e6688dd`、`944f2a0` 提交。STATUS 里 T19 改为放弃。
+- 用户 10-20 的新要求（覆盖 P13 B 的运行范围）：workload = 16 个新 benchmark + 7 个旧远程型 + T17（LLM）；每个实验 6–8 小时，尽量选大的 memory footprint；先跑 baseline（收集 observation 数据），再跑同规模的 Complete，再跑消融 M1+M2、M2+M3、M1+M3。另外先修 5 个新 benchmark 的 LDS 越界崩溃（用户判断是 kernel 的边界问题）。
+- 统计分支：P13 要求从 `isca27/t18-merge` 开出；因为新 benchmark 和 Complete 都在 `isca27/w2-complete`（`d09b18b`，其中 T18 代码和 `ca8b831` 相同、回归逐位一致），改为从 `d09b18b` 开出。
