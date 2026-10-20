@@ -185,6 +185,7 @@ func (b *Benchmark) Verify() {
 		host []float32
 	}{{"state", b.dState, st}, {"old", b.dOld, old}, {"flux", b.dFlux, fl}, {"factor", b.dFactor, fac}} {
 		got := get(c.p, len(c.host))
+		before := bad
 		for i := range c.host {
 			rel := math.Abs(float64(got[i])-float64(c.host[i])) / (1 + math.Abs(float64(c.host[i])))
 			maxErr32 = math.Max(maxErr32, rel)
@@ -192,12 +193,13 @@ func (b *Benchmark) Verify() {
 				maxErr = math.Max(maxErr, math.Abs(float64(got[i])-want[i])/(1+math.Abs(want[i])))
 			}
 			if !(rel <= 1e-4) {
-				if bad < 5 {
+				if bad-before < 3 {
 					log.Printf("altis_cfd: %s[%d] (cell %d, var %d) got %g want %g", c.name, i, i%n, i/n, got[i], c.host[i])
 				}
 				bad++
 			}
 		}
+		fmt.Printf("CFD,verify,%s_mismatches=%d\n", c.name, bad-before)
 	}
 	fmt.Printf("CFD,verify,elements=%d,max_rel_err_fp32_mirror=%.3g,max_rel_err_fp64_ref=%.3g,mismatches=%d\n",
 		16*n, maxErr32, maxErr, bad)
