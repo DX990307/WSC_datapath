@@ -8,6 +8,7 @@ import (
 	// embed hsaco files
 	_ "embed"
 
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/mgpusim/v3/driver"
 	"github.com/sarchlab/mgpusim/v3/insts"
 	"github.com/sarchlab/mgpusim/v3/kernels"
@@ -113,6 +114,12 @@ func (b *Benchmark) initMem() {
 		b.driver.Distribute(b.context,
 			b.gOutputData, uint64(b.Length*4), b.gpus)
 	}
+	b.driver.RegisterMemoryObject(
+		b.context, b.gHistoryData, uint64(b.numTaps*4), "history")
+	b.driver.RegisterMemoryObject(
+		b.context, b.gInputData, uint64(b.Length*4), "input")
+	b.driver.RegisterMemoryObject(
+		b.context, b.gOutputData, uint64(b.Length*4), "output")
 
 	b.driver.MemCopyH2D(b.context, b.gInputData, b.inputData)
 
@@ -124,6 +131,13 @@ func (b *Benchmark) initMem() {
 		} else {
 			b.gFilterData[i] = b.driver.AllocateMemory(
 				b.context, uint64(b.numTaps*4))
+		}
+		b.driver.RegisterMemoryObject(
+			b.context, b.gFilterData[i], uint64(b.numTaps*4), "filter")
+		if memtrace.RemoteOriginTraceEnabled() {
+			log.Printf(
+				"[FIR remote-origin] filter intended_gpu=%d vaddr=0x%x",
+				gpu, uint64(b.gFilterData[i]))
 		}
 		b.driver.MemCopyH2D(b.context, b.gFilterData[i], b.filterData)
 	}

@@ -11,6 +11,7 @@ type Builder struct {
 	numRow            int
 	numCol            int
 	bitOrderHighToLow []LocationItem
+	layoutLowToHigh   []FieldBits
 
 	accessUnitBit uint64
 	colBit        uint64
@@ -95,8 +96,23 @@ func (b Builder) WithNumCol(n int) Builder {
 	return b
 }
 
+// WithLayoutLowToHigh replaces the default bit order with an explicit
+// layout. Fields are listed from the bit right above the access-unit offset
+// upward. A field may appear more than once, in which case it is split and
+// its lower bits come first. The widths of each field must add up to its
+// log2 count (for the column: log2(numCol)-log2(burstLength)). Address bits
+// above the layout are ignored. An empty layout keeps the default mapper.
+func (b Builder) WithLayoutLowToHigh(fields []FieldBits) Builder {
+	b.layoutLowToHigh = append([]FieldBits(nil), fields...)
+	return b
+}
+
 // Build builds a default memory mapper.
 func (b Builder) Build() Mapper {
+	if len(b.layoutLowToHigh) > 0 {
+		return b.buildLayoutMapper()
+	}
+
 	m := DefaultMapper{}
 
 	b.calculateBits()

@@ -4,6 +4,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/sarchlab/akita/v3/mem/dram/internal/cmdq"
 	"github.com/sarchlab/akita/v3/mem/dram/internal/signal"
 	"github.com/sarchlab/akita/v3/mem/mem"
 )
@@ -94,5 +95,35 @@ var _ = Describe("FCFSSubTransactionQueue", func() {
 
 		Expect(madeProgress).To(BeTrue())
 		Expect(queue.Queue).NotTo(ContainElement(subTrans))
+	})
+
+	It("should expose both paired-read commands to scheduling together", func() {
+		demandRead := mem.ReadReqBuilder{}.
+			WithByteSize(64).
+			WithPairedRead("pair", mem.PairedReadDemand).
+			Build()
+		siblingRead := mem.ReadReqBuilder{}.
+			WithByteSize(64).
+			WithPairedRead("pair", mem.PairedReadSibling).
+			Build()
+		demandTrans := &signal.Transaction{Read: demandRead}
+		siblingTrans := &signal.Transaction{Read: siblingRead}
+		demandSub := &signal.SubTransaction{Transaction: demandTrans}
+		siblingSub := &signal.SubTransaction{Transaction: siblingTrans}
+		queue.Queue = []*signal.SubTransaction{demandSub, siblingSub}
+		productionQueue := &cmdq.CommandQueueImpl{
+			Queues: make([]cmdq.Queue, 1), CapacityPerQueue: 4,
+		}
+		queue.CmdQueue = productionQueue
+		demandCmd := &signal.Command{}
+		siblingCmd := &signal.Command{}
+		cmdCreator.EXPECT().Create(demandSub).Return(demandCmd)
+		cmdCreator.EXPECT().Create(siblingSub).Return(siblingCmd)
+
+		Expect(queue.Tick(10)).To(BeTrue())
+		Expect(queue.Queue).To(BeEmpty())
+		Expect(productionQueue.Queues[0]).To(Equal(cmdq.Queue{
+			demandCmd, siblingCmd,
+		}))
 	})
 })

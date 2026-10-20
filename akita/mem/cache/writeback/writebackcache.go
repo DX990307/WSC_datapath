@@ -45,12 +45,85 @@ type Cache struct {
 	lowModuleFinder mem.LowModuleFinder
 	directory       cache.Directory
 	mshr            cache.MSHR
+	mshrCapacity    int
 	log2BlockSize   uint64
 	numReqPerCycle  int
+
+	requestFilter                *TypedCuckooFilter
+	remoteReplicaFilter          lineMembershipFilter
+	remoteReplicaBlocks          map[*cache.Block]*remoteReplicaRecord
+	residentFilter               lineMembershipFilter
+	residentFilterBlocks         map[*cache.Block]residentFilterKey
+	residentFilterEnabled        bool
+	residentFilterReliable       bool
+	authoritativeAuditEnabled    bool
+	residentFilterStats          ResidentFilterStats
+	filterPrefetchEnabled        bool
+	filterPrefetchPredictorOnly  bool
+	filterPrefetchUngated        bool
+	filterPrefetcher             *DemandStridePredictor
+	localPrefetchPatternFilters  map[TypedFilterKey]*TypedCuckooFilter
+	localPrefetchPeers           []*Cache
+	localPrefetchInterleave      uint64
+	localPrefetchLeader          bool
+	localPrefetchCandidate       *localPrefetchCandidate
+	localPrefetchByLine          map[localPrefetchLineKey]*localPrefetchRecord
+	localPrefetchByBlock         map[*cache.Block]*localPrefetchRecord
+	localPrefetchStats           LocalFilterPrefetchStats
+	localPrefetchOutstanding     int
+	granularityAdaptationEnabled bool
+	granularityWithoutFilter     bool
+	granularityAlwaysExpand      bool
+	granularityPredictorOnly     bool
+	granularityPredictor         *DemandStridePredictor
+	granularityPatternFilters    map[TypedFilterKey]*TypedCuckooFilter
+	granularityLeader            bool
+	granularityByLine            map[granularityLineKey]*granularityRecord
+	granularityByBlock           map[*cache.Block]*granularityRecord
+	granularityStats             GranularityAdaptationStats
+	adaptivePairEnabled          bool
+	adaptivePairAdapter          *adaptivePairAdapter
+	adaptivePairStats            AdaptivePairStats
+	interleaving                 bool
+	interleavingBlocks           int
+	interleavingUnits            int
+	interleavingIndex            int
+
+	observationL2Accesses   uint64
+	remoteReplicaStats      RemoteReplicaStats
+	remoteReplicaGeneration uint64
+
+	localMemoryPathStats LocalMemoryPathStats
+	fillForwarding       bool
+	fillForwardingStats  FillForwardingStats
 
 	state                cacheState
 	inFlightTransactions []*transaction
 	evictingList         map[uint64]bool
+}
+
+// GetAdaptivePairStats returns the counters for the restored historical M1
+// adapter with one aligned 128-B controller-level read.
+func (c *Cache) GetAdaptivePairStats() AdaptivePairStats {
+	stats := c.adaptivePairStats
+	if c.adaptivePairAdapter != nil {
+		stats.RegionLines = uint64(c.adaptivePairAdapter.regionLines)
+	}
+	return stats
+}
+
+// RequestFilter exposes the one physical metadata filter owned by this L2
+// slice to the requester-local RDMA metadata interface.
+func (c *Cache) RequestFilter() *TypedCuckooFilter {
+	return c.requestFilter
+}
+
+// GetTypedFilterStats returns shared-array and per-logical-type counters.
+func (c *Cache) GetTypedFilterStats() TypedFilterStats {
+	if c.requestFilter == nil {
+		return TypedFilterStats{}
+	}
+	return c.requestFilter.Stats()
 }
 
 // SetLowModuleFinder sets the LowModuleFinder used by the cache.
@@ -63,9 +136,14 @@ func (c *Cache) Tick(now sim.VTimeInSec) bool {
 	madeProgress := false
 
 	madeProgress = c.controlPortSender.Tick(now) || madeProgress
+	if c.state != cacheStateRunning {
+		madeProgress = c.topParser.processRemoteFillWhileStopped(now) || madeProgress
+	}
 
 	if c.state != cacheStatePaused {
 		madeProgress = c.runPipeline(now) || madeProgress
+	} else {
+		madeProgress = c.runStage(now, c.topSender) || madeProgress
 	}
 
 	madeProgress = c.flusher.Tick(now) || madeProgress
@@ -85,8 +163,16 @@ func (c *Cache) runPipeline(now sim.VTimeInSec) bool {
 	}
 
 	madeProgress = c.runStage(now, c.writeBuffer) || madeProgress
-	madeProgress = c.runStage(now, c.dirStage) || madeProgress
+	// directoryStage already accepts and retires up to numReqPerCycle requests
+	// per Tick and its pipeline has the same width. Calling it through
+	// runStage advanced every pipeline stage numReqPerCycle times at the same
+	// simulation timestamp, collapsing a configured 10-cycle lookup to zero.
+	madeProgress = c.dirStage.Tick(now) || madeProgress
 	madeProgress = c.runStage(now, c.topParser) || madeProgress
+	// Speculation is deliberately last. A real request consumes every cache
+	// pipeline opportunity first; the prefetcher only uses an otherwise idle
+	// front-end slot and drops its candidate on any conflict.
+	madeProgress = c.runLocalFilterPrefetch(now) || madeProgress
 
 	return madeProgress
 }
@@ -115,9 +201,8 @@ func (c *Cache) discardInflightTransactions(now sim.VTimeInSec) {
 	c.mshrStage.Reset(now)
 	c.writeBuffer.Reset(now)
 
-	clearPort(c.topPort, now)
-
 	c.topSender.Clear()
+	c.discardTopPort(now)
 
 	// for _, t := range c.inFlightTransactions {
 	// 	fmt.Printf("%.10f, %s, transaction %s discarded due to flushing\n",

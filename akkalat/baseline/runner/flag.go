@@ -6,7 +6,7 @@ var timingFlag = flag.Bool("timing", false, "Run detailed timing simulation.")
 var maxInstCount = flag.Uint64("max-inst", 0,
 	"Terminate the simulation after the given number of instructions is retired.")
 var maxWGCount = flag.Uint64("max-wg", 0,
-	"Terminate the simulation after the given number of workgroups is retired.")
+	"Terminate after this many workgroups complete across all GPUs.")
 var parallelFlag = flag.Bool("parallel", false,
 	"Run the simulation in parallel.")
 var isaDebug = flag.Bool("debug-isa", false, "Generate the ISA debugging file.")
@@ -38,6 +38,34 @@ var memoryPathTraceMaxRecords = flag.Uint64("trace-memory-path-max-records", 100
 	"Maximum stable-window memory-path raw records to write; 0 means unlimited after warmup.")
 var memoryPathTraceExitOnComplete = flag.Bool("trace-memory-path-exit-on-complete", false,
 	"Exit the benchmark process after the memory-path raw trace window reaches max records.")
+var observationTracing = flag.Bool("trace-observation", false,
+	"Generate the new exclusive-stage observation trace (independent of the legacy memory-path tracer).")
+var observationTraceFile = flag.String("trace-observation-file", "",
+	"Output prefix for observation files. Defaults to <metric-file-name>_observation.")
+var observationTraceWarmupAccesses = flag.Uint64("trace-observation-warmup-accesses", 100000,
+	"Post-coalescing L1 demand-read transactions to skip before collecting the observation window.")
+var observationTraceMaxRecords = flag.Uint64("trace-observation-max-records", 100000,
+	"Maximum post-warmup demand-read observation paths; 0 means unlimited.")
+var observationTraceExitOnComplete = flag.Bool("trace-observation-exit-on-complete", false,
+	"Flush metrics and exit after the bounded observation window completes.")
+var observationDRAMWarmupAccesses = flag.Uint64("trace-observation-dram-warmup-accesses", 100000,
+	"Physical DRAM read subtransactions to skip before the O3 locality window.")
+var observationDRAMMaxRecords = flag.Uint64("trace-observation-dram-max-records", 100000,
+	"Maximum physical DRAM read subtransactions in the O3 window; 0 means unlimited.")
+var observationRemoteWarmupRequests = flag.Uint64("trace-observation-remote-warmup-requests", 0,
+	"Remote requests to skip before the O4/O5/O6 window.")
+var observationRemoteMaxRecords = flag.Uint64("trace-observation-remote-max-records", 100000,
+	"Maximum logical remote requests in the O4/O5/O6 window; 0 uses a safe finite default.")
+var observationL2SampleMax = flag.Uint64("trace-observation-l2-sample-max", 100000,
+	"Maximum periodic L2 utilization samples for O6; 0 uses a safe finite default.")
+var remoteOriginTracing = flag.Bool("trace-remote-origin", false,
+	"Generate a diagnostic WG/object local-vs-remote data-request trace.")
+var remoteOriginTraceFile = flag.String("trace-remote-origin-file", "",
+	"Output prefix for the remote-origin audit. Defaults to <metric-file-name>_remote_origin.")
+var remoteOriginTraceMaxRecords = flag.Uint64("trace-remote-origin-max-records", 100000,
+	"Maximum raw remote-origin rows; complete aggregates are always retained.")
+var allocationProfile = flag.Bool("allocation-profile", false,
+	"Write allocation metrics and exit immediately before the first kernel launch.")
 var instCountReportFlag = flag.Bool("report-inst-count", false,
 	"Report the number of instructions executed in each compute unit.")
 var cacheLatencyReportFlag = flag.Bool("report-cache-latency", false,
@@ -57,6 +85,10 @@ var useUnifiedMemoryFlag = flag.Bool("use-unified-memory", false,
 var reportAll = flag.Bool("report-all", false, "Report all metrics to .csv file.")
 var filenameFlag = flag.String("metric-file-name", "metrics",
 	"Modify the name of the output csv file.")
+var magicCopyCoherentFlag = flag.Bool("magic-copy-coherent", false,
+	"With -magic-memory-copy, make D2H copies read through dirty L2 lines "+
+		"(functional, no simulated time). Benchmarks that copy results back "+
+		"between kernels may enable it themselves.")
 var magicMemoryCopy = flag.Bool("magic-memory-copy", false,
 	"Copy data from CPU directly to global memory")
 var switchLatencyFlag = flag.Int("switch-latency", 20,
@@ -67,27 +99,97 @@ var endpointChannelsFlag = flag.Int("endpoint-channels", 0,
 	"Override local device endpoint input/output flit channels per cycle; 0 uses network bandwidth.")
 var endpointBufferSizeFlag = flag.Int("endpoint-buffer-size", 0,
 	"Override local device endpoint buffer capacity; 0 uses endpoint channel count.")
+var rdmaPipelineWidthFlag = flag.Int("rdma-pipeline-width", 8,
+	"Maximum requests or responses processed by each RDMA input path per cycle.")
+var rdmaPipelineLatencyFlag = flag.Int("rdma-pipeline-latency", 10,
+	"Fixed RDMA processing latency in cycles paid on each endpoint traversal.")
+var rdmaMaxOutstandingFlag = flag.Int("rdma-max-outstanding", 64,
+	"Maximum distinct operations tracked independently by each RDMA requester and owner direction.")
 var networkFlitSizeFlag = flag.Int("network-flit-size", 16,
 	"NoC flit payload size in bytes. Larger values reduce response flit count.")
 var l1vRemoteMaxInflightFlag = flag.Int("l1v-remote-max-inflight", 0,
 	"Limit in-flight remote L1V bottom transactions per L1V cache; 0 disables remote-only throttling.")
-var l1vMSHREntriesFlag = flag.Int("l1v-mshr-entries", 160,
+var l1vMSHREntriesFlag = flag.Int("l1v-mshr-entries", 16,
 	"Number of L1V cache MSHR entries per L1V cache.")
-var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 160,
+var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 16,
 	"Maximum concurrent L1V cache transactions per L1V cache.")
-var l1vBottomReorderPolicyFlag = flag.String("l1v-bottom-reorder-policy", "none",
-	"L1V bottom request reorder policy: none, fifo, or hlq.")
-var l1vBottomReorderWindowFlag = flag.Int("l1v-bottom-reorder-window", 0,
-	"Maximum entries in the optional L1V bottom reorder queue. 0 disables the queue.")
-var l1vBottomReorderMaxAgeNSFlag = flag.Uint64("l1v-bottom-reorder-max-age-ns", 0,
-	"Maximum L1V bottom reorder queue age in ns. 0 means unlimited.")
+var l2CacheSizeMBFlag = flag.Int("l2-cache-size-mb", 4,
+	"Total L2 cache capacity per GPM in MiB.")
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")
+var l2ResidentFilterEnableFlag = flag.Bool("l2-resident-filter-enable", false,
+	"Enable the per-L2-slice resident Cuckoo Filter fast-miss path.")
+var l2FilterPrefetchEnableFlag = flag.Bool("l2-filter-prefetch-enable", false,
+	"Enable real-demand-trained, Filter-coupled 64B prefetching with at most one candidate per demand.")
+var l2PrefetchPredictorOnlyFlag = flag.Bool("l2-prefetch-predictor-only", false,
+	"Diagnostic: train the predictor and count candidates without issuing them.")
+var l2PrefetchUngatedFlag = flag.Bool("l2-prefetch-ungated", false,
+	"Diagnostic: issue predicted candidates without membership gating.")
+var l2GranularityAdaptationEnableFlag = flag.Bool(
+	"l2-granularity-adaptation-enable", false,
+	"Enable demand-attached, filter-guided paired-read aggregation.")
+var l2AdaptivePairEnableFlag = flag.Bool(
+	"l2-adaptive-pair-enable", false,
+	"Enable the historical adjacent-line M1 policy using one aligned 128B DRAM read.")
+var l2AdaptivePairRegionLinesFlag = flag.Int(
+	"l2-adaptive-pair-region-lines", 2,
+	"Aligned row-local region fetched by adaptive pairing, in 64B cachelines; valid values are 2, 4, 8, and 16.")
+var l2GranularityWithoutFilterFlag = flag.Bool(
+	"l2-granularity-without-filter", false,
+	"Diagnostic: adapt controller granularity using prediction and exact checks without Cuckoo gating.")
+var l2GranularityAlwaysExpandFlag = flag.Bool(
+	"l2-granularity-always-expand", false,
+	"Diagnostic: expand every resource-safe demand region without requiring a learned pattern.")
+var l2GranularityPredictorOnlyFlag = flag.Bool(
+	"l2-granularity-predictor-only", false,
+	"Diagnostic: train the paired-read predictor and count eligible sibling candidates without issuing them.")
+var prefetchPredictorEntriesFlag = flag.Int("prefetch-predictor-entries", 256,
+	"Bounded demand-stride predictor entries per GPU/requester.")
+var l2FillForwardingEnableFlag = flag.Bool("l2-fill-forwarding-enable", false,
+	"Enable best-effort read-only L2 fill-and-forward on local DRAM returns.")
+var typedFilterModeFlag = flag.String("typed-filter-mode", "cuckoo",
+	"Per-L2-slice metadata mode: disabled, cuckoo, or exact.")
+var typedFilterCapacityFlag = flag.Int("typed-filter-capacity", 0,
+	"Typed-filter slots per L2 slice; 0 derives capacity from the slice.")
+var typedFilterSlotsPerBucketFlag = flag.Int("typed-filter-slots-per-bucket", 4,
+	"Typed-filter entries per bucket; sensitivity range 1 through 8.")
+var typedFilterFingerprintBitsFlag = flag.Int("typed-filter-fingerprint-bits", 13,
+	"Typed-filter fingerprint width in bits; sensitivity range 4 through 16.")
+var typedFilterLookupLatencyFlag = flag.Int("typed-filter-lookup-latency", 1,
+	"Typed-filter lookup latency in L2 cycles.")
+var typedFilterLookupWidthFlag = flag.Int("typed-filter-lookup-width", 16,
+	"Typed-filter lookups accepted by each L2 slice per cycle.")
+var typedFilterUpdateLatencyFlag = flag.Int("typed-filter-update-latency", 1,
+	"Typed-filter update latency in L2 cycles.")
+var typedFilterUpdateWidthFlag = flag.Int("typed-filter-update-width", 16,
+	"Typed-filter updates accepted by each L2 slice per cycle.")
+var dramRowContinuationEnableFlag = flag.Bool("dram-row-continuation-enable", false,
+	"Enable work-conserving same-bank, same-row DRAM continuation.")
+var remoteDataPathEnableFlag = flag.Bool("remote-data-path-enable", false,
+	"Enable requester RDMA exact dedup/batching and requester-L2 remote replicas.")
+var remoteDataPathDedupEnableFlag = flag.Bool("remote-data-path-dedup-enable", true,
+	"Enable requester RDMA exact same-line deduplication when the remote data path is enabled.")
+var remoteDataPathBatchingEnableFlag = flag.Bool("remote-data-path-batching-enable", true,
+	"Enable requester RDMA FIFO/bitmap batching when the remote data path is enabled.")
+var remoteFilterPrefetchEnableFlag = flag.Bool("remote-filter-prefetch-enable", false,
+	"Allow Filter-approved candidates to piggyback existing remote batches.")
+var remoteDataPathL2EnableFlag = flag.Bool("remote-data-path-l2-enable", true,
+	"Enable requester-L2 Cuckoo probes and remote clean replicas when the remote data path is enabled.")
+var typedFilterAuthoritativeAuditFlag = flag.Bool(
+	"typed-filter-authoritative-audit", false,
+	"Enable timing-neutral exact-state checks for typed-Filter negative decisions.")
+var remoteDataPathBatchLinesFlag = flag.Int("remote-data-path-batch-lines", 8,
+	"Maximum unique 64B lines in one remote bitmap request.")
+var remoteDataPathBatchesFlag = flag.Int("remote-data-path-batches", 64,
+	"Maximum collecting page batches per requester RDMA.")
 var maxNumHopsFlag = flag.Int("max-num-hops", -1,
 	"The maximum number of hops in the network")
 var numMemBankFlag = flag.Int("num-memory-banks", 16,
 	"The maximum number of hops in the network")
+var gpmPresetFlag = flag.String("gpm-preset", "hpca",
+	"GPM-internal configuration: hpca (HPCA submission, default), mi300x-eighth (1/8 MI300X; requires -num-memory-banks=16), "+
+		"or mi200 (1/4 MI250X GCD; requires -num-memory-banks=8 -l2-cache-size-mb=2). See gpm_preset.go.")
 var analyszerNameFlag = flag.String("analyzer-Name", "",
 	"The name of the analyzer to use.")
 var analyszerPeriodFlag = flag.Float64("analyzer-period", 0.0,
@@ -115,6 +217,13 @@ var l2SourceFileFlag = flag.String("l2-source-file", "",
 	"Output prefix for L2 source CSV files. Defaults to <metric-file-name>_l2_source.")
 var l2SourceTileWidthFlag = flag.Int("l2-source-tile-width", 7,
 	"Tile-array width used to compute Manhattan hops for L2 source reports.")
+var gpmTraceFlag = flag.Bool("report-gpm-trace", false,
+	"Statistics only (T16): write one CSV row per kernel x GPM with assigned/"+
+		"completed WGs, first/last WG times, the GPM's kernel end, L1V local/"+
+		"remote misses and latency, L2 TLB local/remote misses, and the GPM's "+
+		"mesh position. Does not change timing.")
+var gpmTraceFileFlag = flag.String("gpm-trace-file", "",
+	"Output file of -report-gpm-trace. Defaults to <metric-file-name>_gpm_trace.csv.")
 
 func configuredLog2PageSize() uint64 {
 	return *log2PageSizeFlag
@@ -124,6 +233,8 @@ func configuredLog2PageSize() uint64 {
 //
 //nolint:gocyclo
 func (r *Runner) ParseFlag() *Runner {
+	applyConfigFiles()
+
 	if *parallelFlag {
 		r.Parallel = true
 	}

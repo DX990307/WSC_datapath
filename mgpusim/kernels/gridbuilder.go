@@ -71,10 +71,14 @@ func (b *gridBuilderImpl) countWG() {
 	}
 
 	b.numWG = 0
+	// The filter is a predicate and does not own the WorkGroup. Reuse one
+	// zeroed descriptor so counting a large sampled grid does not allocate one
+	// temporary object per candidate WG.
+	wg := WorkGroup{}
 	for i := 0; i < x; i++ {
 		for j := 0; j < y; j++ {
 			for k := 0; k < z; k++ {
-				wg := WorkGroup{
+				wg = WorkGroup{
 					IDX: i,
 					IDY: j,
 					IDZ: k,

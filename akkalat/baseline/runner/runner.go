@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/monitoring"
 	"github.com/sarchlab/akita/v3/sim"
@@ -23,6 +24,7 @@ import (
 	"github.com/sarchlab/mgpusim/v3/profiler"
 	"github.com/sarchlab/mgpusim/v3/samples/sampledrunner"
 	"github.com/sarchlab/mgpusim/v3/timing/cp"
+	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 	"github.com/tebeka/atexit"
 )
 
@@ -64,6 +66,9 @@ type Runner struct {
 	simdBusyTimeTracers []simdBusyTimeTracer
 	cuCPITraces         []cuCPIStackTracer
 	sharingTraceWriter  *pageSharingTraceWriter
+	observationDRAM     *windowedPhysicalDRAMObserver
+	gpmTracer           *gpmTracer
+	p12                 *p12Tracer
 
 	Timing                     bool
 	Verify                     bool
@@ -111,6 +116,8 @@ func (r *Runner) Init() *Runner {
 	r.ParseFlag()
 	r.configureL2SourceStats()
 	r.configureMemoryPathTrace()
+	r.configureObservationTrace()
+	r.configureRemoteOriginTrace()
 
 	if !r.DisableServers {
 		go r.startProfilingServer()
@@ -134,6 +141,8 @@ func (r *Runner) Init() *Runner {
 	} else {
 		r.buildEmuPlatform()
 	}
+	r.attachObservationDRAMObserver()
+	r.configureAllocationProfile()
 
 	sampledrunner.ClearGPUSampledEngines()
 	for _, gpu := range r.platform.GPUs {
@@ -151,10 +160,49 @@ func (r *Runner) Init() *Runner {
 	}
 
 	r.createUnifiedGPUs()
+	r.configureMagicCopyCoherence()
 
 	r.defineMetrics()
 
 	return r
+}
+
+// configureMagicCopyCoherence registers every L2 write-back cache with the
+// driver so that coherent magic D2H copies can read through dirty lines.
+// Registration alone changes nothing; -magic-copy-coherent (or a benchmark
+// calling Driver.SetMagicCopyCoherent) turns it on.
+func (r *Runner) configureMagicCopyCoherence() {
+	var peekers []driver.MagicCopyPeeker
+	for _, gpu := range r.platform.GPUs {
+		for _, c := range gpu.L2Caches {
+			if l2, ok := c.(*writeback.Cache); ok {
+				peekers = append(peekers, l2)
+			}
+		}
+	}
+	r.platform.Driver.RegisterMagicCopyPeekers(peekers)
+	if *magicCopyCoherentFlag {
+		r.platform.Driver.SetMagicCopyCoherent(true)
+	}
+}
+
+func (r *Runner) configureAllocationProfile() {
+	if !*allocationProfile {
+		return
+	}
+	r.platform.Driver.SetBeforeFirstKernelLaunchHook(
+		func(stats driver.AllocationStatsSnapshot) {
+			log.Printf(
+				"allocation profile: page_size=%d workload_pages=%d workload_bytes=%d",
+				stats.PageSize,
+				stats.Workload.AllocatedPages,
+				stats.Workload.RequestedBytes,
+			)
+			r.reportDriverAllocationStats()
+			r.dumpMetrics()
+			atexit.Exit(0)
+		},
+	)
 }
 
 func (r *Runner) configureL2SourceStats() {
@@ -185,6 +233,10 @@ func (r *Runner) configureMemoryPathTrace() {
 		doneCallback = func() {
 			log.Printf(
 				"memory-path trace reached max records; flushing metrics and exiting")
+			// The callback runs outside the engine event handler. Pause waits
+			// until the current event finishes, making component metrics safe to
+			// iterate while the early-exit report is generated.
+			r.platform.Engine.Pause()
 			r.flushMetrics()
 			atexit.Exit(0)
 		}
@@ -202,9 +254,96 @@ func (r *Runner) configureMemoryPathTrace() {
 	}
 }
 
+func (r *Runner) configureObservationTrace() {
+	memtrace.DisableObservationTrace()
+	memtrace.DisableObservationRemoteTrace()
+	if !*observationTracing {
+		return
+	}
+	if !r.Timing {
+		panic("-trace-observation requires -timing")
+	}
+	if *memoryPathTracing {
+		panic("-trace-observation and legacy -trace-memory-path are mutually exclusive")
+	}
+	if *sampledrunner.SampledRunnerFlag ||
+		*sampledrunner.IPCSampledRunnerFlag ||
+		*sampledrunner.BranchSampledFlag ||
+		*sampledrunner.KernelSampledFlag ||
+		*sampledrunner.LoopSampledFlag {
+		panic("-trace-observation requires full timing simulation; disable sampled execution")
+	}
+	if *observationTraceExitOnComplete && *observationTraceMaxRecords == 0 {
+		panic("-trace-observation-exit-on-complete requires a nonzero path-record limit")
+	}
+	if *dramRowContinuationEnableFlag ||
+		*l2FillForwardingEnableFlag ||
+		*remoteDataPathEnableFlag || *forceLocalDataAccessFlag ||
+		*l2ResidentFilterEnableFlag {
+		panic("-trace-observation requires the unmodified baseline data path; disable local/remote mechanisms")
+	}
+
+	prefix := *observationTraceFile
+	if prefix == "" {
+		prefix = *filenameFlag + "_observation"
+	}
+	var doneCallback func()
+	if *observationTraceExitOnComplete {
+		doneCallback = func() {
+			log.Printf(
+				"observation trace reached max records; draining admitted remote requests")
+			<-memtrace.FreezeObservationRemoteTrace()
+			log.Printf(
+				"observation remote tail drained; flushing metrics and exiting")
+			r.platform.Engine.Pause()
+			r.flushMetrics()
+			atexit.Exit(0)
+		}
+	}
+	if err := memtrace.EnableObservationTrace(
+		prefix,
+		*observationTraceWarmupAccesses,
+		*observationTraceMaxRecords,
+		*observationTraceExitOnComplete,
+		doneCallback,
+	); err != nil {
+		panic(err)
+	}
+	if err := memtrace.EnableObservationRemoteTrace(
+		memtrace.ObservationRemoteConfig{
+			Prefix:         prefix,
+			WarmupRequests: *observationRemoteWarmupRequests,
+			MaxRequests:    *observationRemoteMaxRecords,
+			L2SampleMax:    *observationL2SampleMax,
+			TileWidth:      *l2SourceTileWidthFlag,
+		},
+	); err != nil {
+		panic(err)
+	}
+}
+
+func (r *Runner) configureRemoteOriginTrace() {
+	memtrace.DisableRemoteOriginTrace()
+	if !*remoteOriginTracing {
+		return
+	}
+	prefix := *remoteOriginTraceFile
+	if prefix == "" {
+		prefix = *filenameFlag + "_remote_origin"
+	}
+	memtrace.EnableRemoteOriginTrace(
+		prefix, *remoteOriginTraceMaxRecords, uint64(1)<<configuredLog2PageSize())
+}
+
 func (r *Runner) buildEmuPlatform() {
+	// GPUIDs is only set by createUnifiedGPUs (after the platform is built);
+	// build the same 48 GPMs it unifies.
+	numGPU := 48
+	if len(r.GPUIDs) > 0 {
+		numGPU = r.GPUIDs[len(r.GPUIDs)-1]
+	}
 	b := MakeEmuBuilder().
-		WithNumGPU(r.GPUIDs[len(r.GPUIDs)-1]).
+		WithNumGPU(numGPU).
 		WithLog2PageSize(configuredLog2PageSize())
 
 	if r.Parallel {
@@ -230,8 +369,61 @@ func (r *Runner) buildEmuPlatform() {
 	r.platform = b.Build()
 }
 
+func configuredTypedFilterMode() writeback.TypedFilterMode {
+	switch strings.ToLower(strings.TrimSpace(*typedFilterModeFlag)) {
+	case "disabled", "none", "off":
+		return writeback.TypedFilterDisabled
+	case "cuckoo", "approximate":
+		return writeback.TypedFilterCuckoo
+	case "exact", "ideal":
+		return writeback.TypedFilterExact
+	default:
+		panic(fmt.Sprintf("invalid -typed-filter-mode=%q; want disabled, cuckoo, or exact",
+			*typedFilterModeFlag))
+	}
+}
+
 func (r *Runner) buildTimingPlatform() {
+	prefetchModes := 0
+	for _, enabled := range []bool{
+		*l2FilterPrefetchEnableFlag,
+		*l2PrefetchPredictorOnlyFlag,
+		*l2PrefetchUngatedFlag,
+		*l2GranularityAdaptationEnableFlag,
+		*l2GranularityWithoutFilterFlag,
+		*l2GranularityAlwaysExpandFlag,
+		*l2GranularityPredictorOnlyFlag,
+		*l2AdaptivePairEnableFlag,
+	} {
+		if enabled {
+			prefetchModes++
+		}
+	}
+	if prefetchModes > 1 {
+		panic("choose only one L2 speculative/granularity mode")
+	}
+	fmt.Printf(
+		"[Config] L1V MSHR entries=%d max-concurrent-transactions=%d\n",
+		*l1vMSHREntriesFlag,
+		*l1vMaxConcurrentTransFlag,
+	)
+	fmt.Printf(
+		"[Config] L2 capacity=%d MiB adaptive-pair-region=%d cachelines\n",
+		*l2CacheSizeMBFlag,
+		*l2AdaptivePairRegionLinesFlag,
+	)
+	gpmPreset := lookupGPMPreset(
+		*gpmPresetFlag, *numMemBankFlag, *l2CacheSizeMBFlag)
+	fmt.Printf(
+		"[Config] GPM preset=%s CUs=%d (%d SA x %d) L2 partitions=%d\n",
+		gpmPreset.Name, gpmPreset.NumCU(), gpmPreset.NumSA,
+		gpmPreset.NumCUPerSA, *numMemBankFlag,
+	)
+	if features := gpmPreset.DRAM.modelFeatures(); len(features) > 0 {
+		fmt.Printf("[Config] DRAM model: %s\n", strings.Join(features, " "))
+	}
 	b := MakeR9NanoBuilder().
+		WithGPMPreset(gpmPreset).
 		WithLog2PageSize(configuredLog2PageSize()).
 		WithBandwidth(*bandwidthFlag).
 		WithSwitchLatency(*switchLatencyFlag).
@@ -239,15 +431,58 @@ func (r *Runner) buildTimingPlatform() {
 		WithNetworkFlitSize(*networkFlitSizeFlag).
 		WithEndpointChannels(*endpointChannelsFlag).
 		WithEndpointBufferSize(*endpointBufferSizeFlag).
+		WithRDMAPipeline(
+			*rdmaPipelineWidthFlag,
+			*rdmaPipelineLatencyFlag,
+			*rdmaMaxOutstandingFlag,
+		).
 		WithL1VRemoteMaxInflight(*l1vRemoteMaxInflightFlag).
 		WithL1VMSHREntries(*l1vMSHREntriesFlag).
 		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag).
-		WithL1VBottomReorder(
-			*l1vBottomReorderPolicyFlag,
-			*l1vBottomReorderWindowFlag,
-			*l1vBottomReorderMaxAgeNSFlag,
-		).
-		WithForceLocalDataAccess(*forceLocalDataAccessFlag)
+		WithL2CacheSizeMB(*l2CacheSizeMBFlag).
+		WithForceLocalDataAccess(*forceLocalDataAccessFlag).
+		WithL2ResidentFilter(*l2ResidentFilterEnableFlag).
+		WithL2FilterPrefetch(
+			*l2FilterPrefetchEnableFlag || *l2PrefetchPredictorOnlyFlag ||
+				*l2PrefetchUngatedFlag).
+		WithL2PrefetchDiagnostics(
+			*l2PrefetchPredictorOnlyFlag, *l2PrefetchUngatedFlag).
+		WithL2GranularityAdaptation(
+			*l2GranularityAdaptationEnableFlag ||
+				*l2GranularityWithoutFilterFlag ||
+				*l2GranularityAlwaysExpandFlag ||
+				*l2GranularityPredictorOnlyFlag,
+			*l2GranularityWithoutFilterFlag,
+			*l2GranularityAlwaysExpandFlag,
+			*l2GranularityPredictorOnlyFlag).
+		WithL2AdaptivePair(*l2AdaptivePairEnableFlag).
+		WithL2AdaptivePairRegionLines(*l2AdaptivePairRegionLinesFlag).
+		WithPrefetchPredictorEntries(*prefetchPredictorEntriesFlag).
+		WithL2FillForwarding(*l2FillForwardingEnableFlag).
+		WithTypedFilterConfig(writeback.TypedFilterConfig{
+			Mode:                     configuredTypedFilterMode(),
+			Capacity:                 *typedFilterCapacityFlag,
+			SlotsPerBucket:           *typedFilterSlotsPerBucketFlag,
+			FingerprintBits:          *typedFilterFingerprintBitsFlag,
+			EnableAuthoritativeAudit: *typedFilterAuthoritativeAuditFlag,
+			LookupLatencyCycles:      *typedFilterLookupLatencyFlag,
+			LookupWidth:              *typedFilterLookupWidthFlag,
+			UpdateLatencyCycles:      *typedFilterUpdateLatencyFlag,
+			UpdateWidth:              *typedFilterUpdateWidthFlag,
+		}).
+		WithDRAMRowContinuation(*dramRowContinuationEnableFlag).
+		WithRemoteDataPath(rdma.RemoteDataPathConfig{
+			Enabled:                  *remoteDataPathEnableFlag,
+			DisableDedup:             !*remoteDataPathDedupEnableFlag,
+			DisableBatching:          !*remoteDataPathBatchingEnableFlag,
+			DisableRequesterL2:       !*remoteDataPathL2EnableFlag,
+			EnableFilterPrefetch:     *remoteFilterPrefetchEnableFlag,
+			EnableAuthoritativeAudit: *typedFilterAuthoritativeAuditFlag,
+			PrefetchEntries:          *prefetchPredictorEntriesFlag,
+			MaxBatchLines:            *remoteDataPathBatchLinesFlag,
+			MaxBatches:               *remoteDataPathBatchesFlag,
+		}).
+		WithT18(t18ConfigFromFlags())
 
 	if *sharingTracing {
 		traceWriter, err := newPageSharingTraceWriter(
@@ -405,6 +640,8 @@ func (r *Runner) dumpMetrics() {
 func (r *Runner) flushMetrics() {
 	r.reportOnce.Do(func() {
 		r.reportStats()
+		r.writeGPMTrace()
+		r.writeP12Traces()
 		r.closeSharingTrace()
 	})
 }

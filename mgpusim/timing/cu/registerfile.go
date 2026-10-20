@@ -54,7 +54,7 @@ func (r *SimpleRegisterFile) Write(access RegisterAccess) {
 	}
 
 	size := access.RegCount * 4
-	copy(r.storage[offset:offset+size], access.Data[0:access.RegCount*4])
+	copyRegisterBytes(r.storage[offset:offset+size], access.Data, size)
 	access.OK = true
 }
 
@@ -66,8 +66,28 @@ func (r *SimpleRegisterFile) Read(access RegisterAccess) {
 	}
 
 	size := access.RegCount * 4
-	copy(access.Data, r.storage[offset:offset+size])
+	copyRegisterBytes(access.Data, r.storage[offset:offset+size], size)
 	access.OK = true
+}
+
+// copyRegisterBytes keeps the overwhelmingly common 4/8/16-byte register
+// transfers at compile-time sizes. A generic copy with a runtime length was
+// showing up as runtime.memmove for every operand lane in CPU profiles.
+func copyRegisterBytes(dst, src []byte, size int) {
+	if len(dst) < size || len(src) < size {
+		copy(dst, src)
+		return
+	}
+	switch size {
+	case 4:
+		*(*[4]byte)(dst) = *(*[4]byte)(src)
+	case 8:
+		*(*[8]byte)(dst) = *(*[8]byte)(src)
+	case 16:
+		*(*[16]byte)(dst) = *(*[16]byte)(src)
+	default:
+		copy(dst[:size], src[:size])
+	}
 }
 
 func (r *SimpleRegisterFile) getRegOffset(reg *insts.Reg, offset int, laneID int) int {

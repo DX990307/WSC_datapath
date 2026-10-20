@@ -1,0 +1,15 @@
+name,description,count_per_gpm,capacity_bytes,block_bytes,output_bits,banks,cache_type,associativity,read_write_ports,read_ports,write_ports,category,tag_bits,accounted_capacity_bytes,access_time_ns,cycle_time_ns,read_energy_nj,write_energy_nj,area_mm2,area_per_gpm_mm2,capacity_per_gpm_bytes
+l2_partition,Baseline 1-MiB L2 data and tag array,4,1048576,64,512,16,cache,16,1,0,0,required,,,6.32735,5.1022,1.15562,1.15256,13.6276,54.5104,4194304
+typed_filter,CACTI cache-style proxy for 8K four-slot buckets,4,32768,1,8,16,cache,4,1,2,0,required,16,86016,0.954857,0.189527,0.0132776,0.0143915,0.625934,2.503736,344064
+remote_predictor,256-entry requester-RDMA predictor at 64 B/entry,1,16384,64,512,1,ram,1,1,0,0,required,,,0.241022,0.270385,0.0142357,0.0271939,0.0361545,0.0361545,16384
+local_pair_history,64 16-B region records per L2 partition,4,1024,16,128,1,ram,1,1,0,0,required,,,0.137682,0.114275,0.00142703,0.00217493,0.00270093,0.01080372,4096
+m1_response_data,16 returned 64-B lines per L2 partition,4,1024,64,512,1,ram,1,1,0,0,required,,,0.118564,0.175801,0.0118253,0.0115164,0.0143382,0.0573528,4096
+m1_response_metadata,16 16-B tag/control entries per response buffer,4,256,16,128,1,ram,1,1,0,0,required,,,0.0837905,0.0730533,0.00123212,0.00135711,0.00138752,0.00555008,1024
+rdma_line_table,1024-entry exact remote-line table at 32 B/entry,1,32768,32,256,8,ram,1,1,0,0,required,,,0.36405,0.23033,0.0261507,0.0272606,0.165352,0.165352,32768
+rdma_waiter_table,1024-entry bounded waiter table at 16 B/entry,1,16384,16,128,8,ram,1,1,0,0,required,,,0.259113,0.144783,0.00824984,0.00880482,0.0613788,0.0613788,16384
+requester_batch_table,64 requester page descriptors and bitmaps at 32 B/entry,1,2048,32,256,8,ram,1,1,0,0,required,,,0.198945,0.0959644,0.0152684,0.0149063,0.0657606,0.0657606,2048
+owner_child_table,512 owner-side child descriptors at 16 B/entry,1,8192,16,128,8,ram,1,1,0,0,required,,,0.23282,0.143717,0.00741551,0.00764501,0.0464025,0.0464025,8192
+owner_batch_table,64 owner page descriptors at 32 B/entry,1,2048,32,256,8,ram,1,1,0,0,required,,,0.198945,0.0959644,0.0152684,0.0149063,0.0657606,0.0657606,2048
+requester_response_data,64 packets times eight returned cachelines,1,65536,64,512,8,ram,1,1,0,0,required,,,0.464879,0.24368,0.0676619,0.0739757,0.380967,0.380967,65536
+owner_response_data,64 packets times eight returned cachelines,1,32768,64,512,8,ram,1,1,0,0,required,,,0.425111,0.23033,0.0621707,0.0651622,0.312102,0.312102,32768
+remote_line_state,Remote and reuse-state bits for 16K L2 lines,4,4096,8,8,1,ram,1,1,0,0,required,,,0.168628,0.158061,0.00160325,0.000980197,0.00746348,0.02985392,16384

@@ -46,6 +46,19 @@ var _ = Describe("Reorder Buffer", func() {
 			read = mem.ReadReqBuilder{}.Build()
 		})
 
+		It("should preserve opaque request metadata", func() {
+			marker := &struct{ label string }{label: "wg-origin"}
+			read = mem.ReadReqBuilder{}.WithInfo(marker).Build()
+			readTransaction := rob.createTransaction(read)
+			Expect(readTransaction.reqToBottom.(*mem.ReadReq).Info).
+				To(BeIdenticalTo(marker))
+
+			write := mem.WriteReqBuilder{}.WithInfo(marker).Build()
+			writeTransaction := rob.createTransaction(write)
+			Expect(writeTransaction.reqToBottom.(*mem.WriteReq).Info).
+				To(BeIdenticalTo(marker))
+		})
+
 		It("should do nothing if buffer is full", func() {
 			for i := 0; i < 10; i++ {
 				req := mem.ReadReqBuilder{}.Build()

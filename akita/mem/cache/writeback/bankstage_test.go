@@ -335,6 +335,20 @@ var _ = Describe("Bank Stage", func() {
 			Expect(bs.inflightTransCount).To(Equal(0))
 			Expect(postPipelineBuf.Size()).To(Equal(0))
 		})
+
+		It("should finish a forwarded fill without sending duplicate responses", func() {
+			trans.fillResponsesForwarded = true
+
+			ret := bs.Tick(10)
+
+			Expect(ret).To(BeTrue())
+			writtenData, _ := storage.Read(0x40, 64)
+			Expect(writtenData).To(Equal(mshrEntry.Data))
+			Expect(block.IsLocked).To(BeFalse())
+			Expect(block.IsValid).To(BeTrue())
+			Expect(bs.inflightTransCount).To(Equal(0))
+			Expect(postPipelineBuf.Size()).To(Equal(0))
+		})
 	})
 
 	Context("finalizing a read for eviction action", func() {

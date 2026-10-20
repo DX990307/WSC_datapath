@@ -85,6 +85,10 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		aes := aes.NewBenchmark(driver)
 		aes.Length = oneGiB
 		benchmark = aes
+	case "aes-pipeline-smoke":
+		aes := aes.NewBenchmark(driver)
+		aes.Length = 1 * 1024 * 1024
+		benchmark = aes
 	case "atax":
 		atax := atax.NewBenchmark(driver)
 		atax.NX = 12288
@@ -215,6 +219,19 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		fft.Bytes = 1024
 		fft.Passes = 4
 		benchmark = fft
+	case "probe":
+		benchmark = newProbe(driver)
+	case "platbench":
+		benchmark = newPlatbench(driver)
+	case "pagedattn":
+		benchmark = newPagedAttn(driver)
+	case "moe":
+		benchmark = newMoE(driver)
+	case "t17-isacheck":
+		// end-to-end check of the instructions added for T17 (use -verify)
+		benchmark = newISACheck(driver)
+	case "rgat":
+		benchmark = newRGAT(driver)
 	case "floydwarshall":
 		floydwarshall := floydwarshall.NewBenchmark(driver)
 		floydwarshall.NumNodes = 11584
@@ -239,10 +256,29 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = im2col
 	case "kmeans":
 		kmeans := kmeans.NewBenchmark(driver)
-		kmeans.NumPoints = 1 << 22
+		// Preserve the original 32-feature, 8-cluster, two-iteration access
+		// pattern while keeping transpose plus both membership-compute phases
+		// inside the default 76,800-WG sampled window. 1,572,864 points gives
+		// 512 workgroups per GPU per kernel: 3 * 48 * 512 = 73,728 total. The
+		// previous 54,525,952-point setup was truncated during transpose and
+		// never exercised the compute or inter-iteration reuse phases.
+		kmeans.NumPoints = 1572864
 		kmeans.NumClusters = 8
 		kmeans.NumFeatures = 32
-		kmeans.MaxIter = 3
+		kmeans.MaxIter = 2
+		benchmark = kmeans
+	case "kmeans-reuse-smoke":
+		kmeans := kmeans.NewBenchmark(driver)
+		// Phase-targeted diagnostic input. Setup-time magic copy initializes
+		// the transposed feature matrix, then timing covers both membership
+		// iterations: 2 * 48 * 8 = 768 workgroups. This isolates remote
+		// request aggregation and cross-iteration reuse and is never included
+		// in the traditional paper geomean.
+		kmeans.NumPoints = 24576
+		kmeans.NumClusters = 8
+		kmeans.NumFeatures = 32
+		kmeans.MaxIter = 2
+		kmeans.PreloadTransposedFeatures()
 		benchmark = kmeans
 	case "kvcache":
 		kvcache := kvcache.NewBenchmark(driver)
@@ -336,8 +372,13 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = matrixmultiplication
 	case "matrixtranspose":
 		matrixtranspose := matrixtranspose.NewBenchmark(driver)
-		matrixtranspose.Width = 4096 * 4
+		matrixtranspose.Width = 11520
+		// matrixtranspose.Width = 4096 * 4
 		// matrixtranspose.Width = 4096 / 2
+		benchmark = matrixtranspose
+	case "matrixtranspose-pipeline-smoke":
+		matrixtranspose := matrixtranspose.NewBenchmark(driver)
+		matrixtranspose.Width = 1024
 		benchmark = matrixtranspose
 	case "matrixtranspose-middletile":
 		matrixtranspose := matrixtranspose.NewMiddleTileBenchmark(driver)
@@ -358,6 +399,12 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		pagerank.NumConnections = 132644864
 		pagerank.MaxIterations = 1
 		benchmark = pagerank
+	case "pagerank-pipeline-smoke":
+		pagerank := pagerank.NewBenchmark(driver)
+		pagerank.NumNodes = 1 << 13
+		pagerank.NumConnections = 1 << 16
+		pagerank.MaxIterations = 1
+		benchmark = pagerank
 	case "relu":
 		relu := relu.NewBenchmark(driver)
 		relu.Length = 10485760 * 32
@@ -366,14 +413,17 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = resnet.NewBenchmark(driver)
 	case "simpleconvolution":
 		simpleconvolution := simpleconvolution.NewBenchmark(driver)
-		simpleconvolution.Height = 2048
-		simpleconvolution.Width = 2048 * 32 / 8
+		// Input plus output occupy approximately 512 MiB. Retain the 3x3 mask
+		// so the benchmark still exposes adjacent-line convolution accesses.
+		// The padded grid is also divisible by 48 GPUs * 64 work-items.
+		simpleconvolution.Height = 8188
+		simpleconvolution.Width = 8190
 		simpleconvolution.SetMaskSize(3)
 		benchmark = simpleconvolution
 	case "spmv":
 		spmv := spmv.NewBenchmark(driver)
-		spmv.Dim = 1 << 20
-		spmv.Sparsity = 0.00012063980102539062
+		spmv.Dim = 1 << 20 * 85
+		spmv.Sparsity = 0.000000001
 		benchmark = spmv
 	case "stencil2d":
 		stencil2d := stencil2d.NewBenchmark(driver)
@@ -446,6 +496,12 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = spmvmt
 
 	default:
+		if b := t16SmallBenchmark(name, driver); b != nil {
+			return b
+		}
+		if b := p12SmallBenchmark(name, driver); b != nil {
+			return b
+		}
 		panic("Unknown benchmark")
 	}
 

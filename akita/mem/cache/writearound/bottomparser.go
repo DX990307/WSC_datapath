@@ -47,6 +47,8 @@ func (p *bottomParser) processDoneRsp(
 	p.cache.releaseBottomTransaction(trans)
 
 	tracing.TraceReqFinalize(trans.writeToBottom, p.cache)
+	memtrace.ObservationTransitionByRequest(
+		done.GetRspTo(), "l1_bottom_response", "l1_fill_response", now)
 	memtrace.RecordMemoryPathL1VBottomResponse(
 		p.cache.Name(),
 		trans.id,
@@ -83,6 +85,8 @@ func (p *bottomParser) processDataReady(
 	data := dr.Data
 	dirtyMask := make([]bool, 1<<p.cache.log2BlockSize)
 	mshrEntry := p.cache.mshr.Query(pid, cachelineID)
+	memtrace.ObservationTransitionByRequest(
+		dr.GetRspTo(), "l1_bottom_response", "l1_fill_response", now)
 	memtrace.RecordMemoryPathL1VBottomResponse(
 		p.cache.Name(),
 		trans.id,
@@ -140,6 +144,10 @@ func (p *bottomParser) finalizeMSHRTrans(
 ) {
 	for _, t := range mshrEntry.Requests {
 		trans := t.(*transaction)
+		if trans.readToBottom == nil {
+			memtrace.ObservationTransition(
+				trans.id, "l1_mshr_wakeup", "l1_fill_response", now)
+		}
 		if trans.read != nil {
 			for _, preCTrans := range trans.preCoalesceTransactions {
 				read := preCTrans.read

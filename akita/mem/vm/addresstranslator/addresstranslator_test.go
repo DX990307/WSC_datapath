@@ -178,6 +178,9 @@ var _ = Describe("Address Translator", func() {
 				WithSendTime(6).
 				WithAddress(0x10040).
 				WithByteSize(4).
+				WithStreamID(0x111).
+				WithLocalStreamID(0x222).
+				WithLocalPairHint(true).
 				Build()
 			translationRsp := vm.TranslationRspBuilder{}.
 				WithSendTime(8).
@@ -203,6 +206,11 @@ var _ = Describe("Address Translator", func() {
 					Expect(read.PID).To(Equal(vm.PID(0)))
 					Expect(read.Address).To(Equal(uint64(0x20040)))
 					Expect(read.AccessByteSize).To(Equal(uint64(4)))
+					Expect(read.LocalStreamID).To(Equal(uint64(0x222)))
+					Expect(read.LocalPairHint).To(BeTrue())
+					// Ordinary StreamID intentionally retains the pre-M1
+					// translation behavior, freezing requester-RDMA prediction.
+					Expect(read.StreamID).To(Equal(uint64(0)))
 					Expect(read.Src).To(BeIdenticalTo(bottomPort))
 				}).
 				Return(nil)

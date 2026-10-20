@@ -13,8 +13,7 @@ var _ = Describe("Bank", func() {
 
 	BeforeEach(func() {
 		b = BankImpl{
-			cyclesToCmdAvailable: make(map[signal.CommandKind]int),
-			CmdCycles: map[signal.CommandKind]int{
+			CmdCycles: [signal.NumCmdKind]int{
 				signal.CmdKindRead:           1,
 				signal.CmdKindReadPrecharge:  1,
 				signal.CmdKindWrite:          1,
@@ -151,6 +150,22 @@ var _ = Describe("Bank", func() {
 
 		Expect(b.cyclesToCmdAvailable[signal.CmdKindActivate]).To(Equal(10))
 		Expect(b.cyclesToCmdAvailable[signal.CmdKindRead]).To(Equal(8))
+	})
+
+	It("should not report a command ready while the bank is busy", func() {
+		b.state = BankStateOpen
+		b.openRow = 1
+		b.currentCmd = &signal.Command{
+			Kind:     signal.CmdKindRead,
+			SubTrans: &signal.SubTransaction{},
+		}
+		read := &signal.Command{
+			Kind:     signal.CmdKindRead,
+			SubTrans: &signal.SubTransaction{},
+		}
+		read.Row = 1
+
+		Expect(b.GetReadyCommand(10, read)).To(BeNil())
 	})
 
 })

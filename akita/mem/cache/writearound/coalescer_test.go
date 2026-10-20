@@ -55,6 +55,9 @@ var _ = Describe("Coalescer", func() {
 				WithAddress(0x100).
 				WithPID(1).
 				WithByteSize(4).
+				WithStreamID(0x111).
+				WithLocalStreamID(0x222).
+				WithInfo("stream-metadata").
 				CanWaitForCoalesce().
 				Build()
 			read2 = mem.ReadReqBuilder{}.
@@ -62,6 +65,10 @@ var _ = Describe("Coalescer", func() {
 				WithAddress(0x104).
 				WithPID(1).
 				WithByteSize(4).
+				WithStreamID(0x111).
+				WithLocalStreamID(0x222).
+				WithLocalPairHint(true).
+				WithInfo("stream-metadata").
 				CanWaitForCoalesce().
 				Build()
 
@@ -139,6 +146,11 @@ var _ = Describe("Coalescer", func() {
 						Expect(trans.read.Address).To(Equal(uint64(0x100)))
 						Expect(trans.read.PID).To(Equal(vm.PID(1)))
 						Expect(trans.read.AccessByteSize).To(Equal(uint64(64)))
+						Expect(trans.read.StreamID).To(BeZero())
+						Expect(trans.read.LocalStreamID).To(Equal(uint64(0x222)))
+						Expect(trans.read.LocalPairHint).To(BeTrue())
+						Expect(trans.read.Info).To(BeNil())
+						Expect(trans.read.CanWaitForCoalesce).To(BeFalse())
 					})
 				topPort.EXPECT().Peek().Return(read3)
 				topPort.EXPECT().Retrieve(gomock.Any())

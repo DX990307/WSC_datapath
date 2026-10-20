@@ -173,6 +173,7 @@ func (s *bankStage) pullFromBuf(now sim.VTimeInSec) bool {
 		t := trans.(*transaction)
 
 		if t.action == writeBufferFetch {
+			t.writeBufferReady = true
 			s.cache.writeBufferBuffer.Push(trans)
 			return true
 		}
@@ -241,17 +242,35 @@ func (s *bankStage) finalizeReadHit(
 
 	s.removeTransaction(now, trans)
 	s.inflightTransCount--
-	s.downwardInflightTransCount--
 	block.ReadCount--
 
-	dataReady := mem.DataReadyRspBuilder{}.
-		WithSendTime(now).
-		WithSrc(s.cache.topPort).
-		WithDst(read.Src).
-		WithRspTo(read.ID).
-		WithData(data).
-		Build()
-	s.cache.topSender.Send(dataReady)
+	if read.LookupOnly {
+		cachelineID, _ := getCacheLineID(
+			read.Address, s.cache.log2BlockSize)
+		s.cache.recordRemoteReplicaHit(block, read.PID, cachelineID)
+		lookupRsp := mem.CacheLookupRspBuilder{}.
+			WithSendTime(now).
+			WithSrc(s.cache.topPort).
+			WithDst(read.Src).
+			WithRspTo(read.ID).
+			WithHit(true).
+			WithData(data).
+			WithGeneration(s.cache.remoteReplicaGeneration).
+			Build()
+		s.cache.topSender.Send(lookupRsp)
+	} else {
+		dataReady := mem.DataReadyRspBuilder{}.
+			WithSendTime(now).
+			WithSrc(s.cache.topPort).
+			WithDst(read.Src).
+			WithRspTo(read.ID).
+			WithData(data).
+			Build()
+		s.cache.topSender.Send(dataReady)
+		s.cache.recordDemandReadCompletion(now, trans)
+	}
+	memtrace.ObservationTransitionByRequest(
+		read.Meta().ID, "l2_response_ready", "l2_response_link", now)
 
 	memtrace.RecordMemoryPathCacheComplete(
 		s.cache.Name(),
@@ -295,6 +314,7 @@ func (s *bankStage) finalizeWriteHit(
 	block.IsLocked = false
 	block.IsDirty = true
 	block.DirtyMask = dirtyMask
+	s.cache.trackResidentBlock(block)
 
 	s.removeTransaction(now, trans)
 	s.inflightTransCount--
@@ -307,6 +327,8 @@ func (s *bankStage) finalizeWriteHit(
 		WithRspTo(write.ID).
 		Build()
 	s.cache.topSender.Send(done)
+	memtrace.ObservationTransitionByRequest(
+		write.Meta().ID, "l2_response_ready", "l2_response_link", now)
 
 	memtrace.RecordMemoryPathCacheComplete(
 		s.cache.Name(),
@@ -329,6 +351,19 @@ func (s *bankStage) finalizeWriteHit(
 	// )
 
 	return true
+}
+
+func mshrEntryHasRealRead(entry *cache.MSHREntry) bool {
+	if entry == nil {
+		return false
+	}
+	for _, request := range entry.Requests {
+		trans, ok := request.(*transaction)
+		if ok && trans.read != nil && !trans.read.LookupOnly && !trans.prefetch {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *bankStage) writeData(
@@ -367,13 +402,15 @@ func (s *bankStage) finalizeBankWriteFetched(
 	now sim.VTimeInSec,
 	trans *transaction,
 ) bool {
-	if !s.cache.mshrStageBuffer.CanPush() {
+	if !trans.fillResponsesForwarded && !s.cache.mshrStageBuffer.CanPush() {
 		return false
 	}
 
 	mshrEntry := trans.mshrEntry
 	block := mshrEntry.Block
-	s.cache.mshrStageBuffer.Push(mshrEntry)
+	if !trans.fillResponsesForwarded {
+		s.cache.mshrStageBuffer.Push(mshrEntry)
+	}
 
 	err := s.cache.storage.Write(block.CacheAddress, mshrEntry.Data)
 	if err != nil {
@@ -382,6 +419,14 @@ func (s *bankStage) finalizeBankWriteFetched(
 
 	block.IsLocked = false
 	block.IsValid = true
+	// The resident filter describes data that can actually be served by L2.
+	// Do not insert the line at miss allocation time while its block is locked
+	// and the DRAM fill is still outstanding. This lets later requests use the
+	// filter-negative fast path and merge into the exact L2 MSHR without paying
+	// the tag pipeline, while preserving the ordinary fill and cache path.
+	s.cache.trackResidentBlock(block)
+	s.cache.completeLocalPrefetchFill(trans, block)
+	s.cache.completeGranularitySiblingFill(trans, block)
 
 	s.inflightTransCount--
 

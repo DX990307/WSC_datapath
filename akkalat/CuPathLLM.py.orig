@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Run the complete PASTA-style ResNet, BERT, and GPT CuPath campaign.
+
+The BERT/GPT machinery lives in run_cupath_llm.py. This entry point adds the
+full ResNet-50 cell used by PASTA while keeping all workloads in one campaign,
+one frozen binary, and one summary.
+"""
+
+from copy import copy
+from pathlib import Path
+import sys
+
+import run_cupath_llm as core
+from runall2_constants import DEFAULT_BENCHMARK_FLAGS
+import summarize_llm_decomposed as llm_summary
+
+
+DEFAULT_MODELS = "resnet,bert,gpt"
+KNOWN_MODELS = ("resnet", "bert", "gpt")
+RESNET_PROFILE = "resnet-50-full"
+RESNET_FLAGS = [
+    "-resnet-mode=full",
+    "-resnet-depth=50",
+    "-resnet-batch-size=4",
+    "-resnet-image-size=224",
+]
+
+base_build_campaign = core.build_campaign
+
+
+def selected_models(value):
+    models = core.parse_csv(value)
+    unknown = sorted(set(models) - set(KNOWN_MODELS))
+    if not models or unknown:
+        raise ValueError(f"unknown or empty --models selection: {unknown or models}")
+    return list(dict.fromkeys(models))
+
+
+def build_campaign(args):
+    models = selected_models(args.models)
+    transformer_models = [model for model in models if model != "resnet"]
+    exps = []
+    model_ops = []
+
+    if transformer_models:
+        transformer_args = copy(args)
+        transformer_args.models = ",".join(transformer_models)
+        transformer_exps, model_ops = base_build_campaign(transformer_args)
+        exps.extend(transformer_exps)
+
+    if "resnet" in models:
+        config_names = core.selected_configs(args.configs)
+        configs = core.formal_config_flags(args, config_names)
+        base_flags = core.common_flags(args)
+        timeout_seconds = int(args.timeout_minutes * 60)
+        for config_name, config_flags in configs:
+            exps.append({
+                "target": "baseline",
+                "benchmark": "resnet",
+                "config_name": (
+                    f"resnet_{RESNET_PROFILE}_000_full_{config_name}"
+                ),
+                "common_flags": base_flags,
+                "flags": (
+                    DEFAULT_BENCHMARK_FLAGS
+                    + config_flags
+                    + RESNET_FLAGS
+                ),
+                "timeout_seconds": timeout_seconds,
+            })
+
+    return exps, model_ops
+
+
+def resnet_records(output_dir):
+    records = []
+    for config in core.FORMAL_CONFIGS:
+        metrics_path = Path(output_dir) / (
+            "baseline_resnet_resnet_resnet-50-full_000_full_"
+            f"{config}_metrics.csv"
+        )
+        if not metrics_path.is_file():
+            continue
+        stdout_path = metrics_path.with_name(
+            metrics_path.name.replace("_metrics.csv", "_out.stdout")
+        )
+        metrics = llm_summary.parse_metrics(metrics_path)
+        elapsed, return_code = llm_summary.parse_stdout(stdout_path)
+        records.append(llm_summary.MetricRecord(
+            result_id=llm_summary.ResultID(
+                target="baseline",
+                benchmark="resnet",
+                model="resnet",
+                profile=RESNET_PROFILE,
+                op_index=0,
+                op_name="full",
+                config=config,
+            ),
+            metrics_path=metrics_path,
+            stdout_path=stdout_path,
+            driver_kernel_time=metrics[0],
+            driver_total_time=metrics[1],
+            command_processor_kernel_time=metrics[2],
+            max_command_processor_kernel_time=metrics[3],
+            stdout_elapsed_seconds=elapsed,
+            return_code=return_code,
+        ))
+    return records
+
+
+def summarize(output_dir):
+    for config in reversed(core.FORMAL_CONFIGS):
+        if config not in llm_summary.CONFIG_NAMES:
+            llm_summary.CONFIG_NAMES.insert(0, config)
+    records, skipped = llm_summary.matching_records(output_dir, "", "")
+    records.extend(resnet_records(output_dir))
+    if not records:
+        raise RuntimeError(f"no CuPath LLM metrics found in {output_dir}")
+    records.sort(key=lambda record: (
+        record.result_id.model,
+        record.result_id.profile,
+        record.result_id.config,
+        record.result_id.op_index,
+        record.result_id.op_name,
+    ))
+    groups = llm_summary.summarize(records)
+    summary_path = Path(output_dir) / "cupath_llm_summary.csv"
+    per_op_path = Path(output_dir) / "cupath_llm_per_op_summary.csv"
+    llm_summary.write_summary_csv(summary_path, groups)
+    llm_summary.write_per_op_csv(per_op_path, records)
+    print(f"Wrote summary: {summary_path}", flush=True)
+    print(f"Wrote per-op summary: {per_op_path}", flush=True)
+    if skipped:
+        print(f"Skipped unrelated metric files: {len(skipped)}", flush=True)
+    llm_summary.print_summary(groups)
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if not any(arg == "--models" or arg.startswith("--models=") for arg in argv):
+        argv = [f"--models={DEFAULT_MODELS}", *argv]
+
+    core.selected_models = selected_models
+    core.build_campaign = build_campaign
+    core.summarize = summarize
+    core.main(argv)
+
+
+if __name__ == "__main__":
+    main()

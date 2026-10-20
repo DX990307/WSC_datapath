@@ -1,0 +1,7 @@
+{
+  "cacti_executable": "/tmp/Cacti-7.0/cacti",
+  "l2_area_per_gpm_mm2": 54.5104,
+  "required_cupath_array_area_per_gpm_mm2": 3.74117452,
+  "required_array_overhead_percent_of_l2": 6.863230722944613,
+  "required_capacity_per_gpm_bytes": 545792
+}

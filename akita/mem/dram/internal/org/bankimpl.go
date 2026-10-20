@@ -25,17 +25,25 @@ type BankImpl struct {
 	state                BankState
 	currentCmd           *signal.Command
 	openRow              uint64
-	CmdCycles            map[signal.CommandKind]int
-	cyclesToCmdAvailable map[signal.CommandKind]int
+	CmdCycles            [signal.NumCmdKind]int
+	cyclesToCmdAvailable [signal.NumCmdKind]int
+	commandCompleted     func(now sim.VTimeInSec, cmd *signal.Command)
+
+	// PipelineColumnCommands lets read and write commands overlap in the
+	// bank, as their data transfers do in a real device. A column command
+	// then does not occupy the bank until its data transfer ends: the next
+	// command waits only for the timing constraints (for example, tCCDL
+	// between two reads of the open row). Activate and precharge still
+	// occupy the bank. False lets a bank execute one command at a time.
+	PipelineColumnCommands bool
+	inflight               []*signal.Command
 }
 
 // NewBankImpl creates a new BankImpl.
 func NewBankImpl(name string) *BankImpl {
 	b := &BankImpl{
-		BankName:             name,
-		state:                BankStateClosed,
-		cyclesToCmdAvailable: make(map[signal.CommandKind]int),
-		CmdCycles:            make(map[signal.CommandKind]int),
+		BankName: name,
+		state:    BankStateClosed,
 	}
 
 	return b
@@ -49,13 +57,14 @@ func (b *BankImpl) Name() string {
 // Tick updates the internal states of the bank.
 func (b *BankImpl) Tick(now sim.VTimeInSec) (madeProgress bool) {
 	madeProgress = b.countDownCurrentCmd(now) || madeProgress
+	madeProgress = b.countDownInflight(now) || madeProgress
 	madeProgress = b.countDownTiming() || madeProgress
 
 	return madeProgress
 }
 
 func (b *BankImpl) countDownTiming() (madeProgress bool) {
-	for i := range b.cyclesToCmdAvailable {
+	for i := signal.CommandKind(0); i < signal.NumCmdKind; i++ {
 		if b.cyclesToCmdAvailable[i] > 0 {
 			b.cyclesToCmdAvailable[i]--
 			madeProgress = true
@@ -77,16 +86,34 @@ func (b *BankImpl) countDownCurrentCmd(now sim.VTimeInSec) (madeProgress bool) {
 	return madeProgress
 }
 
-func (b *BankImpl) completeCurrentCmd(now sim.VTimeInSec) {
-	b.currentCmd.CycleLeft = 0
-
-	tracing.EndTask(b.currentCmd.ID, b)
-
-	if b.currentCmd.IsReadOrWrite() {
-		b.currentCmd.SubTrans.Completed = true
-
-		tracing.EndTask(b.currentCmd.SubTrans.ID, b)
+// countDownInflight counts down the pipelined column commands and completes
+// those whose data transfer has ended, in issue order.
+func (b *BankImpl) countDownInflight(now sim.VTimeInSec) (madeProgress bool) {
+	if len(b.inflight) == 0 {
+		return false
 	}
+
+	remaining := b.inflight[:0]
+	for _, cmd := range b.inflight {
+		cmd.CycleLeft--
+		if cmd.CycleLeft <= 0 {
+			b.completeCommand(now, cmd)
+			continue
+		}
+
+		remaining = append(remaining, cmd)
+	}
+
+	for i := len(remaining); i < len(b.inflight); i++ {
+		b.inflight[i] = nil
+	}
+	b.inflight = remaining
+
+	return true
+}
+
+func (b *BankImpl) completeCurrentCmd(now sim.VTimeInSec) {
+	b.completeCommand(now, b.currentCmd)
 
 	// fmt.Printf("%.10f, %s, cmd completed, %s\n",
 	// 	now, b.Name(), b.currentCmd.Kind.String())
@@ -94,11 +121,55 @@ func (b *BankImpl) completeCurrentCmd(now sim.VTimeInSec) {
 	b.currentCmd = nil
 }
 
+func (b *BankImpl) completeCommand(now sim.VTimeInSec, cmd *signal.Command) {
+	cmd.CycleLeft = 0
+
+	tracing.EndTask(cmd.ID, b)
+
+	if cmd.IsReadOrWrite() {
+		cmd.SubTrans.Completed = true
+
+		tracing.EndTask(cmd.SubTrans.ID, b)
+	}
+
+	if b.commandCompleted != nil {
+		b.commandCompleted(now, cmd)
+	}
+}
+
+// SetCommandCompletedObserver installs a passive command-completion hook.
+func (b *BankImpl) SetCommandCompletedObserver(
+	observer func(now sim.VTimeInSec, cmd *signal.Command),
+) {
+	b.commandCompleted = observer
+}
+
+// ObservationState returns the bank state without exposing mutable bank
+// internals to the observer.
+func (b *BankImpl) ObservationState() (open bool, row uint64) {
+	return b.state == BankStateOpen, b.openRow
+}
+
+// ObservationColumnReady checks whether cmd is a ready row-hit column command
+// without cloning it or changing timing state.
+func (b *BankImpl) ObservationColumnReady(cmd *signal.Command) bool {
+	if cmd == nil || !cmd.IsReadOrWrite() || b.currentCmd != nil {
+		return false
+	}
+	if b.state != BankStateOpen || b.openRow != cmd.Row {
+		return false
+	}
+	return b.cyclesToCmdAvailable[cmd.Kind] == 0
+}
+
 // GetReadyCommand returns the next command is ready to be issued.
 func (b *BankImpl) GetReadyCommand(
 	now sim.VTimeInSec,
 	cmd *signal.Command,
 ) *signal.Command {
+	if b.currentCmd != nil {
+		return nil
+	}
 	requiredKind := b.getRequiredCommandKind(cmd)
 	if requiredKind == signal.NumCmdKind {
 		panic("never")
@@ -129,6 +200,10 @@ func (b *BankImpl) StartCommand(now sim.VTimeInSec, cmd *signal.Command) {
 	if b.currentCmd != nil {
 		panic("previous cmd is not completed")
 	}
+	if b.PipelineColumnCommands && cmd.IsReadOrWrite() {
+		b.startColumnCommand(cmd)
+		return
+	}
 	b.currentCmd = cmd
 	b.currentCmd.CycleLeft = b.CmdCycles[cmd.Kind]
 
@@ -152,6 +227,31 @@ func (b *BankImpl) StartCommand(now sim.VTimeInSec, cmd *signal.Command) {
 
 	// fmt.Printf("%.10f, %s, cmd started, %s\n",
 	// 	now, b.Name(), b.currentCmd.Kind.String())
+}
+
+// startColumnCommand starts a pipelined read or write. The state update
+// happens at once (an auto-precharge closes the row for the next command),
+// while the command stays in flight until its data transfer ends.
+func (b *BankImpl) startColumnCommand(cmd *signal.Command) {
+	cmd.CycleLeft = b.CmdCycles[cmd.Kind]
+
+	updateFunc, found := stateUpdateTable[cmdKindTableKey{b.state, cmd.Kind}]
+	if !found {
+		panic("never")
+	}
+
+	updateFunc(b, cmd)
+
+	tracing.StartTask(
+		cmd.ID,
+		cmd.SubTrans.ID,
+		b,
+		"cmd",
+		cmd.Kind.String(),
+		nil,
+	)
+
+	b.inflight = append(b.inflight, cmd)
 }
 
 // UpdateTiming updates timing related states of the bank.

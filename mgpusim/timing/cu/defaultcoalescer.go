@@ -101,7 +101,17 @@ func (c defaultCoalescer) generateReadTransactions(
 	reqs []*mem.ReadReq,
 ) []VectorMemAccessInfo {
 	transactions := []VectorMemAccessInfo{}
-	for _, req := range reqs {
+	markLocalPairFollowers(reqs, c.log2CacheLineSize)
+	for position, req := range reqs {
+		// Keep cacheline positions of one coalesced load separate after they
+		// converge at the shared L2. Treating every line emitted by one dynamic
+		// vector instruction as a temporal stream merely learns the already
+		// visible within-instruction footprint. Position streams instead learn
+		// how the corresponding line moves across dynamic executions.
+		if inst := wf.DynamicInst(); inst != nil && inst.Inst != nil {
+			req.StreamID = memoryStreamID(inst.PC, position)
+			req.LocalStreamID = localMemoryStreamID(wf, inst.PC, position)
+		}
 		transaction := VectorMemAccessInfo{
 			Read:      req,
 			Wavefront: wf,
@@ -113,6 +123,62 @@ func (c defaultCoalescer) generateReadTransactions(
 		transactions = append(transactions, transaction)
 	}
 	return transactions
+}
+
+// markLocalPairFollowers marks only the later-emitted member of each adjacent
+// cacheline pair. The hint suppresses pointless M1 Filter probes; exact
+// Local-Pending state remains authoritative at L2.
+func markLocalPairFollowers(reqs []*mem.ReadReq, log2LineSize uint64) {
+	if log2LineSize >= 64 {
+		return
+	}
+	lineBytes := uint64(1) << log2LineSize
+	seen := make(map[uint64]struct{}, len(reqs))
+	for _, req := range reqs {
+		if req == nil {
+			continue
+		}
+		line := req.Address & ^(lineBytes - 1)
+		sibling := line ^ lineBytes
+		if _, ok := seen[sibling]; ok {
+			req.LocalPairHint = true
+		}
+		seen[line] = struct{}{}
+	}
+}
+
+func memoryStreamID(pc uint64, position int) uint64 {
+	context := mixMemoryStreamWord(
+		uint64(position) + 0x9e3779b97f4a7c15)
+	return pc ^ context
+}
+
+func mixMemoryStreamWord(context uint64) uint64 {
+	context ^= context >> 30
+	context *= 0xbf58476d1ce4e5b9
+	context ^= context >> 27
+	context *= 0x94d049bb133111eb
+	context ^= context >> 31
+	return context
+}
+
+// localMemoryStreamID groups all cache lines emitted by one static load into
+// one local-M1 footprint stream. Position remains part of ordinary StreamID
+// for the frozen requester-RDMA predictor, but including it here makes M1
+// learn how each position moves across workgroups rather than the adjacent
+// lines simultaneously exposed by one coalesced instruction. Source L1 is an
+// independent predictor-key field, so PC alone provides a bounded local
+// context without workgroup or hardware-slot identity.
+func localMemoryStreamID(
+	_ *wavefront.Wavefront,
+	pc uint64,
+	_ int,
+) uint64 {
+	if pc != 0 {
+		return pc
+	}
+	// Preserve a nonzero local context for synthetic instructions at PC zero.
+	return mixMemoryStreamWord(0x243f6a8885a308d3)
 }
 
 func (c defaultCoalescer) generateWriteTransactions(

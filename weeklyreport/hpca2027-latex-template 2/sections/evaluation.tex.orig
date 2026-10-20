@@ -1,0 +1,197 @@
+% !TeX root = ../main.tex
+\section{Evaluation Methodology}
+\label{sec:evaluation}
+
+\subsection{Simulation}
+
+\textbf{Simulation.}
+We extend MGPUSim~\cite{sun2019mgpusim} with distributed page placement, a
+packet-switched mesh, RDMA endpoints, detailed cache and HBM timing, and the
+instrumentation required to model the complete memory path of a wafer-scale
+GPU.  We model 48 GPMs connected by a $7\times7$ mesh, with the remaining tile
+hosting the central I/O and control components.  Each link provides 768~GB/s
+of bandwidth and incurs 32 cycles of switch latency, consistent with prior
+multi-chip and wafer-scale studies
+\cite{arunkumar2017mcm,feng2024barre}.  Each GPM represents one quarter of an
+AMD MI100-class GPU.  Four GPMs collectively provide the compute, cache,
+memory capacity, and memory bandwidth of one MI100
+\cite{techpowerup_mi100}.  This scaling keeps cycle-level simulation of the
+48 GPM system tractable while preserving its aggregate resource ratios.
+
+\textbf{Cache and memory hierarchy.}
+Each GPM contains 32 CUs organized as eight shader arrays.  Every CU has a
+private 16~KB, four-way L1 vector cache with a 10-cycle access, 16 MSHRs, and
+at most 160 concurrent transactions.  Each shader array also has a 16~KB
+scalar cache and a 32~KB instruction cache.  The GPM-wide 4~MB L2 is divided
+into four independently accessed 1~MB partitions.  Each partition is 16-way
+associative, accepts 16 requests per cycle, contains 64 MSHRs, and charges a
+10-cycle directory lookup to both
+hits and misses.  Four memory controllers connect the L2 to 8~GB of local HBM
+with 1.23~TB/s aggregate bandwidth.  Each RDMA endpoint processes eight
+transfers per cycle, charges 10 cycles for an endpoint traversal, and tracks
+up to 64 requester and 64 owner transactions.  Table~\ref{table:BaselineConfig}
+summarizes the modeled system.
+
+\textbf{CuPath modeling.}
+The MCM-GPU design introduces a GPM-side, remote-only L1.5 cache between L1
+and L2 and explores reallocating L2 capacity to that new level
+\cite{arunkumar2017mcm}.  CuPath does not add an L1.5 cache, a victim cache,
+or another independently addressable cache.  Baseline and CuPath therefore
+use identical L1 and L2 capacities, associativities, ports, MSHRs, and lookup
+latencies.  CuPath adds one metadata-only Cuckoo Filter and a bounded 16-line
+M1 response buffer per L2 partition, together with bounded local and remote
+prediction state.  The response buffer holds an adjacent line returned by a
+paired HBM access until a matching demand consumes it or replacement removes
+it.  A retained remote response is instead inserted as a clean line through
+the existing L2 fill and replacement path.  Exact cache tags, MSHRs, and RDMA
+transaction tables remain authoritative.  All
+configurations also use the same TLBs and 4~KB physical page mapping, so every
+reported difference comes from cache, HBM, RDMA, and network processing below
+address translation.
+
+\textbf{Execution scope.}
+Each experiment continues until 78{,}600 workgroups have completed across the
+48-GPM system.  This represents approximately 51 completed workgroups for each
+of the wafer's 1,536 CUs and is sufficient to capture steady execution beyond
+the initial transient \cite{baruah2020griffin}.  We terminate at a workgroup
+boundary because prior studies show that workgroup completion rates stabilize
+after warmup \cite{avalos2021principal,liu2023photon}.  The threshold does not
+change kernel launches, workgroup IDs, partitioning, or GPU assignment.  A
+workload with fewer workgroups runs to completion, and all configurations use
+the same termination rule.
+
+\begin{table}[t]
+  \centering
+  \caption{Baseline wafer-scale GPU and CuPath configuration.}
+  \label{table:BaselineConfig}
+  \footnotesize
+  \begin{tabularx}{\columnwidth}{@{}l>{\raggedright\arraybackslash}X@{}}
+    \toprule
+    \textbf{Module} & \textbf{Configuration} \\
+    \midrule
+    Wafer & 48 GPMs, 1.0~GHz, $7\times7$ mesh \\
+    Compute & 32 CUs/GPM, eight shader arrays/GPM \\
+    L1 vector & 16~KB/CU, 4-way, 10 cycles,
+                16 MSHRs \\
+    L1 scalar & 16~KB/shader array, 4-way, 16 MSHRs \\
+    L1 instruction & 32~KB/shader array, 4-way, 16 MSHRs \\
+    Shared L2 & 4~MB/GPM, four partitions, 16-way, 64 MSHRs/partition,
+                16 req./cycle/partition, 10-cycle lookup \\
+    HBM & 8~GB/GPM, four controllers, 1.23~TB/s, BL4 \\
+    RDMA endpoint & 8 transfers/cycle, 10-cycle processing,
+                    64 outstanding/direction \\
+    Mesh link & 768~GB/s, 32-cycle switch latency, 16-B flit \\
+    \midrule
+    \multicolumn{2}{l}{\textit{CuPath additions}} \\
+    Cache capacity & No L1.5 or new addressable cache; baseline L1/L2 unchanged \\
+    Typed Filter & One shared array/L2 partition, 4K buckets, four slots/bucket,
+                   13-bit fingerprint \\
+    Filter ports & 1-cycle lookup/update, 16 lookups and 16 updates/cycle/partition \\
+    M1 state & 64 observed regions and 16 returned lines/L2 partition \\
+    Remote predictor & 256 entries/requesting GPM \\
+    M1 & Filter-guided paired HBM access \\
+    M2 & Up to eight lines/packet, 64 packet descriptors/requesting GPM \\
+    M3 & No separate history; best-effort clean fill into existing L2 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Ablation Configurations}
+
+We run five configurations from the same frozen simulator binary.
+\emph{Baseline} disables every CuPath transformation.  \emph{M1} enables the
+complete local request-pairing path: reliable \textsc{Resident} negatives
+bypass guaranteed-miss L2 tag lookups, and typed membership state admits at
+most one predicted sibling into the triggering miss's paired HBM access.
+\emph{M2} enables exact remote same-line deduplication, work-conserving
+home-GPM/page packets, and existing-batch-only remote candidate piggybacking;
+requesting-GPM L2 reuse is off.  \emph{M3} enables \textsc{Seen}/
+\textsc{Resident}-guided requesting-GPM L2 probe gating and reuse without remote
+batching or candidate generation.  \emph{Complete} enables M1--M3.  Row-aware DRAM
+reordering remains disabled in all five configurations.
+
+In the complete configuration, the stages operate on the surviving request
+population.  A requesting-GPM L2 termination never enters requesting-GPM RDMA, and a
+coalesced RDMA waiter does not create a network or home-GPM memory request.  We therefore place
+counters at each boundary and report both eliminated work and end-to-end
+performance, rather than treating the three stage speedups as additive.
+
+\subsection{Hardware Overhead}
+
+We estimate CuPath's storage and area overhead with CACTI~7.0
+\cite{balasubramonian2017cacti} at 32~nm.  Each L2 partition has a 4K-bucket
+Typed Filter with four slots per bucket.  Each slot contains a 13-bit
+fingerprint, three type bits, one valid bit, and a four-bit reference count,
+requiring 42~KiB per Filter.  We model each Filter as 16 banks with two read
+ports and one write port per bank.  In the conflict-free case, this organization
+supports 16 two-bucket lookups and 16 updates per cycle.  The 256-entry remote
+predictor is conservatively budgeted at 64~B per entry, or 16~KiB per GPM.
+The four Filters and predictor therefore require 184~KiB per GPM, equal to
+4.49\% of the 4-MiB L2 data capacity.
+
+CACTI estimates 0.358~mm$^2$ for each Filter and 0.036~mm$^2$ for the remote
+predictor.  The resulting CuPath area is 1.469~mm$^2$ per GPM.  A complete
+4-MiB, 16-way L2, modeled as four 1-MiB partitions and including data arrays,
+tag arrays, and peripheral circuitry, occupies 54.510~mm$^2$.  CuPath therefore
+adds 2.70\% area relative to the modeled L2.  Filter and predictor accesses take
+0.523~ns and 0.241~ns, respectively, and fit within the 1-ns cycle.  The estimate
+includes the arrays and their modeled ports, but excludes hashing, fingerprint
+comparators, arbitration, bank conflicts, and CuPath control logic.
+
+\subsection{Workloads and Execution}
+
+We evaluate CuPath with 14 benchmarks from Hetero-Mark
+\cite{sun2016hetero}, AMD APP SDK~\cite{amd_opencl_guide},
+SHOC~\cite{danalis2010scalable}, and DNNMark~\cite{dong2017dnnmark}.
+The suite has also been used by prior multi-GPU studies
+\cite{wang2025oasis,li2023idyll,li2021improving,feng2024barre} and spans
+local and remote accesses with both streaming and repeated data use.
+Table~\ref{table:Benchmark} reports these two workload properties, the
+workgroups actually admitted and retired in the formal run and the workload
+allocation footprint measured immediately after allocation from the
+simulator's 4-KB page counters.  We derive the labels from the latest Baseline
+run.  \textbf{Remote} and \textbf{Local} identify whether most memory requests
+are served by a remote or local home GPM.  \textbf{Repeated} indicates that L1
+and L2 cache hits together serve more than half of read accesses, whereas
+\textbf{Streaming} indicates that most reads pass through both cache levels
+and continue toward memory.  Baseline and Complete allocate the same number of
+pages and complete the same number of workgroups for every workload.
+
+We choose the largest hundreds-of-MB or GB-scale input that remains tractable
+in cycle-level simulation, following prior multi-GPU and wafer-scale studies
+\cite{baruah2020griffin,li2023trans,xu2025exploring}.  Every footprint exceeds
+the capacity of a single GPM's private and shared caches, forcing requests to
+exercise local HBM and, under distributed page placement, remote home-GPM paths.
+
+The runner records every launch, partition, observed workgroup count, and a
+hash of the global workgroup set.  We reject a comparison if these identities
+differ across configurations.
+
+\begin{table}[t]
+  \centering
+  \caption{Benchmarks, access location, data use, completed workgroups, and footprint.}
+  \label{table:Benchmark}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\columnwidth}{lccXr}
+    \toprule
+    \textbf{Benchmark} & \textbf{Access} & \textbf{Data use} &
+    \textbf{Completed WGs} & \textbf{Footprint} \\
+    \midrule
+    AES  & Local  & Repeated  & 78,600 & 1,024~MiB \\
+    BT   & Local  & Streaming & 78,600 & 1,024~MiB \\
+    FWT  & Local  & Streaming & 78,600 & 1,024~MiB \\
+    FFT  & Local  & Streaming & 78,600 & 1,024~MiB \\
+    FIR  & Local  & Repeated  & 78,600 & 1,024~MiB \\
+    FWS  & Local  & Repeated  & 78,600 & 1,024~MiB \\
+    I2C  & Remote & Repeated  & 78,600 & 1,029~MiB \\
+    KM   & Local  & Repeated  & 73,728 & 390~MiB \\
+    MM   & Remote & Repeated  & 78,600 & 1,024~MiB \\
+    MT   & Remote & Streaming & 32,400 & 1,013~MiB \\
+    PR   & Remote & Repeated  & 78,600 & 1,024~MiB \\
+    RELU & Local  & Streaming & 78,600 & 2,560~MiB \\
+    SC   & Local  & Repeated  & 78,600 & 512~MiB \\
+    SPMV & Local  & Streaming & 78,600 & 1,081~MiB \\
+    \bottomrule
+  \end{tabularx}
+\end{table}

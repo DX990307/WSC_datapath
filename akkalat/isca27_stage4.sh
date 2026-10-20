@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# T13 stage 4: rerun the paper's experiments with the paper's own run scripts
+# (runall2.py, CuPathLLM.py, run_cupath_sensitivity.py) plus a GPM preset.
+# Run from the repo root on a server; the repo is synced without .git, so the
+# caller passes the commit it checked to be clean.
+#
+#   akkalat/isca27_stage4.sh <commit> <plan>
+#
+# Plans (one per server):
+#   yss2: hpca T11 probes, hpca main + filter audit, LLM (mi300x),
+#         sensitivity (filter, with the reference point)
+#   yss3: mi300x T11 probes, mi300x main + filter audit,
+#         sensitivity (l2, row)
+#   mi200-yss2: mi200 T11 probes, mi200 filter audit, LLM (mi200)
+#   mi200-yss3: mi200 main
+# The mi300x LLM campaign runs on yss2 so both servers finish at about the
+# same time (yss3 carries the longer mi300x main campaign); the mi200 plans
+# split the same way. mi200 has no sensitivity part: the preset fixes the L2
+# at 2 MB, and every sensitivity point passes -l2-cache-size-mb (4 MB at the
+# reference point), which the simulator rejects with -gpm-preset=mi200.
+# All parts start at once and share 16 simulation slots per server through
+# slot_pool.py; a free slot goes to the part with the lowest priority number
+# that still has runs to launch (probes 1, main and audit 2, LLM 4,
+# sensitivity 5), so later parts fill the slots left by the long tail of
+# earlier ones. The campaign parts (main, audit, LLM, sensitivity; not the
+# T11 probes, which only take a slot) also wait to launch while MemAvailable
+# is below 30 GiB, while any of the part's simulators is stopped (state T),
+# and until 180 s after the part's previous launch, so each launch sees the
+# memory of the previous one. A campaign part prints a STALL line when its
+# simulators have all been stopped, or none has written output, for 30
+# minutes.
+# Results go to results/<MMDD>_<category>_<item>_<label>_<commit>/ (see
+# akkalat/isca27_name.py): abl_full, audit_full, llm_full, sens_<dims>, and
+# probe_<probe> for the T11 probes; MMDD is the launch date.
+set -euo pipefail
+
+# Many simulations share this session; a shared heartbeat file would be
+# overwritten by all of them, so progress is watched from the results instead.
+unset EXP_HEARTBEAT
+
+COMMIT="$1"
+PLAN="$2"
+ROOT="$(pwd)"
+RESERVE=30
+SCAN=10
+WORKERS=16
+LAUNCH_INTERVAL=180
+STALL_ALERT=30
+# The synced tree has no .git; the paper scripts record this commit instead
+# (the caller checked that the local tree was clean at this commit).
+export EXP_GIT_REVISION="$COMMIT" EXP_GIT_STATUS=""
+export EXP_SLOT_DIR="$HOME/.isca27_slots" EXP_SLOT_COUNT=$WORKERS
+mkdir -p "$EXP_SLOT_DIR"
+# Longest first (paper campaign runtimes), so long runs do not become the tail.
+BENCHMARKS=kmeans,matrixtranspose,matrixmultiplication,aes,pagerank,fir,fft,floydwarshall,im2col,spmv,simpleconvolution,bitonicsort,relu,fastwalshtransform
+
+DATE="$(date -u +%m%d)"
+# out() runs in a command substitution, where a failed check could not stop
+# the script, so the variable part of every name (the commit) is checked here.
+python3 akkalat/isca27_name.py check "${DATE}_abl_full_hpca_$COMMIT" >/dev/null ||
+  { echo "commit must be 7 hex digits: $COMMIT" >&2; exit 1; }
+out() { echo "$ROOT/results/${DATE}_$1_$2_$3_$COMMIT"; } # category item label
+log() { echo "[stage4 $(date -Is)] $*"; }
+
+build() {
+  log "build baseline binary"
+  (cd akkalat/baseline && go build -buildvcs=false -o baseline .)
+  # isca27_run.sh (T11 probes) uses this cache; filling it here keeps 16
+  # parallel probe runs from building it at the same time.
+  mkdir -p "$HOME/isca27bin"
+  [ -x "$HOME/isca27bin/baseline_$COMMIT" ] ||
+    cp akkalat/baseline/baseline "$HOME/isca27bin/baseline_$COMMIT"
+}
+
+probes() { # config
+  local cfg=$1 label=$2
+  local common=(-benchmark probe -report-l2-source -l2-source-tile-width=7
+    -report-rdma-transaction-count -report-dram-transaction-count
+    -report-inst-count -report-cache-hit-rate)
+  local runs=(
+    "P1-o5r5-read-pass2-wg1|-probe-owner 5 -probe-runner 5 -probe-mode read -probe-passes 2 -probe-threads 256"
+    "P1-o5r5-read-pass2|-probe-owner 5 -probe-runner 5 -probe-mode read -probe-passes 2"
+    "P3a-o5r1-read-pass1|-probe-owner 5 -probe-runner 1 -probe-mode read -probe-passes 1"
+    "P3a-o5r1-read-pass2-wg1|-probe-owner 5 -probe-runner 1 -probe-mode read -probe-passes 2 -probe-threads 256"
+    "P3a-o5r1-read-pass2|-probe-owner 5 -probe-runner 1 -probe-mode read -probe-passes 2"
+    "P3b-o2r1-read-pass1-wg1|-probe-owner 2 -probe-runner 1 -probe-mode read -probe-passes 1 -probe-threads 256"
+    "P3b-o2r1-read-pass1|-probe-owner 2 -probe-runner 1 -probe-mode read -probe-passes 1"
+    "P3b-o4r1-read-pass1-wg1|-probe-owner 4 -probe-runner 1 -probe-mode read -probe-passes 1 -probe-threads 256"
+    "P3b-o4r1-read-pass1|-probe-owner 4 -probe-runner 1 -probe-mode read -probe-passes 1"
+    "P3b-o7r1-read-pass1-wg1|-probe-owner 7 -probe-runner 1 -probe-mode read -probe-passes 1 -probe-threads 256"
+    "P3b-o7r1-read-pass1|-probe-owner 7 -probe-runner 1 -probe-mode read -probe-passes 1"
+    "P3b-o48r1-read-pass1-wg1|-probe-owner 48 -probe-runner 1 -probe-mode read -probe-passes 1 -probe-threads 256"
+    "P3b-o48r1-read-pass1|-probe-owner 48 -probe-runner 1 -probe-mode read -probe-passes 1"
+    "P3c-o5r1-write-pass1|-probe-owner 5 -probe-runner 1 -probe-mode write -probe-passes 1"
+    "P3c-o5r1-write-pass2|-probe-owner 5 -probe-runner 1 -probe-mode write -probe-passes 2"
+    "P4-all48-read-pass2|-probe-all-gpms -probe-mode read -probe-passes 2"
+  )
+  log "T11 probes ($cfg): ${#runs[@]} runs"
+  local pids=() r name args
+  for r in "${runs[@]}"; do
+    name="${r%%|*}"
+    args="${r#*|}"
+    # shellcheck disable=SC2086
+    python3 akkalat/slot_pool.py run -- \
+      akkalat/isca27_run.sh "${DATE}_probe_${name}_${label}_$COMMIT" \
+      "$COMMIT" T13-stage4 "$cfg" "${common[@]}" $args &
+    pids+=($!)
+  done
+  local rc=0 p
+  for p in "${pids[@]}"; do wait "$p" || rc=1; done
+  log "T11 probes ($cfg) done, rc=$rc"
+}
+
+main() { # preset label
+  local preset=$1 label=$2
+  log "main ($preset)"
+  python3 akkalat/runall2.py --remote-ablation --configs=all \
+    --benchmarks="$BENCHMARKS" --max-wg=78600 --gpm-preset="$preset" \
+    --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
+    --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
+    --stall-alert-minutes=$STALL_ALERT --skip-build \
+    --output-dir="$(out abl full "$label")" || log "main ($preset) rc=$?"
+  log "main ($preset) done"
+}
+
+audit() { # preset label
+  local preset=$1 label=$2
+  log "filter audit ($preset)"
+  python3 akkalat/runall2.py --remote-ablation --configs=complete \
+    --benchmarks="$BENCHMARKS" --max-wg=78600 --gpm-preset="$preset" \
+    --extra-benchmark-flags='-typed-filter-authoritative-audit=true' \
+    --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
+    --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
+    --stall-alert-minutes=$STALL_ALERT --skip-build \
+    --output-dir="$(out audit full "$label")" || log "filter audit ($preset) rc=$?"
+  log "filter audit ($preset) done"
+}
+
+llm() { # preset label cu-per-gpu (the preset's CUs per GPM)
+  local preset=$1 label=$2 cu=$3
+  log "LLM ($preset)"
+  python3 akkalat/CuPathLLM.py --configs=baseline,complete \
+    --gpm-preset="$preset" --cu-per-gpu="$cu" \
+    --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
+    --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
+    --stall-alert-minutes=$STALL_ALERT --skip-build \
+    --output-dir="$(out llm full "$label")" || log "LLM ($preset) rc=$?"
+  log "LLM ($preset) done"
+}
+
+sensitivity() { # dimensions label-suffix [--include-reference]
+  local dims=$1 part=$2
+  shift 2
+  log "sensitivity ($dims)"
+  python3 akkalat/run_cupath_sensitivity.py --dimensions="$dims" "$@" \
+    --gpm-preset=mi300x-eighth --binary="$ROOT/akkalat/baseline/baseline" \
+    --max-workers=$WORKERS --initial-workers=$WORKERS --memory-reserve-gib="$RESERVE" \
+    --memory-scan-minutes="$SCAN" --launch-interval-seconds=$LAUNCH_INTERVAL \
+    --stall-alert-minutes=$STALL_ALERT \
+    --output-dir="$(out sens "$part" mi300x)" || log "sensitivity rc=$?"
+  log "sensitivity ($dims) done"
+}
+
+part() { # priority function args...
+  local priority=$1
+  shift
+  (export EXP_SLOT_PRIORITY=$priority; "$@") &
+}
+
+build
+case "$PLAN" in
+  yss2)
+    part 1 probes hpca hpca
+    part 2 main hpca hpca
+    part 2 audit hpca hpca
+    part 4 llm mi300x-eighth mi300x 38
+    part 5 sensitivity filter filter --include-reference
+    ;;
+  yss3)
+    part 1 probes mi300x_eighth mi300x
+    part 2 main mi300x-eighth mi300x
+    part 2 audit mi300x-eighth mi300x
+    part 5 sensitivity l2,row l2-row
+    ;;
+  mi200-yss2)
+    part 1 probes mi200 mi200
+    part 2 audit mi200 mi200
+    part 4 llm mi200 mi200 28
+    ;;
+  mi200-yss3)
+    part 2 main mi200 mi200
+    ;;
+  *)
+    echo "unknown plan: $PLAN" >&2
+    exit 1
+    ;;
+esac
+wait
+log "plan $PLAN finished"

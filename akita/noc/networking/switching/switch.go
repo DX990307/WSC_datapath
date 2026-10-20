@@ -65,6 +65,7 @@ type Switch struct {
 	flitSwitchStart      map[string]sim.VTimeInSec
 	flitRouteStart       map[string]sim.VTimeInSec
 	flitForwardStart     map[string]sim.VTimeInSec
+	multicastSplits      map[string]*multicastSplit
 }
 
 // addPort adds a new port on the switch.
@@ -182,6 +183,14 @@ func (s *Switch) route(now sim.VTimeInSec) (madeProgress bool) {
 
 			pipelineItem := item.(flitPipelineItem)
 			flit := pipelineItem.flit
+			if mc, ok := flit.Msg.(messaging.MulticastMsg); ok {
+				if !s.routeMulticastFlit(now, flit, mc, forwardBuf) {
+					break
+				}
+				routeBuf.Pop()
+				madeProgress = true
+				continue
+			}
 			start := s.flitSwitchStart[flit.Meta().ID]
 			if start == 0 {
 				start = now
@@ -305,6 +314,100 @@ func (s *Switch) sendOut(now sim.VTimeInSec) (madeProgress bool) {
 	}
 
 	return madeProgress
+}
+
+// multicastSplit is the per-packet branching decision of a switch for a
+// MulticastMsg. All flits of the packet follow the same branches.
+type multicastSplit struct {
+	msgs   []sim.Msg
+	bufs   []sim.Buffer
+	routed int
+}
+
+// routeMulticastFlit routes one flit of a multicast packet (T18). The
+// destinations are grouped by the output port of their unicast route; with
+// one group the flit continues unchanged, otherwise the switch replicates the
+// flit once per group (one copy per tree branch), each copy carrying the
+// sub-packet for that branch. Replication happens when the flit leaves the
+// route stage: every copy takes one slot of the input port's forward buffer
+// and then competes for its output port like any other flit, so each tree
+// edge carries the packet exactly once. It returns false, without consuming
+// the flit, when the forward buffer cannot hold all copies this cycle.
+func (s *Switch) routeMulticastFlit(
+	now sim.VTimeInSec,
+	flit *messaging.Flit,
+	mc messaging.MulticastMsg,
+	forwardBuf sim.Buffer,
+) bool {
+	if s.multicastSplits == nil {
+		s.multicastSplits = make(map[string]*multicastSplit)
+	}
+	split := s.multicastSplits[mc.Meta().ID]
+	if split == nil {
+		split = s.splitMulticast(mc)
+		s.multicastSplits[mc.Meta().ID] = split
+	}
+	if forwardBuf.Capacity()-forwardBuf.Size() < len(split.msgs) {
+		return false
+	}
+	for i, msg := range split.msgs {
+		f := flit
+		if i > 0 {
+			f = messaging.FlitBuilder{}.
+				WithSendTime(flit.SendTime).
+				WithSrc(flit.Src).
+				WithDst(flit.Dst).
+				WithSeqID(flit.SeqID).
+				WithNumFlitInMsg(flit.NumFlitInMsg).
+				WithMsg(msg).
+				Build()
+			f.RecvTime = flit.RecvTime
+		}
+		f.Msg = msg
+		f.OutputBuf = split.bufs[i]
+		forwardBuf.Push(f)
+		s.flitRouteStart[f.Meta().ID] = now
+	}
+	split.routed++
+	if split.routed >= flit.NumFlitInMsg {
+		delete(s.multicastSplits, mc.Meta().ID)
+	}
+	return true
+}
+
+func (s *Switch) splitMulticast(mc messaging.MulticastMsg) *multicastSplit {
+	dsts := mc.MulticastDsts()
+	if len(dsts) == 0 {
+		panic(fmt.Sprintf("%s: multicast %s has no destination",
+			s.Name(), mc.Meta().ID))
+	}
+	var ports []sim.Port
+	groups := make(map[sim.Port][]sim.Port)
+	for _, dst := range dsts {
+		outPort := s.routingTable.FindPort(dst)
+		if outPort == nil {
+			panic(fmt.Sprintf("%s: no output port for %s", s.Name(), dst))
+		}
+		if _, seen := groups[outPort]; !seen {
+			ports = append(ports, outPort)
+		}
+		groups[outPort] = append(groups[outPort], dst)
+	}
+	split := &multicastSplit{}
+	for _, port := range ports {
+		group := groups[port]
+		var msg sim.Msg = mc
+		if len(ports) > 1 || len(group) == 1 {
+			msg = mc.SplitForDsts(group)
+		}
+		buf := s.portToComplexMapping[port].sendOutBuffer
+		if buf == nil {
+			panic(fmt.Sprintf("%s: no output buffer for %s", s.Name(), port))
+		}
+		split.msgs = append(split.msgs, msg)
+		split.bufs = append(split.bufs, buf)
+	}
+	return split
 }
 
 func (s *Switch) assignFlitOutputBuf(f *messaging.Flit) {

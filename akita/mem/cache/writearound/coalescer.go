@@ -201,6 +201,22 @@ func (c *coalescer) coalesceAndSend(now sim.VTimeInSec) bool {
 			c.cache.Name()+".Local",
 			nil)
 	}
+	for _, parent := range trans.preCoalesceTransactions {
+		parent.observationPathID = trans.id
+	}
+	memtrace.StartObservationPath(memtrace.ObservationPathStart{
+		PathID:    trans.id,
+		CacheName: c.cache.Name(),
+		Address:   trans.Address(),
+		ByteSize:  trans.accessReq().GetByteSize(),
+		PID:       uint64(trans.PID()),
+		Operation: accessReqOp(trans.accessReq()),
+		StartTime: trans.startTime,
+		Parents:   c.observationParents(trans),
+	})
+	memtrace.LinkObservationRequest(trans.id, trans.id, "l1_transaction")
+	memtrace.ObservationTransition(
+		trans.id, "l1_coalesce_done", "l1_directory_queue", now)
 	memtrace.RecordMemoryPathCacheStart(
 		c.cache.Name(),
 		trans.id,
@@ -229,6 +245,26 @@ func (c *coalescer) coalesceAndSend(now sim.VTimeInSec) bool {
 	c.toCoalesce = nil
 
 	return true
+}
+
+func (c *coalescer) observationParents(
+	trans *transaction,
+) []memtrace.ObservationParent {
+	parents := make([]memtrace.ObservationParent, 0,
+		len(trans.preCoalesceTransactions))
+	for _, parent := range trans.preCoalesceTransactions {
+		req := parent.accessReq()
+		if req == nil {
+			continue
+		}
+		parents = append(parents, memtrace.ObservationParent{
+			ID:       req.Meta().ID,
+			Address:  req.GetAddress(),
+			ByteSize: req.GetByteSize(),
+			SendTime: req.Meta().SendTime,
+		})
+	}
+	return parents
 }
 
 func (c *coalescer) recordMemoryPathL1VParents(trans *transaction) {
@@ -269,11 +305,23 @@ func (c *coalescer) memoryPathParentInfos(trans *transaction) []interface{} {
 func (c *coalescer) coalesceRead() *transaction {
 	blockSize := uint64(1 << c.cache.log2BlockSize)
 	cachelineID := c.toCoalesce[0].Address() / blockSize * blockSize
+	firstRead := c.toCoalesce[0].read
+	localPairHint := false
+	for _, parent := range c.toCoalesce {
+		if parent != nil && parent.read != nil && parent.read.LocalPairHint {
+			localPairHint = true
+			break
+		}
+	}
 	coalescedRead := mem.ReadReqBuilder{}.
 		WithAddress(cachelineID).
 		WithByteSize(blockSize).
 		WithPID(c.toCoalesce[0].PID()).
+		WithLocalStreamID(firstRead.LocalStreamID).
+		WithLocalPairHint(localPairHint).
 		Build()
+	// Ordinary StreamID deliberately remains zero here, preserving the frozen
+	// requester-RDMA predictor behavior.  LocalStreamID is consumed only by M1.
 	return &transaction{
 		id:                      sim.GetIDGenerator().Generate(),
 		read:                    coalescedRead,

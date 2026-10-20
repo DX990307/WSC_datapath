@@ -48,6 +48,45 @@ func (mr *MockPageTableMockRecorder) Find(arg0, arg1 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Find", reflect.TypeOf((*MockPageTable)(nil).Find), arg0, arg1)
 }
 
+// GetLastPage mocks base method.
+func (m *MockPageTable) GetLastPage(arg0 vm.PID) (vm.Page, bool) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLastPage", arg0)
+	ret0, _ := ret[0].(vm.Page)
+	ret1, _ := ret[1].(bool)
+	return ret0, ret1
+}
+
+// GetLastPage indicates an expected call of GetLastPage.
+func (mr *MockPageTableMockRecorder) GetLastPage(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastPage", reflect.TypeOf((*MockPageTable)(nil).GetLastPage), arg0)
+}
+
+// InitAccessCounts mocks base method.
+func (m *MockPageTable) InitAccessCounts(arg0 vm.PID, arg1 uint64) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "InitAccessCounts", arg0, arg1)
+}
+
+// InitAccessCounts indicates an expected call of InitAccessCounts.
+func (mr *MockPageTableMockRecorder) InitAccessCounts(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitAccessCounts", reflect.TypeOf((*MockPageTable)(nil).InitAccessCounts), arg0, arg1)
+}
+
+// UpdateAccessCounts mocks base method.
+func (m *MockPageTable) UpdateAccessCounts(arg0 vm.PID, arg1 uint64) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "UpdateAccessCounts", arg0, arg1)
+}
+
+// UpdateAccessCounts indicates an expected call of UpdateAccessCounts.
+func (mr *MockPageTableMockRecorder) UpdateAccessCounts(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessCounts", reflect.TypeOf((*MockPageTable)(nil).UpdateAccessCounts), arg0, arg1)
+}
+
 // Insert mocks base method.
 func (m *MockPageTable) Insert(arg0 vm.Page) {
 	m.ctrl.T.Helper()

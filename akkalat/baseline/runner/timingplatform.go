@@ -8,6 +8,7 @@ import (
 	memtraces "github.com/sarchlab/akita/v3/mem/trace"
 
 	"github.com/sarchlab/akita/v3/analysis"
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/mem/vm/addresstranslator"
@@ -22,34 +23,53 @@ import (
 	"github.com/sarchlab/mgpusim/v3/emu"
 	"github.com/sarchlab/mgpusim/v3/insts"
 	"github.com/sarchlab/mgpusim/v3/timing/cp"
+	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 )
 
 // R9NanoPlatformBuilder can build a platform that equips R9Nano GPU.
 type R9NanoPlatformBuilder struct {
-	useParallelEngine        bool
-	debugISA                 bool
-	traceVis                 bool
-	visTraceStartTime        sim.VTimeInSec
-	visTraceEndTime          sim.VTimeInSec
-	traceMem                 bool
-	tileWidth, tileHeight    int
-	numSAPerGPU              int
-	numCUPerSA               int
-	useMagicMemoryCopy       bool
-	log2PageSize             uint64
-	bandwidth                int
-	switchLatency            int
-	maxNumHops               int
-	networkFlitSize          int
-	endpointChannels         int
-	endpointBufferSize       int
-	l1vRemoteMaxInflight     int
-	l1vMSHREntries           int
-	l1vMaxConcurrentTrans    int
-	l1vBottomReorderPolicy   string
-	l1vBottomReorderWindow   int
-	l1vBottomReorderMaxAgeNS uint64
-	forceLocalDataAccess     bool
+	useParallelEngine         bool
+	debugISA                  bool
+	traceVis                  bool
+	visTraceStartTime         sim.VTimeInSec
+	visTraceEndTime           sim.VTimeInSec
+	traceMem                  bool
+	tileWidth, tileHeight     int
+	numSAPerGPU               int
+	numCUPerSA                int
+	gpmPreset                 gpmPreset
+	useMagicMemoryCopy        bool
+	log2PageSize              uint64
+	bandwidth                 int
+	switchLatency             int
+	maxNumHops                int
+	networkFlitSize           int
+	endpointChannels          int
+	endpointBufferSize        int
+	l1vRemoteMaxInflight      int
+	l1vMSHREntries            int
+	l1vMaxConcurrentTrans     int
+	l2CacheSize               uint64
+	forceLocalDataAccess      bool
+	l2ResidentFilter          bool
+	l2FilterPrefetch          bool
+	l2PrefetchPredictorOnly   bool
+	l2PrefetchUngated         bool
+	prefetchPredictorEntries  int
+	l2GranularityAdaptation   bool
+	l2GranularityNoFilter     bool
+	l2GranularityAlways       bool
+	l2GranularityPredictor    bool
+	l2AdaptivePair            bool
+	l2AdaptivePairRegionLines int
+	l2FillForwarding          bool
+	typedFilterConfig         writeback.TypedFilterConfig
+	dramRowContinuation       bool
+	remoteDataPath            rdma.RemoteDataPathConfig
+	rdmaPipelineWidth         int
+	rdmaPipelineLatency       int
+	rdmaMaxOutstanding        int
+	t18                       rdma.T18Config
 
 	engine       sim.Engine
 	visTracer    tracing.Tracer
@@ -72,19 +92,34 @@ type R9NanoPlatformBuilder struct {
 // MakeR9NanoBuilder creates a EmuBuilder with default parameters.
 func MakeR9NanoBuilder() R9NanoPlatformBuilder {
 	b := R9NanoPlatformBuilder{
-		tileWidth:              7,
-		tileHeight:             7,
-		log2PageSize:           12,
-		visTraceStartTime:      -1,
-		visTraceEndTime:        -1,
-		switchLatency:          20,
-		networkFlitSize:        16,
-		numSAPerGPU:            8,
-		numCUPerSA:             4,
-		maxNumHops:             -1,
-		l1vMSHREntries:         160,
-		l1vMaxConcurrentTrans:  160,
-		l1vBottomReorderPolicy: "none",
+		tileWidth:                 7,
+		tileHeight:                7,
+		log2PageSize:              12,
+		visTraceStartTime:         -1,
+		visTraceEndTime:           -1,
+		switchLatency:             20,
+		networkFlitSize:           16,
+		numSAPerGPU:               hpcaGPMPreset.NumSA,
+		numCUPerSA:                hpcaGPMPreset.NumCUPerSA,
+		gpmPreset:                 hpcaGPMPreset,
+		maxNumHops:                -1,
+		l1vMSHREntries:            16,
+		l1vMaxConcurrentTrans:     16,
+		l2CacheSize:               4 * mem.MB,
+		prefetchPredictorEntries:  64,
+		l2AdaptivePairRegionLines: 2,
+		typedFilterConfig: writeback.TypedFilterConfig{
+			Mode:                writeback.TypedFilterCuckoo,
+			LookupLatencyCycles: 1,
+			UpdateLatencyCycles: 1,
+		},
+		rdmaPipelineWidth:   8,
+		rdmaPipelineLatency: 10,
+		rdmaMaxOutstanding:  64,
+		remoteDataPath: rdma.RemoteDataPathConfig{
+			MaxBatchLines: 8,
+			MaxBatches:    64,
+		},
 	}
 	return b
 }
@@ -156,6 +191,14 @@ func (b R9NanoPlatformBuilder) WithPerfAnalyzer(
 ) R9NanoPlatformBuilder {
 	b.perfAnalysisFileName = Name
 	b.perfAnalyzingPeriod = Period
+	return b
+}
+
+// WithGPMPreset sets the GPM-internal configuration; see gpm_preset.go.
+func (b R9NanoPlatformBuilder) WithGPMPreset(p gpmPreset) R9NanoPlatformBuilder {
+	b.gpmPreset = p
+	b.numSAPerGPU = p.NumSA
+	b.numCUPerSA = p.NumCUPerSA
 	return b
 }
 
@@ -245,16 +288,14 @@ func (b R9NanoPlatformBuilder) WithL1VMaxConcurrentTrans(
 	return b
 }
 
-// WithL1VBottomReorder configures an optional post-L1V bottom request reorder
-// queue used by M1 experiments.
-func (b R9NanoPlatformBuilder) WithL1VBottomReorder(
-	policy string,
-	window int,
-	maxAgeNS uint64,
+// WithL2CacheSizeMB sets the total L2 capacity of each GPM.
+func (b R9NanoPlatformBuilder) WithL2CacheSizeMB(
+	capacityMB int,
 ) R9NanoPlatformBuilder {
-	b.l1vBottomReorderPolicy = policy
-	b.l1vBottomReorderWindow = window
-	b.l1vBottomReorderMaxAgeNS = maxAgeNS
+	if capacityMB < 1 {
+		panic("L2 cache size must be positive")
+	}
+	b.l2CacheSize = uint64(capacityMB) * mem.MB
 	return b
 }
 
@@ -263,6 +304,133 @@ func (b R9NanoPlatformBuilder) WithForceLocalDataAccess(
 	enable bool,
 ) R9NanoPlatformBuilder {
 	b.forceLocalDataAccess = enable
+	return b
+}
+
+// WithL2ResidentFilter enables local L2 Cuckoo-filter fast misses.
+func (b R9NanoPlatformBuilder) WithL2ResidentFilter(
+	enable bool,
+) R9NanoPlatformBuilder {
+	b.l2ResidentFilter = enable
+	return b
+}
+
+// WithL2FilterPrefetch enables the Filter-coupled candidate path.
+func (b R9NanoPlatformBuilder) WithL2FilterPrefetch(
+	enable bool,
+) R9NanoPlatformBuilder {
+	b.l2FilterPrefetch = enable
+	return b
+}
+
+// WithL2PrefetchDiagnostics configures non-paper predictor diagnostics.
+func (b R9NanoPlatformBuilder) WithL2PrefetchDiagnostics(
+	predictorOnly, ungated bool,
+) R9NanoPlatformBuilder {
+	b.l2PrefetchPredictorOnly = predictorOnly
+	b.l2PrefetchUngated = ungated
+	return b
+}
+
+// WithL2GranularityAdaptation configures formal M1 and its two causal
+// diagnostics. The predictor and Cuckoo Filter remain per-GPU/per-slice as
+// configured by the GPU builder.
+func (b R9NanoPlatformBuilder) WithL2GranularityAdaptation(
+	enable, withoutFilter, alwaysExpand, predictorOnly bool,
+) R9NanoPlatformBuilder {
+	b.l2GranularityAdaptation = enable
+	b.l2GranularityNoFilter = withoutFilter
+	b.l2GranularityAlways = alwaysExpand
+	b.l2GranularityPredictor = predictorOnly
+	return b
+}
+
+// WithL2AdaptivePair enables the restored historical M1 adapter on every GPM.
+func (b R9NanoPlatformBuilder) WithL2AdaptivePair(
+	enable bool,
+) R9NanoPlatformBuilder {
+	b.l2AdaptivePair = enable
+	return b
+}
+
+// WithL2AdaptivePairRegionLines sets the aligned row-local fetch region.
+func (b R9NanoPlatformBuilder) WithL2AdaptivePairRegionLines(
+	lines int,
+) R9NanoPlatformBuilder {
+	validateAdaptivePairRegionLines(lines)
+	b.l2AdaptivePairRegionLines = lines
+	return b
+}
+
+func validateAdaptivePairRegionLines(lines int) {
+	if lines != 2 && lines != 4 && lines != 8 && lines != 16 {
+		panic("adaptive-pair region lines must be one of 2, 4, 8, or 16")
+	}
+}
+
+func adaptivePairInterleavingLog2(lines int) uint64 {
+	validateAdaptivePairRegionLines(lines)
+	log2 := uint64(6)
+	for lines > 1 {
+		log2++
+		lines >>= 1
+	}
+	return log2
+}
+
+// WithPrefetchPredictorEntries sets the common bounded predictor capacity for
+// local and remote instances of the same candidate-generation design.
+func (b R9NanoPlatformBuilder) WithPrefetchPredictorEntries(
+	entries int,
+) R9NanoPlatformBuilder {
+	if entries < 1 {
+		panic("prefetch predictor entries must be positive")
+	}
+	b.prefetchPredictorEntries = entries
+	return b
+}
+
+// WithL2FillForwarding enables best-effort read-only local fill forwarding.
+func (b R9NanoPlatformBuilder) WithL2FillForwarding(
+	enable bool,
+) R9NanoPlatformBuilder {
+	b.l2FillForwarding = enable
+	return b
+}
+
+// WithTypedFilterConfig sets the metadata implementation and ports for every
+// L2 slice.
+func (b R9NanoPlatformBuilder) WithTypedFilterConfig(
+	config writeback.TypedFilterConfig,
+) R9NanoPlatformBuilder {
+	b.typedFilterConfig = config
+	return b
+}
+
+// WithDRAMRowContinuation configures work-conserving same-row continuation.
+func (b R9NanoPlatformBuilder) WithDRAMRowContinuation(
+	enabled bool,
+) R9NanoPlatformBuilder {
+	b.dramRowContinuation = enabled
+	return b
+}
+
+// WithRemoteDataPath configures the remote RDMA/L2 datapath mechanism.
+func (b R9NanoPlatformBuilder) WithRemoteDataPath(
+	config rdma.RemoteDataPathConfig,
+) R9NanoPlatformBuilder {
+	b.remoteDataPath = config
+	return b
+}
+
+// WithRDMAPipeline configures the RDMA width, fixed per-traversal latency, and
+// maximum number of distinct outstanding operations.
+func (b R9NanoPlatformBuilder) WithRDMAPipeline(
+	width, latency, maxOutstanding int,
+) R9NanoPlatformBuilder {
+	b.rdmaPipelineWidth = width
+	b.rdmaPipelineLatency = latency
+	b.rdmaMaxOutstanding = maxOutstanding
 	return b
 }
 
@@ -323,6 +491,7 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 		rdmaAddressTable,
 		pmcAddressTable,
 		l2TLBTable)
+	b.configT18Topology()
 
 	connector.EstablishNetwork()
 
@@ -527,18 +696,37 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 		WithNumCUPerShaderArray(b.numCUPerSA).
 		WithNumShaderArray(b.numSAPerGPU).
 		WithNumMemoryBank(numMemoryBank).
-		WithL2CacheSize(4*mem.MB).
-		WithLog2MemoryBankInterleavingSize(7).
+		WithGPMPreset(b.gpmPreset).
+		WithL2CacheSize(b.l2CacheSize).
+		WithLog2MemoryBankInterleavingSize(
+			adaptivePairInterleavingLog2(b.l2AdaptivePairRegionLines)).
 		WithLog2PageSize(b.log2PageSize).
 		WithL1VRemoteMaxInflight(b.l1vRemoteMaxInflight).
 		WithL1VMSHREntries(b.l1vMSHREntries).
 		WithL1VMaxConcurrentTrans(b.l1vMaxConcurrentTrans).
-		WithL1VBottomReorder(
-			b.l1vBottomReorderPolicy,
-			b.l1vBottomReorderWindow,
-			b.l1vBottomReorderMaxAgeNS,
-		).
 		WithForceLocalDataAccess(b.forceLocalDataAccess).
+		WithL2ResidentFilter(b.l2ResidentFilter).
+		WithL2FilterPrefetch(b.l2FilterPrefetch).
+		WithL2PrefetchDiagnostics(
+			b.l2PrefetchPredictorOnly, b.l2PrefetchUngated).
+		WithL2GranularityAdaptation(
+			b.l2GranularityAdaptation,
+			b.l2GranularityNoFilter,
+			b.l2GranularityAlways,
+			b.l2GranularityPredictor).
+		WithL2AdaptivePair(b.l2AdaptivePair).
+		WithL2AdaptivePairRegionLines(b.l2AdaptivePairRegionLines).
+		WithPrefetchPredictorEntries(b.prefetchPredictorEntries).
+		WithL2FillForwarding(b.l2FillForwarding).
+		WithTypedFilterConfig(b.typedFilterConfig).
+		WithDRAMRowContinuation(b.dramRowContinuation).
+		WithRemoteDataPath(b.remoteDataPath).
+		WithRDMAPipeline(
+			b.rdmaPipelineWidth,
+			b.rdmaPipelineLatency,
+			b.rdmaMaxOutstanding,
+		).
+		WithT18(b.t18).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).
 		WithGMMUPageTable(pageTable)
@@ -624,7 +812,7 @@ func (b *R9NanoPlatformBuilder) createGPU(
 		Build(name, uint64(index))
 	gpuDriver.RegisterGPU(gpu.Domain.GetPortByName("CommandProcessor"),
 		driver.DeviceProperties{
-			CUCount:  32,
+			CUCount:  b.numSAPerGPU * b.numCUPerSA,
 			DRAMSize: 8 * mem.GB,
 		})
 	gpu.CommandProcessor.(*cp.CommandProcessor).Driver =

@@ -225,7 +225,7 @@ var _ = Describe("Write Buffer Stage", func() {
 		)
 
 		BeforeEach(func() {
-			read = mem.ReadReqBuilder{}.Build()
+			read = mem.ReadReqBuilder{}.WithStreamID(0xabc).Build()
 			trans = &transaction{
 				read:         read,
 				action:       writeBufferFetch,
@@ -270,6 +270,7 @@ var _ = Describe("Write Buffer Stage", func() {
 					Expect(req.PID).To(Equal(trans.fetchPID))
 					Expect(req.Address).To(Equal(uint64(0x1000)))
 					Expect(req.AccessByteSize).To(Equal(uint64(64)))
+					Expect(req.StreamID).To(Equal(uint64(0xabc)))
 				})
 			writeBufferBuffer.EXPECT().Pop()
 
@@ -658,6 +659,60 @@ var _ = Describe("Write Buffer Stage", func() {
 			Expect(fetch.action).To(Equal(bankWriteFetched))
 			Expect(wbStage.inflightFetch).NotTo(ContainElement(fetch))
 			Expect(fetch.mshrEntry.Data).To(Equal(data))
+		})
+
+		It("should forward a read-only fill before the bank write", func() {
+			request := mem.ReadReqBuilder{}.
+				WithAddress(0x200).
+				WithByteSize(4).
+				Build()
+			requestTrans := &transaction{read: request}
+			mshrEntry.Requests = append(mshrEntry.Requests, requestTrans)
+			cacheModule.fillForwarding = true
+
+			now := sim.VTimeInSec(10)
+			bankBuffer.EXPECT().CanPush().Return(true)
+			bankBuffer.EXPECT().Push(fetch)
+			bottomPort.EXPECT().Retrieve(now)
+			mshr.EXPECT().Remove(mshrEntry.PID, mshrEntry.Address)
+
+			Expect(wbStage.processReturnRsp(now)).To(BeTrue())
+			Expect(fetch.fillResponsesForwarded).To(BeTrue())
+			Expect(cacheModule.mshrStageBuffer.Peek()).To(BeIdenticalTo(mshrEntry))
+			stats := cacheModule.GetFillForwardingStats()
+			Expect(stats.EligibleReadEntries).To(Equal(uint64(1)))
+			Expect(stats.ForwardedReadEntries).To(Equal(uint64(1)))
+			Expect(stats.ForwardedReads).To(Equal(uint64(1)))
+			Expect(stats.BufferFallbacks).To(BeZero())
+		})
+
+		It("should preserve the ordinary fill path for a mixed read-write entry", func() {
+			request := mem.ReadReqBuilder{}.
+				WithAddress(0x200).
+				WithByteSize(4).
+				Build()
+			write := mem.WriteReqBuilder{}.
+				WithAddress(0x204).
+				WithData([]byte{9, 9, 9, 9}).
+				Build()
+			mshrEntry.Requests = append(
+				mshrEntry.Requests,
+				&transaction{read: request},
+				&transaction{write: write},
+			)
+			cacheModule.fillForwarding = true
+
+			now := sim.VTimeInSec(10)
+			bankBuffer.EXPECT().CanPush().Return(true)
+			bankBuffer.EXPECT().Push(fetch)
+			bottomPort.EXPECT().Retrieve(now)
+			mshr.EXPECT().Remove(mshrEntry.PID, mshrEntry.Address)
+
+			Expect(wbStage.processReturnRsp(now)).To(BeTrue())
+			Expect(fetch.fillResponsesForwarded).To(BeFalse())
+			Expect(cacheModule.mshrStageBuffer.Peek()).To(BeNil())
+			Expect(cacheModule.GetFillForwardingStats().EligibleReadEntries).
+				To(BeZero())
 		})
 
 		It("should combine with writes in MSHR entry", func() {

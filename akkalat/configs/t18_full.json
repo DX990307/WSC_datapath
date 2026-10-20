@@ -1,0 +1,7 @@
+{
+  "_description": "Full T18 at the baseline window: requester in-flight table merge + owner merge table + multicast responses along the mesh routing tree. The window stays -rdma-max-outstanding (64); add t18_w*.json / t18_dist.json for the variants. T18 (ISCA'27 new m2, two-sided merge of remote requests). Extends mi200.json; e.g. -config t18_full.json. Adds only -t18-* flags to mi200.json; later files in a -config list override earlier ones.",
+  "extends": "mi200.json",
+  "t18-req-merge": true,
+  "t18-owner-merge": true,
+  "t18-owner-multicast": true
+}

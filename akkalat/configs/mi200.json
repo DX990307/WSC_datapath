@@ -1,0 +1,20 @@
+{
+  "_description": "ISCA'27 candidate (T13): each GPM is 1/4 of an AMD MI250X GCD (28 CUs, 8 L2 slices of 256 KB, one 8-high HBM2e stack as 8 channels of 2 pseudo channels). Same wafer network, RDMA, MMU, and L1 MSHRs as hpca.json; GPM internals come from the mi200 preset (gpm_preset.go), which requires -num-memory-banks=8 and -l2-cache-size-mb=2. Bandwidths are per-cycle equivalents at 1.7 GHz; latencies keep their nanosecond values. Built from public specs, not calibrated.",
+  "extends": "hpca.json",
+
+  "_gpm-preset": "Changed from hpca. The mi200 preset (mi200QuarterGPMPreset in baseline/runner/gpm_preset.go, with sources) sets: 28 CUs as 14 shader arrays x 2 CUs; L1V 16 KB 4-way per CU; L1I 32 KB 4-way and L1S 16 KB per 2 CUs; 32 MSHRs and 2 requests/cycle (128 B/clk) per L2 slice; and the HBM2e DRAM model (2 pseudo channels x 2 stack IDs x 4 bank groups x 4 banks per controller, 32-B accesses, refresh, tFAW).",
+  "gpm-preset": "mi200",
+
+  "_num-memory-banks": "Changed from 4: 8 L2 slices = 8 memory controllers = the 8 HBM2e channels of one stack (CDNA2 has 32 slices per GCD, one per memory controller; 32 / 4 = 8). The simulator rejects any other value with this preset.",
+  "num-memory-banks": 8,
+
+  "_l2-cache-size-mb": "Added (the simulator default is 4): 2 MB = 8 slices x 256 KB, 16-way (8 MB per GCD / 4). The simulator rejects any other value with this preset.",
+  "l2-cache-size-mb": 2,
+
+  "_deviation-cu-count": "110 CUs per GCD / 4 = 27.5; the preset uses 28 (14 x 2), within the 30-CU tile limit.",
+  "_deviation-clock": "The GPM runs at 1 GHz, not 1.7 GHz. Bandwidths are per-cycle equivalents of the 1.7-GHz chip (real bandwidth / 1.7), so the HBM2e stack (409.6 GB/s) peaks at 241 B/cycle per GPM: the DRAM clock is 1.6 GHz / 1.7 = 941 MHz and each pseudo channel moves 32 B per 2 DRAM cycles = 15.06 B/ns. Latencies keep their nanosecond values.",
+  "_deviation-l2-line": "L2 lines are 64 B (user decision); CDNA2 uses 128-B L2 lines.",
+  "_deviation-l2-mshr": "32 MSHRs per L2 slice (256 per GPM) is a user decision; AMD does not publish it.",
+  "_deviation-dram-timing": "HBM2e speed-bin timings are not public. Access latencies (tCL 14, tCWL 4, tRCD 14, tRP 14, tRAS 34, tWR 16, tRTP 6 ns) are the hpca preset's ns values (= DRAMsim3/Ramulator 2 HBM2), converted to 941-MHz cycles; tREFI is 3.9 us and tRFC 450 ns (JESD235D Table 68 as transcribed by Ramulator 2, 16 Gb per channel). Spacings that bound bandwidth (BL/2, tCCDS/L, tRRDS/L, tWTRS/L, tFAW 16 ns per pseudo channel, 2-cycle ACT) keep the clock counts of the real 1.6-GHz part, so activate-bound traffic reaches the chip's fraction of peak (4/7 for random 64-B lines).",
+  "_deviation-dram-model": "Modeling choices, not AMD data: close page; the two 32-B halves of a 64-B line share a bank and row (RD, then RDA) and consecutive lines alternate between the pseudo channels; above that, 128-B blocks rotate through bank groups, banks, and stack IDs (not AMD's unpublished mapping); the L2-slice interleave bits are removed before DRAM mapping; all-bank refresh per pseudo channel, staggered over the GPM, without a command-bus slot or postponement; command queues of 16 per pseudo channel and stack ID and a 64-access-unit transaction queue, to hold the slice's 32 MSHR lines; the stack holds 16 GB but a GPM maps 8 GB."
+}

@@ -530,4 +530,63 @@ var _ = Describe("Scheduler", func() {
 		Expect(scheduler.barrierBuffer).To(BeNil())
 
 	})
+
+	Context("when running scheduler-internal SOPP instructions", func() {
+		// SOPP encodings: 0xBF80_0000 | (opcode << 16) | simm16.
+		soppWord := func(opcode, simm16 uint32) []byte {
+			w := uint32(0xBF800000) | opcode<<16 | simm16
+			return []byte{byte(w), byte(w >> 8), byte(w >> 16), byte(w >> 24)}
+		}
+
+		runThroughInternalInst := func(opcode, simm16 uint32) {
+			cu.Decoder = insts.NewDisassembler()
+
+			buf := make([]byte, 0, 64)
+			buf = append(buf, soppWord(opcode, simm16)...)
+			buf = append(buf, soppWord(1, 0)...) // s_endpgm
+			buf = append(buf, make([]byte, 64-len(buf))...)
+
+			wf := wavefront.NewWavefront(kernels.NewWavefront())
+			wf.PC = 0x1000
+			wf.InstBufferStartPC = 0x1000
+			wf.InstBuffer = buf
+			wf.State = wavefront.WfReady
+			cu.WfPools[0].AddWf(wf)
+
+			scheduler.DecodeNextInst(10)
+			Expect(wf.InstToIssue).NotTo(BeNil())
+			Expect(wf.InstToIssue.Opcode).To(Equal(insts.Opcode(opcode)))
+			Expect(wf.InstToIssue.ExeUnit).To(Equal(insts.ExeUnitSpecial))
+
+			issueArbitor.wfsToReturn = append(issueArbitor.wfsToReturn,
+				[]*wavefront.Wavefront{wf})
+			scheduler.DoIssue(10)
+			Expect(scheduler.internalExecuting).To(ContainElement(wf))
+
+			scheduler.EvaluateInternalInst(11)
+
+			Expect(scheduler.internalExecuting).NotTo(ContainElement(wf))
+			Expect(wf.State).To(Equal(wavefront.WfReady))
+			Expect(wf.PC).To(Equal(uint64(0x1004)))
+
+			// The next decode must see the following instruction, not
+			// re-decode the same SOPP instruction.
+			scheduler.DecodeNextInst(12)
+			Expect(wf.InstToIssue).NotTo(BeNil())
+			Expect(wf.InstToIssue.PC).To(Equal(uint64(0x1004)))
+			Expect(wf.InstToIssue.Opcode).To(Equal(insts.Opcode(1)))
+		}
+
+		It("should advance the PC past s_nop", func() {
+			runThroughInternalInst(0, 3) // s_nop 3
+		})
+
+		It("should advance the PC past s_sleep", func() {
+			runThroughInternalInst(14, 1)
+		})
+
+		It("should advance the PC past s_setprio", func() {
+			runThroughInternalInst(15, 2)
+		})
+	})
 })

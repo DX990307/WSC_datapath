@@ -56,6 +56,8 @@ func (u *ALUImpl) runSOP2(state InstEmuState) {
 		u.runSLSHRB64(state)
 	case 32:
 		u.runSASHRI32(state)
+	case 33:
+		u.runSASHRI64(state)
 	case 34:
 		u.runSBFMB32(state)
 	case 36:
@@ -331,6 +333,21 @@ func (u *ALUImpl) runSLSHRB32(state InstEmuState) {
 func (u *ALUImpl) runSLSHRB64(state InstEmuState) {
 	sp := state.Scratchpad().AsSOP2()
 	sp.DST = sp.SRC0 >> (sp.SRC1 & 0x3f)
+
+	if sp.DST != 0 {
+		sp.SCC = 1
+	} else {
+		sp.SCC = 0
+	}
+}
+
+// runSASHRI64 implements S_ASHR_I64 (GCN3 ISA reference, ch. 12, "SOP2
+// Instructions", opcode 33): D.i64 = signext(S0.i64 >> S1.u[5:0]);
+// SCC = (D.i64 != 0).
+func (u *ALUImpl) runSASHRI64(state InstEmuState) {
+	sp := state.Scratchpad().AsSOP2()
+
+	sp.DST = uint64(int64(sp.SRC0) >> (sp.SRC1 & 0x3f))
 
 	if sp.DST != 0 {
 		sp.SCC = 1

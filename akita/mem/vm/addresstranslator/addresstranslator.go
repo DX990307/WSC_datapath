@@ -1,6 +1,7 @@
 package addresstranslator
 
 import (
+	"fmt"
 	"log"
 	"reflect"
 
@@ -369,7 +370,8 @@ func (t *AddressTranslator) createTranslatedReadReq(
 	addr := page.PAddr + offset
 	originalReqID := memoryPathOriginalReqID(req, req.ID)
 	info := req.Info
-	if memtrace.L2SourceStatsEnabled() || memtrace.MemoryPathTraceEnabled() {
+	if memtrace.L2SourceStatsEnabled() || memtrace.MemoryPathTraceEnabled() ||
+		memtrace.RemoteOriginTraceEnabled() {
 		info = memtrace.WithL2AddressInfo(req.Info, req.Address, addr)
 	}
 	clone := mem.ReadReqBuilder{}.
@@ -378,6 +380,11 @@ func (t *AddressTranslator) createTranslatedReadReq(
 		WithAddress(addr).
 		WithByteSize(req.AccessByteSize).
 		WithPID(0).
+		// LocalStreamID is consumed only by M1 after the translated request
+		// reaches L2. Keep the ordinary StreamID behavior unchanged so this
+		// local-plumbing fix cannot alter the frozen requester-RDMA predictor.
+		WithLocalStreamID(req.LocalStreamID).
+		WithLocalPairHint(req.LocalPairHint).
 		WithInfo(info).
 		Build()
 	if memtrace.MemoryPathTraceEnabled() {
@@ -397,6 +404,7 @@ func (t *AddressTranslator) createTranslatedReadReq(
 		)
 	}
 	clone.CanWaitForCoalesce = req.CanWaitForCoalesce
+	recordRemoteOrigin(clone, info, t.Name(), int(page.DeviceID))
 	return clone
 }
 
@@ -409,7 +417,8 @@ func (t *AddressTranslator) createTranslatedWriteReq(
 	addr := page.PAddr + offset
 	originalReqID := memoryPathOriginalReqID(req, req.ID)
 	info := req.Info
-	if memtrace.L2SourceStatsEnabled() || memtrace.MemoryPathTraceEnabled() {
+	if memtrace.L2SourceStatsEnabled() || memtrace.MemoryPathTraceEnabled() ||
+		memtrace.RemoteOriginTraceEnabled() {
 		info = memtrace.WithL2AddressInfo(req.Info, req.Address, addr)
 	}
 	clone := mem.WriteReqBuilder{}.
@@ -438,7 +447,47 @@ func (t *AddressTranslator) createTranslatedWriteReq(
 		)
 	}
 	clone.CanWaitForCoalesce = req.CanWaitForCoalesce
+	recordRemoteOrigin(clone, info, t.Name(), int(page.DeviceID))
 	return clone
+}
+
+func recordRemoteOrigin(
+	req mem.AccessReq,
+	info interface{},
+	requester string,
+	ownerGPU int,
+) {
+	if !memtrace.RemoteOriginTraceEnabled() {
+		return
+	}
+	accessInfo, ok := memtrace.GetL2AccessInfo(info)
+	if !ok || !accessInfo.HasWGOrigin || !accessInfo.HasVAddr ||
+		!accessInfo.HasPAddr {
+		return
+	}
+	operation := "other"
+	switch req.(type) {
+	case *mem.ReadReq:
+		operation = "read"
+	case *mem.WriteReq:
+		operation = "write"
+	}
+	memtrace.RecordRemoteOrigin(memtrace.RemoteOriginRecord{
+		RequestID:    req.Meta().ID,
+		Operation:    operation,
+		ByteSize:     req.GetByteSize(),
+		RequesterGPU: accessInfo.WGOrigin.RequesterGPU,
+		OwnerGPU:     ownerGPU,
+		Requester:    requester,
+		Owner:        fmt.Sprintf("GPU[%d].PageOwner", ownerGPU),
+		PID:          accessInfo.WGOrigin.PID,
+		FlattenedWG:  accessInfo.WGOrigin.FlattenedWGID,
+		WGX:          accessInfo.WGOrigin.WGX,
+		WGY:          accessInfo.WGOrigin.WGY,
+		WGZ:          accessInfo.WGOrigin.WGZ,
+		VAddr:        accessInfo.VAddr,
+		PAddr:        accessInfo.PAddr,
+	})
 }
 
 func (t *AddressTranslator) addrToPageID(addr uint64) uint64 {

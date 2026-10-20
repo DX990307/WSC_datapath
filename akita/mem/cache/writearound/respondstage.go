@@ -2,6 +2,7 @@ package writearound
 
 import (
 	"github.com/sarchlab/akita/v3/mem/mem"
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 )
@@ -51,6 +52,8 @@ func (s *respondStage) respondReadTrans(
 	}
 
 	s.removeTransaction(trans)
+	memtrace.ObservationParentResponded(
+		trans.observationPathID, read.Meta().ID, now)
 
 	tracing.TraceReqComplete(read, s.cache)
 
@@ -78,6 +81,8 @@ func (s *respondStage) respondWriteTrans(
 	}
 
 	s.removeTransaction(trans)
+	memtrace.ObservationParentResponded(
+		trans.observationPathID, write.Meta().ID, now)
 
 	tracing.TraceReqComplete(write, s.cache)
 

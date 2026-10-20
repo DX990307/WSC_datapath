@@ -3,6 +3,7 @@ package cu
 import (
 	"log"
 
+	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/pipelining"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
@@ -176,6 +177,7 @@ func (u *VectorMemoryUnit) executeFlatLoad(
 	wave.OutstandingScalarMemAccess++
 
 	for i, t := range transactions {
+		attachWGOriginToVectorRequest(t, wave, int(u.cu.GPUID))
 		u.cu.InFlightVectorMemAccess = append(u.cu.InFlightVectorMemAccess, t)
 		if i != len(transactions)-1 {
 			t.Read.CanWaitForCoalesce = true
@@ -217,6 +219,7 @@ func (u *VectorMemoryUnit) executeFlatStore(
 	wave.OutstandingScalarMemAccess++
 
 	for i, t := range transactions {
+		attachWGOriginToVectorRequest(t, wave, int(u.cu.GPUID))
 		u.cu.InFlightVectorMemAccess = append(u.cu.InFlightVectorMemAccess, t)
 		if i != len(transactions)-1 {
 			t.Write.CanWaitForCoalesce = true
@@ -229,6 +232,52 @@ func (u *VectorMemoryUnit) executeFlatStore(
 	}
 
 	return true
+}
+
+func attachWGOriginToVectorRequest(
+	transaction VectorMemAccessInfo,
+	wave *wavefront.Wavefront,
+	requesterGPU int,
+) {
+	origin, ok := wgOriginForWave(wave, requesterGPU)
+	if !ok {
+		return
+	}
+	if transaction.Read != nil {
+		transaction.Read.Info = memtrace.WithWGOriginInfo(
+			transaction.Read.Info, origin)
+	}
+	if transaction.Write != nil {
+		transaction.Write.Info = memtrace.WithWGOriginInfo(
+			transaction.Write.Info, origin)
+	}
+}
+
+func wgOriginForWave(
+	wave *wavefront.Wavefront,
+	requesterGPU int,
+) (memtrace.WGOriginInfo, bool) {
+	if !memtrace.RemoteOriginTraceEnabled() || wave == nil || wave.WG == nil ||
+		wave.WG.WorkGroup == nil {
+		return memtrace.WGOriginInfo{}, false
+	}
+	wg := wave.WG.WorkGroup
+	flattened := uint64(wg.IDX)
+	if packet := wg.Packet; packet != nil && packet.WorkgroupSizeX > 0 &&
+		packet.WorkgroupSizeY > 0 {
+		numX := (uint64(packet.GridSizeX)-1)/uint64(packet.WorkgroupSizeX) + 1
+		numY := (uint64(packet.GridSizeY)-1)/uint64(packet.WorkgroupSizeY) + 1
+		flattened = uint64(wg.IDZ)*numX*numY +
+			uint64(wg.IDY)*numX + uint64(wg.IDX)
+	}
+	return memtrace.WGOriginInfo{
+		PID:           uint64(wave.PID()),
+		RequesterGPU:  requesterGPU,
+		FlattenedWGID: flattened,
+		WGX:           wg.IDX,
+		WGY:           wg.IDY,
+		WGZ:           wg.IDZ,
+	}, true
 }
 
 func (u *VectorMemoryUnit) sendRequest(now sim.VTimeInSec) bool {

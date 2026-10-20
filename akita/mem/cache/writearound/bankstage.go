@@ -103,6 +103,8 @@ func (s *bankStage) finalizeReadHitTrans(
 
 	s.removeTransaction(trans)
 	s.postPipelineBuf.Pop()
+	memtrace.ObservationTransition(
+		trans.id, "l1_bank_done", "l1_fill_response", now)
 
 	recordMemoryPathCacheComplete(s.cache.Name(), trans, now)
 	tracing.EndTask(trans.id, s.cache)

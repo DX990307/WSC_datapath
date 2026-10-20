@@ -9,12 +9,19 @@ import (
 
 // wgTracer can trace the number of instruction completed.
 type wgTracer struct {
-	count     uint64
-	simdInst  bool
-	simdCount uint64
-	maxCount  uint64
+	count    uint64
+	maxCount uint64
 
 	inflightInst map[string]tracing.Task
+}
+
+// newWGStopper creates one tracer shared by every CU. Its count is therefore
+// the number of workgroups completed across all GPUs.
+func newWGStopper(maxWG uint64) *wgTracer {
+	return &wgTracer{
+		maxCount:     maxWG,
+		inflightInst: map[string]tracing.Task{},
+	}
 }
 
 // newWGTracer creates a tracer that can count the number of instructions.
@@ -25,25 +32,12 @@ func newWGTracer() *wgTracer {
 	return t
 }
 
-// newWGStopper with stop the execution after a given number of instructions
-// is retired.
-func newWGStopper(maxInst uint64) *wgTracer {
-	t := &wgTracer{
-		maxCount:     maxInst,
-		inflightInst: map[string]tracing.Task{},
-	}
-	return t
-}
-
 func (t *wgTracer) StartTask(task tracing.Task) {
 	if task.Kind != "req_in" {
 		return
 	}
 
-	// if task.What == "*protocol.WGCompletionMsg" {
-	if task.What == "*protocol.MapWGReq" {
-		t.simdInst = true
-	} else {
+	if task.What != "*protocol.WGCompletionMsg" {
 		return
 	}
 
@@ -66,16 +60,11 @@ func (t *wgTracer) EndTask(task tracing.Task) {
 		return
 	}
 
-	if t.simdInst {
-		t.simdCount++
-	}
-
 	delete(t.inflightInst, task.ID)
 
 	t.count++
-
-	if t.maxCount > 0 && t.count >= t.maxCount {
-		fmt.Printf("[Runner] reached max-wg=%d observed_wg=%d\n",
+	if t.maxCount > 0 && t.count == t.maxCount {
+		fmt.Printf("[Runner] reached max-wg=%d completed_wg=%d\n",
 			t.maxCount, t.count)
 		atexit.Exit(0)
 	}

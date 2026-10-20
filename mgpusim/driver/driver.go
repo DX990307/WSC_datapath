@@ -26,6 +26,10 @@ type Driver struct {
 	distributor   distributor
 	globalStorage *mem.Storage
 
+	// Coherent magic D2H copies (see magiccopycoherent.go).
+	magicCopyPeekers  []MagicCopyPeeker
+	magicCopyCoherent bool
+
 	GPUs        []sim.Port
 	devices     []*internal.Device
 	pageTable   vm.PageTable
@@ -46,7 +50,11 @@ type Driver struct {
 	engineRunningMutex sync.Mutex
 	simulationID       string
 
-	Log2PageSize uint64
+	Log2PageSize      uint64
+	allocationStatsMu sync.RWMutex
+	allocationStats   AllocationStatsSnapshot
+	firstKernelOnce   sync.Once
+	firstKernelHook   func(AllocationStatsSnapshot)
 
 	currentPageMigrationReq         *vm.PageMigrationReqToDriver
 	toSendToMMU                     *vm.PageMigrationRspFromDriver
@@ -465,7 +473,6 @@ func (d *Driver) distributeWGToGPUs(
 		panic("not all wg allocated")
 	}
 
-	// fmt.Sprintln("total WG: %d WG Per CU %d\n", totalWGCount, wgPerCU)
 	fmt.Printf("total WG: %d WG Per CU %d\n", totalWGCount, wgPerCU)
 	fmt.Printf(
 		"total WF: %d WF Per WG %d WG Size %d WF Per CU %.2f WF Per GPU %.2f Active GPUs %d\n",

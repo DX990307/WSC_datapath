@@ -424,7 +424,6 @@ func (d *DispatcherImpl) dispatchNextWG(
 		}
 		d.enableDisabledSampleEngines()
 	}
-
 	reqBuilder := protocol.MapWGReqBuilder{}.
 		WithSrc(d.dispatchingPort).
 		WithDst(d.currWG.cu).

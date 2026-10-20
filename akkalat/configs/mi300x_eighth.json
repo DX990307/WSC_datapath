@@ -1,0 +1,6 @@
+{
+  "_description": "ISCA'27 candidate (T13): each GPM is 1/8 of an MI300X. Same wafer network, RDMA, MMU, and L1 MSHRs as hpca.json; GPM internals come from the mi300x-eighth preset (gpm_preset.go). Bandwidths are per-cycle equivalents at 2.1 GHz; latencies keep their nanosecond values. Not the paper configuration until T13 calibration is confirmed.",
+  "extends": "hpca.json",
+  "gpm-preset": "mi300x-eighth",
+  "num-memory-banks": 16
+}

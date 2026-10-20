@@ -28,4 +28,28 @@ var _ = Describe("Default Mapper", func() {
 		}
 	})
 
+	It("keeps both 64-byte reads of an aligned pair in one bank and row", func() {
+		pairedMapper := MakeBuilder().
+			WithBusWidth(128).
+			WithBurstLength(4).
+			WithNumChannel(1).
+			WithNumRank(32).
+			WithNumBankGroup(4).
+			WithNumBank(4).
+			WithNumCol(64).
+			WithNumRow(16384).
+			Build()
+
+		for base := uint64(0); base < 4096; base += 128 {
+			lower := pairedMapper.Map(base)
+			upper := pairedMapper.Map(base + 64)
+			Expect(upper.Channel).To(Equal(lower.Channel))
+			Expect(upper.Rank).To(Equal(lower.Rank))
+			Expect(upper.BankGroup).To(Equal(lower.BankGroup))
+			Expect(upper.Bank).To(Equal(lower.Bank))
+			Expect(upper.Row).To(Equal(lower.Row))
+			Expect(upper.Column).To(Equal(lower.Column + 1))
+		}
+	})
+
 })

@@ -345,4 +345,28 @@ var _ = Describe("ALU", func() {
 		Expect(layout.PC).To(Equal(uint64(160 + 16*4)))
 	})
 
+	It("should run S_LOAD_DWORDX16", func() {
+		pageTable.EXPECT().
+			Find(vm.PID(1), uint64(1040)).
+			Return(vm.Page{
+				PAddr: uint64(0),
+			}, true)
+		state.inst = insts.NewInst()
+		state.inst.FormatType = insts.SMEM
+		state.inst.Opcode = 4
+
+		layout := state.Scratchpad().AsSMEM()
+		layout.Base = 1024
+		layout.Offset = 16
+
+		for i := 0; i < 16; i++ {
+			storage.Write(uint64(1040+4*i), insts.Uint32ToBytes(uint32(300+i)))
+		}
+
+		alu.Run(state)
+
+		for i := 0; i < 16; i++ {
+			Expect(layout.DST[i]).To(Equal(uint32(300 + i)))
+		}
+	})
 })

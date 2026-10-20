@@ -265,4 +265,25 @@ var _ = Describe("Scalar Unit", func() {
 	It("should return correct num of cacheline", func() {
 		Expect(bu.numCacheline(0x1038, uint64(80))).To(Equal(3))
 	})
+
+	It("should run s_load_dwordx16", func() {
+		wave := wavefront.NewWavefront(nil)
+		bu.toExec = wave
+
+		inst := wavefront.NewInst(insts.NewInst())
+		inst.FormatType = insts.SMEM
+		inst.Opcode = 4
+		inst.Data = insts.NewSRegOperand(0, 0, 16)
+		wave.SetDynamicInst(inst)
+
+		sp := wave.Scratchpad().AsSMEM()
+		sp.Base = 0x1000
+		sp.Offset = 0x40
+		bu.Run(10)
+		Expect(wave.State).To(Equal(wavefront.WfReady))
+		Expect(wave.OutstandingScalarMemAccess).To(Equal(1))
+		Expect(bu.readBuf).To(HaveLen(1))
+		Expect(bu.readBuf[0].Address).To(Equal(uint64(0x1040)))
+		Expect(bu.readBuf[0].AccessByteSize).To(Equal(uint64(64)))
+	})
 })

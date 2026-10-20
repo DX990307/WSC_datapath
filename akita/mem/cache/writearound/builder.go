@@ -24,9 +24,6 @@ type Builder struct {
 	numReqPerCycle        int
 	maxNumConcurrentTrans int
 	maxRemoteBottomTrans  int
-	bottomReorderPolicy   string
-	bottomReorderWindow   int
-	bottomReorderMaxAgeNS uint64
 	lowModuleFinder       mem.LowModuleFinder
 	visTracer             tracing.Tracer
 }
@@ -44,7 +41,6 @@ func NewBuilder() *Builder {
 		maxNumConcurrentTrans: 16,
 		dirLatency:            2,
 		bankLatency:           20,
-		bottomReorderPolicy:   bottomReorderPolicyNone,
 	}
 }
 
@@ -118,19 +114,6 @@ func (b *Builder) WithMaxRemoteBottomTrans(n int) *Builder {
 	return b
 }
 
-// WithBottomReorder configures an optional post-L1V bottom request reorder
-// queue. The default "none" policy preserves the original direct-issue path.
-func (b *Builder) WithBottomReorder(
-	policy string,
-	window int,
-	maxAgeNS uint64,
-) *Builder {
-	b.bottomReorderPolicy = policy
-	b.bottomReorderWindow = window
-	b.bottomReorderMaxAgeNS = maxAgeNS
-	return b
-}
-
 // WithNumReqsPerCycle sets the number of requests that the cache can process
 // per cycle
 func (b *Builder) WithNumReqsPerCycle(n int) *Builder {
@@ -194,12 +177,6 @@ func (b *Builder) Build(name string) *Cache {
 	c.lowModuleFinder = b.lowModuleFinder
 	c.maxNumConcurrentTrans = b.maxNumConcurrentTrans
 	c.maxRemoteBottomTrans = b.maxRemoteBottomTrans
-	c.bottomReorderPolicy = normalizeBottomReorderPolicy(b.bottomReorderPolicy)
-	c.bottomReorderWindow = b.bottomReorderWindow
-	c.bottomReorderMaxAgeNS = b.bottomReorderMaxAgeNS
-	c.bottomReorderOpenRows = make(map[bottomReorderBankKey]uint64)
-	c.bottomReorderChannels = make(map[bottomReorderChannelKey]uint64)
-
 	b.buildStages(c)
 
 	if b.visTracer != nil {

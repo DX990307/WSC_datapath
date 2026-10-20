@@ -32,6 +32,9 @@ func newDramTracer(timeTeller sim.TimeTeller) *dramTracer {
 
 // StartTask records the task start time
 func (t *dramTracer) StartTask(task tracing.Task) {
+	if task.Kind != "req_in" {
+		return
+	}
 	t.Lock()
 	defer t.Unlock()
 

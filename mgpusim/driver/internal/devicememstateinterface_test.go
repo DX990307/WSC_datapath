@@ -13,7 +13,23 @@ var _ = Describe("Implementation of regular DeviceMemoryState", func() {
 		regularDMS.setStorageSize(0x1_0000_0000)
 		regularDMS.setInitialAddress(0x0_0000_1000)
 		rDMS := regularDMS.(*deviceMemoryStateImpl)
-		rDMS.availablePAddrs = rDMS.availablePAddrs[len(rDMS.availablePAddrs):]
+		rDMS.nextPAddr = rDMS.initialRangeEnd
+		rDMS.availablePAddrs = rDMS.availablePAddrs[:0]
+	})
+
+	It("should lazily allocate the initial contiguous range before returned pages", func() {
+		regularDMS.setStorageSize(4 * 4096)
+		regularDMS.setInitialAddress(0x1000)
+		rDMS := regularDMS.(*deviceMemoryStateImpl)
+
+		Expect(rDMS.availablePAddrs).To(BeEmpty())
+		Expect(regularDMS.popNextAvailablePAddrs()).To(Equal(uint64(0x1000)))
+		regularDMS.addSinglePAddr(0x1000)
+		Expect(regularDMS.popNextAvailablePAddrs()).To(Equal(uint64(0x2000)))
+		Expect(regularDMS.popNextAvailablePAddrs()).To(Equal(uint64(0x3000)))
+		Expect(regularDMS.popNextAvailablePAddrs()).To(Equal(uint64(0x4000)))
+		Expect(regularDMS.popNextAvailablePAddrs()).To(Equal(uint64(0x1000)))
+		Expect(regularDMS.noAvailablePAddrs()).To(BeTrue())
 	})
 
 	It("should add PAddrs to regular DMS", func() {

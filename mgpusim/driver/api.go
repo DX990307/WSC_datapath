@@ -134,25 +134,22 @@ func (d *Driver) AllocateMemory(
 	ctx *Context,
 	byteSize uint64,
 ) Ptr {
-	ptr := d.memAllocator.Allocate(ctx.pid, byteSize, ctx.currentGPUID)
-
-	ctx.buffers = append(ctx.buffers, &buffer{
-		vAddr:   Ptr(ptr),
-		size:    byteSize,
-		freed:   false,
-		l2Dirty: false,
-	})
-
-	// log.Printf("Allocate %d\n", ptr)
-	return Ptr(ptr)
+	return d.allocateMemory(ctx, byteSize, AllocationClassWorkload, false)
 }
 
-// AllocateUnifiedMemory allocates a unified memory. Allocation is done on CPU
-func (d *Driver) AllocateUnifiedMemory(
+func (d *Driver) allocateMemory(
 	ctx *Context,
 	byteSize uint64,
+	class AllocationClass,
+	unified bool,
 ) Ptr {
-	ptr := Ptr(d.memAllocator.AllocateUnified(ctx.pid, byteSize))
+	var ptr Ptr
+	if unified {
+		ptr = Ptr(d.memAllocator.AllocateUnified(ctx.pid, byteSize))
+	} else {
+		ptr = Ptr(d.memAllocator.Allocate(ctx.pid, byteSize, ctx.currentGPUID))
+	}
+	d.recordAllocation(class, byteSize, unified)
 
 	ctx.buffers = append(ctx.buffers, &buffer{
 		vAddr:   ptr,
@@ -161,7 +158,16 @@ func (d *Driver) AllocateUnifiedMemory(
 		l2Dirty: false,
 	})
 
+	// log.Printf("Allocate %d\n", ptr)
 	return ptr
+}
+
+// AllocateUnifiedMemory allocates a unified memory. Allocation is done on CPU
+func (d *Driver) AllocateUnifiedMemory(
+	ctx *Context,
+	byteSize uint64,
+) Ptr {
+	return d.allocateMemory(ctx, byteSize, AllocationClassWorkload, true)
 }
 
 // Remap keeps the virtual address unchanged and moves the physical address to

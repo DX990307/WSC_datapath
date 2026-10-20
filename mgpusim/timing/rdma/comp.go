@@ -5,6 +5,7 @@ import (
 	"log"
 	"reflect"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
 	"github.com/sarchlab/akita/v3/sim"
@@ -34,21 +35,84 @@ type Comp struct {
 	pauseIncomingReqsFromL1 bool
 	currentDrainReq         *DrainReq
 
-	localModules           mem.LowModuleFinder
-	RemoteRDMAAddressTable mem.LowModuleFinder
+	localModules             mem.LowModuleFinder
+	RemoteRDMAAddressTable   mem.LowModuleFinder
+	remoteCacheModules       mem.LowModuleFinder
+	requestFilters           []*writeback.TypedCuckooFilter
+	requestFilterInterleave  uint64
+	pipelineWidth            int
+	pipelineLatency          int
+	maxOutstanding           int
+	pipelineWaitCycles       uint64
+	requesterFullStalls      uint64
+	ownerFullStalls          uint64
+	peakRequesterOutstanding int
+	peakOwnerOutstanding     int
 
 	transactionsFromOutside []transaction
 	transactionsFromInside  []transaction
+
+	remoteConfig             RemoteDataPathConfig
+	remoteBatches            map[remoteBatchKey]*remoteBatch
+	remoteBatchOrder         []remoteBatchKey
+	remoteLines              map[remoteLineKey]*remoteLineEntry
+	remoteFilterLookups      map[string]writeback.TypedFilterLookup
+	remoteHintResults        map[string]bool
+	remotePrefetcher         *writeback.DemandStridePredictor
+	remotePrefetchCandidates map[string]*remotePrefetchCandidate
+	remotePrefetchObserved   map[string]bool
+	remotePatternFilters     map[writeback.TypedFilterKey]*writeback.TypedCuckooFilter
+	// A capacity-blocked ToL1 head cannot be overtaken on the same port.
+	// Cache its negative filter result across retries to avoid repeating
+	// simulator-only hash work without changing modeled admission or timing.
+	remoteBlockedNegativeReqID string
+	remoteBlockedNegativeKey   remoteLineKey
+	remoteProbes               map[string]*remoteProbe
+	remotePendingBatch         []*remoteLineEntry
+	remoteSingleInflight       map[string]*remoteLineEntry
+	remoteBitmapInflight       map[string]*remoteBatch
+	remoteFillInflight         map[string]*remoteLineEntry
+	remoteReady                []*remoteLineEntry
+	remoteEpochs               map[remoteLineIdentity]uint64
+	remoteUncacheable          map[remoteLineIdentity]bool
+	remoteOutstandingReads     int
+	remoteOwnerPendingReq      []*remoteOwnerSubReq
+	remoteOwnerSubReqs         map[string]*remoteOwnerSubReq
+	remoteOwnerPendingRsp      []*remoteOwnerBatch
+	remoteOwnerBatches         map[string]*remoteOwnerBatch
+	RemoteDataPathStats        RemoteDataPathStats
 
 	firstSeenFromL1Req      map[string]sim.VTimeInSec
 	firstSeenFromOutsideReq map[string]sim.VTimeInSec
 	firstSeenFromL2Rsp      map[string]sim.VTimeInSec
 	firstSeenFromOutsideRsp map[string]sim.VTimeInSec
+
+	// T18 (ISCA'27 new m2). nil when T18 is off: every hook below is then a
+	// nil check and the engine behaves exactly like the baseline.
+	t18       *t18State
+	t18Topo   *t18Topology
+	t18Window int
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
 func (c *Comp) SetLocalModuleFinder(lmf mem.LowModuleFinder) {
 	c.localModules = lmf
+}
+
+// SetRemoteCacheModuleFinder sets the requester-local L2 slice finder. Unlike
+// localModules, this finder must not reject addresses owned by another GPU.
+func (c *Comp) SetRemoteCacheModuleFinder(lmf mem.LowModuleFinder) {
+	c.remoteCacheModules = lmf
+}
+
+// SetRequestFilters connects RDMA metadata accesses to the existing
+// requester-L2 slices. It does not allocate a per-RDMA filter.
+func (c *Comp) SetRequestFilters(
+	filters []*writeback.TypedCuckooFilter,
+	interleaving uint64,
+) {
+	c.requestFilters = filters
+	c.requestFilterInterleave = interleaving
 }
 
 // Tick checks if make progress
@@ -59,11 +123,166 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 	if c.isDraining {
 		madeProgress = c.drainRDMA(now) || madeProgress
 	}
+	if c.remoteConfig.Enabled || len(c.remoteOwnerPendingReq) > 0 ||
+		len(c.remoteOwnerPendingRsp) > 0 {
+		readyProgress := 0
+		madeProgress = c.runPipelineWidth(
+			func() bool {
+				progress := c.processRemoteReady(now)
+				if progress {
+					readyProgress++
+				}
+				return progress
+			}) || madeProgress
+		if readyProgress >= c.effectivePipelineWidth() && len(c.remoteReady) > 0 {
+			c.RemoteDataPathStats.ResponseFanoutWidthStalls++
+		}
+		ownerReqProgress := 0
+		madeProgress = c.runPipelineWidth(
+			func() bool {
+				progress := c.processRemoteOwnerPendingReqs(now)
+				if progress {
+					ownerReqProgress++
+				}
+				return progress
+			}) || madeProgress
+		if ownerReqProgress >= c.effectivePipelineWidth() &&
+			len(c.remoteOwnerPendingReq) > 0 {
+			c.RemoteDataPathStats.OwnerIssueWidthStalls++
+		}
+		ownerRspProgress := 0
+		madeProgress = c.runPipelineWidth(
+			func() bool {
+				progress := c.processRemoteOwnerPendingRsps(now)
+				if progress {
+					ownerRspProgress++
+				}
+				return progress
+			}) || madeProgress
+		if ownerRspProgress >= c.effectivePipelineWidth() &&
+			len(c.remoteOwnerPendingRsp) > 0 {
+			c.RemoteDataPathStats.OwnerResponseWidthStalls++
+		}
+	}
+	if c.t18 != nil {
+		if c.t18.reqActive {
+			madeProgress = c.t18Fanout(now) || madeProgress
+		}
+		if c.t18.ownerActive {
+			madeProgress = c.t18OwnerSend(now) || madeProgress
+		}
+	}
 	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
 	madeProgress = c.processFromOutside(now) || madeProgress
+	if c.t18 != nil && c.t18.reqActive {
+		madeProgress = c.t18ReqIssue(now) || madeProgress
+	}
+	if c.remoteConfig.Enabled || len(c.remotePendingBatch) > 0 ||
+		len(c.remoteBatchOrder) > 0 {
+		// First collect all requests admitted by this cycle's RDMA input
+		// width, then immediately issue every ready batch allowed by the
+		// output width. This forms a scheduling-quantum micro-batch without
+		// waiting for requests that have not arrived yet.
+		madeProgress = c.runPipelineWidth(
+			func() bool { return c.processRemotePendingBatches(now) }) || madeProgress
+		madeProgress = c.processRemoteBatches(now, false) || madeProgress
+	}
 
 	return madeProgress
+}
+
+func (c *Comp) effectivePipelineWidth() int {
+	if c.pipelineWidth > 0 {
+		return c.pipelineWidth
+	}
+	return int(^uint(0) >> 1)
+}
+
+func (c *Comp) runPipelineWidth(stage func() bool) bool {
+	madeProgress := false
+	for i := 0; i < c.effectivePipelineWidth(); i++ {
+		if !stage() {
+			break
+		}
+		madeProgress = true
+	}
+	return madeProgress
+}
+
+func (c *Comp) pipelineReady(now sim.VTimeInSec, msg sim.Msg) bool {
+	if c.pipelineLatency <= 0 {
+		return true
+	}
+	readyAt := c.Freq.NCyclesLater(c.pipelineLatency, msg.Meta().RecvTime)
+	if now >= readyAt {
+		return true
+	}
+	c.pipelineWaitCycles++
+	return false
+}
+
+func (c *Comp) requesterOutstandingCount() int {
+	// A bitmap packet is one RDMA transaction descriptor even though the
+	// bounded coalescing table retains line-level dedup/fanout state. Keeping
+	// those resources separate lets batching reduce network tracking pressure
+	// without discarding per-line correctness state.
+	if c.remoteConfig.Enabled && c.remoteConfig.DisableBatching {
+		// Without M2 batching, preserve the original one-line/one-outstanding
+		// semantics across probe, network, response, and fanout states. This
+		// prevents M3-only from inheriting M2's packet compression.
+		return len(c.transactionsFromInside) + len(c.remoteLines)
+	}
+	return len(c.transactionsFromInside) +
+		len(c.remoteSingleInflight) + len(c.remoteBitmapInflight)
+}
+
+func (c *Comp) ownerOutstandingCount() int {
+	if c.t18 != nil {
+		return len(c.transactionsFromOutside) + c.remoteOwnerOccupancy() +
+			c.t18.ownerLive
+	}
+	return len(c.transactionsFromOutside) + c.remoteOwnerOccupancy()
+}
+
+func (c *Comp) canAcceptRequesterOutstanding(n int) bool {
+	if c.maxOutstanding <= 0 {
+		return true
+	}
+	if c.requesterOutstandingCount()+n <= c.maxOutstanding {
+		return true
+	}
+	c.requesterFullStalls++
+	return false
+}
+
+func (c *Comp) canAcceptOwnerOutstanding(n int) bool {
+	limit := c.maxOutstanding
+	if c.t18 != nil {
+		limit = c.t18.ownerWindow
+	}
+	if limit <= 0 {
+		return true
+	}
+	if c.ownerOutstandingCount()+n <= limit {
+		return true
+	}
+	c.ownerFullStalls++
+	return false
+}
+
+func (c *Comp) recordRequesterOutstandingPeak() {
+	current := c.requesterOutstandingCount()
+	if current > c.peakRequesterOutstanding {
+		c.peakRequesterOutstanding = current
+	}
+}
+
+func (c *Comp) recordOwnerOutstandingPeak() {
+	current := c.ownerOutstandingCount()
+	if current > c.peakOwnerOutstanding {
+		c.peakOwnerOutstanding = current
+	}
 }
 
 func (c *Comp) processFromCtrlPort(now sim.VTimeInSec) bool {
@@ -105,6 +324,9 @@ func (c *Comp) processRDMARestartReq(now sim.VTimeInSec) bool {
 }
 
 func (c *Comp) drainRDMA(now sim.VTimeInSec) bool {
+	if c.processRemoteBatches(now, true) {
+		return true
+	}
 	if c.fullyDrained() {
 		drainCompleteRsp := DrainRspBuilder{}.
 			WithSendTime(now).
@@ -117,6 +339,7 @@ func (c *Comp) drainRDMA(now sim.VTimeInSec) bool {
 			return false
 		}
 		c.isDraining = false
+		c.resetRemoteDataPathHistory()
 		return true
 	}
 	return false
@@ -124,7 +347,9 @@ func (c *Comp) drainRDMA(now sim.VTimeInSec) bool {
 
 func (c *Comp) fullyDrained() bool {
 	return len(c.transactionsFromOutside) == 0 &&
-		len(c.transactionsFromInside) == 0
+		len(c.transactionsFromInside) == 0 &&
+		!c.remoteDataPathHasPendingWork() &&
+		!c.t18HasPendingWork()
 }
 
 func (c *Comp) firstSeen(
@@ -155,10 +380,21 @@ func (c *Comp) processFromL1(now sim.VTimeInSec) bool {
 	}
 
 	madeProgress := false
-	for {
+	for processed := 0; processed < c.effectivePipelineWidth(); processed++ {
 		req := c.ToL1.Peek()
 		if req == nil {
 			return madeProgress
+		}
+		// The typed metadata lookup is part of the fixed requester-RDMA
+		// pipeline, not an extra serial stage after it. Starting tickets while
+		// the head request traverses that pipeline preserves the configured
+		// lookup latency and shared per-slice port contention without charging
+		// an artificial extra cycle when the pipeline already hides it.
+		c.primeRemoteMetadata(now, req)
+		if !c.pipelineReady(now, req) {
+			// Keep ticking until the head request completes its fixed-latency
+			// RDMA pipeline traversal.
+			return true
 		}
 
 		switch req := req.(type) {
@@ -174,17 +410,49 @@ func (c *Comp) processFromL1(now sim.VTimeInSec) bool {
 			return false
 		}
 	}
+	return madeProgress
 }
 
 func (c *Comp) processFromL2(now sim.VTimeInSec) bool {
 	madeProgress := false
-	for {
+	for processed := 0; processed < c.effectivePipelineWidth(); processed++ {
 		req := c.ToL2.Peek()
 		if req == nil {
 			return madeProgress
 		}
+		if !c.pipelineReady(now, req) {
+			return true
+		}
 		switch req := req.(type) {
 		case mem.AccessRsp:
+			if c.isRemoteProbeRsp(req) {
+				if !c.processRemoteProbeRsp(now, req) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
+			if c.isRemoteFillRsp(req) {
+				if !c.processRemoteFillRsp(now, req) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
+			if c.t18 != nil && c.t18IsOwnerL2Rsp(req) {
+				if !c.t18OwnerL2Rsp(now, req) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
+			if c.isRemoteOwnerSubRsp(req) {
+				if !c.processRemoteOwnerSubRsp(now, req) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			ret := c.processRspFromL2(now, req)
 			if !ret {
 				return madeProgress
@@ -194,17 +462,46 @@ func (c *Comp) processFromL2(now sim.VTimeInSec) bool {
 			panic("unknown req type")
 		}
 	}
+	return madeProgress
 }
 
 func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 	madeProgress := false
-	for {
+	for processed := 0; processed < c.effectivePipelineWidth(); processed++ {
+		// Preserve packet order at the owner. A bitmap request is unpacked over
+		// several cycles; do not let a younger legacy write pass queued reads.
+		if len(c.remoteOwnerPendingReq) > 0 {
+			return madeProgress
+		}
 		req := c.ToOutside.Peek()
 		if req == nil {
 			return madeProgress
 		}
+		if !c.pipelineReady(now, req) {
+			return true
+		}
 		switch req := req.(type) {
+		case *BitmapReadReq:
+			if !c.processBitmapReqFromOutside(now, req) {
+				return madeProgress
+			}
+			madeProgress = true
+		case *BitmapReadRsp:
+			if !c.processBitmapRspFromOutside(now, req) {
+				return madeProgress
+			}
+			madeProgress = true
 		case mem.AccessReq:
+			if c.t18 != nil && c.t18.ownerActive {
+				if handled, progress := c.t18OwnerReqFromOutside(
+					now, req); handled {
+					if !progress {
+						return madeProgress
+					}
+					madeProgress = true
+					continue
+				}
+			}
 			ret := c.processReqFromOutside(now, req)
 			if !ret {
 				return madeProgress
@@ -221,17 +518,60 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			return false
 		}
 	}
+	return madeProgress
 }
 
 func (c *Comp) processReqFromL1(
 	now sim.VTimeInSec,
 	req mem.AccessReq,
 ) bool {
+	_, previouslySeen := c.firstSeenFromL1Req[req.Meta().ID]
 	firstSeen := c.firstSeen(&c.firstSeenFromL1Req, req.Meta().ID, now)
 	dst := c.RemoteRDMAAddressTable.Find(req.GetAddress())
 
 	if dst == c.ToOutside {
 		panic("RDMA loop back detected")
+	}
+	if !previouslySeen {
+		switch req.(type) {
+		case *mem.ReadReq:
+			c.RemoteDataPathStats.ObservedRemoteReads++
+		case *mem.WriteReq:
+			c.RemoteDataPathStats.ObservedRemoteWrites++
+		}
+	}
+	if !previouslySeen && memtrace.ObservationRemoteTraceEnabled() {
+		// Admission is recorded on the first processing attempt rather than
+		// after a successful output send. Output backpressure can therefore
+		// reorder/delay issue without corrupting arrival-time overlap counts.
+		ownerName := ""
+		if dst != nil {
+			ownerName = dst.Name()
+		}
+		memtrace.StartRemoteRequest(memtrace.ObservationRemoteRequestStart{
+			LogicalRequestID: req.Meta().ID,
+			PID:              uint64(req.GetPID()),
+			Operation:        remoteObservationOperation(req),
+			Address:          req.GetAddress(),
+			ByteSize:         req.GetByteSize(),
+			RequesterName:    c.Name(),
+			OwnerName:        ownerName,
+			ArrivalTime:      req.Meta().RecvTime,
+		})
+	}
+
+	if c.t18 != nil && c.t18.reqActive {
+		return c.t18ReqFromL1(now, req, dst)
+	}
+	if c.remoteConfig.Enabled {
+		if handled, progress := c.tryProcessRemoteReqFromL1(
+			now, req, dst, firstSeen,
+		); handled {
+			return progress
+		}
+	}
+	if !c.canAcceptRequesterOutstanding(1) {
+		return false
 	}
 
 	cloned := c.cloneReq(req)
@@ -242,6 +582,21 @@ func (c *Comp) processReqFromL1(
 
 	err := c.ToOutside.Send(cloned)
 	if err == nil {
+		memtrace.IssueRemoteRequest(memtrace.ObservationRemoteRequestIssue{
+			LogicalRequestID:    req.Meta().ID,
+			IssueTime:           now,
+			ForwardWireID:       cloned.Meta().ID,
+			ForwardTrafficBytes: uint64(cloned.Meta().TrafficBytes),
+		})
+		memtrace.MarkObservationRemote(req.Meta().ID)
+		memtrace.ObservationTransitionByRequest(
+			req.Meta().ID, "requester_rdma_receive",
+			"requester_rdma", req.Meta().RecvTime)
+		memtrace.LinkObservationRequestFromRequest(
+			req.Meta().ID, cloned.Meta().ID, "remote_forward_request")
+		memtrace.ObservationTransitionByRequest(
+			req.Meta().ID, "requester_rdma_send",
+			"remote_request_network", now)
 		memtrace.RegisterMemoryPathNetworkMessage(
 			rdmaAccessReqInfo(req),
 			req.Meta().ID,
@@ -277,6 +632,10 @@ func (c *Comp) processReqFromL1(
 			toOutside:  cloned,
 		}
 		c.transactionsFromInside = append(c.transactionsFromInside, trans)
+		c.recordRequesterOutstandingPeak()
+		if c.remoteConfig.Enabled {
+			c.noteLegacyRemoteReqSent(req, dst)
+		}
 
 		return true
 	}
@@ -290,14 +649,23 @@ func (c *Comp) processReqFromOutside(
 ) bool {
 	firstSeen := c.firstSeen(&c.firstSeenFromOutsideReq, req.Meta().ID, now)
 	dst := c.localModules.Find(req.GetAddress())
+	if !c.canAcceptOwnerOutstanding(1) {
+		return false
+	}
 
 	cloned := c.cloneReq(req)
 	cloned.Meta().Src = c.ToL2
 	cloned.Meta().Dst = dst
 	cloned.Meta().SendTime = now
-
 	err := c.ToL2.Send(cloned)
 	if err == nil {
+		memtrace.ObservationTransitionByRequest(
+			req.Meta().ID, "owner_rdma_receive",
+			"owner_rdma_request", req.Meta().RecvTime)
+		memtrace.LinkObservationRequestFromRequest(
+			req.Meta().ID, cloned.Meta().ID, "owner_l2_request")
+		memtrace.ObservationTransitionByRequest(
+			req.Meta().ID, "owner_rdma_l2_send", "owner_l2_link", now)
 		memtrace.RecordMemoryPathRDMALocalToRemoteRequest(
 			c.Name(),
 			rdmaAccessReqInfo(req),
@@ -328,6 +696,7 @@ func (c *Comp) processReqFromOutside(
 		}
 		c.transactionsFromOutside =
 			append(c.transactionsFromOutside, trans)
+		c.recordOwnerOutstandingPeak()
 		return true
 	}
 	return false
@@ -349,6 +718,15 @@ func (c *Comp) processRspFromL2(
 
 	err := c.ToOutside.Send(rspToOutside)
 	if err == nil {
+		memtrace.ObservationTransitionByRequest(
+			trans.toInside.Meta().ID, "owner_rdma_response_receive",
+			"owner_rdma_response", rsp.Meta().RecvTime)
+		memtrace.LinkObservationRequestFromRequest(
+			trans.toInside.Meta().ID, rspToOutside.Meta().ID,
+			"remote_return_response")
+		memtrace.ObservationTransitionByRequest(
+			trans.toInside.Meta().ID, "owner_rdma_response_send",
+			"remote_response_network", now)
 		memtrace.RegisterMemoryPathNetworkMessage(
 			rdmaAccessReqInfo(trans.fromOutside),
 			trans.fromOutside.Meta().ID,
@@ -393,6 +771,14 @@ func (c *Comp) processRspFromOutside(
 	now sim.VTimeInSec,
 	rsp mem.AccessRsp,
 ) bool {
+	if c.t18 != nil && c.t18.reqActive {
+		if handled, progress := c.t18ReqRsp(now, rsp); handled {
+			return progress
+		}
+	}
+	if c.isRemoteSingleRsp(rsp) {
+		return c.processRemoteSingleRsp(now, rsp)
+	}
 	firstSeen := c.firstSeen(&c.firstSeenFromOutsideRsp, rsp.Meta().ID, now)
 	transactionIndex := c.findTransactionByRspToID(
 		rsp.GetRspTo(), c.transactionsFromInside)
@@ -405,6 +791,19 @@ func (c *Comp) processRspFromOutside(
 
 	err := c.ToL1.Send(rspToInside)
 	if err == nil {
+		memtrace.CompleteRemoteRequest(
+			memtrace.ObservationRemoteRequestCompletion{
+				LogicalRequestID:   trans.fromInside.Meta().ID,
+				CompletionTime:     now,
+				ReturnWireID:       rsp.Meta().ID,
+				ReturnTrafficBytes: uint64(rsp.Meta().TrafficBytes),
+			})
+		memtrace.ObservationTransitionByRequest(
+			rsp.Meta().ID, "requester_rdma_response_receive",
+			"requester_rdma_response", rsp.Meta().RecvTime)
+		memtrace.ObservationTransitionByRequest(
+			trans.fromInside.Meta().ID, "requester_rdma_l1_send",
+			"requester_l1_link", now)
 		memtrace.RecordMemoryPathRDMARemoteToLocalResponse(
 			c.Name(),
 			rdmaAccessReqInfo(trans.fromInside),
@@ -496,8 +895,21 @@ func rdmaAccessReqInfo(req sim.Msg) interface{} {
 		return req.Info
 	case *mem.WriteReq:
 		return req.Info
+	case *BitmapReadReq:
+		return req.Info
 	default:
 		return nil
+	}
+}
+
+func remoteObservationOperation(req mem.AccessReq) string {
+	switch req.(type) {
+	case *mem.ReadReq:
+		return "read"
+	case *mem.WriteReq:
+		return "write"
+	default:
+		return "unknown"
 	}
 }
 
@@ -529,9 +941,11 @@ func (c *Comp) cloneReq(origin mem.AccessReq) mem.AccessReq {
 			WithAddress(origin.Address).
 			WithByteSize(origin.AccessByteSize).
 			WithPID(origin.PID).
+			WithStreamID(origin.StreamID).
 			WithInfo(origin.Info).
 			Build()
 		read.CanWaitForCoalesce = origin.CanWaitForCoalesce
+		read.LookupOnly = origin.LookupOnly
 		return read
 	case *mem.WriteReq:
 		write := mem.WriteReqBuilder{}.

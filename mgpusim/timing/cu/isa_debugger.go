@@ -43,8 +43,8 @@ func (h *ISADebugger) StartTask(task tracing.Task) {
 	}
 
 	// For debugging
-	detail := task.Detail.(map[string]interface{})
-	wf := detail["wf"].(*wavefront.Wavefront)
+	detail := decodeInstTaskDetail(task.Detail)
+	wf := detail.Wf
 	if wf.FirstWiFlatID != 0 {
 		return
 	}
@@ -65,9 +65,9 @@ func (h *ISADebugger) EndTask(task tracing.Task) {
 		return
 	}
 
-	detail := originalTask.Detail.(map[string]interface{})
-	wf := detail["wf"].(*wavefront.Wavefront)
-	inst := detail["inst"].(*wavefront.Inst).Inst
+	detail := decodeInstTaskDetail(originalTask.Detail)
+	wf := detail.Wf
+	inst := detail.Inst.Inst
 
 	if wf.WG.IDX == 75 && wf.WG.IDY == 1 {
 		h.logWholeWf(inst, wf)

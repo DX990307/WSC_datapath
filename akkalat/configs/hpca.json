@@ -1,0 +1,16 @@
+{
+  "_description": "HPCA submission configuration (commit 95b4f46). Must equal BASE_COMMON_FLAGS in akkalat/runall2_constants.py plus -mmutlb-lookup-latency=80 (checked by test_isca27_configs.py). Mechanism flags are not included.",
+  "timing": true,
+  "gpm-preset": "hpca",
+  "num-memory-banks": 4,
+  "l1v-mshr-entries": 16,
+  "l1v-max-concurrent-trans": 16,
+  "bandwidth": 48,
+  "switch-latency": 32,
+  "rdma-pipeline-width": 8,
+  "rdma-pipeline-latency": 10,
+  "rdma-max-outstanding": 64,
+  "magic-memory-copy": true,
+  "report-all": true,
+  "mmutlb-lookup-latency": 80
+}
