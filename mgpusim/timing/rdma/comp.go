@@ -86,6 +86,12 @@ type Comp struct {
 	firstSeenFromOutsideReq map[string]sim.VTimeInSec
 	firstSeenFromL2Rsp      map[string]sim.VTimeInSec
 	firstSeenFromOutsideRsp map[string]sim.VTimeInSec
+
+	// T18 (ISCA'27 new m2). nil when T18 is off: every hook below is then a
+	// nil check and the engine behaves exactly like the baseline.
+	t18       *t18State
+	t18Topo   *t18Topology
+	t18Window int
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -158,9 +164,20 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 			c.RemoteDataPathStats.OwnerResponseWidthStalls++
 		}
 	}
+	if c.t18 != nil {
+		if c.t18.reqActive {
+			madeProgress = c.t18Fanout(now) || madeProgress
+		}
+		if c.t18.ownerActive {
+			madeProgress = c.t18OwnerSend(now) || madeProgress
+		}
+	}
 	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
 	madeProgress = c.processFromOutside(now) || madeProgress
+	if c.t18 != nil && c.t18.reqActive {
+		madeProgress = c.t18ReqIssue(now) || madeProgress
+	}
 	if c.remoteConfig.Enabled || len(c.remotePendingBatch) > 0 ||
 		len(c.remoteBatchOrder) > 0 {
 		// First collect all requests admitted by this cycle's RDMA input
@@ -221,6 +238,10 @@ func (c *Comp) requesterOutstandingCount() int {
 }
 
 func (c *Comp) ownerOutstandingCount() int {
+	if c.t18 != nil {
+		return len(c.transactionsFromOutside) + c.remoteOwnerOccupancy() +
+			c.t18.ownerLive
+	}
 	return len(c.transactionsFromOutside) + c.remoteOwnerOccupancy()
 }
 
@@ -236,10 +257,14 @@ func (c *Comp) canAcceptRequesterOutstanding(n int) bool {
 }
 
 func (c *Comp) canAcceptOwnerOutstanding(n int) bool {
-	if c.maxOutstanding <= 0 {
+	limit := c.maxOutstanding
+	if c.t18 != nil {
+		limit = c.t18.ownerWindow
+	}
+	if limit <= 0 {
 		return true
 	}
-	if c.ownerOutstandingCount()+n <= c.maxOutstanding {
+	if c.ownerOutstandingCount()+n <= limit {
 		return true
 	}
 	c.ownerFullStalls++
@@ -323,7 +348,8 @@ func (c *Comp) drainRDMA(now sim.VTimeInSec) bool {
 func (c *Comp) fullyDrained() bool {
 	return len(c.transactionsFromOutside) == 0 &&
 		len(c.transactionsFromInside) == 0 &&
-		!c.remoteDataPathHasPendingWork()
+		!c.remoteDataPathHasPendingWork() &&
+		!c.t18HasPendingWork()
 }
 
 func (c *Comp) firstSeen(
@@ -413,6 +439,13 @@ func (c *Comp) processFromL2(now sim.VTimeInSec) bool {
 				madeProgress = true
 				continue
 			}
+			if c.t18 != nil && c.t18IsOwnerL2Rsp(req) {
+				if !c.t18OwnerL2Rsp(now, req) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			if c.isRemoteOwnerSubRsp(req) {
 				if !c.processRemoteOwnerSubRsp(now, req) {
 					return madeProgress
@@ -459,6 +492,16 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			}
 			madeProgress = true
 		case mem.AccessReq:
+			if c.t18 != nil && c.t18.ownerActive {
+				if handled, progress := c.t18OwnerReqFromOutside(
+					now, req); handled {
+					if !progress {
+						return madeProgress
+					}
+					madeProgress = true
+					continue
+				}
+			}
 			ret := c.processReqFromOutside(now, req)
 			if !ret {
 				return madeProgress
@@ -517,6 +560,9 @@ func (c *Comp) processReqFromL1(
 		})
 	}
 
+	if c.t18 != nil && c.t18.reqActive {
+		return c.t18ReqFromL1(now, req, dst)
+	}
 	if c.remoteConfig.Enabled {
 		if handled, progress := c.tryProcessRemoteReqFromL1(
 			now, req, dst, firstSeen,
@@ -725,6 +771,11 @@ func (c *Comp) processRspFromOutside(
 	now sim.VTimeInSec,
 	rsp mem.AccessRsp,
 ) bool {
+	if c.t18 != nil && c.t18.reqActive {
+		if handled, progress := c.t18ReqRsp(now, rsp); handled {
+			return progress
+		}
+	}
 	if c.isRemoteSingleRsp(rsp) {
 		return c.processRemoteSingleRsp(now, rsp)
 	}

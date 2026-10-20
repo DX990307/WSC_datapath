@@ -481,7 +481,8 @@ func (r *Runner) buildTimingPlatform() {
 			PrefetchEntries:          *prefetchPredictorEntriesFlag,
 			MaxBatchLines:            *remoteDataPathBatchLinesFlag,
 			MaxBatches:               *remoteDataPathBatchesFlag,
-		})
+		}).
+		WithT18(t18ConfigFromFlags())
 
 	if *sharingTracing {
 		traceWriter, err := newPageSharingTraceWriter(

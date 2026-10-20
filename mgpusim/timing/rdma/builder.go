@@ -16,6 +16,7 @@ type Builder struct {
 	pipelineWidth          int
 	pipelineLatency        int
 	maxOutstanding         int
+	t18                    T18Config
 }
 
 // MakeBuilder creates a new builder with default configuration values.
@@ -86,6 +87,12 @@ func (b Builder) WithRemoteDataPath(c RemoteDataPathConfig) Builder {
 	return b
 }
 
+// WithT18 configures the ISCA'27 T18 two-sided merge (off in the zero value).
+func (b Builder) WithT18(c T18Config) Builder {
+	b.t18 = c
+	return b
+}
+
 // Build creates a RDMA with the given parameters.
 func (b Builder) Build(name string) *Comp {
 	rdma := &Comp{}
@@ -98,6 +105,7 @@ func (b Builder) Build(name string) *Comp {
 	rdma.pipelineLatency = b.pipelineLatency
 	rdma.maxOutstanding = b.maxOutstanding
 	rdma.ConfigureRemoteDataPath(b.remoteDataPath)
+	rdma.ConfigureT18(b.t18)
 	// rdma.SetFreq(b.freq)
 
 	rdma.ToL1 = sim.NewLimitNumMsgPort(rdma, b.bufferSize, name+".ToL1")

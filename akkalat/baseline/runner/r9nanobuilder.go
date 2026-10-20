@@ -63,6 +63,7 @@ type R9NanoGPUBuilder struct {
 	rdmaPipelineWidth              int
 	rdmaPipelineLatency            int
 	rdmaMaxOutstanding             int
+	t18                            rdma.T18Config
 	gpmPreset                      gpmPreset
 
 	enableISADebugging bool
@@ -1277,6 +1278,7 @@ func (b *R9NanoGPUBuilder) buildRDMAEngine() {
 		WithLocalModules(b.lowModuleFinderForL1).
 		WithRemoteModules(nil).
 		WithRemoteDataPath(b.remoteDataPath).
+		WithT18(b.t18).
 		Build(name)
 	b.gpu.RDMAEngine = b.rdmaEngine
 	if b.monitor != nil {

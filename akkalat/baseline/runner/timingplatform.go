@@ -69,6 +69,7 @@ type R9NanoPlatformBuilder struct {
 	rdmaPipelineWidth         int
 	rdmaPipelineLatency       int
 	rdmaMaxOutstanding        int
+	t18                       rdma.T18Config
 
 	engine       sim.Engine
 	visTracer    tracing.Tracer
@@ -490,6 +491,7 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 		rdmaAddressTable,
 		pmcAddressTable,
 		l2TLBTable)
+	b.configT18Topology()
 
 	connector.EstablishNetwork()
 
@@ -724,6 +726,7 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 			b.rdmaPipelineLatency,
 			b.rdmaMaxOutstanding,
 		).
+		WithT18(b.t18).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).
 		WithGMMUPageTable(pageTable)
