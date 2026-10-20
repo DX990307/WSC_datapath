@@ -583,12 +583,12 @@ svg .bar-m{fill:var(--muted)}
   <p><a href="next_1019.html" style="color:var(--accent);font-weight:700">机制设计、冒烟结果、benchmark 集和测量的详细页 →</a>　调度相关的 idea 留给下一篇（见详细页末尾）。</p>
   <div class="grid2">
     <div class="box">
-      <h3>机制（T18）：相对 HPCA 版 m2 新增的两部分</h3>
+      <h3>机制 M1（T18）：相对 HPCA 版 m2 新增的两部分</h3>
       <ul>
         <li><b>HPCA 版已有</b>：请求方用 cuckoo filter 记录在途远程请求、合并同一 line、同页打包（这部分不再算新贡献）</li>
         <li><b>新 1：把请求跟踪表做大</b>。今天的端点只配到能用满封装内链路（64 项 ≈ MI250X 实测）；wafer 链路宽、距离远，带宽 × 往返时间大 30–180 倍。用 cuckoo 结构让几百到几千项的跟踪表代价很小，替代全相联 CAM</li>
         <li><b>新 2：owner 端跨 GPM 合并 + mesh 多播</b>。HPCA 版只合并同一 GPM 内的请求；wafer 上同一条 line 最多被 47 个 GPM 同时读，owner 读一次、沿路由树分叉送达</li>
-        <li><b>为什么只对 wafer 成立</b>：需要的跟踪项数随距离增长，读者数随 GPM 数增长；用 2×2 / 4×4 / 7×7 的规模实验证明收益随规模变大</li>
+        <li><b>为什么只对 wafer 成立</b>：需要的跟踪项数随距离增长，读者数随 GPM 数增长；用 3×3 / 5×5 / 7×7 的规模实验证明收益随规模变大</li>
       </ul>
     </div>
     <div class="box">
@@ -598,7 +598,7 @@ svg .bar-m{fill:var(--muted)}
         <li>合并和放大跟踪表要一起才有效：FW 只放大 2.26×、只 owner 端几乎没用；PagedAttention 几乎没有可合并的，收益全部来自跟踪表</li>
         <li>1024 和 4096 项结果相同；64 项时 T18 不如旧 m2（FW 2.13× 对 2.51×）</li>
         <li>正式评估在跑：mi200 141 个运行；HPCA 规模下和 HPCA Complete 比较 28 个；T17 的 O1 / O2b / O3</li>
-        <li>还缺：E1 延迟分段、规模实验 2×2 / 4×4 / 7×7、链路 / switch 敏感性（后两项要改配置）</li>
+        <li>还缺：E1 延迟分段、规模实验 3×3 / 5×5 / 7×7、链路 / switch 敏感性（后两项要改配置）</li>
       </ul>
     </div>
   </div>
@@ -614,7 +614,8 @@ svg .bar-m{fill:var(--muted)}
     <div class="box">
       <h3>要决定的</h3>
       <ul>
-        <li>Remote Reuse（m3）去留：留就补 kernel 边界失效，并和 B1（真实 MI200 把远程数据缓存在请求方 L2）对比</li>
+        <li>模拟太慢：先维持 28 CU，缩小 memory footprint 试试（10-20 晚）；改成每个 GPM 14 个 CU（D23）作为备用方案暂缓</li>
+        <li>已定（用户 10-20）：<b>Complete = M1（T18）+ M2（旧 m2）+ M3（旧 m3，不作为重点）</b>，Local Pairing 不进论文。M1 和 M2 要先集成（现在不能同时打开）；M3 要补 kernel 边界失效，并和 B1 对比</li>
         <li>baseline 已定（用户 10-19）：mi200 原样，地址转换不变；论文里说明 T17 的远程地址转换只占远程延迟 0.3–0.5%</li>
         <li>论文讨论里回应"为什么不把 WG 派到 owner"（下一篇的内容）</li>
       </ul>
@@ -622,7 +623,7 @@ svg .bar-m{fill:var(--muted)}
   </div>
   <div class="timeline">
     <div class="week"><span class="when">10/19–10/25</span><b>测量 + 实现</b><span>P12 测量 1–4、T18 / T19 实现（完成）；T18 正式评估、T17 的 O1 / O2b / O3（运行中）；文献检查</span></div>
-    <div class="week"><span class="when">10/26–11/01</span><b>补实验</b><span>读 T18 评估结果、决定是否拆成两个机制；E1 分段；规模实验；链路 / switch 敏感性；m3 去留</span></div>
+    <div class="week"><span class="when">10/26–11/01</span><b>补实验</b><span>读 T18 评估结果、决定是否拆成两个机制；E1 分段；规模实验；链路 / switch 敏感性；observation 一节的数据</span></div>
     <div class="week"><span class="when">11/02–11/08</span><b>收尾</b><span>补实验、面积（CACTI）；提交 abstract</span></div>
     <div class="week"><span class="when">11/09–11/16</span><b>写论文</b><span>按估计的截止日期（CFP 未出）</span></div>
   </div>

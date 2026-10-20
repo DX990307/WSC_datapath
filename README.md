@@ -48,6 +48,7 @@
 | [`tasks/T19_filter_guided_wg_stealing.md`](tasks/T19_filter_guided_wg_stealing.md) | cuckoo filter 指导的就近 WG 窃取 | `[下一篇论文]`（10-20：ISCA'27 只做通信，见 `next_paper_scheduling.md`）；代码已实现（`isca27/t19-steal` @ `eaa9c73`），冒烟结果在 STATUS | — |
 | [`observations/README.md`](observations/README.md) | ISCA'27 observation 一节要收集的数据：删 O6（Local Pairing）、换 O2/O3，新 O1–O6 各自的数据、统计定义、运行清单 | `[提案]`，等用户确认后写提示词 | 10-20 |
 | [`prompts/P13_observation_data.md`](prompts/P13_observation_data.md) | 给 Claude Code：observation / evaluation 第一批数据（新统计 + R1–R3、m3 修复 + R8、mesh 尺寸 flag、CACTI、R4 / R6 / R7 的配置确认准备） | 待执行 | 10-20 |
+| [`prompts/P14_config_14cu.md`](prompts/P14_config_14cu.md) | 给 Claude Code：论文配置改为每 GPM 14 个 CU（D23）——新预设、校准、28 对 14 CU 验证、workload 重新定规模 | 待执行 | 10-20 |
 | [`guides/G1_port_workload_to_mgpusim.md`](guides/G1_port_workload_to_mgpusim.md) | **操作指南**：怎么把新 workload 移植进 MGPUSim（以 GCN 为例） | 参考资料 | — |
 
 ## 时间线

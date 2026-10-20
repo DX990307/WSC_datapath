@@ -440,4 +440,4 @@ T14 的 all-to-all 每个 kernel 都跑完了，`metrics.csv` 里有每个 GPM �
 - 加：Pearson 等 2023，arXiv 2302.14827（MI250X 节点内互连测量，GCD 间 kernel 直接读写 153 GB/s）；Schieffer 等 2024，arXiv 2410.00801（"Understanding Data Movement in AMD Multi-GPU Systems with Infinity Fabric"，MI250X）；Pal 等 HPCA'19（"Architecting Waferscale Processors – A GPU Case Study"，GPM 间带宽每 GPM 1.5 TB/s、延迟约 20 ns）。
 - 链路参数：我们 768 GB/s 每方向，比 Pal 等宽约 2 倍的说法要核对口径（每方向还是双向、每条链路还是每 GPM）；改成 384 GB/s 和每跳 20 周期的敏感性需要用户确认配置。
 
-**贡献结构（随 T18 实现更新）**：(1) 特征分析：wafer 的远程访问受端点限制，排队占 80% 以上，链路 < 3%；(2) 新 1：请求跟踪表规模化（cuckoo 索引，替代 CAM）；(3) 新 2：owner 端跨 GPM 合并 + 网内多播，消掉 incast；冒烟显示 (2)(3) 要一起才有效（FW：只放大 2.26×，全开 8.56×）。HPCA 版已有的请求方合并 / 同页打包不再算新贡献。(4) 用户 10-20：Remote Reuse（m3）保留，但不作为重点，只在消融和 Complete（= T18 + m3）里出现；observation 里 HPCA 稿的 O4、O5 合成一条。
+**贡献结构（随 T18 实现更新）**：(1) 特征分析：wafer 的远程访问受端点限制，排队占 80% 以上，链路 < 3%；(2) 新 1：请求跟踪表规模化（cuckoo 索引，替代 CAM）；(3) 新 2：owner 端跨 GPM 合并 + 网内多播，消掉 incast；冒烟显示 (2)(3) 要一起才有效（FW：只放大 2.26×，全开 8.56×）。HPCA 版已有的请求方合并 / 同页打包不再算新贡献。(4) 用户 10-20 的机制编号：M1 = T18，M2 = 旧 m2，M3 = 旧 m3（保留但不作为重点）；Complete = M1 + M2 + M3，Local Pairing 不进论文。observation：HPCA 稿 O3（请求方聚合机会）保留给 M2 重算，O4、O5 合成一条给 M3。
