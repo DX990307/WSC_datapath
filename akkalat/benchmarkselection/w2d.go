@@ -26,6 +26,7 @@ var (
 	cfdBlock    = flag.Int("cfd-block", cfdDefaults.Block, "altis_cfd: threads per WG")
 	cfdShuffle  = flag.Bool("cfd-shuffle", cfdDefaults.Shuffle, "altis_cfd: relabel the cells randomly (unstructured numbering)")
 	cfdSeed     = flag.Int64("cfd-seed", cfdDefaults.Seed, "altis_cfd: shuffle seed")
+	cfdStages   = flag.Int("cfd-rk-stages", cfdDefaults.Stages, "altis_cfd: RK stages per step (3 = upstream; fewer for debugging)")
 	ludDefaults = rodinialud.DefaultParams()
 	ludN        = flag.Int("lud-n", ludDefaults.N, "rodinia_lud: matrix size N (multiple of 16)")
 	ludSeed     = flag.Int64("lud-seed", ludDefaults.Seed, "rodinia_lud: matrix seed")
@@ -48,7 +49,7 @@ func newLonestarBH(d *driver.Driver) *lonestarbh.Benchmark {
 func newAltisCFD(d *driver.Driver) *altiscfd.Benchmark {
 	b := altiscfd.NewBenchmark(d)
 	b.Params = altiscfd.Params{Cells: *cfdCells, Steps: *cfdSteps, Block: *cfdBlock,
-		Shuffle: *cfdShuffle, Seed: *cfdSeed}
+		Shuffle: *cfdShuffle, Seed: *cfdSeed, Stages: *cfdStages}
 	return b
 }
 

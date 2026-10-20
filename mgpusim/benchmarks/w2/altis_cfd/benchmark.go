@@ -32,11 +32,12 @@ type Params struct {
 	Block   int
 	Shuffle bool
 	Seed    int64
+	Stages  int // RK stages per step (upstream 3; fewer only for debugging)
 }
 
 // DefaultParams is a small smoke size.
 func DefaultParams() Params {
-	return Params{Cells: 6000, Steps: 1, Block: 256, Seed: 1}
+	return Params{Cells: 6000, Steps: 1, Block: 256, Seed: 1, Stages: 3}
 }
 
 // CopyArgs are the arguments of cfd_copy.
@@ -123,7 +124,7 @@ func (b *Benchmark) upload(name string, data interface{}, bytes int) driver.Ptr 
 // Run builds the mesh and launches the solver.
 func (b *Benchmark) Run() {
 	pr := b.Params
-	if pr.Cells < 1 || pr.Steps < 1 || pr.Block < 64 || pr.Block > 1024 {
+	if pr.Cells < 1 || pr.Steps < 1 || pr.Block < 64 || pr.Block > 1024 || pr.Stages < 1 || pr.Stages > 3 {
 		log.Panicf("altis_cfd: bad params %+v", pr)
 	}
 	b.driver.SelectGPU(b.context, b.gpus[0])
@@ -152,7 +153,7 @@ func (b *Benchmark) Run() {
 		b.driver.EnqueueLaunchKernel(q, b.kCopy, grid, wg, &CopyArgs{N: int32(n), State: b.dState, Old: b.dOld})
 		b.driver.EnqueueLaunchKernel(q, b.kStep, grid, wg,
 			&StepArgs{N: int32(n), Vars: b.dState, Areas: dAreas, Factor: b.dFactor})
-		for stage := 0; stage < 3; stage++ {
+		for stage := 0; stage < pr.Stages; stage++ {
 			b.driver.EnqueueLaunchKernel(q, b.kFlux, grid, wg, &FluxArgs{N: int32(n), Nbrs: dNbrs,
 				Normals: dNormals, Vars: b.dState, Fluxes: b.dFlux, FF: dFF})
 			b.driver.EnqueueLaunchKernel(q, b.kRK, grid, wg, &RKArgs{J: int32(stage), N: int32(n),
@@ -160,7 +161,7 @@ func (b *Benchmark) Run() {
 		}
 	}
 	fmt.Printf("CFD,config,cells=%d,padded=%d,cube_side=%d,steps=%d,block=%d,shuffle=%v,kernels=%d,wgs_per_kernel=%d,"+
-		"footprint_mb=%.1f\n", pr.Cells, n, m.Side, pr.Steps, pr.Block, pr.Shuffle, 8*pr.Steps, n/pr.Block,
+		"footprint_mb=%.1f\n", pr.Cells, n, m.Side, pr.Steps, pr.Block, pr.Shuffle, (2+2*pr.Stages)*pr.Steps, n/pr.Block,
 		float64(n*4*(5*3+1+1+12+4))/1e6)
 	b.driver.DrainCommandQueue(q)
 }
@@ -171,8 +172,8 @@ func (b *Benchmark) Run() {
 func (b *Benchmark) Verify() {
 	m := b.mesh
 	n := m.Padded
-	want := Reference(m, b.Params.Steps)
-	st, old, fl, fac := Simulate32(m, b.Params.Steps)
+	want := Reference(m, b.Params.Steps, b.Params.Stages)
+	st, old, fl, fac := Simulate32(m, b.Params.Steps, b.Params.Stages)
 	bad, maxErr, maxErr32 := 0, 0.0, 0.0
 	get := func(p driver.Ptr, cnt int) []float32 {
 		o := make([]float32, cnt)

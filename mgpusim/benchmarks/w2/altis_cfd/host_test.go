@@ -54,7 +54,7 @@ func TestMesh(t *testing.T) {
 	}
 	// the reference moves the state and stays finite
 	m := NewMesh(600, 64, false, 1)
-	s := Reference(m, 2)
+	s := Reference(m, 2, 3)
 	moved := false
 	for i, v := range s {
 		if math.IsNaN(v) || math.IsInf(v, 0) {
@@ -71,8 +71,8 @@ func TestMesh(t *testing.T) {
 
 func TestSimulate32MatchesReference(t *testing.T) {
 	m := NewMesh(3000, 256, true, 2)
-	st, _, _, _ := Simulate32(m, 2)
-	ref := Reference(m, 2)
+	st, _, _, _ := Simulate32(m, 2, 3)
+	ref := Reference(m, 2, 3)
 	for i := range ref {
 		if e := math.Abs(float64(st[i])-ref[i]) / (1 + math.Abs(ref[i])); e > 1e-5 {
 			t.Fatalf("state[%d] %g vs %g", i, st[i], ref[i])

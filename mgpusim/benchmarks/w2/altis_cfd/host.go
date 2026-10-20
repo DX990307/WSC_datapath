@@ -282,7 +282,7 @@ func phys(u [5]float64) physical {
 // Reference is the float64 CPU trajectory (tier2 cfd_reference.h): steps
 // timesteps of copy, step factor and three RK flux/update stages. It returns
 // the final state.
-func Reference(m *Mesh, steps int) []float64 {
+func Reference(m *Mesh, steps, stages int) []float64 {
 	n := m.Padded
 	state := make([]float64, 5*n)
 	for i, v := range m.Initial {
@@ -316,7 +316,7 @@ func Reference(m *Mesh, steps int) []float64 {
 			a := phys(load(state, i))
 			factor[i] = 0.5 / (math.Sqrt(float64(m.Areas[i])) * (a.speed + a.sound))
 		}
-		for stage := 0; stage < 3; stage++ {
+		for stage := 0; stage < stages; stage++ {
 			for i := 0; i < n; i++ {
 				u := load(state, i)
 				a := phys(u)
@@ -369,7 +369,7 @@ func sqrt32(x float32) float32 { return float32(math.Sqrt(float64(x))) }
 
 // Simulate32 mirrors the kernels in float32 (same expressions); it returns
 // the final state, old state, last flux and step factors.
-func Simulate32(m *Mesh, steps int) (st, old, fl, fac []float32) {
+func Simulate32(m *Mesh, steps, stages int) (st, old, fl, fac []float32) {
 	n := m.Padded
 	st = append([]float32(nil), m.Initial...)
 	old, fl, fac = make([]float32, 5*n), make([]float32, 5*n), make([]float32, n)
@@ -385,7 +385,7 @@ func Simulate32(m *Mesh, steps int) (st, old, fl, fac []float32) {
 			sos := sqrt32(1.4 * p / d)
 			fac[i] = 0.5 / (sqrt32(m.Areas[i]) * (sqrt32(s2) + sos))
 		}
-		for stage := 0; stage < 3; stage++ {
+		for stage := 0; stage < stages; stage++ {
 			for i := 0; i < n; i++ {
 				di := st[i]
 				mi := [3]float32{st[i+n], st[i+2*n], st[i+3*n]}
