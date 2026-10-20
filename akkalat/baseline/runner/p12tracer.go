@@ -82,7 +82,7 @@ type p12GPMs struct {
 }
 
 func newP12GPMs(names []string) *p12GPMs {
-	g := &p12GPMs{tileToIdx: map[int]int{}, width: gpmTraceMeshWidth}
+	g := &p12GPMs{tileToIdx: map[int]int{}, width: gpmTraceMeshWidth()}
 	for i, n := range names {
 		m := p12TileRe.FindStringSubmatch(n)
 		if m == nil {

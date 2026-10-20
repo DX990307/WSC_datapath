@@ -13,7 +13,7 @@ package runner
 //   - The GPM index is the position in Platform.GPUs, which equals the
 //     position in the unified GPU's UnifiedGPUIDs (driver IDs 1..48 in
 //     order, see createUnifiedGPUs); the driver ID is index+1.
-//   - The tile t comes from the component name GPU[t]; x = t % 7, y = t / 7.
+//   - The tile t comes from the component name GPU[t]; x = t % w, y = t / w (w = -mesh-size, default 7).
 //
 // Events are attributed to the kernel that the GPM was last launched with.
 
@@ -34,11 +34,9 @@ import (
 	"github.com/sarchlab/mgpusim/v3/protocol"
 )
 
-const (
-	gpmTraceMeshWidth = 7
-	gpmTraceCenterX   = 3
-	gpmTraceCenterY   = 3
-)
+// gpmTraceMeshWidth is the mesh width (-mesh-size, default 7); the center
+// tile is (w/2, w/2).
+func gpmTraceMeshWidth() int { return MeshSize() }
 
 // gpmTraceGPM describes one GPM's position.
 type gpmTraceGPM struct {
@@ -216,12 +214,12 @@ func newGPMTraceGPMs(names []string, tiles []int, numCUs []int) []gpmTraceGPM {
 			DriverID: i + 1,
 			Name:     names[i],
 			Tile:     t,
-			X:        t % gpmTraceMeshWidth,
-			Y:        t / gpmTraceMeshWidth,
+			X:        t % gpmTraceMeshWidth(),
+			Y:        t / gpmTraceMeshWidth(),
 			NumCU:    numCUs[i],
 		}
 		gpms[i].HopsToCenter = meshHops(
-			gpms[i].X, gpms[i].Y, gpmTraceCenterX, gpmTraceCenterY)
+			gpms[i].X, gpms[i].Y, gpmTraceMeshWidth()/2, gpmTraceMeshWidth()/2)
 	}
 	for i := range gpms {
 		sum := 0

@@ -231,6 +231,13 @@ func (b R9NanoPlatformBuilder) WithSwitchLatency(
 
 // WithMaxNumHops sets the maximum number of hops that a flit can travel in the
 // mesh network.
+// WithMeshSize sets the mesh to n x n tiles (center tile = CPU/IOMMU).
+func (b R9NanoPlatformBuilder) WithMeshSize(n int) R9NanoPlatformBuilder {
+	b.tileWidth = n
+	b.tileHeight = n
+	return b
+}
+
 func (b R9NanoPlatformBuilder) WithMaxNumHops(
 	n int,
 ) R9NanoPlatformBuilder {

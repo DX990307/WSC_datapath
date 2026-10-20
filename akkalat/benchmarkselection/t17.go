@@ -50,6 +50,7 @@ func newPagedAttn(d *driver.Driver) *pagedattn.Benchmark {
 	p.Steps = *paStepsFlag
 	pagedattn.PrintGroups = *t17PrintGroupsFlag
 	b.CUsPerGPM = runner.CUsPerGPM()
+	b.NumGPMs = runner.NumGPMs()
 	return b
 }
 
@@ -78,6 +79,7 @@ func newMoE(d *driver.Driver) *moe.Benchmark {
 	}
 	moe.PrintGroups = *t17PrintGroupsFlag
 	b.CUsPerGPM = runner.CUsPerGPM()
+	b.NumGPMs = runner.NumGPMs()
 	return b
 }
 
