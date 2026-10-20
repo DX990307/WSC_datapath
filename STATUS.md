@@ -183,6 +183,34 @@
 
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
 
+### W2：16 个通信密集型新 benchmark 的移植（10-20，来源 sarchlab/gpu_benchmarks；分支 `isca27/wport-a..d`，合并进 `isca27/w2-complete` @ `d09b18b`）
+
+全部移植完成，`mgpusim/benchmarks/w2/<名字>/`（OpenCL kernel + hsaco + Go host + 单元测试）；不用 atomic、不用 scratch、fp32、合成输入（R-MAT 图、NAS makea、幂律下标等）；emu 小输入和 CPU 参考一致；4 个分支各自的回归（fir、MM `-max-wg 4096`）和 `ca8b831` 逐位一致；没有改模拟器。
+
+| benchmark | 类别 | 小输入 | mi200 | 远程比例 / 远程延迟占比 | 用到的 GPM | T18（W=1024 + 距离） | 建议的 3–5 小时规模 |
+|---|---|---|---|---|---|---|---|
+| graphtc | 图 | R-MAT scale 13 | 69.9 µs | 0.958 / 0.999 | 48 | 2.80× | scale 15–16 |
+| bfs | 图 | scale 14 | 443 µs | 0.919 / 0.998 | 37 | 1.65× | scale 19 |
+| sssp | 图 | scale 13 | 1479 µs | 0.979 / 1.000 | 37 | 2.19× | scale 16 |
+| npbcg | 稀疏求解 | class S | 981 µs | 0.976 / 0.999 | 13 | 1.73× | class A，1 个外迭代 |
+| embbag | 推荐 | 默认 | 141 µs | 0.741 / 0.972 | 30 | 1.06× | 15 万行，batch 4096 |
+| ivfflat | 向量检索 | 默认 | 778 µs | 0.955 / 0.999 | 44 | 2.46× | 1M 向量，nlist 4096，nprobe 16 |
+| gups | 随机读改写 | 2 MB 表 | 361 µs | 0.963 / 0.999 | 48 | 4.72× | 2¹⁸ 表 × 48 次更新 |
+| allreduce | 集合通信 | 默认 | 467 µs | 0.662 / 0.989 | 48 | 3.16× | `-ar-per-cu 8` |
+| w2-shocsort | 排序 | 64K | 679 µs | 0.960 / 0.999 | 48 | 2.34× | 3.67M |
+| w2-npbis | 直方图/排序 | class S | 352 µs | 0.874 / 0.997 | 48 | 2.10× | class A，1 次迭代 |
+| w2-fft2d | FFT/转置 | 512² | 448 µs | 0.918 / 0.998 | 48 | 3.05× | 2048² |
+| w2-atax | BLAS2 | 2048² | 422 µs | 0.711 / 0.989 | 48 | 2.34× | 11264² |
+| lonestar_bh | N-body/树 | 16K 物体 | 492 µs | 0.928 / 0.990 | 10 | 1.02× | 524K 物体 |
+| altis_cfd | 非结构网格 | 97K 单元 | 780 µs | 0.894 / 0.997 | 14 | 5.3× | 140 万单元 |
+| rodinia_lud | LU | N=512 | 1547 µs | 0.966 / 0.999 | 35 | 1.52× | N=1664 |
+| npb_mg | 多重网格 | class S | 231 µs | 0.895 / 0.997 | 37 | 1.25× | class W，3 个 V-cycle |
+
+- 小输入下有几个只用到 10–37 个 GPM（WG 太少）；建议规模下都能铺满。lonestar_bh 的 1.02× 是 16K、只用 10 个 GPM 的结果，不代表正式规模。
+- **地址转换的问题（重要）**：每 GPM 的 L2 TLB 只覆盖 2 MB；GUPS 表超过 2 MB 时被 TLB 卡住（8 MB 表跑了 2.5 小时没结束，已终止），embbag、ivfflat 的正式规模也远超 TLB 覆盖。论文前提是地址转换已由 HDPAT 解决，这类大表 workload 正式评估时可能需要理想地址转换或 HDPAT，否则测的是 TLB 而不是数据访问。等用户决定。
+- **发现的 emulator bug（都在 kernel 侧绕开，没改模拟器）**：`v_cndmask_b32_e64` 的取反按整数取反；`v_lshlrev_b64` 寄存器移位量读错；`v_cmp_*_u32` 遇到负的内联常数时符号扩展错误（`check_hsaco.sh` 已加检查）；没有实现 `v_bfe_u32`、`s_cmp_le_u32`、`s_cmpk_{lt,gt}_u32`、`s_or_b32`（某些形式）、`ds_*2st64`、`ds_write_b64`、`v_sin/v_cos`。现有结果是否踩到这些 bug 需要查（旧 benchmark 和 T17 kernel 已经过 T17 的检查脚本）。
+- 新 Complete 在这 16 个上的运行（baseline / 新 Complete / HPCA Complete，中小规模）正在跑，`~/akita-exp-test/w2c/`。
+
 ### T19 冒烟测试（10-20，二进制 `539261b`/`eaa9c73`，`~/akita-exp-test/t19/`）
 
 设计要点：每个 GPM 的静态区间变成队列，自己从头取，偷取方从尾部一次切 k 个；偷取请求和回复是真实的 mesh 消息（每个 CP 一个专用端口，16 B / 32 B）；剩余 WG 数每 200 ns 告诉 2 跳内的邻居（远处每 2 µs，按解析模型计算陈旧度）；挑最近、剩余足够多的 GPM，近处没有就去远处，包括静态切分里没分到 WG 的 GPM；filter 指导用每 GPM 最近访问页的 cuckoo filter 和每组 WG 的历史足迹（只记可偷的尾部）。每个 WG 只执行一次由位图检查（违反就 panic）。

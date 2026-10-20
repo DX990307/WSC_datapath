@@ -283,3 +283,8 @@
 ### 2026-10-20 [claude-code] 用户确认：先跑新 Complete，消融放最后
 - 新 Complete = 新 M1（T18 全开 W=1024 + 按距离分 credit）+ M2（旧 m2）+ 旧 m3（Remote Reuse），去掉旧 m1；去重暂时两边都做。保留 HPCA 版 Complete 作参照。
 - 计划（用户 10-20 确认）：整合分支 `isca27/m1m2` 跑通 → 和 4 个移植分支合并、回归、推送 → 16 个新 benchmark × {baseline、新 Complete、HPCA Complete}，中小规模（每个约 0.5–1 小时），共 48 个。注意旧 m3 在 kernel 边界不失效（P08 a），多 kernel 的结果可能偏乐观，结果里标明。
+
+### 2026-10-20 [claude-code] 16 个新 benchmark 移植完成；新 Complete 整合完成
+- 代码：`isca27/wport-a..d`（16 个 benchmark）、`isca27/m1m2`（新 M1 + M2 + M3 组合，`-cupath-dedup-owner`，`complete_new`，去重归 M1）、合并分支 `isca27/w2-complete` @ `d09b18b`，都已推送。回归都和 `ca8b831` 逐位一致。
+- STATUS 新增“W2 移植”结果表、地址转换（TLB 覆盖）问题、emulator bug 清单。
+- 进行中：新 Complete 在 16 个新 benchmark 上的 48 个运行；T18 评估。
