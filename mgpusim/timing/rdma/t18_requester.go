@@ -70,6 +70,7 @@ type t18State struct {
 	waiterCap   int
 	seq         uint64
 	fanout      []t18L1Rsp
+	lastStallID string
 	lastIntegNS sim.VTimeInSec
 	hopInflight [t18MaxHops]int
 
@@ -292,8 +293,7 @@ func (c *Comp) t18ReqFromL1(
 	if mergeable && s.cfg.ReqMerge {
 		if e := s.reqTable.Lookup(key, t18OpenEntry); e != nil {
 			if s.waiters >= s.waiterCap {
-				s.stats.ReqWaiterFullStalls++
-				return false
+				return c.t18Stall(req, &s.stats.ReqWaiterFullStalls)
 			}
 			e.waiters = append(e.waiters, t18Waiter{req: req, arrival: now})
 			c.t18AddWaiter()
@@ -314,8 +314,7 @@ func (c *Comp) t18ReqFromL1(
 		}
 	}
 	if s.waiters >= s.waiterCap {
-		s.stats.ReqWaiterFullStalls++
-		return false
+		return c.t18Stall(req, &s.stats.ReqWaiterFullStalls)
 	}
 	dstIdx := c.t18DstIndex(dst)
 	e := &t18ReqEntry{
@@ -324,13 +323,14 @@ func (c *Comp) t18ReqFromL1(
 		dstIdx: dstIdx,
 		open:   mergeable && s.cfg.ReqMerge,
 	}
-	if s.reqTable.Insert(key, e) {
+	// A table at capacity is full without a cuckoo walk; below capacity an
+	// insert may still fail after MaxKicks displacements.
+	if s.reqTable.Len() < s.reqTable.Capacity() && s.reqTable.Insert(key, e) {
 		e.inTable = true
 	} else {
 		if !s.cfg.BypassWhenFull ||
 			len(s.reqQueues[dstIdx]) > 0 || !c.t18CanSendNow(dstIdx) {
-			s.stats.ReqTableFullStalls++
-			return false
+			return c.t18Stall(req, &s.stats.ReqTableFullStalls)
 		}
 		e.open = false
 		s.stats.ReqBypasses++
@@ -361,6 +361,18 @@ func (c *Comp) t18ReqFromL1(
 	c.ToL1.Retrieve(now)
 	c.forgetSeen(c.firstSeenFromL1Req, req.Meta().ID)
 	return true
+}
+
+// t18Stall records a request that cannot be accepted this cycle: counter
+// counts distinct stalled requests, ReqStallRetries every failed attempt.
+func (c *Comp) t18Stall(req mem.AccessReq, counter *uint64) bool {
+	s := c.t18
+	s.stats.ReqStallRetries++
+	if s.lastStallID != req.Meta().ID {
+		s.lastStallID = req.Meta().ID
+		*counter++
+	}
+	return false
 }
 
 func (c *Comp) t18AddWaiter() {

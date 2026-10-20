@@ -83,9 +83,10 @@ type T18Stats struct {
 	ReqMergedQueued     uint64 // ... whose entry still waited for a credit
 	ReqNewEntries       uint64
 	ReqClosedByWrite    uint64
-	ReqTableFullStalls  uint64 // insert failures that stalled the request
+	ReqTableFullStalls  uint64 // requests stalled by a full table (distinct)
 	ReqBypasses         uint64 // insert failures sent untracked
-	ReqWaiterFullStalls uint64
+	ReqWaiterFullStalls uint64 // requests stalled by a full waiter pool (distinct)
+	ReqStallRetries     uint64 // failed accept attempts (about one per cycle)
 	ReqSent             uint64 // network transactions sent
 	ReqSentBorrowed     uint64 // ... sent on a borrowed credit
 	ReqResponses        uint64

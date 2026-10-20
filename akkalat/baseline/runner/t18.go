@@ -162,6 +162,7 @@ func (r *Runner) reportT18Stats() {
 			put("req_table_full_stalls", float64(st.ReqTableFullStalls))
 			put("req_bypasses", float64(st.ReqBypasses))
 			put("req_waiter_full_stalls", float64(st.ReqWaiterFullStalls))
+			put("req_stall_retries", float64(st.ReqStallRetries))
 			put("req_sent", float64(st.ReqSent))
 			put("req_sent_borrowed", float64(st.ReqSentBorrowed))
 			put("req_responses", float64(st.ReqResponses))
