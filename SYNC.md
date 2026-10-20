@@ -307,3 +307,6 @@
 - 结果：15 个有效，GMEAN 2.82×（去掉 embbag 3.04×）；graphtc 三个配置都崩溃（kernel LDS 越界），npbis 2 次迭代的 baseline 崩溃。更正了之前根据崩溃运行汇报的 TC、npbis 数字。CSV：`results_index/w2complete/`。
 - 用户：HPCA 版 Complete 不再测（正在跑的按 PID 停掉）；跑完这组后不跑别的实验，T18 消融 / HPCA 规模 / 本地型检查的队列冻结（`~/akita-exp-test/t18eval/queue.tsv` 保留，可恢复），冻结前已在跑的运行照常跑完。
 - 读到 Cowork 10-20 的条目：T18 保留、T19 放弃（本篇不做）；m3 保留但不作重点；新增 observations/ 和 P13（等用户交给 Claude Code）。注意：Cowork 写的“Complete = T18 + m3”和本会话 10-20 用户定的新 Complete（M1 = T18 + M2 = 旧 m2 + M3）不一致，待用户确认。
+
+### 2026-10-20 [claude-code] 用户确认 Complete 的定义
+- 用户 10-20：**Complete = T18（新 M1）+ M2（旧 m2：去重 + 同页打包 + 预取）+ M3（旧 m3：Remote Reuse）**，即代码里的 `complete_new`（`isca27/m1m2`）。Cowork 10-20 写的“Complete = T18 + m3”请按此更正（`observations/README.md` 等处）。
