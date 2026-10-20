@@ -61,6 +61,6 @@ func newGUPS(d *driver.Driver) *gups.Benchmark {
 
 func newAllReduce(d *driver.Driver) *allreduce.Benchmark {
 	b := allreduce.NewBenchmark(d)
-	b.Params = allreduce.Params{Ranks: 48, CUs: runner.CUsPerGPM(), PerCU: *arPerCUFlag}
+	b.Params = allreduce.Params{Ranks: runner.NumGPMs(), CUs: runner.CUsPerGPM(), PerCU: *arPerCUFlag}
 	return b
 }

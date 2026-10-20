@@ -194,19 +194,25 @@ func (b *Benchmark) emit(r row) {
 	fmt.Printf("PLATCSV,row,%s\n", strings.Join(vals, ","))
 }
 
-// TileOf returns the 7x7 mesh tile index of a driver GPU ID (tile 24, the
-// center, holds the driver/IOMMU).
+// MeshWidth is the width of the square mesh (odd; default 7 = 48 GPMs). The
+// center tile holds the driver/IOMMU.
+var MeshWidth = 7
+
+func centerTile() int { return MeshWidth * MeshWidth / 2 }
+
+// TileOf returns the mesh tile index of a driver GPU ID (on the 7x7 mesh,
+// tile 24, the center, holds the driver/IOMMU).
 func TileOf(gpu int) int {
-	if gpu <= 24 {
+	if gpu <= centerTile() {
 		return gpu - 1
 	}
 	return gpu
 }
 
-// Hops returns the Manhattan distance between two GPMs on the 7x7 mesh.
+// Hops returns the Manhattan distance between two GPMs on the mesh.
 func Hops(a, b int) int {
 	ta, tb := TileOf(a), TileOf(b)
-	dx, dy := ta%7-tb%7, ta/7-tb/7
+	dx, dy := ta%MeshWidth-tb%MeshWidth, ta/MeshWidth-tb/MeshWidth
 	if dx < 0 {
 		dx = -dx
 	}
@@ -549,14 +555,14 @@ func (b *Benchmark) runIncast() {
 
 // ---------------------------------------------------------------- 6. patterns
 
-func meshXY(gpu int) (int, int) { t := TileOf(gpu); return t % 7, t / 7 }
+func meshXY(gpu int) (int, int) { t := TileOf(gpu); return t % MeshWidth, t / MeshWidth }
 
 func gpuAt(x, y int) int {
-	t := y*7 + x
-	if t == 24 {
+	t := y*MeshWidth + x
+	if t == centerTile() {
 		return 0
 	}
-	if t < 24 {
+	if t < centerTile() {
 		return t + 1
 	}
 	return t
@@ -578,7 +584,7 @@ func sourcesFor(pattern string, gpu, n int, snake []int) []int {
 		var s []int
 		for _, d := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
 			nx, ny := x+d[0], y+d[1]
-			if nx >= 0 && nx < 7 && ny >= 0 && ny < 7 && gpuAt(nx, ny) != 0 {
+			if nx >= 0 && nx < MeshWidth && ny >= 0 && ny < MeshWidth && gpuAt(nx, ny) != 0 {
 				s = append(s, gpuAt(nx, ny))
 			}
 		}
@@ -604,11 +610,11 @@ func sourcesFor(pattern string, gpu, n int, snake []int) []int {
 // center tile.
 func snakeOrder() []int {
 	var o []int
-	for y := 0; y < 7; y++ {
-		for i := 0; i < 7; i++ {
+	for y := 0; y < MeshWidth; y++ {
+		for i := 0; i < MeshWidth; i++ {
 			x := i
 			if y%2 == 1 {
-				x = 6 - i
+				x = MeshWidth - 1 - i
 			}
 			if g := gpuAt(x, y); g != 0 {
 				o = append(o, g)
@@ -758,7 +764,7 @@ func FractionThreshold(f float64) int32 {
 // runs MixWGs work-groups; each wavefront reads MixIters 1-KB chunks, a
 // fraction f of them from uniformly random other GPMs' shards and the rest
 // from its own shard. The shards are first read once locally (one warm-up
-// phase), then each f is one SPMD phase over all 48 GPMs. Phase k of the
+// phase), then each f is one SPMD phase over all GPMs (48 on 7x7). Phase k of the
 // -report-gpm-trace CSV is the warm-up (k = 0) or f = Fractions[k-1]; its
 // per-GPM gpm_kernel_end_ns gives the finish-time heatmap.
 func (b *Benchmark) runRemoteFrac() {

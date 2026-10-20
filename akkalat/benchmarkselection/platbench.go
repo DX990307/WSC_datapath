@@ -112,6 +112,7 @@ func newPlatbench(d *driver.Driver) *platbench.Benchmark {
 	b.Test = *platTestFlag
 	b.Config = flag.Lookup("gpm-preset").Value.String()
 	b.CUsPerGPM = runner.CUsPerGPM()
+	platbench.MeshWidth = runner.MeshSize()
 	b.Src = *platSrcFlag
 	b.Dsts = parseInts(*platDstsFlag)
 	b.Sources = parseInts(*platSourcesFlag)

@@ -215,7 +215,7 @@ func (r *Runner) configureL2SourceStats() {
 	if prefix == "" {
 		prefix = *filenameFlag + "_l2_source"
 	}
-	memtrace.EnableL2SourceStats(prefix, *l2SourceTileWidthFlag)
+	memtrace.EnableL2SourceStats(prefix, l2SourceTileWidth())
 }
 
 func (r *Runner) configureMemoryPathTrace() {
@@ -246,7 +246,7 @@ func (r *Runner) configureMemoryPathTrace() {
 		*memoryPathTraceWarmupAccesses,
 		*memoryPathTraceMaxRecords,
 		configuredLog2PageSize(),
-		*l2SourceTileWidthFlag,
+		l2SourceTileWidth(),
 		*memoryPathTraceExitOnComplete,
 		doneCallback,
 	); err != nil {
@@ -315,7 +315,7 @@ func (r *Runner) configureObservationTrace() {
 			WarmupRequests: *observationRemoteWarmupRequests,
 			MaxRequests:    *observationRemoteMaxRecords,
 			L2SampleMax:    *observationL2SampleMax,
-			TileWidth:      *l2SourceTileWidthFlag,
+			TileWidth:      l2SourceTileWidth(),
 		},
 	); err != nil {
 		panic(err)
@@ -337,8 +337,8 @@ func (r *Runner) configureRemoteOriginTrace() {
 
 func (r *Runner) buildEmuPlatform() {
 	// GPUIDs is only set by createUnifiedGPUs (after the platform is built);
-	// build the same 48 GPMs it unifies.
-	numGPU := 48
+	// build the same NumGPMs() (48 on the default 7x7 mesh) it unifies.
+	numGPU := NumGPMs()
 	if len(r.GPUIDs) > 0 {
 		numGPU = r.GPUIDs[len(r.GPUIDs)-1]
 	}
@@ -428,6 +428,7 @@ func (r *Runner) buildTimingPlatform() {
 		WithBandwidth(*bandwidthFlag).
 		WithSwitchLatency(*switchLatencyFlag).
 		WithMaxNumHops(*maxNumHopsFlag).
+		WithMeshSize(MeshSize()).
 		WithNetworkFlitSize(*networkFlitSizeFlag).
 		WithEndpointChannels(*endpointChannelsFlag).
 		WithEndpointBufferSize(*endpointBufferSizeFlag).
@@ -559,8 +560,9 @@ func (r *Runner) createUnifiedGPUs() {
 	// 9, 10, 11, 12, 13, 14, 15, 16,
 	// 17, 18, 19, 20, 21, 22, 23, 24,
 	// })
-	gpulist := make([]int, 48)
-	for i := 0; i < 48; i++ {
+	n := NumGPMs()
+	gpulist := make([]int, n)
+	for i := 0; i < n; i++ {
 		gpulist[i] = i + 1
 	}
 	unifiedGPUID := r.platform.Driver.CreateUnifiedGPU(nil, gpulist)
