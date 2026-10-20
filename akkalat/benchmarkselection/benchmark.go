@@ -232,6 +232,14 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = newISACheck(driver)
 	case "rgat":
 		benchmark = newRGAT(driver)
+	case "embbag":
+		benchmark = newEmbBag(driver)
+	case "ivfflat":
+		benchmark = newIVFFlat(driver)
+	case "gups":
+		benchmark = newGUPS(driver)
+	case "allreduce":
+		benchmark = newAllReduce(driver)
 	case "floydwarshall":
 		floydwarshall := floydwarshall.NewBenchmark(driver)
 		floydwarshall.NumNodes = 11584
