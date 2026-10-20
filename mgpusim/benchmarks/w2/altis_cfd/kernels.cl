@@ -113,11 +113,16 @@ __kernel void cfd_flux(const int nelr, __global const int *nbrs,
       flux_mx += factor * (fxn_z + fxi_z);
       flux_my += factor * (fyn_z + fyi_z);
       flux_mz += factor * (fzn_z + fzi_z);
-    } else if (nb == -1) {  // wing (slip wall) boundary
+    } else if (nb & 1) {  // nb == -1: wing (slip wall) boundary
       flux_mx += nx * pressure_i;
       flux_my += ny * pressure_i;
       flux_mz += nz * pressure_i;
-    } else if (nb == -2) {  // far field boundary
+    } else {  // nb == -2: far field boundary
+      // (upstream: "else if (nb == -1) ... else if (nb == -2)"; the only
+      // codes are >= 0, -1, -2. clang compiles those tests to
+      // v_cmp_ne_u32 vcc, -1/-2, v0, which the emulator gets wrong: it
+      // compares the sign-extended 64-bit inline constant with the
+      // zero-extended 32-bit register, so the branch never ran)
       float factor = 0.5f * nx;
       flux_d += factor * (ff[VAR_MOMENTUM + 0] + mix);
       flux_e += factor * (ff[14] + fei_x);
