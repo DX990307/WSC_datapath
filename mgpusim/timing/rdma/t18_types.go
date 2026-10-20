@@ -119,6 +119,9 @@ type T18Stats struct {
 	OwnerMulticastDests     uint64
 	OwnerUnicastFanout      uint64 // unicast packets for merged entries (no multicast)
 	OwnerFanoutHistogram    [49]uint64
+	OwnerBatchChildReads    uint64 // M1+M2: bitmap child reads that opened an entry
+	OwnerBatchChildMerged   uint64 // M1+M2: bitmap child reads merged into an entry
+	Composed                bool   // M1 requester runs on top of M2
 	OwnerPeakLive           uint64
 	OwnerTable              t18CuckooStats
 }
@@ -131,6 +134,10 @@ type T18MulticastRsp struct {
 	Data   []byte
 	Dsts   []sim.Port
 	RspTos []string // RspTos[i] answers the request of Dsts[i]
+	// Lines (M1+M2 only; nil otherwise): Lines[i] >= 0 means Dsts[i] asked
+	// for this line as line Lines[i] of the M2 bitmap request RspTos[i]; its
+	// leaf is a one-line BitmapReadRsp. -1: an ordinary DataReadyRsp leaf.
+	Lines []int
 }
 
 var _ messaging.MulticastMsg = (*T18MulticastRsp)(nil)
@@ -148,17 +155,39 @@ func (m *T18MulticastRsp) MulticastDsts() []sim.Port { return m.Dsts }
 // SplitForDsts returns the packet for a branch of the tree.
 func (m *T18MulticastRsp) SplitForDsts(dsts []sim.Port) sim.Msg {
 	rspTos := make([]string, 0, len(dsts))
+	var lines []int
+	if m.Lines != nil {
+		lines = make([]int, 0, len(dsts))
+	}
 	for _, d := range dsts {
 		found := false
 		for i, md := range m.Dsts {
 			if md == d {
 				rspTos = append(rspTos, m.RspTos[i])
+				if m.Lines != nil {
+					lines = append(lines, m.Lines[i])
+				}
 				found = true
 				break
 			}
 		}
 		if !found {
 			panic(fmt.Sprintf("multicast %s has no destination %s", m.ID, d.Name()))
+		}
+	}
+	if len(dsts) == 1 && lines != nil && lines[0] >= 0 {
+		return &BitmapReadRsp{
+			MsgMeta: sim.MsgMeta{
+				ID:           sim.GetIDGenerator().Generate(),
+				Src:          m.Src,
+				Dst:          dsts[0],
+				SendTime:     m.SendTime,
+				TrafficBytes: bitmapRspOverhead + len(m.Data),
+			},
+			RespondTo: rspTos[0],
+			LineData: map[uint64][]byte{
+				uint64(lines[0]): append([]byte(nil), m.Data...),
+			},
 		}
 	}
 	if len(dsts) == 1 {
@@ -176,6 +205,7 @@ func (m *T18MulticastRsp) SplitForDsts(dsts []sim.Port) sim.Msg {
 		Data:    m.Data,
 		Dsts:    append([]sim.Port(nil), dsts...),
 		RspTos:  rspTos,
+		Lines:   lines,
 	}
 	child.ID = sim.GetIDGenerator().Generate()
 	child.Dst = dsts[0]

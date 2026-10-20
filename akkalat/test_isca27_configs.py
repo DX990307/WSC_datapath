@@ -193,5 +193,65 @@ class T18ConfigTest(unittest.TestCase):
                 self.assertEqual(values[key], value, (name, key))
 
 
+class M1M2ConfigTest(unittest.TestCase):
+    """ISCA'27 M1 (= T18) / M2 (= old m2) / composition / new Complete files
+    only add mechanism flags to mi200.json."""
+
+    def load(self, name):
+        return isca27_config.load(os.path.join(CONFIGS, name))
+
+    def added(self, name):
+        base = self.load("mi200.json")
+        got = self.load(name)
+        for key, value in base.items():
+            self.assertEqual(got[key], value, (name, key))
+        return {k: v for k, v in got.items() if k not in base}
+
+    def test_m1_is_t18_full_w1024_dist(self):
+        want = {}
+        for n in ("t18_full.json", "t18_w1024.json", "t18_dist.json"):
+            want.update(self.added(n))
+        self.assertEqual(self.added("m1.json"), want)
+
+    def test_m2_is_m2_old(self):
+        self.assertEqual(self.added("m2.json"), self.added("m2_old.json"))
+
+    def test_compositions(self):
+        m1, m2 = self.added("m1.json"), self.added("m2.json")
+        for name, owner in (("m1m2_dedupM1.json", "m1"),
+                            ("m1m2_dedupM2.json", "m2")):
+            want = dict(m2)
+            want.update(m1)
+            want["cupath-dedup-owner"] = owner
+            self.assertEqual(self.added(name), want, name)
+
+    def test_complete_new(self):
+        want = dict(self.added("m2.json"))
+        want.update(self.added("m1.json"))
+        want["remote-data-path-l2-enable"] = "true"
+        want["cupath-dedup-owner"] = "both"
+        got = self.added("complete_new.json")
+        self.assertEqual(got, want)
+        # old m1 (Local Pairing) stays off
+        for key in ("l2-resident-filter-enable", "l2-fill-forwarding-enable",
+                    "l2-adaptive-pair-enable"):
+            self.assertEqual(got[key], "false", key)
+
+    def test_complete_hpca_flags_equals_runall2_complete(self):
+        import sys
+        from runall2_args import parse_args
+        from runall2_config import build_remote_data_path_ablation_configs
+        from runall2_constants import DEFAULT_BENCHMARK_FLAGS
+        argv = sys.argv
+        sys.argv = ["runall2.py", "--remote-ablation"]
+        try:
+            args = parse_args()
+        finally:
+            sys.argv = argv
+        complete = dict(build_remote_data_path_ablation_configs(args))["complete"]
+        self.assertEqual(self.added("complete_hpca_flags.json"),
+                         flag_pairs(DEFAULT_BENCHMARK_FLAGS + complete))
+
+
 if __name__ == "__main__":
     unittest.main()

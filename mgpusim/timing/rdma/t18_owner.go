@@ -34,6 +34,7 @@ import (
 type t18OwnerReq struct {
 	src   sim.Port
 	rspTo string
+	sub   *remoteOwnerSubReq // M1+M2: a child line of an M2 bitmap request
 }
 
 type t18OwnerEntry struct {
@@ -44,6 +45,9 @@ type t18OwnerEntry struct {
 	data      []byte
 	nextSend  int
 	multicast bool
+	// live: the entry holds an owner window slot (opened by a single-line
+	// read). Entries opened by an M2 bitmap child use the bitmap's slot.
+	live bool
 }
 
 func t18OwnerOpen(e *t18OwnerEntry) bool { return e.open }
@@ -92,7 +96,7 @@ func (c *Comp) t18OwnerReqFromOutside(
 	if !c.canAcceptOwnerOutstanding(1) {
 		return true, false
 	}
-	e := &t18OwnerEntry{key: key, open: true}
+	e := &t18OwnerEntry{key: key, open: true, live: true}
 	if !s.ownerTable.Insert(key, e) {
 		if s.ownerFallbackID != read.ID {
 			s.ownerFallbackID = read.ID
@@ -168,10 +172,41 @@ func (c *Comp) t18OwnerL2Rsp(now sim.VTimeInSec, rsp mem.AccessRsp) bool {
 		n = 48
 	}
 	s.stats.OwnerFanoutHistogram[n]++
+	c.ToL2.Retrieve(now)
+	if !e.live {
+		// M1+M2: opened by an M2 bitmap child.
+		if len(e.reqs) == 1 {
+			c.t18DeliverChild(e.reqs[0].sub, e.data)
+			return true
+		}
+	}
+	if !s.cfg.OwnerMulticast && e.hasChild() {
+		// Unicast fan-out: bitmap children return in their bitmap responses.
+		singles := e.reqs[:0]
+		for _, r := range e.reqs {
+			if r.sub != nil {
+				c.t18DeliverChild(r.sub, e.data)
+				continue
+			}
+			singles = append(singles, r)
+		}
+		e.reqs = singles
+		if len(e.reqs) == 0 {
+			return true
+		}
+	}
 	e.multicast = len(e.reqs) > 1 && s.cfg.OwnerMulticast
 	s.ownerRspQueue = append(s.ownerRspQueue, e)
-	c.ToL2.Retrieve(now)
 	return true
+}
+
+func (e *t18OwnerEntry) hasChild() bool {
+	for _, r := range e.reqs {
+		if r.sub != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // t18OwnerSend sends owner responses, one packet per pipeline slot.
@@ -183,9 +218,19 @@ func (c *Comp) t18OwnerSend(now sim.VTimeInSec) bool {
 		if e.multicast {
 			dsts := make([]sim.Port, len(e.reqs))
 			rspTos := make([]string, len(e.reqs))
+			var lines []int
+			if e.hasChild() {
+				lines = make([]int, len(e.reqs))
+			}
 			for j, r := range e.reqs {
 				dsts[j] = r.src
 				rspTos[j] = r.rspTo
+				if lines != nil {
+					lines[j] = -1
+					if r.sub != nil {
+						lines[j] = int(r.sub.line)
+					}
+				}
 			}
 			msg := &T18MulticastRsp{
 				MsgMeta: sim.MsgMeta{
@@ -199,15 +244,24 @@ func (c *Comp) t18OwnerSend(now sim.VTimeInSec) bool {
 				Data:   e.data,
 				Dsts:   dsts,
 				RspTos: rspTos,
+				Lines:  lines,
 			}
 			if err := c.ToOutside.Send(msg); err != nil {
 				break
+			}
+			for _, r := range e.reqs {
+				if r.sub != nil {
+					c.t18ChildSentByMulticast(r.sub)
+				}
 			}
 			s.stats.OwnerMulticastPackets++
 			s.stats.OwnerMulticastDests += uint64(len(dsts))
 			e.nextSend = len(e.reqs)
 		} else {
 			r := e.reqs[e.nextSend]
+			if r.sub != nil {
+				panic("T18 owner: bitmap child on the unicast path")
+			}
 			msg := mem.DataReadyRspBuilder{}.
 				WithSendTime(now).
 				WithSrc(c.ToOutside).
@@ -229,7 +283,9 @@ func (c *Comp) t18OwnerSend(now sim.VTimeInSec) bool {
 		if e.nextSend >= len(e.reqs) {
 			s.ownerRspQueue[0] = nil
 			s.ownerRspQueue = s.ownerRspQueue[1:]
-			s.ownerLive--
+			if e.live {
+				s.ownerLive--
+			}
 		}
 	}
 	return madeProgress

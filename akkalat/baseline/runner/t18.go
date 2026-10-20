@@ -47,9 +47,49 @@ var t18BypassWhenFullFlag = flag.Bool("t18-bypass-when-full", false,
 	"T18: when the requester table is full, send the request unmerged if a "+
 		"window slot is free (default: stall at the RDMA input).")
 
+// ISCA'27 M1 (= T18) + M2 (= old m2 remote data path): which mechanism
+// removes same-line duplicate reads at the requester. Empty keeps the
+// per-mechanism flags (-t18-req-merge, -remote-data-path-dedup-enable), so
+// existing T18 / old-m2 configurations are unchanged.
+var cupathDedupOwnerFlag = flag.String("cupath-dedup-owner", "",
+	"M1+M2 requester de-duplication owner: m1 (only M1's in-flight table "+
+		"merge; M2 dedup off), m2 (only M2's filter dedup; M1 requester "+
+		"merge off), both, none; empty keeps -t18-req-merge and "+
+		"-remote-data-path-dedup-enable as given.")
+
+// dedupOwner returns (M1 merge, M2 dedup) overrides; set is false when the
+// switch is empty.
+func dedupOwner() (m1, m2, set bool) {
+	switch *cupathDedupOwnerFlag {
+	case "":
+		return false, false, false
+	case "m1":
+		return true, false, true
+	case "m2":
+		return false, true, true
+	case "both":
+		return true, true, true
+	case "none":
+		return false, false, true
+	}
+	panic("-cupath-dedup-owner must be m1, m2, both or none, got " +
+		*cupathDedupOwnerFlag)
+}
+
+func remoteDataPathDedupFromFlags() bool {
+	if _, m2, set := dedupOwner(); set {
+		return m2
+	}
+	return *remoteDataPathDedupEnableFlag
+}
+
 func t18ConfigFromFlags() rdma.T18Config {
+	reqMerge := *t18ReqMergeFlag
+	if m1, _, set := dedupOwner(); set {
+		reqMerge = m1
+	}
 	c := rdma.T18Config{
-		ReqMerge:        *t18ReqMergeFlag,
+		ReqMerge:        reqMerge,
 		OwnerMerge:      *t18OwnerMergeFlag,
 		OwnerMulticast:  *t18OwnerMulticastFlag,
 		Window:          *t18WindowFlag,
@@ -67,7 +107,9 @@ func t18ConfigFromFlags() rdma.T18Config {
 		return rdma.T18Config{}
 	}
 	if *remoteDataPathEnableFlag {
-		panic("T18 (-t18-*) and -remote-data-path-enable are mutually exclusive")
+		fmt.Printf("[Config] M1+M2: T18 composed with the remote data path "+
+			"(dedup owner %q: M1 merge=%v, M2 dedup=%v)\n",
+			*cupathDedupOwnerFlag, c.ReqMerge, remoteDataPathDedupFromFlags())
 	}
 	if *observationTracing {
 		panic("-trace-observation does not follow T18 requests; disable T18")
@@ -139,6 +181,9 @@ func (r *Runner) reportT18Stats() {
 			r.metricsCollector.Collect(where, "t18_"+name, v)
 		}
 		put("req_engine", boolMetric(st.RequesterActive))
+		if st.Composed {
+			put("m1m2_composed", 1)
+		}
 		put("req_merge_enabled", boolMetric(st.ReqMergeEnabled))
 		put("owner_merge_enabled", boolMetric(st.OwnerMergeEnabled))
 		put("multicast_enabled", boolMetric(st.MulticastEnabled))
@@ -226,6 +271,10 @@ func (r *Runner) reportT18Stats() {
 					float64(st.OwnerMulticastPackets))
 			}
 			put("owner_unicast_fanout_packets", float64(st.OwnerUnicastFanout))
+			if st.OwnerBatchChildReads+st.OwnerBatchChildMerged > 0 {
+				put("owner_batch_child_reads", float64(st.OwnerBatchChildReads))
+				put("owner_batch_child_merged", float64(st.OwnerBatchChildMerged))
+			}
 			put("owner_peak_live", float64(st.OwnerPeakLive))
 			put("owner_table_peak", float64(st.OwnerTable.Peak))
 			put("owner_table_fp_matches", float64(st.OwnerTable.FingerprintMatches))

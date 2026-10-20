@@ -1,0 +1,9 @@
+{
+  "_description": "ISCA'27 M1 (= T18 full: requester in-flight table merge + owner merge table + mesh multicast) at W = 1024 with distance credits; the same flags as t18_full.json + t18_w1024.json + t18_dist.json. Extends mi200.json.",
+  "extends": "mi200.json",
+  "t18-req-merge": true,
+  "t18-owner-merge": true,
+  "t18-owner-multicast": true,
+  "t18-window": 1024,
+  "t18-dist-credits": true
+}

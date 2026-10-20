@@ -74,6 +74,14 @@ type t18State struct {
 	lastIntegNS sim.VTimeInSec
 	hopInflight [t18MaxHops]int
 
+	// M1+M2 composition (m1m2_compose.go): the requester runs on M2's path.
+	compose           bool
+	m1Index           *t18CuckooTable[remoteLineEntry]
+	composedSent      map[string]t18ComposedTxn
+	composedOpen      []int
+	composedLineCap   int
+	composedWaiterCap int
+
 	ownerActive   bool
 	ownerWindow   int
 	ownerTable    *t18CuckooTable[t18OwnerEntry]
@@ -92,10 +100,6 @@ func (c *Comp) ConfigureT18(cfg T18Config) {
 	if !cfg.Enabled() {
 		c.t18 = nil
 		return
-	}
-	if c.remoteConfig.Enabled {
-		panic("T18 and the old remote data path (-remote-data-path-enable) " +
-			"are mutually exclusive")
 	}
 	if cfg.Ways <= 0 {
 		cfg.Ways = 4
@@ -130,7 +134,16 @@ func (c *Comp) ConfigureT18(cfg T18Config) {
 	s.stats.DistCredits = cfg.DistCredits
 	s.stats.OwnerWindow = uint64(ownerWindow)
 
-	if cfg.RequesterActive() {
+	if cfg.RequesterActive() && c.remoteConfig.Enabled {
+		// M1 on top of M2 (ConfigureRemoteDataPath runs first).
+		s.compose = true
+		s.stats.Composed = true
+		s.stats.RequesterActive = true
+		s.stats.Window = uint64(window)
+		c.t18Window = window
+		c.t18 = s
+		c.m1ComposeInit(window)
+	} else if cfg.RequesterActive() {
 		s.reqActive = true
 		s.stats.RequesterActive = true
 		s.stats.Window = uint64(window)
@@ -201,9 +214,10 @@ func (c *Comp) t18BuildCredits() {
 		}
 		s.hops[i] = t18Hops(topo.self, topo.coord[i])
 	}
-	if !s.reqActive {
+	if !s.reqActive && !s.compose {
 		return
 	}
+	s.composedOpen = make([]int, len(topo.ports))
 	s.credits = newT18CreditAllocator(c.t18Window, s.cfg.DistCredits, s.hops)
 	s.reqQueues = make([][]*t18ReqEntry, len(topo.ports))
 	s.stats.HopDests = [t18MaxHops]uint64{}
@@ -226,6 +240,10 @@ func (c *Comp) GetT18Stats() T18Stats {
 	if s.reqActive {
 		c.t18Integrate(c.Engine.CurrentTime())
 		s.stats.ReqTable = s.reqTable.Stats()
+	}
+	if s.compose {
+		c.t18Integrate(c.Engine.CurrentTime())
+		s.stats.ReqTable = s.m1Index.Stats()
 	}
 	if s.ownerActive {
 		s.stats.OwnerTable = s.ownerTable.Stats()
@@ -589,6 +607,6 @@ func (c *Comp) t18HasPendingWork() bool {
 	if s == nil {
 		return false
 	}
-	return s.queued > 0 || len(s.reqByNetID) > 0 || len(s.fanout) > 0 ||
+	return (s.queued > 0 && !s.compose) || len(s.reqByNetID) > 0 || len(s.fanout) > 0 ||
 		s.ownerLive > 0 || len(s.ownerRspQueue) > 0
 }

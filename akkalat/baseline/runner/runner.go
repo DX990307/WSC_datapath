@@ -473,7 +473,7 @@ func (r *Runner) buildTimingPlatform() {
 		WithDRAMRowContinuation(*dramRowContinuationEnableFlag).
 		WithRemoteDataPath(rdma.RemoteDataPathConfig{
 			Enabled:                  *remoteDataPathEnableFlag,
-			DisableDedup:             !*remoteDataPathDedupEnableFlag,
+			DisableDedup:             !remoteDataPathDedupFromFlags(),
 			DisableBatching:          !*remoteDataPathBatchingEnableFlag,
 			DisableRequesterL2:       !*remoteDataPathL2EnableFlag,
 			EnableFilterPrefetch:     *remoteFilterPrefetchEnableFlag,

@@ -18,7 +18,7 @@ func (c *Comp) processBitmapReqFromOutside(
 	if len(lines) > c.remoteConfig.MaxBatchLines {
 		panic("RDMA bitmap request exceeds the configured batch-line limit")
 	}
-	if c.remoteOwnerOccupancy()+1 > c.remoteConfig.MaxBatches {
+	if c.remoteOwnerOccupancy()+1 > c.remoteOwnerBatchCapacity() {
 		c.ownerFullStalls++
 		return false
 	}
@@ -76,6 +76,14 @@ func (c *Comp) processRemoteOwnerPendingReqs(now sim.VTimeInSec) bool {
 		return false
 	}
 	sub := c.remoteOwnerPendingReq[0]
+	if c.t18 != nil && c.t18.ownerActive {
+		if handled, progress := c.t18OwnerChildRead(now, sub); handled {
+			if progress {
+				c.remoteOwnerPendingReq = c.remoteOwnerPendingReq[1:]
+			}
+			return progress
+		}
+	}
 	sub.read.SendTime = now
 	if err := c.ToL2.Send(sub.read); err != nil {
 		return false

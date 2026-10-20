@@ -186,7 +186,11 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 		// waiting for requests that have not arrived yet.
 		madeProgress = c.runPipelineWidth(
 			func() bool { return c.processRemotePendingBatches(now) }) || madeProgress
-		madeProgress = c.processRemoteBatches(now, false) || madeProgress
+		if c.m1Composed() {
+			madeProgress = c.m1ProcessRemoteBatches(now, false) || madeProgress
+		} else {
+			madeProgress = c.processRemoteBatches(now, false) || madeProgress
+		}
 	}
 
 	return madeProgress
@@ -324,7 +328,11 @@ func (c *Comp) processRDMARestartReq(now sim.VTimeInSec) bool {
 }
 
 func (c *Comp) drainRDMA(now sim.VTimeInSec) bool {
-	if c.processRemoteBatches(now, true) {
+	if c.m1Composed() {
+		if c.m1ProcessRemoteBatches(now, true) {
+			return true
+		}
+	} else if c.processRemoteBatches(now, true) {
 		return true
 	}
 	if c.fullyDrained() {
@@ -570,7 +578,11 @@ func (c *Comp) processReqFromL1(
 			return progress
 		}
 	}
-	if !c.canAcceptRequesterOutstanding(1) {
+	if c.m1Composed() {
+		if !c.m1CanSend(dst) {
+			return false
+		}
+	} else if !c.canAcceptRequesterOutstanding(1) {
 		return false
 	}
 
@@ -632,6 +644,9 @@ func (c *Comp) processReqFromL1(
 			toOutside:  cloned,
 		}
 		c.transactionsFromInside = append(c.transactionsFromInside, trans)
+		if c.m1Composed() {
+			c.m1Acquire(now, dst, cloned.Meta().ID)
+		}
 		c.recordRequesterOutstandingPeak()
 		if c.remoteConfig.Enabled {
 			c.noteLegacyRemoteReqSent(req, dst)
@@ -827,6 +842,9 @@ func (c *Comp) processRspFromOutside(
 
 		c.traceInsideOutEnd(trans)
 		c.recordRemoteGPMAccess(now, trans, rsp)
+		if c.m1Composed() {
+			c.m1Release(now, rsp.GetRspTo())
+		}
 
 		//fmt.Printf("%s rsp outside %s -> inside %s\n",
 		//e.Name(), rsp.GetID(), rspToInside.GetID())

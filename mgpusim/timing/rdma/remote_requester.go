@@ -384,6 +384,12 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 		remoteLineIdentity: identity,
 		epoch:              c.remoteEpochs[identity],
 	}
+	if c.m1Composed() && c.t18.cfg.ReqMerge {
+		if handled, progress := c.m1ComposeTryMerge(
+			now, read, firstSeen); handled {
+			return true, progress
+		}
+	}
 	var existing *remoteLineEntry
 	negativeRetry := c.remoteBlockedNegativeReqID == read.ID &&
 		c.remoteBlockedNegativeKey == key
@@ -409,7 +415,7 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 	}
 	if entry := existing; entry != nil {
 		c.clearRemoteBlockedNegative(read.ID)
-		if c.remoteOutstandingReads >= c.remoteOutstandingCapacity() {
+		if c.remoteOutstandingReads >= c.remoteWaiterCapacity() {
 			c.RemoteDataPathStats.WaiterEntryFullStalls++
 			return true, false
 		}
@@ -444,13 +450,13 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 		c.RemoteDataPathStats.LineEntryFullStalls++
 		return true, false
 	}
-	if c.remoteOutstandingReads >= c.remoteOutstandingCapacity() {
+	if c.remoteOutstandingReads >= c.remoteWaiterCapacity() {
 		c.rememberRemoteBlockedNegative(read.ID, key)
 		c.RemoteDataPathStats.WaiterEntryFullStalls++
 		return true, false
 	}
 	c.clearRemoteBlockedNegative(read.ID)
-	if c.remoteConfig.DisableBatching &&
+	if c.remoteConfig.DisableBatching && !c.m1Composed() &&
 		!c.canAcceptRequesterOutstanding(1) {
 		return true, false
 	}
@@ -825,6 +831,7 @@ func (c *Comp) insertRemoteLine(
 	entry *remoteLineEntry,
 ) {
 	c.remoteLines[key] = entry
+	c.m1IndexLine(entry)
 	if uint64(len(c.remoteLines)) > c.RemoteDataPathStats.PeakLineEntries {
 		c.RemoteDataPathStats.PeakLineEntries = uint64(len(c.remoteLines))
 	}
@@ -942,6 +949,9 @@ func (c *Comp) remoteIdentities(
 }
 
 func (c *Comp) remoteOutstandingCapacity() int {
+	if c.m1Composed() {
+		return c.t18.composedLineCap
+	}
 	capacity := c.remoteConfig.MaxBatches * c.remoteConfig.MaxBatchLines * 2
 	if capacity < 1 {
 		return 1
@@ -950,7 +960,7 @@ func (c *Comp) remoteOutstandingCapacity() int {
 }
 
 func (c *Comp) remoteOwnerChildLineCapacity() int {
-	capacity := c.remoteConfig.MaxBatches * c.remoteConfig.MaxBatchLines
+	capacity := c.remoteOwnerBatchCapacity() * c.remoteConfig.MaxBatchLines
 	if capacity < 1 {
 		return 1
 	}
@@ -1003,6 +1013,7 @@ func (c *Comp) noteLegacyRemoteReqSent(req mem.AccessReq, dst sim.Port) {
 	if _, ok := req.(*mem.WriteReq); !ok {
 		return
 	}
+	c.m1CloseLines(req)
 	for _, identity := range c.remoteIdentities(req, dst) {
 		c.remoteEpochs[identity]++
 		c.remoteUncacheable[identity] = true
@@ -1050,6 +1061,7 @@ func (c *Comp) processRemoteProbeRsp(
 		entry.data = append([]byte(nil), lookup.Data...)
 		entry.state = remoteLineReady
 		entry.fromRemote = false
+		c.m1UnindexLine(entry)
 		c.queueRemoteReady(entry)
 		c.RemoteDataPathStats.L2ProbeHits++
 		return true
@@ -1091,6 +1103,9 @@ func (c *Comp) sendRemoteEntryDirect(
 	now sim.VTimeInSec,
 	entry *remoteLineEntry,
 ) bool {
+	if c.m1Composed() && !c.m1CanSend(entry.owner) {
+		return false
+	}
 	info := memtrace.WithL2RemoteInfo(
 		entry.info, c.Name(), entry.key.ownerName)
 	req := mem.ReadReqBuilder{}.
@@ -1109,6 +1124,9 @@ func (c *Comp) sendRemoteEntryDirect(
 	entry.state = remoteLineInflight
 	entry.fromRemote = true
 	c.remoteSingleInflight[req.ID] = entry
+	if c.m1Composed() {
+		c.m1Acquire(now, entry.owner, req.ID)
+	}
 	c.RemoteDataPathStats.SingleReadPackets++
 	c.RemoteDataPathStats.BatchSizeHistogram[1]++
 	c.RemoteDataPathStats.WireLines++
@@ -1153,7 +1171,12 @@ func (c *Comp) tryAddRemoteEntryToBatch(
 		// admitting another batch with the same key.
 		return false, false
 	}
-	if batch == nil && len(c.remoteBatchOrder) >= c.remoteConfig.MaxBatches {
+	if batch != nil && batch.lines[line] != nil && batch.lines[line] != entry {
+		// Another entry of the same line (possible only without M2 dedup)
+		// already rides this batch: wait until the batch has left.
+		return false, false
+	}
+	if batch == nil && len(c.remoteBatchOrder) >= c.remoteRequesterBatchCapacity() {
 		// Egress is work-conserving and will make room this cycle whenever
 		// the output port can accept a packet.
 		return false, false
@@ -1173,6 +1196,7 @@ func (c *Comp) tryAddRemoteEntryToBatch(
 		}
 		c.remoteBatches[key] = batch
 		c.remoteBatchOrder = append(c.remoteBatchOrder, key)
+		c.m1BatchOpened(now, batch)
 	}
 
 	batch.lineBitmap |= uint64(1) << line
@@ -1193,6 +1217,7 @@ func (c *Comp) dropUnsentRemotePrefetch(entry *remoteLineEntry) {
 	if c.remoteLines[entry.key] == entry {
 		delete(c.remoteLines, entry.key)
 	}
+	c.m1UnindexLine(entry)
 	if filter := c.requestFilterForAddress(entry.key.lineAddr); filter != nil {
 		filter.ScheduleUpdate(c.Engine.CurrentTime(), remoteTypedFilterKey(
 			entry.key.remoteLineIdentity, writeback.FilterPending), true)
@@ -1244,7 +1269,11 @@ func (c *Comp) flushRemoteBatch(
 	if batch == nil || batch.lineCount() == 0 {
 		return false
 	}
-	if !c.canAcceptRequesterOutstanding(1) {
+	if c.m1Composed() {
+		if !c.m1CanSend(batch.dst) {
+			return false
+		}
+	} else if !c.canAcceptRequesterOutstanding(1) {
 		return false
 	}
 
@@ -1271,6 +1300,9 @@ func (c *Comp) flushRemoteBatch(
 		entry.batch = nil
 		entry.fromRemote = true
 		c.remoteSingleInflight[req.ID] = entry
+		if c.m1Composed() {
+			c.m1Acquire(now, batch.dst, req.ID)
+		}
 		c.recordRequesterOutstandingPeak()
 		c.RemoteDataPathStats.SingleReadPackets++
 		c.recordRemoteBatchSent(now, batch, req.ID)
@@ -1305,6 +1337,9 @@ func (c *Comp) flushRemoteBatch(
 		entry.fromRemote = true
 	}
 	c.remoteBitmapInflight[req.ID] = batch
+	if c.m1Composed() {
+		c.m1Acquire(now, batch.dst, req.ID)
+	}
 	c.recordRequesterOutstandingPeak()
 	c.RemoteDataPathStats.BitmapPackets++
 	c.RemoteDataPathStats.BitmapLines += uint64(batch.lineCount())
@@ -1404,6 +1439,9 @@ func (c *Comp) countRemoteFlush(reason string) {
 }
 
 func (c *Comp) removeRemoteBatch(batch *remoteBatch) {
+	if c.remoteBatches[batch.key] == batch {
+		c.m1BatchClosed(batch)
+	}
 	delete(c.remoteBatches, batch.key)
 	for i, key := range c.remoteBatchOrder {
 		if key != batch.key {
@@ -1434,6 +1472,10 @@ func (c *Comp) processRemoteSingleRsp(
 	entry.data = append([]byte(nil), dataRsp.Data...)
 	entry.state = remoteLineReady
 	entry.fromRemote = true
+	c.m1UnindexLine(entry)
+	if c.m1Composed() {
+		c.m1Release(now, rsp.GetRspTo())
+	}
 	delete(c.remoteSingleInflight, rsp.GetRspTo())
 	c.RemoteDataPathStats.NetworkResponseBytes += uint64(rsp.Meta().TrafficBytes)
 	c.ToOutside.Retrieve(now)
@@ -1475,6 +1517,7 @@ func (c *Comp) processBitmapRspFromOutside(
 		entry.data = append([]byte(nil), data...)
 		entry.state = remoteLineReady
 		entry.fromRemote = true
+		c.m1UnindexLine(entry)
 		c.queueRemoteReady(entry)
 		batch.responseBitmap |= lineBit
 	}
@@ -1484,6 +1527,9 @@ func (c *Comp) processBitmapRspFromOutside(
 	c.RemoteDataPathStats.NetworkResponseBytes += uint64(rsp.Meta().TrafficBytes)
 	if batch.responseBitmap == batch.lineBitmap {
 		delete(c.remoteBitmapInflight, rsp.GetRspTo())
+		if c.m1Composed() {
+			c.m1Release(now, rsp.GetRspTo())
+		}
 	}
 	c.ToOutside.Retrieve(now)
 	return true
@@ -1616,6 +1662,7 @@ func (c *Comp) processRemoteFillRsp(
 }
 
 func (c *Comp) removeRemoteLine(entry *remoteLineEntry) {
+	c.m1UnindexLine(entry)
 	if c.remoteLines[entry.key] == entry {
 		delete(c.remoteLines, entry.key)
 		identity := entry.key.remoteLineIdentity
