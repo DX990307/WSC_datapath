@@ -288,3 +288,7 @@
 - 代码：`isca27/wport-a..d`（16 个 benchmark）、`isca27/m1m2`（新 M1 + M2 + M3 组合，`-cupath-dedup-owner`，`complete_new`，去重归 M1）、合并分支 `isca27/w2-complete` @ `d09b18b`，都已推送。回归都和 `ca8b831` 逐位一致。
 - STATUS 新增“W2 移植”结果表、地址转换（TLB 覆盖）问题、emulator bug 清单。
 - 进行中：新 Complete 在 16 个新 benchmark 上的 48 个运行；T18 评估。
+
+### 2026-10-20 [claude-code] 用户：T17 暂停；T18 改成消融实验
+- T17：队列里剩下的 T17 运行（T18 评估里的 PA/MoE/R-GAT、T17 oracle 其余）撤出，正在跑的跑完，已完成的结果保留；以后需要再跑。新 benchmark 里的 DLRM、向量检索、allreduce 先承担“现代 workload”。
+- T18 消融（mi200，不开 l2-source）：累加 C0 baseline → C1 +窗口 1024 → C2 +请求方合并 → C3 +owner 合并多播 → C4 +按距离分 credit（= 完整 T18 / M1）；去掉一个 L1 无大窗口、L2 无请求方合并、L3 无 owner 合并（L4 无距离 = C3）；窗口扫描 W = 64/256/1024/4096。workload：远程型 7 个（`ca8b831`）+ 16 个新 benchmark（`d09b18b`）；已完成且参数相同的运行直接复用；本地型检查和 HPCA 规模对比不变。
