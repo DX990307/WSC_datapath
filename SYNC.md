@@ -292,3 +292,13 @@
 ### 2026-10-20 [claude-code] 用户：T17 暂停；T18 改成消融实验
 - T17：队列里剩下的 T17 运行（T18 评估里的 PA/MoE/R-GAT、T17 oracle 其余）撤出，正在跑的跑完，已完成的结果保留；以后需要再跑。新 benchmark 里的 DLRM、向量检索、allreduce 先承担“现代 workload”。
 - T18 消融（mi200，不开 l2-source）：累加 C0 baseline → C1 +窗口 1024 → C2 +请求方合并 → C3 +owner 合并多播 → C4 +按距离分 credit（= 完整 T18 / M1）；去掉一个 L1 无大窗口、L2 无请求方合并、L3 无 owner 合并（L4 无距离 = C3）；窗口扫描 W = 64/256/1024/4096。workload：远程型 7 个（`ca8b831`）+ 16 个新 benchmark（`d09b18b`）；已完成且参数相同的运行直接复用；本地型检查和 HPCA 规模对比不变。
+
+- 2026-10-20 · cowork · **用户决定：T18 保留（"有用"）；T19 放弃（本篇不做，代码留在 `isca27/t19-steal`）。** 给 Claude Code：T19 的方向问题和评估计划不用再等答复，不要启动 T19 的评估运行。用户下一步要改论文的 observation 一节：删掉 M1（Local Pairing）的 observation（HPCA 稿 O6），换成支撑 T18 的新 observation；Cowork 在对话里提了新 observation 的列表和要收集的数据，等用户确认后再写进文档 / 提示词。
+
+- 2026-10-20 · cowork · 新增 `observations/README.md`（用户要求）：ISCA'27 observation 一节要收集的数据。删 HPCA 稿 O6（Local Pairing）和 O1 的本地部分，换掉旧 M2 的 O2、O3；新 O1–O6（远程是主要代价、排队在请求方网络接口、受跟踪表不受链路限制、需要的表项随规模增长、跨 GPM 共享和读者相邻、只放大跟踪表瓶颈转到 owner 端），每条写了论点、已有数据、要新加的统计（E1 分段、跟踪表 / owner 占用、链路利用率、共享统计补齐）、CSV 格式；运行清单 R1–R6（R1、R2 只加统计不需确认；oracle 补跑和 3×3 / 5×5 / 7×7 规模实验需要确认，模拟器还没有 mesh 尺寸的 flag）。状态 `[提案]`，Claude Code 先不要开始。README 索引加了一行。
+
+- 2026-10-20 · cowork · **用户决定：m3（Remote Reuse）保留，但不作为重点。** m3 只出现在消融和 Complete（= T18 + m3）里；observation 里 HPCA 稿的 O4、O5 合成新 O7（次要），在 mi200 上重算（L2 每 GPM 2 MB）。`observations/README.md` 加了新 O7 的数据要求（远程复用比例、复用间隔、L2 空余；放进 R1，只加统计），并记下 m3 写论文前要补的：kernel 边界失效、和 B1 对比、L2 命中延迟偏小可能高估 m3。T18 文档加"和 m3 的关系"；`ideas_from_T14.md` 贡献结构加第 (4) 条。规模实验的尺寸统一改成 3×3 / 5×5 / 7×7（可选 2×2）。汇报网页（"下一步"页和 `next_1019.html`）同步。
+
+- 2026-10-20 · cowork · `observations/README.md` 加了第 5 节"论文图表清单"：Motivation 图 F1–F7（对应新 O1–O7）、Design 小表、Evaluation 表 A–D 和图 E1–E8，每个写了内容、数据来源、状态、优先级和收集先后；运行清单 R3 改为必须，加了 R6 扩展（带宽随表项数扫到 4096）、R7（链路 / switch / L2 延迟敏感性，要确认）、R8（m3 单独和 T18 + m3，先修 m3 的 kernel 边界失效）。
+
+- 2026-10-20 · cowork · 新增 `prompts/P13_observation_data.md`（用户要求，用户自己交给 Claude Code）：按 `observations/README.md` 收集第一批数据——新统计（E1 分段、RRT / owner 占用、链路利用率、远程复用和 L2 空余）+ R1–R3（baseline、只放大跟踪表 W=4096、T18 全开 W=1024，10 个 workload，规模同 T18 评估）；并行准备：m3 kernel 边界失效修复 + R8（m3、T18 + m3）、mesh 尺寸 flag（只准备 3×3 / 5×5 的配置确认）、CACTI（RRT 对比同容量 CAM、OMT）、R4 / R6 / R7 的配置确认。README 索引加了一行。

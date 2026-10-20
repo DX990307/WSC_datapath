@@ -31,6 +31,8 @@
 
 用户 10-20：如果 T18 效果很好且相对复杂，考虑拆成两个机制（合并 + 多播消 incast；大跟踪表）。
 
+**和 m3（Remote Reuse）的关系**（用户 10-20：m3 保留，但不作为重点）：T18 是主机制，m3 只在消融和 Complete（= T18 + m3）里出现。两者互补：T18 的多播把一条 line 同时送到多个请求方，m3 再把它留在各自的 L2。m3 写论文前要补 kernel 边界失效、和 B1 对比。
+
 ## 64 项的依据（回应老板 10-20："真实硬件有没有这个限制或等效限制"）
 
 **来源**：上游 MGPUSim 的 RDMA 引擎**没有**在途上限（`transactionsFromInside/Outside` 是无界切片，只有端口缓冲 1024）。`-rdma-max-outstanding=64`（连同 `-rdma-pipeline-width=8`、`-rdma-pipeline-latency=10`）是我们 fork 在 `a185a7e`（2026-07-11）和 CuPath 远程通路机制一起加的。HPCA 稿 background.tex 引用的 kalia2016design、wei2018deconstructing、mittal2018revisiting 是数据中心 RDMA 网卡的论文，不能支撑片上 GPM 端点的 64 项。
@@ -51,9 +53,9 @@
 
 **冒烟里的提醒**：W = 1024 和 4096 结果相同；Claude Code 报告 W ≥ 1024 时每 GPM 在途只有 40–75 个（统计口径待核对：是时间平均还是峰值、是否只算网络在途）。论文里说"几百到几千"，不要说"几千"。
 
-## 证明"对 wafer 独特"的实验（未做，改 mesh 尺寸要先做配置确认）
+## 证明"对 wafer 独特"的实验（未做，改 mesh 尺寸要先做配置确认；数据要求见 `../observations/README.md` 新 O4）
 
-同样的 workload 和机制，在 2×2（相当于 4 个 GPM 的 MCM）、4×4、7×7 的 mesh 上跑，画出 baseline 的远程排队占比、需要的跟踪表项数和 T18 的加速比随 GPM 数的变化。收益随规模变大，才能说是 wafer 独特；如果 2×2 上一样大，就要重新考虑论点。另外做链路 / switch 的敏感性（`-bandwidth` 24 即 384 GB/s、`-switch-latency` 20），确认"端点受限、不是链路受限"不依赖链路参数。两项都改配置，需要用户确认。
+同样的 workload 和机制，在 3×3（8 个 GPM）、5×5（24 个）、7×7（48 个）的 mesh 上跑（CPU 都在中心；可选 2×2，相当于 4 个 GPM 的 MCM），每个 GPM 的工作量不变，画出 baseline 的远程排队占比、需要的跟踪表项数和 T18 的加速比随 GPM 数的变化。收益随规模变大，才能说是 wafer 独特；如果小 mesh 上一样大，就要重新考虑论点。另外做链路 / switch 的敏感性（`-bandwidth` 24 即 384 GB/s、`-switch-latency` 20），确认"端点受限、不是链路受限"不依赖链路参数。两项都改配置，需要用户确认。
 
 ## 已有结果
 

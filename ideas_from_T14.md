@@ -432,7 +432,7 @@ T14 的 all-to-all 每个 kernel 都跑完了，`metrics.csv` 里有每个 GPM �
 - 上游 MGPUSim 没有这个上限；64 是我们 fork 在 `a185a7e`（2026-07-11）加的。论文里要把它写成有意设定的 baseline 参数，不能当作模拟器自带的特性。
 - 等效限制：芯片间接口都用有限的表跟踪在途请求（PCIe tag、xGMI / NVLink 的 credit 和请求跟踪），按"填满自己的链路"来配。比较要按在途字节和带宽 × 往返，不能按 tag 个数（PCIe Gen4 ×16 的 768 个 tag ≈ 384 KB 在途，自己的链路只需要约 32 KB）。
 - 校准：64 项时每 CU 远程带宽约 1.6 GB/s，MI250X 同封装两个 GCD 之间实测约 1.4 GB/s（153 GB/s，理论的 77%）→ 64 项 ≈ 今天多芯片 GPU 的端点。
-- wafer 独特：我们一个 GPM 链路 768 GB/s、往返 155–945 ns，填满需要 120–730 KB 在途，64 项只有 4 KB，差 30–180 倍；需要的项数随距离（wafer 直径）增长，读同一 line 的 GPM 数随 GPM 数增长。要用 2×2 / 4×4 / 7×7 的规模实验证明收益随规模变大（未做，改配置要确认）。
+- wafer 独特：我们一个 GPM 链路 768 GB/s、往返 155–945 ns，填满需要 120–730 KB 在途，64 项只有 4 KB，差 30–180 倍；需要的项数随距离（wafer 直径）增长，读同一 line 的 GPM 数随 GPM 数增长。要用 3×3 / 5×5 / 7×7（可选 2×2）的规模实验证明收益随规模变大（未做，改配置要确认）。
 - 扫 64 / 256 / 1024 / 4096；冒烟里 1024 和 4096 相同，所以写"几百到几千项"。
 
 **引用替换**（background 里关于端点限制的部分）：
@@ -440,4 +440,4 @@ T14 的 all-to-all 每个 kernel 都跑完了，`metrics.csv` 里有每个 GPM �
 - 加：Pearson 等 2023，arXiv 2302.14827（MI250X 节点内互连测量，GCD 间 kernel 直接读写 153 GB/s）；Schieffer 等 2024，arXiv 2410.00801（"Understanding Data Movement in AMD Multi-GPU Systems with Infinity Fabric"，MI250X）；Pal 等 HPCA'19（"Architecting Waferscale Processors – A GPU Case Study"，GPM 间带宽每 GPM 1.5 TB/s、延迟约 20 ns）。
 - 链路参数：我们 768 GB/s 每方向，比 Pal 等宽约 2 倍的说法要核对口径（每方向还是双向、每条链路还是每 GPM）；改成 384 GB/s 和每跳 20 周期的敏感性需要用户确认配置。
 
-**贡献结构（随 T18 实现更新）**：(1) 特征分析：wafer 的远程访问受端点限制，排队占 80% 以上，链路 < 3%；(2) 新 1：请求跟踪表规模化（cuckoo 索引，替代 CAM）；(3) 新 2：owner 端跨 GPM 合并 + 网内多播，消掉 incast；冒烟显示 (2)(3) 要一起才有效（FW：只放大 2.26×，全开 8.56×）。HPCA 版已有的请求方合并 / 同页打包不再算新贡献。
+**贡献结构（随 T18 实现更新）**：(1) 特征分析：wafer 的远程访问受端点限制，排队占 80% 以上，链路 < 3%；(2) 新 1：请求跟踪表规模化（cuckoo 索引，替代 CAM）；(3) 新 2：owner 端跨 GPM 合并 + 网内多播，消掉 incast；冒烟显示 (2)(3) 要一起才有效（FW：只放大 2.26×，全开 8.56×）。HPCA 版已有的请求方合并 / 同页打包不再算新贡献。(4) 用户 10-20：Remote Reuse（m3）保留，但不作为重点，只在消融和 Complete（= T18 + m3）里出现；observation 里 HPCA 稿的 O4、O5 合成一条。
