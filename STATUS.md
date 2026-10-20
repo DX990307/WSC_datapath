@@ -183,6 +183,35 @@
 
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
 
+### 新 Complete（M1 + M2 + M3）在 16 个新 benchmark 上（10-20，二进制 `d09b18b`，mi200，中小规模；`results_index/w2complete/`）
+
+新 Complete = T18 全开（W=1024 + 按距离分 credit）+ 旧 m2 + 旧 m3（requester L2），去重归 M1。baseline 和新 Complete 每对的指令数、WG 数完全相同。
+
+| benchmark | 规模 | 数据量 | baseline | 新 Complete | 加速比 |
+|---|---|---|---|---|---|
+| altis_cfd | 19.4 万单元 | 26 MB | 1002 µs | 152 µs | 6.60× |
+| npbcg | class W | 7 MB | 5897 µs | 936 µs | 6.30× |
+| gups | 2¹⁸ 表 × 8 | 5 MB | 683 µs | 128 µs | 5.33×（M1 合并只有 1.7%、M2 打包 1.0，收益来源待拆分） |
+| allreduce | 每 CU 2 份 | 267 MB | 1008 µs | 236 µs | 4.28× |
+| sssp | scale 14 | 4 MB | 2777 µs | 674 µs | 4.12× |
+| w2-npbis | 2²⁰ key，1 次迭代 | 18 MB | 1144 µs | 299 µs | 3.83× |
+| npb_mg | class W | 29 MB | 2193 µs | 606 µs | 3.62× |
+| ivfflat | 16K 向量 | 9 MB | 778 µs | 263 µs | 2.95× |
+| w2-atax | 4096² | 68 MB | 831 µs | 288 µs | 2.88× |
+| w2-fft2d | 1024² | 17 MB | 840 µs | 360 µs | 2.33× |
+| bfs | scale 16 | 14 MB | 1073 µs | 606 µs | 1.77× |
+| w2-shocsort | 512K | 9 MB | 760 µs | 470 µs | 1.62× |
+| rodinia_lud | N=1024 | 4 MB | 4148 µs | 2737 µs | 1.52× |
+| lonestar_bh | 8.6 万物体 | 5 MB | 435 µs | 361 µs | 1.21× |
+| embbag | batch 1024 | 70 MB | 989 µs | 973 µs | 1.02× |
+| graphtc | scale 13 | 2 MB | **三个配置都崩溃** | | — |
+
+- **GMEAN（15 个有效）2.82×**；去掉 embbag 的 14 个 3.04×。
+- **graphtc 崩溃**：`runDSREAD2B32` 越界（`tc_count` 的 1040 字节 LDS 归约数组被多读 4 字节），三个配置都在约 1030 s 崩溃，移植时的小规模也一样。需要修 kernel 或 emulator。**更正**：我 10-20 下午汇报的 TC 3.11× / HPCA 2.95× 读的是崩溃运行写出的 summary，无效。
+- **npbis 2 次迭代**：baseline 崩溃（LDS 负地址），新 Complete 没崩；这一对不可靠，表里用 1 次迭代。**更正**：之前汇报的 npbis 3.00× 同样无效。以后判断运行是否完成要看退出码，不能只看有没有 summary.csv。
+- 数据量都小（2–267 MB，大多小于全 wafer L2 的 96 MB），加速比可能偏高。
+- HPCA 版 Complete（用户 10-20 放弃）：已完成的 11 个 GMEAN 1.88×，同样 11 个上新 Complete 2.98×；结果保留，标为部分完成。
+
 ### W2：16 个通信密集型新 benchmark 的移植（10-20，来源 sarchlab/gpu_benchmarks；分支 `isca27/wport-a..d`，合并进 `isca27/w2-complete` @ `d09b18b`）
 
 全部移植完成，`mgpusim/benchmarks/w2/<名字>/`（OpenCL kernel + hsaco + Go host + 单元测试）；不用 atomic、不用 scratch、fp32、合成输入（R-MAT 图、NAS makea、幂律下标等）；emu 小输入和 CPU 参考一致；4 个分支各自的回归（fir、MM `-max-wg 4096`）和 `ca8b831` 逐位一致；没有改模拟器。

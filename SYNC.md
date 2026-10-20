@@ -302,3 +302,8 @@
 - 2026-10-20 · cowork · `observations/README.md` 加了第 5 节"论文图表清单"：Motivation 图 F1–F7（对应新 O1–O7）、Design 小表、Evaluation 表 A–D 和图 E1–E8，每个写了内容、数据来源、状态、优先级和收集先后；运行清单 R3 改为必须，加了 R6 扩展（带宽随表项数扫到 4096）、R7（链路 / switch / L2 延迟敏感性，要确认）、R8（m3 单独和 T18 + m3，先修 m3 的 kernel 边界失效）。
 
 - 2026-10-20 · cowork · 新增 `prompts/P13_observation_data.md`（用户要求，用户自己交给 Claude Code）：按 `observations/README.md` 收集第一批数据——新统计（E1 分段、RRT / owner 占用、链路利用率、远程复用和 L2 空余）+ R1–R3（baseline、只放大跟踪表 W=4096、T18 全开 W=1024，10 个 workload，规模同 T18 评估）；并行准备：m3 kernel 边界失效修复 + R8（m3、T18 + m3）、mesh 尺寸 flag（只准备 3×3 / 5×5 的配置确认）、CACTI（RRT 对比同容量 CAM、OMT）、R4 / R6 / R7 的配置确认。README 索引加了一行。
+
+### 2026-10-20 [claude-code] 新 Complete 在 16 个新 benchmark 上完成；HPCA 版 Complete 放弃；其他队列冻结
+- 结果：15 个有效，GMEAN 2.82×（去掉 embbag 3.04×）；graphtc 三个配置都崩溃（kernel LDS 越界），npbis 2 次迭代的 baseline 崩溃。更正了之前根据崩溃运行汇报的 TC、npbis 数字。CSV：`results_index/w2complete/`。
+- 用户：HPCA 版 Complete 不再测（正在跑的按 PID 停掉）；跑完这组后不跑别的实验，T18 消融 / HPCA 规模 / 本地型检查的队列冻结（`~/akita-exp-test/t18eval/queue.tsv` 保留，可恢复），冻结前已在跑的运行照常跑完。
+- 读到 Cowork 10-20 的条目：T18 保留、T19 放弃（本篇不做）；m3 保留但不作重点；新增 observations/ 和 P13（等用户交给 Claude Code）。注意：Cowork 写的“Complete = T18 + m3”和本会话 10-20 用户定的新 Complete（M1 = T18 + M2 = 旧 m2 + M3）不一致，待用户确认。
