@@ -54,6 +54,12 @@ type T18Config struct {
 	MaxKicks int
 	// ReqWaiters bounds the requester waiter pool (0: 4 x ReqEntries).
 	ReqWaiters int
+	// ComposeLineEntries (M1 composed with M2 packing only) sets the
+	// requester line table to exactly this many line entries; the M1
+	// in-flight index, the waiter pool (ReqWaiters, else 4 x entries) and
+	// the open-batch limit follow it. 0 keeps the old sizing
+	// max(ReqEntries or 2W, M2's 2 x batches x batch-lines) = 1024 at W=64.
+	ComposeLineEntries int
 	// BypassWhenFull sends a request unmerged and untracked by the table when
 	// the requester table is full and a window slot is free; otherwise the
 	// request stalls at the RDMA input.

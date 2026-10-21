@@ -485,7 +485,8 @@ func (r *Runner) buildTimingPlatform() {
 			MaxBatches:               *remoteDataPathBatchesFlag,
 			KernelBoundaryInvalidate: *remoteReuseKernelInvalidateFlag,
 		}).
-		WithT18(t18ConfigFromFlags())
+		WithT18(t18ConfigFromFlags()).
+		WithLegacyNoKernelL1Invalidate(*legacyNoKernelL1InvalidateFlag)
 
 	if *sharingTracing {
 		traceWriter, err := newPageSharingTraceWriter(

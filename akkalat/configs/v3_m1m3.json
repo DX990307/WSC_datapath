@@ -1,5 +1,5 @@
 {
-  "_description": "ISCA'27 v3 ablation: M1 + M3. M1 (network interface): merge = requester in-flight table merge (-t18-req-merge, dedup owner m1) + owner merge table (-t18-owner-merge); pack = same-page bitmap batching + prefetch piggyback (old m2: -remote-data-path-batching-enable, -remote-filter-prefetch-enable); allocation = credit policy rtt over the W = 64 slots; no M2: merged owner entries return as one unicast per requester (-t18-owner-multicast=false); M3 (retention): requester L2 keeps remote lines (-remote-data-path-l2-enable) with kernel-boundary invalidation. Both tables keep 64 entries (t18-window 64, table = 2W = 128 slots, -t18-req-entries/-t18-owner-entries unset). Old m2 filter dedup off (-remote-data-path-dedup-enable=false). Extends mi200.json (unchanged); -magic-memory-copy comes from mi200.json/hpca.json. P16 config #4.",
+  "_description": "ISCA'27 v3 ablation: M1 + M3. M1 (network interface): merge = requester in-flight table merge (-t18-req-merge, dedup owner m1) + owner merge table (-t18-owner-merge); pack = same-page bitmap batching + prefetch piggyback (old m2: -remote-data-path-batching-enable, -remote-filter-prefetch-enable); allocation = credit policy rtt over the W = 64 slots; no M2: merged owner entries return as one unicast per requester (-t18-owner-multicast=false); M3 (retention): requester L2 keeps remote lines (-remote-data-path-l2-enable) with kernel-boundary invalidation. Both tables keep 64 entries (t18-window 64, table = 2W = 128 slots, -t18-req-entries/-t18-owner-entries unset); the composed requester line table (M1 in-flight table on top of packing) is also 128 entries (-t18-compose-table-entries 128, user 2026-10-21; waiter pool 512 = 4 x 128, open batches <= 64), not the old max(2W, M2 lines) = 1024. Old m2 filter dedup off (-remote-data-path-dedup-enable=false). Extends mi200.json (unchanged); -magic-memory-copy comes from mi200.json/hpca.json. P16 config #4.",
   "extends": "mi200.json",
   "typed-filter-slots-per-bucket": 4,
   "typed-filter-fingerprint-bits": 13,
@@ -33,5 +33,6 @@
   "t18-owner-multicast": false,
   "cupath-dedup-owner": "m1",
   "t18-window": 64,
-  "t18-credit-policy": "rtt"
+  "t18-credit-policy": "rtt",
+  "t18-compose-table-entries": 128
 }

@@ -508,6 +508,106 @@ var _ = Describe("Scheduler", func() {
 
 	})
 
+	Context("when the barrier buffer is full", func() {
+		newBarrierWf := func(wg *wavefront.WorkGroup, pc uint64) *wavefront.Wavefront {
+			wf := wavefront.NewWavefront(kernels.NewWavefront())
+			wf.SetDynamicInst(wavefront.NewInst(insts.NewInst()))
+			wf.DynamicInst().Format = insts.FormatTable[insts.SOPP]
+			wf.DynamicInst().Opcode = 10 // S_BARRIER
+			wf.DynamicInst().ByteSize = 4
+			wf.State = wavefront.WfRunning
+			wf.PC = pc
+			wf.WG = wg
+			wg.Wfs = append(wg.Wfs, wf)
+			return wf
+		}
+
+		fillBarrierBuffer := func() {
+			for i := 0; i < scheduler.barrierBufferSize; i++ {
+				other := new(wavefront.WorkGroup)
+				wf := newBarrierWf(other, 0x100)
+				wf.State = wavefront.WfAtBarrier
+				newBarrierWf(other, 0x100) // not at the barrier yet
+				scheduler.barrierBuffer = append(scheduler.barrierBuffer, wf)
+			}
+		}
+
+		// Old behavior: the overflow wave stayed in internalExecuting after
+		// its work-group passed the barrier; re-evaluating it put it back
+		// at the barrier, and the next barrier release advanced its PC a
+		// second time (skipping the instruction after s_barrier).
+		It("should advance the overflow wave's PC once (released in a later cycle)", func() {
+			fillBarrierBuffer()
+			wg := new(wavefront.WorkGroup)
+			a := newBarrierWf(wg, 0x1000)
+			b := newBarrierWf(wg, 0x1000)
+
+			scheduler.internalExecuting = []*wavefront.Wavefront{a}
+			scheduler.EvaluateInternalInst(10)
+			Expect(scheduler.internalExecuting).To(ContainElement(a))
+			Expect(a.State).To(Equal(wavefront.WfAtBarrier))
+			Expect(a.PC).To(Equal(uint64(0x1000)))
+
+			scheduler.internalExecuting = append(scheduler.internalExecuting, b)
+			scheduler.EvaluateInternalInst(11)
+
+			Expect(scheduler.internalExecuting).To(BeEmpty())
+			Expect(a.State).To(Equal(wavefront.WfReady))
+			Expect(b.State).To(Equal(wavefront.WfReady))
+			Expect(a.PC).To(Equal(uint64(0x1004)))
+			Expect(b.PC).To(Equal(uint64(0x1004)))
+
+			// Further evaluations must not touch the released wave.
+			scheduler.EvaluateInternalInst(12)
+			Expect(a.State).To(Equal(wavefront.WfReady))
+			Expect(a.PC).To(Equal(uint64(0x1004)))
+			Expect(scheduler.barrierBuffer).NotTo(ContainElement(a))
+		})
+
+		It("should advance the overflow wave's PC once (released in the same cycle)", func() {
+			fillBarrierBuffer()
+			wg := new(wavefront.WorkGroup)
+			a := newBarrierWf(wg, 0x2000)
+			b := newBarrierWf(wg, 0x2000)
+			c := newBarrierWf(wg, 0x2000)
+
+			// a overflows first; then b (still not the last) is evaluated
+			// before a again. Order b-then-a in the same cycle with c last.
+			scheduler.internalExecuting = []*wavefront.Wavefront{a}
+			scheduler.EvaluateInternalInst(10)
+			b.State = wavefront.WfAtBarrier
+			scheduler.internalExecuting = []*wavefront.Wavefront{c, a, b}
+			scheduler.EvaluateInternalInst(11)
+
+			Expect(scheduler.internalExecuting).NotTo(ContainElement(a))
+			for _, wf := range []*wavefront.Wavefront{a, b, c} {
+				Expect(wf.State).To(Equal(wavefront.WfReady))
+				Expect(wf.PC).To(Equal(uint64(0x2004)))
+			}
+		})
+
+		It("should keep waiting while the work-group has not arrived", func() {
+			fillBarrierBuffer()
+			wg := new(wavefront.WorkGroup)
+			a := newBarrierWf(wg, 0x3000)
+			newBarrierWf(wg, 0x3000)
+
+			scheduler.internalExecuting = []*wavefront.Wavefront{a}
+			scheduler.EvaluateInternalInst(10)
+			scheduler.EvaluateInternalInst(11)
+
+			Expect(scheduler.internalExecuting).To(ConsistOf(a))
+			Expect(a.State).To(Equal(wavefront.WfAtBarrier))
+			Expect(a.PC).To(Equal(uint64(0x3000)))
+
+			// A slot frees up: the wave moves into the barrier buffer.
+			scheduler.barrierBuffer = scheduler.barrierBuffer[1:]
+			scheduler.EvaluateInternalInst(12)
+			Expect(scheduler.internalExecuting).To(BeEmpty())
+			Expect(scheduler.barrierBuffer).To(ContainElement(a))
+		})
+	})
+
 	It("should flush", func() {
 		wg := new(wavefront.WorkGroup)
 		for i := 0; i < 4; i++ {

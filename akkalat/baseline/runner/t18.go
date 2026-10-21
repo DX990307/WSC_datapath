@@ -62,6 +62,11 @@ var t18MaxKicksFlag = flag.Int("t18-max-kicks", 32,
 	"T18: maximum cuckoo displacements per insert before the table is full.")
 var t18ReqWaitersFlag = flag.Int("t18-req-waiters", 0,
 	"T18: requester waiter pool entries; 0 = 4 x table slots.")
+var t18ComposeTableEntriesFlag = flag.Int("t18-compose-table-entries", 0,
+	"M1 composed with M2 packing (-remote-data-path-enable with T18): "+
+		"requester line table entries (the M1 in-flight table; the waiter "+
+		"pool = 4 x entries unless -t18-req-waiters, open batches <= entries). "+
+		"0 = old sizing max(2W, 2 x batches x batch-lines) = 1024 at W=64.")
 var t18BypassWhenFullFlag = flag.Bool("t18-bypass-when-full", false,
 	"T18: when the requester table is full, send the request unmerged if a "+
 		"window slot is free (default: stall at the RDMA input).")
@@ -173,6 +178,8 @@ func t18ConfigFromFlags() rdma.T18Config {
 		MaxKicks:        *t18MaxKicksFlag,
 		ReqWaiters:      *t18ReqWaitersFlag,
 		BypassWhenFull:  *t18BypassWhenFullFlag,
+
+		ComposeLineEntries: *t18ComposeTableEntriesFlag,
 	}
 	if policy == rdma.T18CreditNear {
 		c.NearReserve = *t18NearReserveFlag
@@ -210,6 +217,10 @@ func t18ConfigFromFlags() rdma.T18Config {
 	}
 	fmt.Printf("[Config] T18 credit-policy=%s%s v3-stats=%v\n",
 		policy, near, c.ExtraStats)
+	if *remoteDataPathEnableFlag {
+		fmt.Printf("[Config] M1+M2 compose requester line table: %s\n",
+			composeTableDescription(c))
+	}
 	return c
 }
 
@@ -458,4 +469,30 @@ func t18GroupOfHop(h int) int {
 		return 1
 	}
 	return 2
+}
+
+// composeTableDescription states the effective requester line table size of
+// the M1+M2 composed path (it mirrors rdma.Comp.m1ComposeInit).
+func composeTableDescription(c rdma.T18Config) string {
+	window := c.Window
+	if window <= 0 {
+		window = *rdmaMaxOutstandingFlag
+	}
+	if c.ComposeLineEntries > 0 {
+		waiters := 4 * c.ComposeLineEntries
+		if c.ReqWaiters > 0 {
+			waiters = c.ReqWaiters
+		}
+		return fmt.Sprintf("entries=%d waiters=%d (-t18-compose-table-entries)",
+			c.ComposeLineEntries, waiters)
+	}
+	entries := c.ReqEntries
+	if entries <= 0 {
+		entries = 2 * window
+	}
+	m2 := *remoteDataPathBatchesFlag * *remoteDataPathBatchLinesFlag * 2
+	if entries < m2 {
+		entries = m2
+	}
+	return fmt.Sprintf("entries=%d (default max(2W, M2 lines))", entries)
 }

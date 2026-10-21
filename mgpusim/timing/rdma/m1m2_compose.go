@@ -83,6 +83,17 @@ func (c *Comp) m1ComposeInit(window int) {
 		waiters = 4 * entries
 	}
 	s.composedWaiterCap = maxInt(waiters, m2Lines)
+	if cfg.ComposeLineEntries > 0 {
+		// Explicit table size (v3 configs: 128 = 2W, the same as M1
+		// alone). The waiter pool follows the table like standalone T18
+		// (4 waiters per slot unless -t18-req-waiters is set); it is not
+		// raised to M2's line count.
+		s.composedLineCap = cfg.ComposeLineEntries
+		s.composedWaiterCap = 4 * cfg.ComposeLineEntries
+		if cfg.ReqWaiters > 0 {
+			s.composedWaiterCap = cfg.ReqWaiters
+		}
+	}
 	buckets := (s.composedLineCap + cfg.Ways - 1) / cfg.Ways
 	s.m1Index = newT18CuckooTable[remoteLineEntry](
 		buckets, cfg.Ways, uint(cfg.FingerprintBits), cfg.MaxKicks)
@@ -105,7 +116,13 @@ func (c *Comp) remoteWaiterCapacity() int {
 // remoteRequesterBatchCapacity bounds the collecting page batches.
 func (c *Comp) remoteRequesterBatchCapacity() int {
 	if c.m1Composed() {
-		return maxInt(c.remoteConfig.MaxBatches, c.t18Window)
+		limit := maxInt(c.remoteConfig.MaxBatches, c.t18Window)
+		if c.t18.cfg.ComposeLineEntries > 0 &&
+			limit > c.t18.composedLineCap {
+			// Every open batch holds at least one line entry.
+			limit = c.t18.composedLineCap
+		}
+		return limit
 	}
 	return c.remoteConfig.MaxBatches
 }

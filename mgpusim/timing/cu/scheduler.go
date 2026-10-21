@@ -35,6 +35,15 @@ type SchedulerImpl struct {
 	barrierBuffer     []*wavefront.Wavefront
 	barrierBufferSize int
 
+	// barrierReleased lists the work-groups whose barrier was passed during
+	// the current EvaluateInternalInst call. A wave that reached s_barrier
+	// while the barrier buffer was full waits in internalExecuting (state
+	// WfAtBarrier); when its work-group passes the barrier, passBarrier has
+	// already advanced its PC, so it must leave internalExecuting without
+	// being evaluated again (otherwise its PC is advanced a second time at
+	// the next barrier and the instruction after s_barrier is skipped).
+	barrierReleased map[*wavefront.WorkGroup]bool
+
 	cyclesNoProgress                  int
 	stopTickingAfterNCyclesNoProgress int
 
@@ -235,9 +244,16 @@ func (s *SchedulerImpl) EvaluateInternalInst(now sim.VTimeInSec) bool {
 	}
 
 	madeProgress := false
+	s.barrierReleased = nil
 
 	newExecuting := make([]*wavefront.Wavefront, 0)
 	for _, executing := range s.internalExecuting {
+		if s.releasedFromBarrierOverflow(executing) {
+			// Its work-group passed the barrier earlier in this loop; the
+			// PC already moved past s_barrier.
+			continue
+		}
+
 		instProgress := false
 		instCompleted := false
 
@@ -268,9 +284,34 @@ func (s *SchedulerImpl) EvaluateInternalInst(now sim.VTimeInSec) bool {
 		}
 	}
 
+	if s.barrierReleased != nil {
+		// Waves evaluated before their work-group passed the barrier in
+		// this loop were kept; drop them now.
+		kept := newExecuting[:0]
+		for _, wf := range newExecuting {
+			if !s.releasedFromBarrierOverflow(wf) {
+				kept = append(kept, wf)
+			}
+		}
+		newExecuting = kept
+		s.barrierReleased = nil
+	}
+
 	s.internalExecuting = newExecuting
 
 	return madeProgress
+}
+
+// releasedFromBarrierOverflow reports whether wf is an s_barrier wave left in
+// internalExecuting (barrier buffer full) whose work-group has passed the
+// barrier during the current evaluation.
+func (s *SchedulerImpl) releasedFromBarrierOverflow(
+	wf *wavefront.Wavefront,
+) bool {
+	if s.barrierReleased == nil || !s.barrierReleased[wf.WG] {
+		return false
+	}
+	return wf.Inst().Opcode == 10 // S_BARRIER
 }
 
 func (s *SchedulerImpl) evalSEndPgm(
@@ -446,6 +487,10 @@ func (s *SchedulerImpl) evalSBarrier(
 		return true, true
 	}
 
+	// Barrier buffer full: the wave stays in internalExecuting and retries
+	// next cycle. It keeps WfAtBarrier so its work-group can still pass the
+	// barrier (no deadlock); passBarrier then removes it from
+	// internalExecuting so the PC is advanced exactly once.
 	return false, false
 }
 
@@ -464,6 +509,10 @@ func (s *SchedulerImpl) passBarrier(
 ) {
 	s.removeAllWfFromBarrierBuffer(wg)
 	s.setAllWfStateToReady(now, wg)
+	if s.barrierReleased == nil {
+		s.barrierReleased = make(map[*wavefront.WorkGroup]bool)
+	}
+	s.barrierReleased[wg] = true
 }
 
 func (s *SchedulerImpl) setAllWfStateToReady(

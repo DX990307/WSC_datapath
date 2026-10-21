@@ -1,5 +1,5 @@
 {
-  "_description": "ISCA'27 v3 ablation: Complete without M1 merging (requester merge, owner merge and requester dedup all off: -t18-req-merge=false, -t18-owner-merge=false, dedup owner none). M2 multicast has no merged entry to send, so it is off as well (-t18-owner-multicast=false). Pack (batching + prefetch piggyback), allocation (rtt, requester still on the T18 window W = 64 and allocator) and M3 stay on. Both tables keep 64 entries (t18-window 64, table = 2W = 128 slots, -t18-req-entries/-t18-owner-entries unset). Old m2 filter dedup off (-remote-data-path-dedup-enable=false). Extends mi200.json (unchanged); -magic-memory-copy comes from mi200.json/hpca.json. P16 config #6.",
+  "_description": "ISCA'27 v3 ablation: Complete without M1 merging (requester merge, owner merge and requester dedup all off: -t18-req-merge=false, -t18-owner-merge=false, dedup owner none). M2 multicast has no merged entry to send, so it is off as well (-t18-owner-multicast=false). Pack (batching + prefetch piggyback), allocation (rtt, requester still on the T18 window W = 64 and allocator) and M3 stay on. Both tables keep 64 entries (t18-window 64, table = 2W = 128 slots, -t18-req-entries/-t18-owner-entries unset); the composed requester line table (M1 in-flight table on top of packing) is also 128 entries (-t18-compose-table-entries 128, user 2026-10-21; waiter pool 512 = 4 x 128, open batches <= 64), not the old max(2W, M2 lines) = 1024. Old m2 filter dedup off (-remote-data-path-dedup-enable=false). Extends mi200.json (unchanged); -magic-memory-copy comes from mi200.json/hpca.json. P16 config #6.",
   "extends": "mi200.json",
   "typed-filter-slots-per-bucket": 4,
   "typed-filter-fingerprint-bits": 13,
@@ -33,5 +33,6 @@
   "t18-owner-multicast": false,
   "cupath-dedup-owner": "none",
   "t18-window": 64,
-  "t18-credit-policy": "rtt"
+  "t18-credit-policy": "rtt",
+  "t18-compose-table-entries": 128
 }

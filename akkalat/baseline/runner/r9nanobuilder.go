@@ -29,6 +29,9 @@ import (
 
 // R9NanoGPUBuilder can build R9 Nano GPUs.
 type R9NanoGPUBuilder struct {
+	// legacyNoKernelL1Invalidate: see installKernelLaunchL1Invalidation.
+	legacyNoKernelL1Invalidate bool
+
 	engine                         sim.Engine
 	freq                           sim.Freq
 	memAddrOffset                  uint64
@@ -481,11 +484,49 @@ func (b R9NanoGPUBuilder) Build(name string, id uint64) *GPU {
 	b.connectL1ToL2()
 	b.connectL1TLBToL2TLB()
 	b.connectL2TLBtoGMMU()
+	b.installKernelLaunchL1Invalidation()
 	b.installRemoteReuseKernelInvalidation()
 
 	b.populateExternalPorts()
 
 	return b.gpu
+}
+
+// WithLegacyNoKernelL1Invalidate disables the kernel-launch L1 invalidation.
+func (b R9NanoGPUBuilder) WithLegacyNoKernelL1Invalidate(
+	legacy bool,
+) R9NanoGPUBuilder {
+	b.legacyNoKernelL1Invalidate = legacy
+	return b
+}
+
+// installKernelLaunchL1Invalidation makes every kernel launch accepted by the
+// GPM's command processor invalidate the GPM's L1 vector, L1 scalar and L1
+// instruction caches before the first work-group is dispatched, as real GPUs
+// do at a kernel boundary (dispatch-time acquire). Without it a kernel can hit
+// lines that an earlier kernel cached before another CU / GPM overwrote them
+// (stale data; e.g. npb_mg, rodinia_lud, w2-fft2d, w2-shocsort fail -verify).
+// The invalidation takes no simulated time; subsequent misses pay the normal
+// refill cost.
+func (b *R9NanoGPUBuilder) installKernelLaunchL1Invalidation() {
+	if b.legacyNoKernelL1Invalidate {
+		return
+	}
+	l1v := append([]*writearound.Cache(nil), b.l1vCaches...)
+	l1s := append([]*writethrough.Cache(nil), b.l1sCaches...)
+	l1i := append([]*writethrough.Cache(nil), b.l1iCaches...)
+	b.cp.KernelLaunchHooks = append(b.cp.KernelLaunchHooks,
+		func(now sim.VTimeInSec) {
+			for _, c := range l1v {
+				c.InvalidateAll(now)
+			}
+			for _, c := range l1s {
+				c.InvalidateAll(now)
+			}
+			for _, c := range l1i {
+				c.InvalidateAll(now)
+			}
+		})
 }
 
 // installRemoteReuseKernelInvalidation hooks the M3 kernel-boundary

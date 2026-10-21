@@ -72,6 +72,10 @@ type R9NanoPlatformBuilder struct {
 	rdmaMaxOutstanding        int
 	t18                       rdma.T18Config
 
+	// legacyNoKernelL1Invalidate restores the pre-fix behavior in which a
+	// kernel launch does not invalidate L1V / L1S / L1I.
+	legacyNoKernelL1Invalidate bool
+
 	engine       sim.Engine
 	visTracer    tracing.Tracer
 	monitor      *monitoring.Monitor
@@ -424,6 +428,15 @@ func (b R9NanoPlatformBuilder) WithDRAMRowContinuation(
 	return b
 }
 
+// WithLegacyNoKernelL1Invalidate disables the kernel-launch invalidation of
+// the L1 caches (pre-fix behavior; only for reproducing old results).
+func (b R9NanoPlatformBuilder) WithLegacyNoKernelL1Invalidate(
+	legacy bool,
+) R9NanoPlatformBuilder {
+	b.legacyNoKernelL1Invalidate = legacy
+	return b
+}
+
 // WithRemoteDataPath configures the remote RDMA/L2 datapath mechanism.
 func (b R9NanoPlatformBuilder) WithRemoteDataPath(
 	config rdma.RemoteDataPathConfig,
@@ -737,6 +750,7 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 			b.rdmaMaxOutstanding,
 		).
 		WithT18(b.t18).
+		WithLegacyNoKernelL1Invalidate(b.legacyNoKernelL1Invalidate).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).
 		WithGMMUPageTable(pageTable)

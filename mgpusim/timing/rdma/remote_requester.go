@@ -448,6 +448,11 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 	if len(c.remoteLines) >= c.remoteOutstandingCapacity() {
 		c.rememberRemoteBlockedNegative(read.ID, key)
 		c.RemoteDataPathStats.LineEntryFullStalls++
+		if c.m1Composed() {
+			// Composed M1: a full requester table stalls the request at
+			// the RDMA input (distinct requests; retries counted apart).
+			c.t18Stall(read, &c.t18.stats.ReqTableFullStalls)
+		}
 		return true, false
 	}
 	if c.remoteOutstandingReads >= c.remoteWaiterCapacity() {

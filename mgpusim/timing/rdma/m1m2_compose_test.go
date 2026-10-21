@@ -288,3 +288,66 @@ func TestM1M2OwnerMergesBitmapChildIntoMulticast(t *testing.T) {
 		t.Fatal("owner kept state after all lines were answered")
 	}
 }
+
+// -t18-compose-table-entries: the composed requester never holds more line
+// entries than configured; extra new lines stall at the RDMA input (no
+// bypass), and the waiter pool / open-batch limit follow the table.
+func TestM1M2ComposeTableEntriesBoundsLineTable(t *testing.T) {
+	for _, entries := range []int{128, 0} {
+		c, toL1, _, _, remoteGPU := newRemoteDataPathTestComp(t,
+			RemoteDataPathConfig{
+				Enabled:            true,
+				DisableDedup:       true,
+				DisableRequesterL2: true,
+				MaxBatchLines:      8,
+				MaxBatches:         64,
+			})
+		c.ConfigureT18(T18Config{ReqMerge: true, Window: 64,
+			DistCredits: true, ComposeLineEntries: entries})
+		c.SetT18Topology([2]int{0, 0},
+			[]sim.Port{c.ToOutside, remoteGPU}, [][2]int{{0, 0}, {1, 0}})
+		if !c.m1Composed() {
+			t.Fatal("M1 did not compose with M2")
+		}
+		l1 := &remoteTestPort{name: "L1"}
+		peak := 0
+		now := sim.VTimeInSec(1e-9)
+		// 600 distinct lines over 75 pages; no response ever returns.
+		for i := 0; i < 600; i++ {
+			toL1.inbox = append(toL1.inbox,
+				remoteTestRead(l1, 0x100000+uint64(i)*remoteLineBytes))
+		}
+		for cycle := 0; cycle < 2000; cycle++ {
+			c.processFromL1(now)
+			for c.processRemotePendingBatches(now) {
+			}
+			c.m1ProcessRemoteBatches(now, false)
+			if len(c.remoteLines) > peak {
+				peak = len(c.remoteLines)
+			}
+			now += 1e-9
+		}
+		st := c.GetT18Stats()
+		if entries == 128 {
+			if peak > 128 || c.t18.m1Index.Capacity() != 128 {
+				t.Fatalf("line entries peak %d, index capacity %d; want <= 128",
+					peak, c.t18.m1Index.Capacity())
+			}
+			if peak != 128 || st.ReqTableFullStalls == 0 {
+				t.Fatalf("table did not fill and stall: peak %d stalls %d",
+					peak, st.ReqTableFullStalls)
+			}
+			if c.remoteWaiterCapacity() != 512 ||
+				c.remoteRequesterBatchCapacity() != 64 {
+				t.Fatalf("waiters %d batches %d, want 512 / 64",
+					c.remoteWaiterCapacity(), c.remoteRequesterBatchCapacity())
+			}
+			if len(toL1.inbox) == 0 {
+				t.Fatal("requests beyond the table were not held back")
+			}
+		} else if peak <= 128 || c.remoteOutstandingCapacity() != 1024 {
+			t.Fatalf("default sizing: peak %d capacity %d, want > 128 / 1024",
+				peak, c.remoteOutstandingCapacity())
+		}
+	}
+}

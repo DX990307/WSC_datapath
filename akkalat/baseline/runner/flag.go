@@ -178,6 +178,11 @@ var remoteFilterPrefetchEnableFlag = flag.Bool("remote-filter-prefetch-enable", 
 	"Allow Filter-approved candidates to piggyback existing remote batches.")
 var remoteDataPathL2EnableFlag = flag.Bool("remote-data-path-l2-enable", true,
 	"Enable requester-L2 Cuckoo probes and remote clean replicas when the remote data path is enabled.")
+var legacyNoKernelL1InvalidateFlag = flag.Bool(
+	"legacy-no-kernel-l1-invalidate", false,
+	"Reproduce pre-fix results only: do NOT invalidate L1V / L1S / L1I at "+
+		"kernel launch (the old timing model, which lets a kernel read stale "+
+		"lines cached by an earlier kernel). Default false = invalidate.")
 var remoteReuseKernelInvalidateFlag = flag.Bool(
 	"remote-reuse-kernel-invalidate", false,
 	"M3 (Remote Reuse) kernel-boundary invalidation (HPCA paper IV-C): when "+
