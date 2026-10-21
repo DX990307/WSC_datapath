@@ -183,6 +183,16 @@
 
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
 
+### v3 @ 384 GB/s：baseline / Complete / 消融（10-21，二进制 `4235991`，修复 Bug A/B，组合表 128 项；`results_index/abl3c384/`）
+- 网络 `-bandwidth=24 -switch-buffer-flits=16`；25 个 workload × 10 个配置 = 250 个运行：249 个 exit 0，WG 数和指令数与 baseline 逐对一致；**MG 的 M1+M2 挂住**（L2TLB 直接用 IOMMUCache 的端口发送，丢唤醒；原有 bug，没修没杀，PID 2415098 @ yss3，见 README 第 3 节）。
+- 以前崩溃的 5 个规模（sssp s19、atax 12096、ivf 2M、graphtc s14、shocsort 6.19M）全部 exit 0；fir、MM（768 GB/s）修复前后逐位一致。
+- **Complete 对 baseline GMEAN 1.73×（25 个）**。M1 / M1+M2 / M1+M3 / Complete = 1.44 / 1.43 / 1.73 / 1.73；只开 M3 1.28。
+- 从 Complete 去掉一个部件（T_without / T_Complete）：M1 1.358、M2 **0.998**、M3 1.213；合并 1.111、打包 **1.222**、分配 shared 0.998、分配 near 1.056。
+- 每个 workload 贡献最大的部件：打包 11、M3 7、合并 3（MM、FW、shocsort）；embbag、gups、MT、SPMV 所有部件都 < 2%。M2 和分配方式在任何 workload 上都不是最大贡献。
+- 统计：baseline 链路平均利用率 1–5%，远程延迟大头是请求方等 64 个窗口位；owner 合并率 0–9%（请求方合并 0–86%）；多播平均 2.0–2.6 个目的地；M2 在 sssp（−5%）、bfs（−3%）上是负的。
+- 最大加速（PR 13.3×、npbcg 4.4×、graphtc 3.7×、atax 2.7×、MM 2.7×）都来自 < 192 KB 的 buffer 整个放在 GPM 0 造成的热点 owner，论文里要交代。
+- 改进提案（未实现，`mechanism_analysis.md`）：P1 按页的请求方表；P2 窗口满时按批 line 数排序发送；P3 M3 按复用率决定是否填；P4 分配改共享池，按距离分配作为负面结果；P5 M2 只在 48 GB/s 下重新评估；P6 热点 owner 是放置问题，单独交代。
+
 ### 新 Complete（M1 + M2 + M3）在 16 个新 benchmark 上（10-20，二进制 `d09b18b`，mi200，中小规模；`results_index/w2complete/`）
 
 新 Complete = T18 全开（W=1024 + 按距离分 credit）+ 旧 m2 + 旧 m3（requester L2），去重归 M1。baseline 和新 Complete 每对的指令数、WG 数完全相同。

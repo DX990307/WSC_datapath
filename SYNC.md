@@ -403,3 +403,8 @@
 
 ### 2026-10-21 [claude-code] 用户：先修两个模拟器 bug，再按 384 GB/s 跑 baseline / Complete / 消融
 - 用户决定：修 Bug A（barrier 缓冲区满跳指令）和 Bug B（kernel 启动时失效 L1V）后再跑；网络 `-bandwidth=24`（384 GB/s，单向每链路）+ `-switch-buffer-flits=16`；11 个配置（baseline、Complete、M1、M1+M2、M1+M3、M3、Complete −合并 / −打包 / 分配 shared / 分配 near）；Complete 运行同时收集 M1/M2/M3 的统计，看哪些有用、哪些没用，并据此提出更有用的机制（只写提案，不实现）。组合模式下请求方表保持 1024 槽（网络在途仍 64）。
+
+### 2026-10-21 [claude-code] 修复 Bug A/B、组合表 128 项；384 GB/s 战役完成（249/250）
+- 更正上一条：用户随后要求组合模式下请求方表用 128 项（不要 1024）。代码 `isca27/cupath-v3` @ `4235991`：Bug A（`scheduler.go` barrier 缓冲区满时重试、PC 只推进一次）、Bug B（kernel 启动时经 `KernelLaunchHooks` 失效 L1V/L1S/L1I，`-legacy-no-kernel-l1-invalidate` 可恢复旧行为）、新参数 `-t18-compose-table-entries`（8 个 `v3_*.json` 设成 128）。因此 `v3_complete` 不再等于 W = 64 的 `complete_new`（1024 项）。
+- 结果在 `results_index/abl3c384/`（README、abl3c384.csv、mechanism_analysis.md、mechanism_stats.csv、verify.csv、obs_raw/、scripts/）；摘要见 STATUS"v3 @ 384 GB/s"。
+- 待用户决定：杀掉 MG M1+M2 挂住的进程；是否修 L2TLB→IOMMU 丢唤醒 bug（会改时序）；PR 等热点 owner workload 在论文里怎么处理；改进提案 P1–P6 做哪些。
