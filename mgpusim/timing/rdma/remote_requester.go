@@ -1127,6 +1127,7 @@ func (c *Comp) sendRemoteEntryDirect(
 	}
 
 	c.obsNetSend(entry.owner, req.ID, entry.key.lineAddr, 1, now)
+	c.geoBoundEntryNetRead(entry.owner, entry, now)
 	entry.state = remoteLineInflight
 	entry.fromRemote = true
 	c.remoteSingleInflight[req.ID] = entry
@@ -1301,6 +1302,7 @@ func (c *Comp) flushRemoteBatch(
 			return false
 		}
 		c.obsNetSend(batch.dst, req.ID, entry.key.lineAddr, 1, now)
+		c.geoBoundEntryNetRead(batch.dst, entry, now)
 		c.recordRemoteBatchMetrics(now, batch, req.Meta().TrafficBytes)
 		c.removeRemoteBatch(batch)
 		entry.state = remoteLineInflight
@@ -1346,6 +1348,7 @@ func (c *Comp) flushRemoteBatch(
 	c.removeRemoteBatch(batch)
 	for _, line := range batch.lineOrder {
 		entry := batch.lines[line]
+		c.geoBoundEntryNetRead(batch.dst, entry, now)
 		entry.state = remoteLineInflight
 		entry.batch = nil
 		entry.fromRemote = true
@@ -1490,6 +1493,8 @@ func (c *Comp) processRemoteSingleRsp(
 		memtrace.ObsReqArrive(c.Name(), rsp.GetRspTo(), entry.key.lineAddr,
 			rsp.Meta().RecvTime)
 	}
+	c.geoBoundDeliver(entry.owner, entry.key.pid, entry.key.lineAddr,
+		rsp.Meta().SendTime, now)
 	c.m1UnindexLine(entry)
 	if c.m1Composed() {
 		c.m1Release(now, rsp.GetRspTo())
@@ -1539,6 +1544,8 @@ func (c *Comp) processBitmapRspFromOutside(
 			memtrace.ObsReqArrive(c.Name(), rsp.GetRspTo(),
 				entry.key.lineAddr, rsp.Meta().RecvTime)
 		}
+		c.geoBoundDeliver(entry.owner, entry.key.pid, entry.key.lineAddr,
+			rsp.Meta().SendTime, now)
 		c.m1UnindexLine(entry)
 		c.queueRemoteReady(entry)
 		batch.responseBitmap |= lineBit

@@ -96,6 +96,14 @@ type Comp struct {
 
 	// ISCA'27 P13 occupancy statistic; nil when off (obs_occupancy.go).
 	obsOcc *obsOccState
+
+	// ISCA'27 geo-push (geo_*.go). geoTopo is nil unless geo-push or its
+	// upper-bound statistic is on; geo is nil unless geo-push is on.
+	geoTopo         *GeoTopology
+	geoIdx          int
+	geoLastBoundary sim.VTimeInSec
+	geoBoundarySet  bool
+	geo             *geoPushState
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -658,6 +666,15 @@ func (c *Comp) processReqFromL1(
 		if c.m1Composed() {
 			c.m1Acquire(now, dst, cloned.Meta().ID)
 		}
+		if geoBound != nil {
+			switch req.(type) {
+			case *mem.ReadReq:
+				c.geoBoundNetRead(dst, req.GetPID(), req.GetAddress(),
+					firstSeen, now)
+			case *mem.WriteReq:
+				c.geoBoundWrite(req)
+			}
+		}
 		c.recordRequesterOutstandingPeak()
 		if c.remoteConfig.Enabled {
 			c.noteLegacyRemoteReqSent(req, dst)
@@ -872,6 +889,14 @@ func (c *Comp) processRspFromOutside(
 
 		c.traceInsideOutEnd(trans)
 		c.recordRemoteGPMAccess(now, trans, rsp)
+		if geoBound != nil {
+			if read, ok := trans.fromInside.(*mem.ReadReq); ok {
+				if _, isData := rsp.(*mem.DataReadyRsp); isData {
+					c.geoBoundDeliver(trans.toOutside.Meta().Dst, read.PID,
+						read.Address, rsp.Meta().SendTime, now)
+				}
+			}
+		}
 		if c.m1Composed() {
 			c.m1Release(now, rsp.GetRspTo())
 		}
