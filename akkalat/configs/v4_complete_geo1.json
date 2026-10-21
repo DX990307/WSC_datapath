@@ -1,0 +1,6 @@
+{
+  "_description": "ISCA'27 geo-push (geographic broadcast response) on top of v4 Complete (M1 requester merge + pack, shared allocation, M3; no owner merge, no M2 multicast): when an owner returns a read response to requester R it also multicasts the line(s) to the GPMs within 1 hop of R (R and the owner excluded) along the mesh multicast tree; neighbors install them in their L2 through the M3 fill path (no window slot, no L1 response, invalid ways only), or hand them early to an own entry still waiting for the line. Pushed copies are M3 replicas (kernel-boundary invalidation). No filter: every read response is pushed. Extends v4_complete.json (unchanged).",
+  "extends": "v4_complete.json",
+  "geo-push-radius": 1,
+  "geo-push-filter": "none"
+}
