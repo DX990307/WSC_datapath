@@ -146,3 +146,71 @@ func TestGeoBoundBoundaryAndWrite(t *testing.T) {
 		t.Fatalf("zero-use pushes = %d, want 3", s.ZeroUsePushes[1][0])
 	}
 }
+
+func TestGeoMulticastSplit(t *testing.T) {
+	src := &geoTestPort{name: "owner"}
+	r1 := &geoTestPort{name: "r1"}
+	r2 := &geoTestPort{name: "r2"}
+	n1 := &geoTestPort{name: "n1"}
+	n2 := &geoTestPort{name: "n2"}
+	inner := &T18MulticastRsp{
+		MsgMeta: sim.MsgMeta{ID: "mc", Src: src, Dst: r1, TrafficBytes: 74},
+		Data:    make([]byte, 64),
+		Dsts:    []sim.Port{r1, r2},
+		RspTos:  []string{"a", "b"},
+	}
+	w := &GeoMulticast{
+		MsgMeta:   sim.MsgMeta{ID: "w", Src: src, Dst: r1, TrafficBytes: 74},
+		Inner:     inner,
+		InnerDsts: []sim.Port{r1, r2},
+		PushDsts:  []sim.Port{n1, n2},
+		Push:      &GeoPushMsg{PID: 1, Owner: src, Lines: []geoPushLine{{addr: 0x40}}},
+	}
+	if got := len(w.MulticastDsts()); got != 4 {
+		t.Fatalf("dsts = %d", got)
+	}
+	// Both requesters only: the inner multicast itself.
+	if m := w.SplitForDsts([]sim.Port{r1, r2}); m != sim.Msg(inner) {
+		t.Fatalf("inner branch = %T", m)
+	}
+	// One requester: the ordinary unicast leaf.
+	if m, ok := w.SplitForDsts([]sim.Port{r2}).(interface{ GetRspTo() string }); !ok || m.GetRspTo() != "b" {
+		t.Fatalf("r2 leaf wrong")
+	}
+	// One neighbor: a push leaf addressed to it.
+	leaf, ok := w.SplitForDsts([]sim.Port{n2}).(*GeoPushMsg)
+	if !ok || leaf.Dst != n2 || len(leaf.Lines) != 1 || leaf.ID == w.ID {
+		t.Fatalf("push leaf wrong: %#v", leaf)
+	}
+	// Mixed branch: a smaller GeoMulticast.
+	mixed, ok := w.SplitForDsts([]sim.Port{r1, n1, n2}).(*GeoMulticast)
+	if !ok || len(mixed.InnerDsts) != 1 || len(mixed.PushDsts) != 2 ||
+		mixed.Dst != r1 || mixed.ID == w.ID {
+		t.Fatalf("mixed branch wrong: %#v", mixed)
+	}
+	pushOnly, ok := w.SplitForDsts([]sim.Port{n1, n2}).(*GeoMulticast)
+	if !ok || pushOnly.Inner != nil || pushOnly.Dst != n1 {
+		t.Fatalf("push-only branch wrong")
+	}
+}
+
+func TestGeoShareTable(t *testing.T) {
+	tab := newGeoShareTable(8) // 2 sets x 4 ways
+	k := geoLineKey{1, 0x1000}
+	tab.record(k, 3)
+	tab.record(k, 3)
+	if tab.shared(k) {
+		t.Fatal("one reader is not shared")
+	}
+	tab.record(k, 4)
+	if !tab.shared(k) {
+		t.Fatal("two readers are shared")
+	}
+	// Fill the table with other lines: k is eventually evicted (LRU).
+	for i := uint64(1); i <= 64; i++ {
+		tab.record(geoLineKey{1, 0x1000 + i*64}, 5)
+	}
+	if tab.shared(k) {
+		t.Fatal("evicted line still shared")
+	}
+}

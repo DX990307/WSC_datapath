@@ -17,6 +17,7 @@ type remoteReplicaKey struct {
 type remoteReplicaRecord struct {
 	key        remoteReplicaKey
 	used       bool
+	push       bool
 	hits       uint64
 	patternKey *TypedFilterKey
 }
@@ -51,6 +52,15 @@ type RemoteReplicaStats struct {
 	UnusedPatternRetirements       uint64
 	SpeculativeInvalidOnlyAttempts uint64
 	SpeculativeInvalidOnlyDrops    uint64
+	// ISCA'27 geo-push fills (counted here only, not in the fields above).
+	PushFills             uint64
+	PushInstalled         uint64
+	PushDropped           uint64
+	PushDroppedStale      uint64
+	PushDroppedResident   uint64
+	PushUseful            uint64 // pushed lines hit at least once
+	PushHits              uint64
+	PushUnusedRetirements uint64
 }
 
 // GetRemoteReplicaStats returns a snapshot of this L2 slice's counters.
@@ -72,11 +82,19 @@ func (c *Cache) remoteReplicaMayContain(pid vm.PID, addr uint64) bool {
 }
 
 func (c *Cache) recordRemoteFillAttempt(fill *mem.RemoteDataFill) {
+	if fill != nil && fill.Push {
+		c.remoteReplicaStats.PushFills++
+		return
+	}
 	c.remoteReplicaStats.CleanFills++
 	c.remoteReplicaStats.TwoTouchFillAttempts++
 }
 
 func (c *Cache) recordRemoteFillDropped(fill *mem.RemoteDataFill) {
+	if fill != nil && fill.Push {
+		c.remoteReplicaStats.PushDropped++
+		return
+	}
 	c.remoteReplicaStats.DroppedFills++
 	c.remoteReplicaStats.TwoTouchDroppedFills++
 }
@@ -87,11 +105,18 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 		c.recordRemoteFillDropped(fill)
 		return false
 	}
-	if fill.Generation != c.remoteReplicaGeneration {
+	if fill.Push {
+		if fill.OriginTime <= c.remoteReplicaGenTime ||
+			(c.replicaBoundarySet && fill.OriginTime <= c.replicaBoundaryTime) {
+			c.remoteReplicaStats.PushDroppedStale++
+			c.recordRemoteFillDropped(fill)
+			return false
+		}
+	} else if fill.Generation != c.remoteReplicaGeneration {
 		c.recordRemoteFillDropped(fill)
 		return false
 	}
-	if c.replicaBoundarySet && fill.SendTime <= c.replicaBoundaryTime {
+	if !fill.Push && c.replicaBoundarySet && fill.SendTime <= c.replicaBoundaryTime {
 		c.replicaBoundaryStats.StaleFillDrops++
 		c.recordRemoteFillDropped(fill)
 		return false
@@ -111,6 +136,9 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 
 	// Never let a late remote response overwrite a newer resident line.
 	if c.directory.Lookup(fill.PID, line) != nil {
+		if fill.Push {
+			c.remoteReplicaStats.PushDroppedResident++
+		}
 		c.recordRemoteFillDropped(fill)
 		return false
 	}
@@ -125,9 +153,13 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 	victimWasValid := block.IsValid
 	oldRecord, replacedRemote := c.remoteReplicaBlocks[block]
 	if fill.RequireInvalidVictim {
-		c.remoteReplicaStats.SpeculativeInvalidOnlyAttempts++
+		if !fill.Push {
+			c.remoteReplicaStats.SpeculativeInvalidOnlyAttempts++
+		}
 		if victimWasValid {
-			c.remoteReplicaStats.SpeculativeInvalidOnlyDrops++
+			if !fill.Push {
+				c.remoteReplicaStats.SpeculativeInvalidOnlyDrops++
+			}
 			c.recordRemoteFillDropped(fill)
 			return false
 		}
@@ -148,7 +180,7 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 		c.recordRemoteReplicaRetirement(oldRecord)
 		c.remoteReplicaStats.TrackedEvictions++
 		c.remoteReplicaStats.FillReplacedRemote++
-	} else {
+	} else if !fill.Push {
 		c.remoteReplicaStats.FillIntoInvalid++
 	}
 	data := append([]byte(nil), fill.Data...)
@@ -177,6 +209,12 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 		record.patternKey = &patternKey
 	}
 	c.remoteReplicaBlocks[block] = record
+	if fill.Push {
+		record.push = true
+		c.remoteReplicaStats.PushInstalled++
+		c.updateRemoteReplicaOccupancy()
+		return true
+	}
 	c.remoteReplicaStats.InstalledFills++
 	c.remoteReplicaStats.TwoTouchInstalledFills++
 	c.updateRemoteReplicaOccupancy()
@@ -205,6 +243,14 @@ func (c *Cache) recordRemoteReplicaHit(
 	}
 	record := c.remoteReplicaBlocks[block]
 	record.hits++
+	if record.push {
+		c.remoteReplicaStats.PushHits++
+		if !record.used {
+			c.remoteReplicaStats.PushUseful++
+		}
+		record.used = true
+		return true
+	}
 	c.remoteReplicaStats.ReplicaProbeHits++
 	c.remoteReplicaStats.TwoTouchReplicaHits++
 	if !record.used {
@@ -218,6 +264,10 @@ func (c *Cache) recordRemoteReplicaRetirement(
 	record *remoteReplicaRecord,
 ) {
 	if record == nil || record.used {
+		return
+	}
+	if record.push {
+		c.remoteReplicaStats.PushUnusedRetirements++
 		return
 	}
 	c.remoteReplicaStats.UnusedTwoTouchRetirements++

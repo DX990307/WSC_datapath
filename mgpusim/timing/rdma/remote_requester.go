@@ -1611,6 +1611,13 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 		return true
 	}
 
+	if entry.geoEarly && entry.state != remoteLineReady {
+		// geo-push served the waiters; the entry's own response is still
+		// outstanding and completes the entry when it arrives.
+		c.remoteReady = c.remoteReady[1:]
+		entry.queuedReady = false
+		return true
+	}
 	shouldFill := entry.fromRemote &&
 		!c.remoteConfig.DisableRequesterL2 &&
 		entry.admit && !entry.boundaryStale &&

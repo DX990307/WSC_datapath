@@ -116,6 +116,7 @@ func (c *Comp) processRemoteOwnerSubRsp(
 		panic("bitmap owner received an invalid cache line")
 	}
 	sub.batch.readyData[sub.line] = append([]byte(nil), dataRsp.Data...)
+	sub.batch.noteReadyOrigin(sub.read.SendTime)
 	sub.batch.remaining--
 	delete(c.remoteOwnerSubReqs, rsp.GetRspTo())
 	if memtrace.ObsEnabled() {
@@ -149,7 +150,21 @@ func (c *Comp) processRemoteOwnerPendingRsps(now sim.VTimeInSec) bool {
 		LineData:  batch.readyData,
 	}
 	rsp.SendTime = now
-	if err := c.ToOutside.Send(rsp); err != nil {
+	var sendErr *sim.SendError
+	if c.geo != nil {
+		lines := make([]geoPushLine, 0, len(batch.readyData))
+		for line := uint64(0); line < 64; line++ {
+			if data, ok := batch.readyData[line]; ok {
+				lines = append(lines, geoPushLine{
+					addr: batch.req.PagePAddr + line*remoteLineBytes, data: data})
+			}
+		}
+		sendErr = c.geoSend(now, rsp, []sim.Port{batch.req.Src},
+			batch.req.PID, lines, batch.readyOrigin)
+	} else {
+		sendErr = c.ToOutside.Send(rsp)
+	}
+	if sendErr != nil {
 		return false
 	}
 	if memtrace.ObsEnabled() {
@@ -168,6 +183,7 @@ func (c *Comp) processRemoteOwnerPendingRsps(now sim.VTimeInSec) bool {
 	c.remoteOwnerPendingRsp = c.remoteOwnerPendingRsp[1:]
 	batch.readyData = make(map[uint64][]byte)
 	batch.readyQueued = false
+	batch.readyOriginSet = false
 	if batch.remaining == 0 {
 		delete(c.remoteOwnerBatches, batch.req.ID)
 	}

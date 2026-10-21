@@ -187,6 +187,9 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 			madeProgress = c.t18OwnerSend(now) || madeProgress
 		}
 	}
+	if c.geo != nil && len(c.geo.fillQ) > 0 {
+		madeProgress = c.geoSendFills(now) || madeProgress
+	}
 	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
 	madeProgress = c.processFromOutside(now) || madeProgress
@@ -372,6 +375,7 @@ func (c *Comp) fullyDrained() bool {
 	return len(c.transactionsFromOutside) == 0 &&
 		len(c.transactionsFromInside) == 0 &&
 		!c.remoteDataPathHasPendingWork() &&
+		!c.geoHasPendingWork() &&
 		!c.t18HasPendingWork()
 }
 
@@ -455,6 +459,13 @@ func (c *Comp) processFromL2(now sim.VTimeInSec) bool {
 				madeProgress = true
 				continue
 			}
+			if c.geo != nil && c.isGeoFillRsp(req) {
+				if !c.processGeoFillRsp(now, req) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			if c.isRemoteFillRsp(req) {
 				if !c.processRemoteFillRsp(now, req) {
 					return madeProgress
@@ -502,6 +513,14 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 		}
 		if !c.pipelineReady(now, req) {
 			return true
+		}
+		if c.geo != nil {
+			if push, ok := req.(*GeoPushMsg); ok {
+				c.geoReceive(now, push)
+				madeProgress = true
+				continue
+			}
+			c.geoOwnerRecordRead(req)
 		}
 		switch req := req.(type) {
 		case *BitmapReadReq:
@@ -765,7 +784,17 @@ func (c *Comp) processRspFromL2(
 	rspToOutside.Meta().Src = c.ToOutside
 	rspToOutside.Meta().Dst = trans.fromOutside.Meta().Src
 
-	err := c.ToOutside.Send(rspToOutside)
+	var err *sim.SendError
+	if read, isRead := trans.fromOutside.(*mem.ReadReq); c.geo != nil && isRead &&
+		remoteReadBatchable(read) {
+		data := rspToOutside.(*mem.DataReadyRsp).Data
+		err = c.geoSend(now, rspToOutside,
+			[]sim.Port{trans.fromOutside.Meta().Src}, read.PID,
+			[]geoPushLine{{addr: read.Address, data: data}},
+			trans.toInside.Meta().SendTime)
+	} else {
+		err = c.ToOutside.Send(rspToOutside)
+	}
 	if err == nil {
 		if _, isData := rsp.(*mem.DataReadyRsp); isData && memtrace.ObsEnabled() {
 			memtrace.ObsOwnerL2Rsp(rsp.GetRspTo(), rsp.Meta().RecvTime)

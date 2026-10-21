@@ -5,6 +5,7 @@ import (
 
 	"github.com/sarchlab/akita/v3/mem/mem"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
+	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 )
 
@@ -195,7 +196,7 @@ func (c *Comp) t18OwnerL2Rsp(now sim.VTimeInSec, rsp mem.AccessRsp) bool {
 	if !e.live {
 		// M1+M2: opened by an M2 bitmap child.
 		if len(e.reqs) == 1 {
-			c.t18DeliverChild(e.reqs[0].sub, e.data)
+			c.t18DeliverChild(e.reqs[0].sub, e.data, e.l2Req.SendTime)
 			return true
 		}
 	}
@@ -204,7 +205,7 @@ func (c *Comp) t18OwnerL2Rsp(now sim.VTimeInSec, rsp mem.AccessRsp) bool {
 		singles := e.reqs[:0]
 		for _, r := range e.reqs {
 			if r.sub != nil {
-				c.t18DeliverChild(r.sub, e.data)
+				c.t18DeliverChild(r.sub, e.data, e.l2Req.SendTime)
 				continue
 			}
 			singles = append(singles, r)
@@ -265,7 +266,7 @@ func (c *Comp) t18OwnerSend(now sim.VTimeInSec) bool {
 				RspTos: rspTos,
 				Lines:  lines,
 			}
-			if err := c.ToOutside.Send(msg); err != nil {
+			if err := c.t18OwnerGeoSend(now, msg, dsts, e); err != nil {
 				break
 			}
 			for _, r := range e.reqs {
@@ -291,7 +292,7 @@ func (c *Comp) t18OwnerSend(now sim.VTimeInSec) bool {
 				WithRspTo(r.rspTo).
 				WithData(append([]byte(nil), e.data...)).
 				Build()
-			if err := c.ToOutside.Send(msg); err != nil {
+			if err := c.t18OwnerGeoSend(now, msg, []sim.Port{r.src}, e); err != nil {
 				break
 			}
 			if memtrace.ObsEnabled() {
@@ -331,4 +332,19 @@ func (c *Comp) t18OwnerIntegrate(now sim.VTimeInSec) {
 	if n >= s.ownerTable.Capacity() {
 		s.stats.OwnerTableFullNS += dt
 	}
+}
+
+// t18OwnerGeoSend sends an owner-table response, with geo-push when on.
+func (c *Comp) t18OwnerGeoSend(
+	now sim.VTimeInSec, msg sim.Msg, dsts []sim.Port, e *t18OwnerEntry,
+) *sim.SendError {
+	if c.geo == nil {
+		return c.ToOutside.Send(msg)
+	}
+	origin := now
+	if e.l2Req != nil {
+		origin = e.l2Req.SendTime
+	}
+	return c.geoSend(now, msg, dsts, vm.PID(e.key.pid),
+		[]geoPushLine{{addr: e.key.line, data: e.data}}, origin)
 }

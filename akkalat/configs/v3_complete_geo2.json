@@ -1,0 +1,6 @@
+{
+  "_description": "ISCA'27 geo-push, radius 2 (GPMs within 2 hops of the requester), no filter. Otherwise as v3_complete_geo1.json. Extends v3_complete.json (unchanged).",
+  "extends": "v3_complete.json",
+  "geo-push-radius": 2,
+  "geo-push-filter": "none"
+}
