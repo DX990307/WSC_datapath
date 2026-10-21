@@ -400,3 +400,6 @@
   - 两处修法已写出但没改代码，等用户决定；修了会改变时序，现有结果（v3 各网络、W2、可能还有 T15–T18）中碰到这两个 bug 的都不可信。
 - P16 其他：`cupath-v3` @ `2784487` 实现和回归（见 `results_index/abl3/v3impl.md`、`config_confirm.md`）；`5952d19` 加 `-switch-buffer-flits`；规模校准 17/26 满足（`sizes.md`）。组合模式下请求方表实际是 1024 槽（取 max(2W, 旧 m2 line 表)），不是用户要的 128 槽。
 - 用户 10-21 凌晨：不跑了。停掉 v3net（48 GB/s / 400 GB/s）全部运行和调度器，两台服务器 `~/akita-exp-test` 下已无进程。已完成的 48 GB/s 结果（PA、ATAX、NPB IS、allreduce、embbag 等）留在 `~/akita-exp-test/v3net/src/results/`，属于修复前的结果。
+
+### 2026-10-21 [claude-code] 用户：先修两个模拟器 bug，再按 384 GB/s 跑 baseline / Complete / 消融
+- 用户决定：修 Bug A（barrier 缓冲区满跳指令）和 Bug B（kernel 启动时失效 L1V）后再跑；网络 `-bandwidth=24`（384 GB/s，单向每链路）+ `-switch-buffer-flits=16`；11 个配置（baseline、Complete、M1、M1+M2、M1+M3、M3、Complete −合并 / −打包 / 分配 shared / 分配 near）；Complete 运行同时收集 M1/M2/M3 的统计，看哪些有用、哪些没用，并据此提出更有用的机制（只写提案，不实现）。组合模式下请求方表保持 1024 槽（网络在途仍 64）。
