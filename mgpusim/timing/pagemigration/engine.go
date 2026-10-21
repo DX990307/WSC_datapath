@@ -32,17 +32,22 @@ type lineRead struct {
 
 // CopyEngine is the per-GPM DMA engine that moves migrating pages. As a
 // destination it pulls chunks from source engines over the network (at most
-// PullWindow chunks in flight) and writes them into its GPM's L2; as a source
-// it serves pulls by reading its GPM's L2. Both sides keep at most L2Window
-// line accesses in flight to the L2.
+// PullWindow chunks in flight) and writes them into its GPM's DRAM (the new
+// frames are not cached anywhere, and writing around the L2 leaves no dirty
+// copies that a later functional host copy could shadow); as a source it
+// serves pulls by reading through its GPM's L2, so dirty lines are copied.
+// Each side keeps at most L2Window line accesses in flight to memory.
 type CopyEngine struct {
 	*sim.TickingComponent
 
 	remotePort sim.Port
 	l2Port     sim.Port
+	dramPort   sim.Port
 
-	// L2Finder finds the L2 slice of a local physical address.
-	L2Finder mem.LowModuleFinder
+	// L2Finder finds the L2 slice of a local physical address, DRAMFinder its
+	// memory controller.
+	L2Finder   mem.LowModuleFinder
+	DRAMFinder mem.LowModuleFinder
 
 	cfg     Config
 	manager *Manager
@@ -59,7 +64,8 @@ type CopyEngine struct {
 	readOwners map[string]lineRead // by ReadReq ID
 	rsps       []*PullRsp
 
-	l2Inflight int
+	l2Inflight   int
+	dramInflight int
 
 	// statistics
 	PulledBytes uint64
@@ -79,8 +85,13 @@ func NewCopyEngine(name string, engine sim.Engine, cfg Config) *CopyEngine {
 	e.AddPort("Remote", e.remotePort)
 	e.l2Port = sim.NewLimitNumMsgPort(e, 2*cfg.L2Window, name+".L2")
 	e.AddPort("L2", e.l2Port)
+	e.dramPort = sim.NewLimitNumMsgPort(e, 2*cfg.L2Window, name+".DRAM")
+	e.AddPort("DRAM", e.dramPort)
 	return e
 }
+
+// DRAMPort is the port that writes to the GPM's memory controllers.
+func (e *CopyEngine) DRAMPort() sim.Port { return e.dramPort }
 
 // RemotePort is the port on the wafer network.
 func (e *CopyEngine) RemotePort() sim.Port { return e.remotePort }
@@ -107,7 +118,8 @@ func (e *CopyEngine) Tick(now sim.VTimeInSec) bool {
 	progress = e.sendPulls(now) || progress
 	progress = e.issueL2(now) || progress
 	progress = e.recvRemote(now) || progress
-	progress = e.recvL2(now) || progress
+	progress = e.recvMem(now, e.l2Port) || progress
+	progress = e.recvMem(now, e.dramPort) || progress
 	return progress
 }
 
@@ -144,15 +156,14 @@ func (e *CopyEngine) sendPulls(now sim.VTimeInSec) bool {
 
 func (e *CopyEngine) issueL2(now sim.VTimeInSec) bool {
 	progress := false
-	// Writes first: they complete chunks and free the pull window.
-	for e.l2Inflight < e.cfg.L2Window && len(e.writes) > 0 {
+	for e.dramInflight < e.cfg.L2Window && len(e.writes) > 0 {
 		w := e.writes[0]
 		w.SendTime = now
-		if e.l2Port.Send(w) != nil {
-			return progress
+		if e.dramPort.Send(w) != nil {
+			break
 		}
 		e.writes = e.writes[1:]
-		e.l2Inflight++
+		e.dramInflight++
 		progress = true
 	}
 	for e.l2Inflight < e.cfg.L2Window && len(e.reads) > 0 {
@@ -222,8 +233,8 @@ func (e *CopyEngine) land(now sim.VTimeInSec, rsp *PullRsp) {
 		addr := c.dstPAddr + off
 		w := mem.WriteReqBuilder{}.
 			WithSendTime(now).
-			WithSrc(e.l2Port).
-			WithDst(e.L2Finder.Find(addr)).
+			WithSrc(e.dramPort).
+			WithDst(e.DRAMFinder.Find(addr)).
 			WithAddress(addr).
 			WithData(rsp.Data[off : off+line]).
 			WithPID(0).
@@ -233,17 +244,17 @@ func (e *CopyEngine) land(now sim.VTimeInSec, rsp *PullRsp) {
 	}
 }
 
-func (e *CopyEngine) recvL2(now sim.VTimeInSec) bool {
+func (e *CopyEngine) recvMem(now sim.VTimeInSec, port sim.Port) bool {
 	progress := false
 	for {
-		msg := e.l2Port.Retrieve(now)
+		msg := port.Retrieve(now)
 		if msg == nil {
 			return progress
 		}
 		progress = true
-		e.l2Inflight--
 		switch msg := msg.(type) {
 		case *mem.DataReadyRsp:
+			e.l2Inflight--
 			lr, ok := e.readOwners[msg.RespondTo]
 			if !ok {
 				log.Panicf("copy engine %s: unknown read %s", e.Name(), msg.RespondTo)
@@ -256,6 +267,7 @@ func (e *CopyEngine) recvL2(now sim.VTimeInSec) bool {
 					lr.s.req.Src, lr.s.req.ID, lr.s.data))
 			}
 		case *mem.WriteDoneRsp:
+			e.dramInflight--
 			c, ok := e.writeChunks[msg.RespondTo]
 			if !ok {
 				log.Panicf("copy engine %s: unknown write %s", e.Name(), msg.RespondTo)

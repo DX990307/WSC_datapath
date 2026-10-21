@@ -62,9 +62,11 @@ func newRig(t *testing.T, cfg Config) *testRig {
 			Build("L2" + string(rune('0'+dev)))
 		e := NewCopyEngine("DMA"+string(rune('0'+dev)), r.engine, cfg)
 		e.L2Finder = &mem.SingleLowModuleFinder{LowModule: ctrl.GetPortByName("Top")}
+		e.DRAMFinder = e.L2Finder
 		conn := sim.NewDirectConnection("L1L2"+string(rune('0'+dev)), r.engine, 1*sim.GHz)
 		conn.PlugIn(ctrl.GetPortByName("Top"), 64)
 		conn.PlugIn(e.L2Port(), 64)
+		conn.PlugIn(e.DRAMPort(), 64)
 		net.PlugIn(e.RemotePort(), 64)
 		tlb := &fakeTLB{}
 		r.tlbs = append(r.tlbs, tlb)

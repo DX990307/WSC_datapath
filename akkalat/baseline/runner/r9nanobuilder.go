@@ -699,6 +699,10 @@ func (b *R9NanoGPUBuilder) connectL2AndDRAM() {
 	b.l2ToDramConnection.PlugIn(b.dmaEngine.ToMem, 64)
 
 	b.pageMigrationController.MemCtrlFinder = lowModuleFinder
+	if b.pmEngine != nil {
+		b.pmEngine.DRAMFinder = lowModuleFinder
+		b.l2ToDramConnection.PlugIn(b.pmEngine.DRAMPort(), 64)
+	}
 	b.l2ToDramConnection.PlugIn(
 		b.pageMigrationController.GetPortByName("LocalMem"), 16)
 }
