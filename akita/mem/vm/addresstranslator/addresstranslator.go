@@ -51,6 +51,57 @@ type AddressTranslator struct {
 	isWaitingOnGL0InvalidateRsp    bool
 	currentGL0InvReq               *mem.GL0InvalidateReq
 	totalRequestsUponGL0InvArrival int
+
+	// migrationHook is nil unless page migration is enabled. When set, every
+	// translated access is resolved against it (it may hold the access while
+	// its page migrates) and reports the issue and completion of the
+	// physical access so that a migration can drain in-flight accesses.
+	migrationHook MigrationHook
+	held          []heldTranslation
+
+	// HeldAccesses counts the accesses the migration hook held.
+	HeldAccesses uint64
+}
+
+// MigrationHook lets a page-migration manager observe and gate the
+// translated accesses of an address translator.
+type MigrationHook interface {
+	// Resolve is called when the translation of an access arrives. It
+	// returns the page to use (the authoritative mapping, which may differ
+	// from a stale TLB copy) and false if the access must be held because
+	// its page is migrating. A held access is retried after the hook wakes
+	// the translator with TickLater.
+	Resolve(now sim.VTimeInSec, at Waker, pid vm.PID,
+		vAddr uint64, page vm.Page) (vm.Page, bool)
+	// Issued is called after a translated access has been sent below.
+	Issued(now sim.VTimeInSec, pid vm.PID, vAddr, pAddr uint64)
+	// Completed is called when the access to pAddr has been answered.
+	Completed(now sim.VTimeInSec, pAddr uint64)
+}
+
+// Waker is a component that can be asked to tick again.
+type Waker interface {
+	TickLater(now sim.VTimeInSec)
+}
+
+type heldTranslation struct {
+	transaction *transaction
+	rsp         *vm.TranslationRsp
+}
+
+// SetMigrationHook installs a page-migration hook (nil removes it).
+func (t *AddressTranslator) SetMigrationHook(h MigrationHook) {
+	t.migrationHook = h
+}
+
+// DeviceID returns the ID of the GPU that owns the translator.
+func (t *AddressTranslator) DeviceID() uint64 {
+	return t.deviceID
+}
+
+// NumHeld returns the number of accesses held by the migration hook.
+func (t *AddressTranslator) NumHeld() int {
+	return len(t.held)
 }
 
 // SetTranslationProvider sets the remote port that can translate addresses.
@@ -81,6 +132,10 @@ func (t *AddressTranslator) runPipeline(now sim.VTimeInSec) bool {
 
 	for i := 0; i < t.numReqPerCycle; i++ {
 		madeProgress = t.respond(now) || madeProgress
+	}
+
+	if len(t.held) > 0 {
+		madeProgress = t.releaseHeld(now) || madeProgress
 	}
 
 	for i := 0; i < t.numReqPerCycle; i++ {
@@ -217,10 +272,60 @@ func (t *AddressTranslator) parseTranslation(now sim.VTimeInSec) bool {
 
 	transaction.translationRsp = transRsp
 	transaction.translationDone = true
+	page := transRsp.Page
+	if t.migrationHook != nil {
+		reqFromTop := transaction.incomingReqs[0]
+		resolved, ok := t.migrationHook.Resolve(now, t, reqFromTop.GetPID(),
+			reqFromTop.GetAddress(), page)
+		if !ok {
+			t.held = append(t.held, heldTranslation{transaction, transRsp})
+			t.HeldAccesses++
+			t.translationPort.Retrieve(now)
+			return true
+		}
+		page = resolved
+	}
+
+	if !t.sendTranslated(now, transaction, page) {
+		return false
+	}
+
+	t.translationPort.Retrieve(now)
+
+	return true
+}
+
+// releaseHeld retries, in arrival order, the accesses held by the migration
+// hook. It stops at the first one that is still held or cannot be sent, so
+// held accesses leave in order.
+func (t *AddressTranslator) releaseHeld(now sim.VTimeInSec) bool {
+	madeProgress := false
+	for len(t.held) > 0 {
+		h := t.held[0]
+		reqFromTop := h.transaction.incomingReqs[0]
+		page, ok := t.migrationHook.Resolve(now, t, reqFromTop.GetPID(),
+			reqFromTop.GetAddress(), h.rsp.Page)
+		if !ok {
+			return madeProgress
+		}
+		if !t.sendTranslated(now, h.transaction, page) {
+			return madeProgress
+		}
+		t.held = t.held[1:]
+		madeProgress = true
+	}
+	return madeProgress
+}
+
+func (t *AddressTranslator) sendTranslated(
+	now sim.VTimeInSec,
+	transaction *transaction,
+	page vm.Page,
+) bool {
 	reqFromTop := transaction.incomingReqs[0]
 	translatedReq := t.createTranslatedReq(
 		reqFromTop,
-		transaction.translationRsp.Page,
+		page,
 		transaction.translationReq)
 	translatedReq.Meta().SendTime = now
 	err := t.bottomPort.Send(translatedReq)
@@ -230,6 +335,11 @@ func (t *AddressTranslator) parseTranslation(now sim.VTimeInSec) bool {
 	// fmt.Printf("%0.9f,%s,FeedbackReq,%s,\n",
 	// 	float64(now), transRsp.Dst.Name(), transRsp.TaskID)
 
+	if t.migrationHook != nil {
+		t.migrationHook.Issued(now, reqFromTop.GetPID(),
+			reqFromTop.GetAddress(), translatedReq.GetAddress())
+	}
+
 	t.inflightReqToBottom = append(t.inflightReqToBottom,
 		reqToBottom{
 			reqFromTop:  reqFromTop,
@@ -238,13 +348,11 @@ func (t *AddressTranslator) parseTranslation(now sim.VTimeInSec) bool {
 	t.traceSharingAccess(
 		transaction.needTime,
 		reqFromTop,
-		transaction.translationRsp.Page)
+		page)
 	transaction.incomingReqs = transaction.incomingReqs[1:]
 	if len(transaction.incomingReqs) == 0 {
 		t.removeExistingTranslation(transaction)
 	}
-
-	t.translationPort.Retrieve(now)
 
 	tracing.TraceReqFinalize(transaction.translationReq, t)
 	tracing.TraceReqInitiate(translatedReq, t,
@@ -316,6 +424,10 @@ func (t *AddressTranslator) respond(now sim.VTimeInSec) bool {
 		}
 
 		t.removeReqToBottomByID(rsp.(mem.AccessRsp).GetRspTo())
+		if t.migrationHook != nil {
+			t.migrationHook.Completed(now,
+				reqToBottomCombo.reqToBottom.GetAddress())
+		}
 
 		tracing.TraceReqFinalize(reqToBottomCombo.reqToBottom, t)
 		tracing.TraceReqComplete(reqToBottomCombo.reqFromTop, t)

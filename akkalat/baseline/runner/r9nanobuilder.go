@@ -23,6 +23,7 @@ import (
 	"github.com/sarchlab/akita/v3/tracing"
 	"github.com/sarchlab/mgpusim/v3/timing/cp"
 	"github.com/sarchlab/mgpusim/v3/timing/cu"
+	"github.com/sarchlab/mgpusim/v3/timing/pagemigration"
 	"github.com/sarchlab/mgpusim/v3/timing/pagemigrationcontroller"
 	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 )
@@ -68,6 +69,8 @@ type R9NanoGPUBuilder struct {
 	rdmaMaxOutstanding             int
 	t18                            rdma.T18Config
 	gpmPreset                      gpmPreset
+	pageMigration                  pagemigration.Config
+	pmEngine                       *pagemigration.CopyEngine
 
 	enableISADebugging bool
 	enableMemTracing   bool
@@ -488,6 +491,7 @@ func (b R9NanoGPUBuilder) Build(name string, id uint64) *GPU {
 	b.installRemoteReuseKernelInvalidation()
 
 	b.populateExternalPorts()
+	b.recordPageMigrationParts()
 
 	return b.gpu
 }
@@ -558,6 +562,9 @@ func (b *R9NanoGPUBuilder) populateExternalPorts() {
 		b.pageMigrationController.GetPortByName("Remote"))
 	b.gpu.Domain.AddPort("L2TLB", b.l2TLB.OutsidePort)
 	b.gpu.Domain.AddPort("L2TLBToIOMMU", b.l2TLB.IOMMUPort)
+	if b.pmEngine != nil {
+		b.gpu.Domain.AddPort("PageMigrationDMA", b.pmEngine.RemotePort())
+	}
 
 	// for i, l2TLB := range b.l2TLBs {
 	// 	name := fmt.Sprintf("Translation[%02d]", i)
@@ -641,6 +648,10 @@ func (b *R9NanoGPUBuilder) connectL1ToL2() {
 		l1ToL2Conn.PlugIn(l2.GetPortByName("Top"), 64)
 	}
 	b.rdmaEngine.SetRemoteCacheModuleFinder(remoteCacheFinder)
+	if b.pmEngine != nil {
+		b.pmEngine.L2Finder = lowModuleFinder
+		l1ToL2Conn.PlugIn(b.pmEngine.L2Port(), 64)
+	}
 	requestFilters := make([]*writeback.TypedCuckooFilter, 0, len(b.l2Caches))
 	for _, l2 := range b.l2Caches {
 		requestFilters = append(requestFilters, l2.RequestFilter())
@@ -1417,6 +1428,7 @@ func (b *R9NanoGPUBuilder) buildCP() {
 	b.buildDMAEngine()
 	b.buildRDMAEngine()
 	b.buildPageMigrationController()
+	b.buildPageMigrationEngine()
 }
 
 func (b *R9NanoGPUBuilder) numCU() int {

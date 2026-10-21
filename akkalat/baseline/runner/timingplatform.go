@@ -23,6 +23,7 @@ import (
 	"github.com/sarchlab/mgpusim/v3/emu"
 	"github.com/sarchlab/mgpusim/v3/insts"
 	"github.com/sarchlab/mgpusim/v3/timing/cp"
+	"github.com/sarchlab/mgpusim/v3/timing/pagemigration"
 	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 )
 
@@ -71,6 +72,7 @@ type R9NanoPlatformBuilder struct {
 	rdmaPipelineLatency       int
 	rdmaMaxOutstanding        int
 	t18                       rdma.T18Config
+	pageMigration             pagemigration.Config
 
 	// legacyNoKernelL1Invalidate restores the pre-fix behavior in which a
 	// kernel launch does not invalidate L1V / L1S / L1I.
@@ -516,6 +518,7 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 	b.configT18Topology()
 
 	connector.EstablishNetwork()
+	pm := b.buildPageMigrationManager(pageTable)
 
 	for _, gpu := range b.gpus {
 		gpu.MMUEngine = mmuComponent
@@ -554,10 +557,11 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 	}
 
 	return &Platform{
-		Engine:   b.engine,
-		Driver:   gpuDriver,
-		GPUs:     b.gpus,
-		IOMMUTLB: b.IOMMUTLB,
+		Engine:        b.engine,
+		Driver:        gpuDriver,
+		GPUs:          b.gpus,
+		IOMMUTLB:      b.IOMMUTLB,
+		PageMigration: pm,
 	}
 }
 
@@ -750,6 +754,7 @@ func (b *R9NanoPlatformBuilder) createGPUBuilder(
 			b.rdmaMaxOutstanding,
 		).
 		WithT18(b.t18).
+		WithPageMigration(b.pageMigration).
 		WithLegacyNoKernelL1Invalidate(b.legacyNoKernelL1Invalidate).
 		WithGlobalStorage(b.globalStorage).
 		WithPerfAnalyzer(b.perfAnalyzer).
