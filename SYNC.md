@@ -419,3 +419,9 @@
 
 ### 2026-10-21 [claude-code] 追加"网络紧张"场景 W=2048@48（m2w 的第 5 个条件）
 - 用户要求；主会话直接在 v3m2w 两台队列追加 24 行（tag `w2048b48`）并重启调度器（yss3 曾误追加重复的 12 行，已去重，没有重复启动）。全部 exit 0。结果摘要见 STATUS m2w 一节；还没有并入 `results_index/m2w/m2w.csv`。
+
+### 2026-10-21 [claude-code] data movement 离线分析（dm）；网络紧张场景补 19 个 workload；page migration 扩到 25 个
+- `results_index/dm/`：字节×跳数、重复搬运与共享上限、压缩提案，摘要见 STATUS。
+- v3m2w 追加 38 个运行（tag `w256b48m`，48 GB/s、W=256，19 个 workload 的 baseline/Complete，完整统计），在跑。
+- 停掉 MSHR=64 两组（`w256b48mshr64`：只改 MSHR 被 `-l1v-max-concurrent-trans=16` 卡住；`w256b48m64`：用户要求停）。
+- page migration（分支 `isca27/page-migration`，二进制 c74ef96，未推送）：DESIGN.md 在 `results_index/pm/`；扩到 25 个 workload × 9 个配置（225 个运行）在跑。PR 首个结果：fault-4K 2.9×（ideal 同），Complete 13.3×。

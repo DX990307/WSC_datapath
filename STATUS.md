@@ -183,6 +183,12 @@
 
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
 
+### data movement 离线分析（10-21；`results_index/dm/`；只用已有统计，没改代码、没跑新模拟）
+- 热点 owner 全在角落（tile 0、tile 48：小 buffer 放 GPM0、余数页放最后一个 GPM）；角落 2 条出链路 + 先 Y 后 X 路由，PR 87% 出流量走 0→7 一条链路。均匀流量压在中部 56 条链路（41–43% 字节）。
+- Complete 省下的字节×跳数主要来自本地命中（M3 + 预取）；打包按字节只省 3–15%（作用是省窗口位）；M2 ≈ 0–2%。
+- M3 之后剩余网络 line 里仍有重复取：均值 0.31（KM 0.93、npbcg 0.82、mg 0.62、cfd 0.60）。主因是 kernel 边界整体作废（npbcg 141 万填入 135 万被作废），L2 70–95% 空闲。
+- 排序：①M3 跨 kernel 保留只读 line（上限：网络 line 0.32、mesh 0.22）②主动推送（sssp/ivf，需预测器）③热点小数据放中间/复制 ④压缩（384 GB/s 下几乎无上限）⑤owner 自适应等待（W=64 下净负）。压缩需要新加只读统计（提案在 dm/analysis.md）。
+
 ### M2 / 分配方式的敏感性：W 和带宽（10-21，二进制 `4235991`；`results_index/m2w/`）
 - 6 个 workload（PR、npbcg、sssp、bfs、allreduce、CFD）× 4 个配置（baseline、M1+M3、Complete、Complete 分配 shared）；条件 W=64@384（复用 abl3c384）、W=256@384、W=2048@384、W=64@48（`-bandwidth=3`）。W=256@48 用户中途取消（结果留在服务器，不进分析）。72 个新运行全部 exit 0，无挂住。
 - **M2 增益**（M1+M3 / Complete 的 GMEAN）：0.984 / 1.008 / 1.004 / 1.007。最大 PR @W=2048 +2.7%（热点 owner 出口链路饱和处）。sssp/bfs 的负值来自单个最慢 GPM 的关键路径波动和翻译延迟尖峰，不是数据通路变慢。
