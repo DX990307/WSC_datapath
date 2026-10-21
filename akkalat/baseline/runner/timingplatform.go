@@ -45,6 +45,7 @@ type R9NanoPlatformBuilder struct {
 	maxNumHops                int
 	networkFlitSize           int
 	endpointChannels          int
+	switchBufferFlits         int
 	endpointBufferSize        int
 	l1vRemoteMaxInflight      int
 	l1vMSHREntries            int
@@ -248,6 +249,14 @@ func (b R9NanoPlatformBuilder) WithEndpointChannels(
 	n int,
 ) R9NanoPlatformBuilder {
 	b.endpointChannels = n
+	return b
+}
+
+// WithSwitchBufferFlits sets the mesh switch port buffer depth in flits.
+func (b R9NanoPlatformBuilder) WithSwitchBufferFlits(
+	n int,
+) R9NanoPlatformBuilder {
+	b.switchBufferFlits = n
 	return b
 }
 
@@ -619,7 +628,8 @@ func (b R9NanoPlatformBuilder) createConnection(
 		WithBandwidth(float64(b.bandwidth)).
 		WithSwitchLatency(b.switchLatency).
 		WithEndpointTransferPerCycle(b.endpointChannels).
-		WithEndpointBufferSize(b.endpointBufferSize)
+		WithEndpointBufferSize(b.endpointBufferSize).
+		WithSwitchBufferFlits(b.switchBufferFlits)
 
 	if b.traceVis {
 		connector = connector.WithVisTracer(b.visTracer)

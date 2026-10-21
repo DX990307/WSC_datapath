@@ -28,6 +28,7 @@ type Connector struct {
 	linkTransferPerCycle     float64
 	endpointTransferPerCycle int
 	endpointBufferSize       int
+	switchBufferFlits        int
 
 	gridSize [3]int
 	gridCap  [3]int
@@ -109,6 +110,24 @@ func (c *Connector) WithEndpointTransferPerCycle(num int) *Connector {
 func (c *Connector) WithEndpointBufferSize(num int) *Connector {
 	c.endpointBufferSize = num
 	return c
+}
+
+// WithSwitchBufferFlits sets the depth (in flits) of every switch port buffer
+// (incoming/outgoing port buffers and the switch's route/forward/send-out
+// buffers) independently of the link bandwidth: depth = max(transfers per
+// cycle, num). The per-cycle channel throughput stays at the link bandwidth.
+// A non-positive value keeps buffers equal to the transfers per cycle.
+// Device-side endpoint buffers are not changed.
+func (c *Connector) WithSwitchBufferFlits(num int) *Connector {
+	c.switchBufferFlits = num
+	return c
+}
+
+func (c *Connector) switchBufSize(channels int) int {
+	if c.switchBufferFlits > channels {
+		return c.switchBufferFlits
+	}
+	return channels
 }
 
 // WithMonitor sets a monitor that can inspect the internal states of the
@@ -292,11 +311,12 @@ func (c *Connector) createSwitches() {
 							NumOutputChannel: endpointTransferPerCycle,
 						},
 						SwitchEndParam: networkconnector.LinkEndSwitchParameter{
-							IncomingBufSize:  endpointBufferSize,
-							OutgoingBufSize:  endpointBufferSize,
+							IncomingBufSize:  c.switchBufSize(endpointBufferSize),
+							OutgoingBufSize:  c.switchBufSize(endpointBufferSize),
 							Latency:          1,
 							NumInputChannel:  endpointTransferPerCycle,
 							NumOutputChannel: endpointTransferPerCycle,
+							BufferSize:       c.switchBufferFlits,
 						},
 						LinkParam: networkconnector.LinkParameter{
 							IsIdeal:       true,
@@ -366,20 +386,22 @@ func (c *Connector) createLink(
 	return c.connector.ConnectSwitches(a, b,
 		networkconnector.SwitchToSwitchLinkParameter{
 			LeftEndParam: networkconnector.LinkEndSwitchParameter{
-				IncomingBufSize:  transferPerCycle,
-				OutgoingBufSize:  transferPerCycle,
+				IncomingBufSize:  c.switchBufSize(transferPerCycle),
+				OutgoingBufSize:  c.switchBufSize(transferPerCycle),
 				Latency:          c.switchLatency,
 				NumInputChannel:  transferPerCycle,
 				NumOutputChannel: transferPerCycle,
 				PortName:         DirectionA,
+				BufferSize:       c.switchBufferFlits,
 			},
 			RightEndParam: networkconnector.LinkEndSwitchParameter{
-				IncomingBufSize:  transferPerCycle,
-				OutgoingBufSize:  transferPerCycle,
+				IncomingBufSize:  c.switchBufSize(transferPerCycle),
+				OutgoingBufSize:  c.switchBufSize(transferPerCycle),
 				Latency:          c.switchLatency,
 				NumInputChannel:  transferPerCycle,
 				NumOutputChannel: transferPerCycle,
 				PortName:         DirectionB,
+				BufferSize:       c.switchBufferFlits,
 			},
 			LinkParam: networkconnector.LinkParameter{
 				IsIdeal:       false, // Use channel model for NoC tracing

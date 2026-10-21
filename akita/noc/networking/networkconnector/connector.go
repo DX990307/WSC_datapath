@@ -22,6 +22,9 @@ type LinkEndSwitchParameter struct {
 	NumOutputChannel int
 	Latency          int
 	PortName         string
+	// BufferSize is the depth (in flits) of the switch's internal route,
+	// forward, and send-out buffers for this port. 0 keeps the channel count.
+	BufferSize int
 }
 
 // LinkEndDeviceParameter defines the parameter that associated with an end of a
@@ -310,6 +313,7 @@ func (c *Connector) connectEndPointWithSwitch(
 		WithLatency(param.SwitchEndParam.Latency).
 		WithNumInputChannel(param.SwitchEndParam.NumInputChannel).
 		WithNumOutputChannel(param.SwitchEndParam.NumOutputChannel).
+		WithBufferSize(param.SwitchEndParam.BufferSize).
 		AddPort()
 
 	conn := c.connectPorts(epPort, swPort,
@@ -417,6 +421,7 @@ func (c *Connector) ConnectSwitches(
 		WithLatency(param.LeftEndParam.Latency).
 		WithNumInputChannel(param.LeftEndParam.NumInputChannel).
 		WithNumOutputChannel(param.LeftEndParam.NumOutputChannel).
+		WithBufferSize(param.LeftEndParam.BufferSize).
 		AddPort()
 
 	switching.MakeSwitchPortAdder(rightSwitch).
@@ -424,6 +429,7 @@ func (c *Connector) ConnectSwitches(
 		WithLatency(param.RightEndParam.Latency).
 		WithNumInputChannel(param.RightEndParam.NumInputChannel).
 		WithNumOutputChannel(param.RightEndParam.NumOutputChannel).
+		WithBufferSize(param.RightEndParam.BufferSize).
 		AddPort()
 
 	conn := c.connectPorts(leftPort, rightPort,

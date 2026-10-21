@@ -508,6 +508,7 @@ type SwitchPortAdder struct {
 	latency          int
 	numInputChannel  int
 	numOutputChannel int
+	bufferSize       int
 }
 
 // MakeSwitchPortAdder creates a SwitchPortAdder that can add ports for the
@@ -551,14 +552,33 @@ func (a SwitchPortAdder) WithNumOutputChannel(num int) SwitchPortAdder {
 	return a
 }
 
+// WithBufferSize sets the depth (in flits) of the port's route, forward, and
+// send-out buffers. The depth never drops below the channel count, so the
+// default (0) keeps buffers equal to the per-cycle channel count. The number
+// of flits moved per cycle is still bounded by the channel counts.
+func (a SwitchPortAdder) WithBufferSize(num int) SwitchPortAdder {
+	a.bufferSize = num
+	return a
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // AddPort adds the port to the switch.
 func (a SwitchPortAdder) AddPort() {
 	complexID := len(a.sw.ports)
 	complexName := fmt.Sprintf("%s.PortComplex%d", a.sw.Name(), complexID)
 
-	sendOutBuf := sim.NewBuffer(complexName+"SendOutBuf", a.numOutputChannel)
-	forwardBuf := sim.NewBuffer(complexName+"ForwardBuf", a.numInputChannel)
-	routeBuf := sim.NewBuffer(complexName+"RouteBuf", a.numInputChannel)
+	sendOutBuf := sim.NewBuffer(complexName+"SendOutBuf",
+		maxInt(a.numOutputChannel, a.bufferSize))
+	forwardBuf := sim.NewBuffer(complexName+"ForwardBuf",
+		maxInt(a.numInputChannel, a.bufferSize))
+	routeBuf := sim.NewBuffer(complexName+"RouteBuf",
+		maxInt(a.numInputChannel, a.bufferSize))
 	pipeline := pipelining.MakeBuilder().
 		WithNumStage(a.latency).
 		WithCyclePerStage(1).

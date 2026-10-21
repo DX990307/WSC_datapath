@@ -97,6 +97,8 @@ var bandwidthFlag = flag.Int("bandwidth", 1,
 	"The bandwidth of the network as a multiple of 16GB/s.")
 var endpointChannelsFlag = flag.Int("endpoint-channels", 0,
 	"Override local device endpoint input/output flit channels per cycle; 0 uses network bandwidth.")
+var switchBufferFlitsFlag = flag.Int("switch-buffer-flits", 0,
+	"Depth (flits) of every mesh switch port buffer, independent of -bandwidth: max(bandwidth, N); 0 keeps buffers = bandwidth.")
 var endpointBufferSizeFlag = flag.Int("endpoint-buffer-size", 0,
 	"Override local device endpoint buffer capacity; 0 uses endpoint channel count.")
 var rdmaPipelineWidthFlag = flag.Int("rdma-pipeline-width", 8,

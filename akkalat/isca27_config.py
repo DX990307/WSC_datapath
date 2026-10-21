@@ -59,6 +59,13 @@ ORACLE_FLAGS = {
     "-force-local-data-access": "oracle（有意偏离 mi200.json 的分析实验）：L1V miss 一律走本地 L2/DRAM",
 }
 
+# Network scaling (P16 v3net, user 10-20): intentional configuration
+# deviations that the user must confirm, not benchmark parameters.
+MESH_FLAGS = {
+    "-mesh-size": "规模实验（有意偏离 mi200.json，需要用户确认）：N×N mesh，CPU/IOMMU 在中心，N²−1 个 GPM",
+    "-switch-buffer-flits": "网络按 CU 比例缩小（有意偏离 mi200.json，用户 10-20 确认）：交换机端口缓冲深度 = max(-bandwidth, N) flit，与链路带宽分开；0 = 原行为",
+}
+
 
 def preset_keys(preset):
     """Flag names the preset sets (gpm-preset, num-memory-banks, ...)."""
@@ -131,8 +138,8 @@ def deviation(config_list, bench, base=None):
         if name in used or name in paper:
             reason = "命令行覆盖配置文件"
         else:
-            reason = STAT_FLAGS.get(f"-{name}") or ORACLE_FLAGS.get(
-                f"-{name}", "benchmark 参数（不算配置修改）")
+            reason = (STAT_FLAGS.get(f"-{name}") or ORACLE_FLAGS.get(f"-{name}")
+                      or MESH_FLAGS.get(f"-{name}", "benchmark 参数（不算配置修改）"))
         out.append({"flag": flag, "change": "added", "reason": reason})
         i += 1
     return out

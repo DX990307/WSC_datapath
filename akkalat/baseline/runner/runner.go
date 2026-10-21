@@ -432,6 +432,7 @@ func (r *Runner) buildTimingPlatform() {
 		WithNetworkFlitSize(*networkFlitSizeFlag).
 		WithEndpointChannels(*endpointChannelsFlag).
 		WithEndpointBufferSize(*endpointBufferSizeFlag).
+		WithSwitchBufferFlits(*switchBufferFlitsFlag).
 		WithRDMAPipeline(
 			*rdmaPipelineWidthFlag,
 			*rdmaPipelineLatencyFlag,
