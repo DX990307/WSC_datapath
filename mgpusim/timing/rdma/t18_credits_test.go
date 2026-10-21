@@ -80,7 +80,7 @@ func TestT18CreditsSharedPool(t *testing.T) {
 	if ok, _ := a.CanSend(2, none); ok {
 		t.Fatal("full pool must refuse")
 	}
-	a.Release(1)
+	a.Release(1, false)
 	if ok, _ := a.CanSend(2, none); !ok {
 		t.Fatal("released slot must be usable")
 	}
@@ -110,7 +110,7 @@ func TestT18CreditsBorrowing(t *testing.T) {
 	}
 	// Destination 2 now waits: borrowing must leave its credits free.
 	for i := 0; i < 10; i++ {
-		a.Release(1)
+		a.Release(1, false)
 	}
 	waiting2 := func(e int) bool { return e == 2 }
 	for i := 0; i < own1; i++ {

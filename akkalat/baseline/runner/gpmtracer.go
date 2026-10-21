@@ -84,6 +84,9 @@ type gpmKernelStats struct {
 	LastEndNS    float64
 	SumWGDurNS   float64
 	TimedWGs     uint64 // completed WGs whose start was seen
+	// ActiveNS: time this GPM had at least one WG of the kernel running
+	// (P16: "every GPM in use").
+	ActiveNS float64
 
 	L1VReadLocal                            latencyCounter
 	L1VReadRemote                           latencyCounter
@@ -105,6 +108,8 @@ type gpmTraceKernel struct {
 	Ended    bool
 	EndNS    float64
 	PerGPM   []gpmKernelStats
+	// AllActiveNS: time every GPM had at least one running WG.
+	AllActiveNS float64
 }
 
 type gpmTraceWG struct {
@@ -138,6 +143,13 @@ type gpmTraceAgg struct {
 	wgs         map[string]gpmTraceWG
 	l1vReqs     map[string]gpmTraceMemReq
 	tlbReqs     map[string]gpmTraceMemReq
+
+	// Running WGs per GPM (tracked WGs only) and since when each GPM, and
+	// all GPMs together, have been busy.
+	running     []int
+	activeSince []float64
+	numActive   int
+	allSince    float64
 }
 
 func newGPMTraceAgg(gpms []gpmTraceGPM) *gpmTraceAgg {
@@ -150,6 +162,8 @@ func newGPMTraceAgg(gpms []gpmTraceGPM) *gpmTraceAgg {
 		wgs:         map[string]gpmTraceWG{},
 		l1vReqs:     map[string]gpmTraceMemReq{},
 		tlbReqs:     map[string]gpmTraceMemReq{},
+		running:     make([]int, len(gpms)),
+		activeSince: make([]float64, len(gpms)),
 	}
 	for i := range a.curKernel {
 		a.curKernel[i] = -1
@@ -355,6 +369,14 @@ func (a *gpmTraceAgg) wgStart(wgKey string, gpm int, nowNS float64) {
 	}
 	s.Started++
 	a.wgs[wgKey] = gpmTraceWG{kernel: a.curKernel[gpm], gpm: gpm, startNS: nowNS}
+	if a.running[gpm] == 0 {
+		a.activeSince[gpm] = nowNS
+		a.numActive++
+		if a.numActive == len(a.gpms) {
+			a.allSince = nowNS
+		}
+	}
+	a.running[gpm]++
 }
 
 func (a *gpmTraceAgg) wgEnd(wgKey string, gpm int, nowNS float64) {
@@ -379,6 +401,14 @@ func (a *gpmTraceAgg) wgEnd(wgKey string, gpm int, nowNS float64) {
 	if ok {
 		s.SumWGDurNS += nowNS - wg.startNS
 		s.TimedWGs++
+		a.running[wg.gpm]--
+		if a.running[wg.gpm] == 0 {
+			s.ActiveNS += nowNS - a.activeSince[wg.gpm]
+			if a.numActive == len(a.gpms) {
+				a.kernels[wg.kernel].AllActiveNS += nowNS - a.allSince
+			}
+			a.numActive--
+		}
 	}
 }
 
@@ -476,6 +506,7 @@ var gpmTraceCSVHeader = []string{
 	"l1v_write_remote_mean_lat_ns",
 	"l2tlb_miss_local", "l2tlb_miss_remote",
 	"l2tlb_miss_remote_lat_sum_ns", "l2tlb_miss_remote_mean_lat_ns",
+	"gpm_active_ns", "kernel_all_gpm_active_ns",
 }
 
 func fmtNS(v float64, valid bool) string {
@@ -540,6 +571,7 @@ func (a *gpmTraceAgg) writeCSV(w io.Writer) error {
 				u(s.TLBMissLocalIssued), u(s.TLBMissRemoteIssued),
 				fmtNS(s.TLBMissRemote.SumNS, true),
 				fmtNS(s.TLBMissRemote.mean(), true),
+				fmtNS(s.ActiveNS, true), fmtNS(k.AllActiveNS, true),
 			}
 			if _, err := fmt.Fprintln(w, strings.Join(row, ",")); err != nil {
 				return err

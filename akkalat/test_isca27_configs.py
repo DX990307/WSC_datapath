@@ -1,5 +1,6 @@
 """The config files must stay identical to the flags the paper scripts pass."""
 
+import json
 import os
 import re
 import unittest
@@ -314,6 +315,88 @@ class M1M2ConfigTest(unittest.TestCase):
         complete = dict(build_remote_data_path_ablation_configs(args))["complete"]
         self.assertEqual(self.added("complete_hpca_flags.json"),
                          flag_pairs(DEFAULT_BENCHMARK_FLAGS + complete))
+
+
+
+class V3ConfigTest(unittest.TestCase):
+    """ISCA'27 P16 v3 ablation configs (M1 = merge + pack + allocation at the
+    network interface, M2 = multicast, M3 = retention). W = 64 everywhere,
+    old m2 filter dedup off everywhere, mi200.json values untouched."""
+
+    NAMES = ["v3_m1.json", "v3_m1m2.json", "v3_m1m3.json", "v3_complete.json",
+             "v3_complete_nomerge.json", "v3_complete_nopack.json",
+             "v3_complete_alloc_shared.json", "v3_complete_alloc_near.json"]
+
+    def load(self, name):
+        return isca27_config.load(os.path.join(CONFIGS, name))
+
+    def added(self, name):
+        base = self.load("mi200.json")
+        got = self.load(name)
+        for key, value in base.items():
+            self.assertEqual(got[key], value, (name, key))
+        return {k: v for k, v in got.items() if k not in base}
+
+    def test_common_rules(self):
+        for name in self.NAMES:
+            got = self.added(name)
+            with open(os.path.join(CONFIGS, name)) as f:
+                raw = json.load(f)
+            self.assertEqual(raw["extends"], "mi200.json", name)
+            self.assertTrue(raw["_description"], name)
+            self.assertEqual(got["t18-window"], "64", name)
+            self.assertEqual(got["remote-data-path-dedup-enable"], "false", name)
+            self.assertNotIn("t18-req-entries", got, name)
+            self.assertNotIn("t18-owner-entries", got, name)
+            self.assertNotIn("t18-dist-credits", got, name)
+            merge = got["t18-req-merge"] == "true"
+            self.assertEqual(got["t18-owner-merge"], got["t18-req-merge"], name)
+            self.assertEqual(got["cupath-dedup-owner"], "m1" if merge else "none", name)
+            if got["t18-owner-multicast"] == "true":
+                self.assertTrue(merge, name)  # M2 builds on M1's owner merge
+
+    def test_complete_is_complete_new_at_w64(self):
+        want = self.added("complete_new.json")
+        want["t18-window"] = "64"
+        del want["t18-dist-credits"]
+        want["t18-credit-policy"] = "rtt"
+        # dedup owner m1 already forces the M2 filter dedup off
+        want["remote-data-path-dedup-enable"] = "false"
+        self.assertEqual(self.added("v3_complete.json"), want)
+
+    def test_ablations(self):
+        c = self.added("v3_complete.json")
+        def minus(**kv):
+            w = dict(c)
+            for k, v in kv.items():
+                w[k.replace("_", "-")] = v
+            return w
+        self.assertEqual(self.added("v3_m1.json"), minus(
+            t18_owner_multicast="false", remote_data_path_l2_enable="false",
+            remote_reuse_kernel_invalidate="false"))
+        self.assertEqual(self.added("v3_m1m2.json"), minus(
+            remote_data_path_l2_enable="false",
+            remote_reuse_kernel_invalidate="false"))
+        self.assertEqual(self.added("v3_m1m3.json"), minus(
+            t18_owner_multicast="false"))
+        self.assertEqual(self.added("v3_complete_nomerge.json"), minus(
+            t18_req_merge="false", t18_owner_merge="false",
+            t18_owner_multicast="false", cupath_dedup_owner="none"))
+        self.assertEqual(self.added("v3_complete_nopack.json"), minus(
+            remote_data_path_batching_enable="false",
+            remote_filter_prefetch_enable="false"))
+        self.assertEqual(self.added("v3_complete_alloc_shared.json"), minus(
+            t18_credit_policy="shared"))
+        want = minus(t18_credit_policy="near")
+        want["t18-near-reserve"] = "16"
+        want["t18-near-hops"] = "3"
+        self.assertEqual(self.added("v3_complete_alloc_near.json"), want)
+
+    def test_v3_stats_flag_is_a_statistic(self):
+        out = isca27_config.deviation(os.path.join(CONFIGS, "mi200.json"),
+                                      ["-report-cupath-v3-stats"])
+        self.assertEqual(out[0]["reason"],
+                         isca27_config.STAT_FLAGS["-report-cupath-v3-stats"])
 
 
 if __name__ == "__main__":

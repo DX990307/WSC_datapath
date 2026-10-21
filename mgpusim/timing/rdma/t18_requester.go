@@ -39,10 +39,12 @@ type t18ReqEntry struct {
 	open    bool
 	inTable bool
 	sent    bool
-	seq     uint64
-	sentAt  sim.VTimeInSec
-	netReq  mem.AccessReq
-	waiters []t18Waiter
+	// nearZone: the transaction holds a near-zone slot (credit policy near).
+	nearZone bool
+	seq      uint64
+	sentAt   sim.VTimeInSec
+	netReq   mem.AccessReq
+	waiters  []t18Waiter
 }
 
 type t18L1Rsp struct {
@@ -73,6 +75,8 @@ type t18State struct {
 	lastStallID string
 	lastIntegNS sim.VTimeInSec
 	hopInflight [t18MaxHops]int
+	hopQueued   [t18MaxHops]int // queued entries (standalone) / open batches (composed)
+	ownerLastNS sim.VTimeInSec  // last owner-table integration (ExtraStats)
 
 	// M1+M2 composition (m1m2_compose.go): the requester runs on M2's path.
 	compose           bool
@@ -131,7 +135,13 @@ func (c *Comp) ConfigureT18(cfg T18Config) {
 	s.stats.ReqMergeEnabled = cfg.ReqMerge
 	s.stats.OwnerMergeEnabled = cfg.OwnerMerge
 	s.stats.MulticastEnabled = cfg.OwnerMerge && cfg.OwnerMulticast
-	s.stats.DistCredits = cfg.DistCredits
+	s.stats.DistCredits = cfg.EffectiveCreditPolicy() != T18CreditShared
+	s.stats.CreditPolicy = cfg.EffectiveCreditPolicy()
+	if s.stats.CreditPolicy == T18CreditNear {
+		s.stats.NearReserve = uint64(cfg.NearReserve)
+		s.stats.NearHops = uint64(cfg.NearHops)
+	}
+	s.stats.ExtraStats = cfg.ExtraStats
 	s.stats.OwnerWindow = uint64(ownerWindow)
 
 	if cfg.RequesterActive() && c.remoteConfig.Enabled {
@@ -218,7 +228,8 @@ func (c *Comp) t18BuildCredits() {
 		return
 	}
 	s.composedOpen = make([]int, len(topo.ports))
-	s.credits = newT18CreditAllocator(c.t18Window, s.cfg.DistCredits, s.hops)
+	s.credits = newT18CreditAllocatorPolicy(c.t18Window,
+		s.cfg.EffectiveCreditPolicy(), s.cfg.NearReserve, s.cfg.NearHops, s.hops)
 	s.reqQueues = make([][]*t18ReqEntry, len(topo.ports))
 	s.stats.HopDests = [t18MaxHops]uint64{}
 	s.stats.HopCredits = [t18MaxHops]uint64{}
@@ -246,6 +257,7 @@ func (c *Comp) GetT18Stats() T18Stats {
 		s.stats.ReqTable = s.m1Index.Stats()
 	}
 	if s.ownerActive {
+		c.t18OwnerIntegrate(c.Engine.CurrentTime())
 		s.stats.OwnerTable = s.ownerTable.Stats()
 	}
 	return s.stats
@@ -270,6 +282,66 @@ func (c *Comp) t18Integrate(now sim.VTimeInSec) {
 		if s.hopInflight[h] > 0 {
 			s.stats.HopInflightAreaNS[h] += float64(s.hopInflight[h]) * dt
 		}
+	}
+	if s.cfg.ExtraStats {
+		c.t18IntegrateExtra(dt)
+	}
+}
+
+// t18IntegrateExtra accumulates the ISCA'27 v3 distance-group and near-zone
+// statistics over dt ns of unchanged state.
+func (c *Comp) t18IntegrateExtra(dt float64) {
+	s := c.t18
+	a := s.credits
+	if a == nil {
+		return
+	}
+	full := a.total >= a.window
+	var inflight, queued [3]int
+	for h := 0; h < t18MaxHops; h++ {
+		g := t18DistGroup(h)
+		inflight[g] += s.hopInflight[h]
+		queued[g] += s.hopQueued[h]
+	}
+	for g := 0; g < 3; g++ {
+		s.stats.GroupInflightAreaNS[g] += float64(inflight[g]) * dt
+		s.stats.GroupQueuedAreaNS[g] += float64(queued[g]) * dt
+		if full && queued[g] > 0 {
+			s.stats.GroupQueuedFullNS[g] += float64(queued[g]) * dt
+			s.stats.GroupWaitFullTimeNS[g] += dt
+		}
+	}
+	if a.nearReserve > 0 {
+		s.stats.NearZoneAreaNS += float64(a.nearTotal) * dt
+		if a.nearTotal >= a.nearReserve {
+			s.stats.NearZoneFullNS += dt
+		}
+	}
+}
+
+// t18NoteSend records the near-zone statistics of a transaction just
+// admitted to destination d (call before Acquire).
+func (c *Comp) t18NoteSend(d int, borrow bool) {
+	s := c.t18
+	a := s.credits
+	if !s.cfg.ExtraStats || a.nearReserve == 0 || !a.near[d] {
+		return
+	}
+	if a.nearZoneFree(d) {
+		s.stats.NearZoneSends++
+		return
+	}
+	s.stats.NearOverflowSends++
+	if borrow {
+		s.stats.NearOverflowBorrowed++
+	}
+}
+
+// t18HopQueued adjusts the queued count of destination d's hop bucket.
+func (c *Comp) t18HopQueued(d, delta int) {
+	s := c.t18
+	if h := s.hops[d]; h >= 0 {
+		s.hopQueued[h] += delta
 	}
 }
 
@@ -367,6 +439,7 @@ func (c *Comp) t18ReqFromL1(
 	c.t18Integrate(now)
 	s.reqQueues[dstIdx] = append(s.reqQueues[dstIdx], e)
 	s.queued++
+	c.t18HopQueued(dstIdx, 1)
 	if uint64(s.queued) > s.stats.ReqPeakQueued {
 		s.stats.ReqPeakQueued = uint64(s.queued)
 	}
@@ -457,14 +530,19 @@ func (c *Comp) t18ReqIssue(now sim.VTimeInSec) bool {
 		if a.distCredits {
 			reserved = c.t18ReservedCredits()
 		}
-		free := a.window - a.total
+		// Free slots of the general zone (all W slots unless policy near).
+		free := a.genWindow - a.genTotal
 		best := -1
 		borrowBest := false
 		for d, q := range s.reqQueues {
 			if len(q) == 0 {
 				continue
 			}
-			own := !a.distCredits || a.inflight[d] < a.credits[d]
+			nearZone := a.nearZoneFree(d)
+			if !nearZone && free <= 0 {
+				continue
+			}
+			own := nearZone || !a.distCredits || a.inflight[d] < a.credits[d]
 			if !own && free <= reserved {
 				continue
 			}
@@ -488,7 +566,9 @@ func (c *Comp) t18ReqIssue(now sim.VTimeInSec) bool {
 		s.reqQueues[best][0] = nil
 		s.reqQueues[best] = s.reqQueues[best][1:]
 		s.queued--
-		a.Acquire(best)
+		c.t18HopQueued(best, -1)
+		c.t18NoteSend(best, borrowBest)
+		e.nearZone = a.Acquire(best)
 		e.sent = true
 		e.sentAt = now
 		s.reqByNetID[e.netReq.Meta().ID] = e
@@ -546,7 +626,7 @@ func (c *Comp) t18ReqRsp(
 		s.reqTable.Delete(e)
 		e.inTable = false
 	}
-	s.credits.Release(e.dstIdx)
+	s.credits.Release(e.dstIdx, e.nearZone)
 	if h := s.hops[e.dstIdx]; h >= 0 {
 		s.hopInflight[h]--
 		s.stats.HopRTTTotalNS[h] += remoteDurationNS(now - e.sentAt)

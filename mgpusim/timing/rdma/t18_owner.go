@@ -106,6 +106,7 @@ func (c *Comp) t18OwnerReqFromOutside(
 		return true, false
 	}
 	e := &t18OwnerEntry{key: key, open: true, live: true}
+	c.t18OwnerIntegrate(now)
 	if !s.ownerTable.Insert(key, e) {
 		if s.ownerFallbackID != read.ID {
 			s.ownerFallbackID = read.ID
@@ -124,6 +125,7 @@ func (c *Comp) t18OwnerReqFromOutside(
 		WithInfo(read.Info).
 		Build()
 	if err := c.ToL2.Send(l2Req); err != nil {
+		c.t18OwnerIntegrate(now)
 		s.ownerTable.Delete(e)
 		return true, false
 	}
@@ -180,6 +182,7 @@ func (c *Comp) t18OwnerL2Rsp(now sim.VTimeInSec, rsp mem.AccessRsp) bool {
 	}
 	delete(s.ownerByL2ID, rsp.GetRspTo())
 	if s.ownerTable.Contains(e) {
+		c.t18OwnerIntegrate(now)
 		s.ownerTable.Delete(e)
 	}
 	e.open = false
@@ -311,4 +314,21 @@ func (c *Comp) t18OwnerSend(now sim.VTimeInSec) bool {
 		}
 	}
 	return madeProgress
+}
+
+// t18OwnerIntegrate accumulates the owner-table occupancy and full time
+// (ISCA'27 v3 statistics) up to now; call it before every table change.
+func (c *Comp) t18OwnerIntegrate(now sim.VTimeInSec) {
+	s := c.t18
+	if !s.cfg.ExtraStats || s.ownerTable == nil || now <= s.ownerLastNS {
+		return
+	}
+	dt := float64(now-s.ownerLastNS) * 1e9
+	s.ownerLastNS = now
+	n := s.ownerTable.Len()
+	s.stats.OwnerTimeNS += dt
+	s.stats.OwnerTableAreaNS += float64(n) * dt
+	if n >= s.ownerTable.Capacity() {
+		s.stats.OwnerTableFullNS += dt
+	}
 }

@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"encoding/csv"
+	"fmt"
 	"math"
 	"strconv"
 	"testing"
@@ -137,6 +138,8 @@ func TestGPMTraceCSV(t *testing.T) {
 		"l2tlb_miss_remote": "1", "l2tlb_miss_local": "1",
 		"l2tlb_miss_remote_lat_sum_ns": "1000.000", "l2tlb_miss_remote_mean_lat_ns": "1000.000",
 		"tile": "0", "hops_to_center": "6",
+		// GPM 0 busy 110..320; GPM 1 never finishes wgC; not all 48 busy.
+		"gpm_active_ns": "210.000", "kernel_all_gpm_active_ns": "0.000",
 	}
 	for k, v := range checks {
 		if got := get(r0, k); got != v {
@@ -188,5 +191,28 @@ func TestGPMTraceSinglePhases(t *testing.T) {
 	}
 	if _, ok := agg.kernels[1].end(); ok {
 		t.Errorf("phase 1 has not ended")
+	}
+}
+
+func TestGPMTraceAllActive(t *testing.T) {
+	gpms := wafer48()
+	agg := newGPMTraceAgg(gpms)
+	for g := range gpms {
+		agg.kernelLaunch("cmd0", fmt.Sprintf("req%d_req_out", g), g, 48*28, true, 0)
+	}
+	// Every GPM runs one WG over [10+g, 100]; GPM 0 runs a second WG over
+	// [90, 150]. All 48 busy over [57, 100]; GPM 0 busy [10, 150].
+	for g := range gpms {
+		agg.wgStart(fmt.Sprintf("a%d", g), g, float64(10+g))
+	}
+	agg.wgStart("b0", 0, 90)
+	for g := range gpms {
+		agg.wgEnd(fmt.Sprintf("a%d", g), g, 100)
+	}
+	agg.wgEnd("b0", 0, 150)
+	k := agg.kernels[0]
+	if k.AllActiveNS != 43 || k.PerGPM[0].ActiveNS != 140 || k.PerGPM[47].ActiveNS != 43 {
+		t.Fatalf("all %v gpm0 %v gpm47 %v", k.AllActiveNS, k.PerGPM[0].ActiveNS,
+			k.PerGPM[47].ActiveNS)
 	}
 }

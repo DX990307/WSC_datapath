@@ -49,6 +49,7 @@ STAT_FLAGS = {
     "-wg-footprint-max-pages": "统计开关的参数：P12 每个 WG 最多记录的页数",
     "-report-m1-sharing": "统计开关（P12）：远程 line 跨 GPM 共享和在途重复请求",
     "-m1-sharing-file": "统计开关的参数：P12 M1 统计文件名前缀",
+    "-report-cupath-v3-stats": "统计开关（P16）：按距离分组的请求表占用和排队、近区使用、owner 表占用和满的时间、合并 / 多播比例",
 }
 
 

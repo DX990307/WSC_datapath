@@ -44,8 +44,9 @@ import (
 //     owner window like the rest of M1.
 
 type t18ComposedTxn struct {
-	dst    int
-	sentAt sim.VTimeInSec
+	dst      int
+	sentAt   sim.VTimeInSec
+	nearZone bool // holds a near-zone slot (credit policy near)
 }
 
 // m1Composed reports whether the M1 requester side runs on top of M2.
@@ -233,8 +234,9 @@ func (c *Comp) m1Acquire(now sim.VTimeInSec, dst sim.Port, netID string) {
 		return s.composedOpen[e] > 0
 	})
 	c.t18Integrate(now)
-	s.credits.Acquire(d)
-	s.composedSent[netID] = t18ComposedTxn{dst: d, sentAt: now}
+	c.t18NoteSend(d, borrow)
+	nearZone := s.credits.Acquire(d)
+	s.composedSent[netID] = t18ComposedTxn{dst: d, sentAt: now, nearZone: nearZone}
 	s.stats.ReqSent++
 	if borrow {
 		s.stats.ReqSentBorrowed++
@@ -261,7 +263,7 @@ func (c *Comp) m1Release(now sim.VTimeInSec, netID string) {
 	}
 	c.t18Integrate(now)
 	delete(s.composedSent, netID)
-	s.credits.Release(txn.dst)
+	s.credits.Release(txn.dst, txn.nearZone)
 	s.stats.ReqResponses++
 	if h := s.hops[txn.dst]; h >= 0 {
 		s.hopInflight[h]--
@@ -275,7 +277,9 @@ func (c *Comp) m1BatchOpened(now sim.VTimeInSec, batch *remoteBatch) {
 	}
 	s := c.t18
 	c.t18Integrate(now)
-	s.composedOpen[c.t18DstIndex(batch.dst)]++
+	d := c.t18DstIndex(batch.dst)
+	s.composedOpen[d]++
+	c.t18HopQueued(d, 1)
 	s.queued++
 	if uint64(s.queued) > s.stats.ReqPeakQueued {
 		s.stats.ReqPeakQueued = uint64(s.queued)
@@ -288,7 +292,9 @@ func (c *Comp) m1BatchClosed(batch *remoteBatch) {
 	}
 	s := c.t18
 	c.t18Integrate(c.Engine.CurrentTime())
-	s.composedOpen[c.t18DstIndex(batch.dst)]--
+	d := c.t18DstIndex(batch.dst)
+	s.composedOpen[d]--
+	c.t18HopQueued(d, -1)
 	s.queued--
 }
 
@@ -369,6 +375,7 @@ func (c *Comp) t18OwnerChildRead(
 		return true, true
 	}
 	e := &t18OwnerEntry{key: key, open: true}
+	c.t18OwnerIntegrate(now)
 	if !s.ownerTable.Insert(key, e) {
 		s.stats.OwnerReads++
 		s.stats.OwnerTableFullFallbacks++
@@ -376,6 +383,7 @@ func (c *Comp) t18OwnerChildRead(
 	}
 	read.SendTime = now
 	if err := c.ToL2.Send(read); err != nil {
+		c.t18OwnerIntegrate(now)
 		s.ownerTable.Delete(e)
 		return true, false
 	}

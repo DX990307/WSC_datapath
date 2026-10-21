@@ -27,6 +27,25 @@ var t18WindowFlag = flag.Int("t18-window", 0,
 var t18DistCreditsFlag = flag.Bool("t18-dist-credits", false,
 	"T18: split W into per-destination credits proportional to RTT "+
 		"(84 + 71.4 ns/hop); idle credits may be borrowed.")
+var t18CreditPolicyFlag = flag.String("t18-credit-policy", "",
+	"T18 / ISCA'27 M1 allocation of the W requester slots: shared (one pool), "+
+		"rtt (= -t18-dist-credits=true: per-destination credits proportional "+
+		"to RTT, idle credits borrowable), near (-t18-near-reserve slots only "+
+		"for destinations within -t18-near-hops hops, the rest split as rtt). "+
+		"Empty: rtt if -t18-dist-credits, else shared. A policy other than "+
+		"shared enables the T18 requester engine. Contradicting "+
+		"-t18-dist-credits is an error.")
+var t18NearReserveFlag = flag.Int("t18-near-reserve", 16,
+	"T18 credit policy near: slots of W reserved for near destinations "+
+		"(0 <= R < W; R = 0 is rtt). Setting it with another policy is an error.")
+var t18NearHopsFlag = flag.Int("t18-near-hops", 3,
+	"T18 credit policy near: a destination at most this many hops away may "+
+		"use the near slots. Setting it with another policy is an error.")
+var cupathV3StatsFlag = flag.Bool("report-cupath-v3-stats", false,
+	"Statistics only (ISCA'27 P16): T18 requester occupancy and queueing by "+
+		"distance group (near <= 3 hops, mid 4-6, far >= 7), near-zone use, "+
+		"owner merge table occupancy and full time, derived merge / multicast "+
+		"ratios. Does not change timing.")
 var t18OwnerWindowFlag = flag.Int("t18-owner-window", 0,
 	"T18: owner-direction in-flight limit; 0 = -t18-window if set, else "+
 		"-rdma-max-outstanding.")
@@ -83,7 +102,57 @@ func remoteDataPathDedupFromFlags() bool {
 	return *remoteDataPathDedupEnableFlag
 }
 
+// t18CreditPolicyFromFlags resolves -t18-credit-policy against the older
+// -t18-dist-credits; contradictions and near-only flags given with another
+// policy are errors.
+func t18CreditPolicyFromFlags() rdma.T18CreditPolicy {
+	set := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	policy, err := resolveT18CreditPolicy(*t18CreditPolicyFlag,
+		*t18DistCreditsFlag, set["t18-dist-credits"],
+		set["t18-near-reserve"] || set["t18-near-hops"])
+	if err != nil {
+		panic(err.Error())
+	}
+	if policy == rdma.T18CreditNear &&
+		(*t18NearReserveFlag < 0 || *t18NearHopsFlag < 0) {
+		panic("-t18-near-reserve and -t18-near-hops must be >= 0")
+	}
+	return policy
+}
+
+// resolveT18CreditPolicy: an empty policy follows -t18-dist-credits (true =
+// rtt, false = shared). A policy given together with an explicit
+// -t18-dist-credits must agree with it (true = rtt or near, false = shared).
+// The near-only flags require the near policy.
+func resolveT18CreditPolicy(
+	name string, dist, distSet, nearFlagsSet bool,
+) (rdma.T18CreditPolicy, error) {
+	policy := rdma.T18CreditShared
+	if dist {
+		policy = rdma.T18CreditRTT
+	}
+	if name != "" {
+		p, err := rdma.ParseT18CreditPolicy(name)
+		if err != nil {
+			return 0, fmt.Errorf("-t18-credit-policy: %v", err)
+		}
+		if distSet && dist != (p != rdma.T18CreditShared) {
+			return 0, fmt.Errorf("-t18-credit-policy=%s contradicts "+
+				"-t18-dist-credits=%v (dist-credits true = rtt or near, "+
+				"false = shared)", p, dist)
+		}
+		policy = p
+	}
+	if policy != rdma.T18CreditNear && nearFlagsSet {
+		return 0, fmt.Errorf("-t18-near-reserve / -t18-near-hops need "+
+			"-t18-credit-policy=near (policy is %s)", policy)
+	}
+	return policy, nil
+}
+
 func t18ConfigFromFlags() rdma.T18Config {
+	policy := t18CreditPolicyFromFlags()
 	reqMerge := *t18ReqMergeFlag
 	if m1, _, set := dedupOwner(); set {
 		reqMerge = m1
@@ -93,7 +162,9 @@ func t18ConfigFromFlags() rdma.T18Config {
 		OwnerMerge:      *t18OwnerMergeFlag,
 		OwnerMulticast:  *t18OwnerMulticastFlag,
 		Window:          *t18WindowFlag,
-		DistCredits:     *t18DistCreditsFlag,
+		DistCredits:     policy != rdma.T18CreditShared,
+		CreditPolicy:    policy,
+		ExtraStats:      *cupathV3StatsFlag,
 		OwnerWindow:     *t18OwnerWindowFlag,
 		ReqEntries:      *t18ReqEntriesFlag,
 		OwnerEntries:    *t18OwnerEntriesFlag,
@@ -102,6 +173,18 @@ func t18ConfigFromFlags() rdma.T18Config {
 		MaxKicks:        *t18MaxKicksFlag,
 		ReqWaiters:      *t18ReqWaitersFlag,
 		BypassWhenFull:  *t18BypassWhenFullFlag,
+	}
+	if policy == rdma.T18CreditNear {
+		c.NearReserve = *t18NearReserveFlag
+		c.NearHops = *t18NearHopsFlag
+		window := c.Window
+		if window <= 0 {
+			window = *rdmaMaxOutstandingFlag
+		}
+		if c.NearReserve >= window {
+			panic(fmt.Sprintf("-t18-near-reserve=%d must be below the window W=%d",
+				c.NearReserve, window))
+		}
 	}
 	if !c.Enabled() {
 		return rdma.T18Config{}
@@ -121,6 +204,12 @@ func t18ConfigFromFlags() rdma.T18Config {
 		c.ReqMerge, c.OwnerMerge, c.OwnerMulticast, c.Window, c.DistCredits,
 		c.OwnerWindow, c.ReqEntries, c.OwnerEntries, c.Ways,
 		c.FingerprintBits, c.MaxKicks, c.ReqWaiters, c.BypassWhenFull)
+	near := ""
+	if policy == rdma.T18CreditNear {
+		near = fmt.Sprintf(" near-reserve=%d near-hops=%d", c.NearReserve, c.NearHops)
+	}
+	fmt.Printf("[Config] T18 credit-policy=%s%s v3-stats=%v\n",
+		policy, near, c.ExtraStats)
 	return c
 }
 
@@ -251,6 +340,9 @@ func (r *Runner) reportT18Stats() {
 				}
 			}
 		}
+		if st.ExtraStats {
+			reportT18V3Stats(st, put)
+		}
 		if st.OwnerMergeEnabled {
 			put("owner_table_slots", float64(st.OwnerTableSlots))
 			put("owner_reads", float64(st.OwnerReads))
@@ -288,4 +380,82 @@ func (r *Runner) reportT18Stats() {
 			}
 		}
 	}
+}
+
+// reportT18V3Stats writes the ISCA'27 P16 statistics (-report-cupath-v3-stats)
+// as t18_v3_* metrics. Groups: near <= 3 hops, mid 4-6, far >= 7.
+func reportT18V3Stats(st rdma.T18Stats, put func(string, float64)) {
+	v3 := func(name string, v float64) { put("v3_"+name, v) }
+	div := func(a, b float64) float64 {
+		if b == 0 {
+			return 0
+		}
+		return a / b
+	}
+	v3("credit_policy_"+st.CreditPolicy.String(), 1)
+	if st.CreditPolicy == rdma.T18CreditNear {
+		v3("near_reserve", float64(st.NearReserve))
+		v3("near_hops", float64(st.NearHops))
+	}
+	if st.RequesterActive {
+		groups := [3]string{"near", "mid", "far"}
+		var dests [3]float64
+		for h, n := range st.HopDests {
+			if h > 0 {
+				dests[t18GroupOfHop(h)] += float64(n)
+			}
+		}
+		for g, name := range groups {
+			v3(name+"_dests", dests[g])
+			v3(name+"_inflight_avg", div(st.GroupInflightAreaNS[g], st.ReqTimeNS))
+			v3(name+"_queued_avg", div(st.GroupQueuedAreaNS[g], st.ReqTimeNS))
+			v3(name+"_queued_while_full_avg", div(st.GroupQueuedFullNS[g], st.ReqTimeNS))
+			v3(name+"_wait_while_full_ns", st.GroupWaitFullTimeNS[g])
+			v3(name+"_wait_while_full_frac", div(st.GroupWaitFullTimeNS[g], st.ReqTimeNS))
+		}
+		v3("window_full_ns", st.ReqWindowFullNS)
+		if st.CreditPolicy == rdma.T18CreditNear {
+			v3("near_zone_inflight_avg", div(st.NearZoneAreaNS, st.ReqTimeNS))
+			v3("near_zone_full_frac", div(st.NearZoneFullNS, st.ReqTimeNS))
+			v3("near_zone_sends", float64(st.NearZoneSends))
+			v3("near_overflow_sends", float64(st.NearOverflowSends))
+			v3("near_overflow_borrowed", float64(st.NearOverflowBorrowed))
+		}
+		v3("req_merged_into_sent", float64(st.ReqMergedInflight))
+		v3("req_merged_into_queued", float64(st.ReqMergedQueued))
+	}
+	if st.OwnerMergeEnabled {
+		v3("owner_full_line_reads", float64(st.OwnerReads))
+		v3("owner_merged", float64(st.OwnerMerged))
+		v3("owner_table_full_fallbacks", float64(st.OwnerTableFullFallbacks))
+		v3("owner_table_avg", div(st.OwnerTableAreaNS, st.OwnerTimeNS))
+		v3("owner_table_full_ns", st.OwnerTableFullNS)
+		v3("owner_table_full_frac", div(st.OwnerTableFullNS, st.OwnerTimeNS))
+		fallbacks := float64(st.OwnerTableFullFallbacks + st.OwnerSameRequester)
+		v3("owner_unicast_fallback_frac", div(fallbacks, float64(st.OwnerReads)))
+		// Merged entries (>= 2 requesters): responses that would have been
+		// sent as unicasts versus packets actually sent.
+		merged := 0.0
+		for n := 2; n < len(st.OwnerFanoutHistogram); n++ {
+			merged += float64(st.OwnerFanoutHistogram[n])
+		}
+		v3("owner_merged_entries", merged)
+		v3("mc_packets", float64(st.OwnerMulticastPackets))
+		v3("mc_dests_avg", div(float64(st.OwnerMulticastDests),
+			float64(st.OwnerMulticastPackets)))
+		v3("mc_responses_saved",
+			float64(st.OwnerMulticastDests)-float64(st.OwnerMulticastPackets))
+		v3("mc_unicast_fanout_packets", float64(st.OwnerUnicastFanout))
+	}
+}
+
+// t18GroupOfHop mirrors rdma's distance groups: near <= 3, mid 4-6, far >= 7.
+func t18GroupOfHop(h int) int {
+	switch {
+	case h <= 3:
+		return 0
+	case h <= 6:
+		return 1
+	}
+	return 2
 }

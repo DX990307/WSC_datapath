@@ -26,8 +26,20 @@ type T18Config struct {
 	// Window is the requester in-flight limit W; 0 keeps -rdma-max-outstanding.
 	Window int
 	// DistCredits divides W into per-destination credits proportional to the
-	// modeled RTT (borrowing allowed); false keeps one shared pool.
+	// modeled RTT (borrowing allowed); false keeps one shared pool. It is the
+	// credit policy rtt when CreditPolicy is T18CreditShared (the zero value).
 	DistCredits bool
+	// CreditPolicy selects shared / rtt / near (t18_credits.go). The zero
+	// value (shared) defers to DistCredits, so existing configurations keep
+	// their behavior.
+	CreditPolicy T18CreditPolicy
+	// NearReserve (near only) is the number of slots of W reserved for
+	// destinations at most NearHops hops away.
+	NearReserve int
+	NearHops    int
+	// ExtraStats enables the ISCA'27 v3 statistics (distance groups, near
+	// zone, owner table full time); statistics only, no timing change.
+	ExtraStats bool
 	// OwnerWindow is the owner-direction in-flight limit; 0 means Window when
 	// Window > 0, else -rdma-max-outstanding.
 	OwnerWindow int
@@ -51,7 +63,19 @@ type T18Config struct {
 // RequesterActive reports whether the T18 requester engine replaces the
 // baseline requester path.
 func (c T18Config) RequesterActive() bool {
-	return c.ReqMerge || c.Window > 0 || c.DistCredits
+	return c.ReqMerge || c.Window > 0 || c.DistCredits ||
+		c.CreditPolicy != T18CreditShared
+}
+
+// EffectiveCreditPolicy resolves CreditPolicy and the older DistCredits.
+func (c T18Config) EffectiveCreditPolicy() T18CreditPolicy {
+	if c.CreditPolicy != T18CreditShared {
+		return c.CreditPolicy
+	}
+	if c.DistCredits {
+		return T18CreditRTT
+	}
+	return T18CreditShared
 }
 
 // Enabled reports whether any part of T18 is on.
@@ -69,6 +93,10 @@ type T18Stats struct {
 	OwnerMergeEnabled bool
 	MulticastEnabled  bool
 	DistCredits       bool
+	CreditPolicy      T18CreditPolicy
+	NearReserve       uint64
+	NearHops          uint64
+	ExtraStats        bool
 	Window            uint64
 	OwnerWindow       uint64
 	ReqTableSlots     uint64
@@ -107,6 +135,18 @@ type T18Stats struct {
 	HopInflightAreaNS   [t18MaxHops]float64
 	HopRTTTotalNS       [t18MaxHops]float64 // send -> response, per transaction
 
+	// ISCA'27 v3 statistics (ExtraStats). Distance groups: near <= 3 hops,
+	// mid 4-6, far >= 7 (t18DistGroup).
+	GroupInflightAreaNS  [3]float64 // integral of in-flight transactions
+	GroupQueuedAreaNS    [3]float64 // integral of queued requests/batches
+	GroupQueuedFullNS    [3]float64 // ... while the window is full
+	GroupWaitFullTimeNS  [3]float64 // time the window is full and the group has queued work
+	NearZoneAreaNS       float64    // integral of near-zone slots in use
+	NearZoneFullNS       float64    // time the near zone is full
+	NearZoneSends        uint64     // transactions sent in the near zone
+	NearOverflowSends    uint64     // near destinations sent in the general zone (near zone full)
+	NearOverflowBorrowed uint64     // ... of which on a borrowed general credit
+
 	// Owner.
 	OwnerReads              uint64 // remote full-line reads seen
 	OwnerMerged             uint64
@@ -124,6 +164,10 @@ type T18Stats struct {
 	Composed                bool   // M1 requester runs on top of M2
 	OwnerPeakLive           uint64
 	OwnerTable              t18CuckooStats
+	// ISCA'27 v3 statistics (ExtraStats).
+	OwnerTimeNS      float64 // observation time of the owner table
+	OwnerTableAreaNS float64 // integral of owner table entries
+	OwnerTableFullNS float64 // time with every owner table slot in use
 }
 
 // T18MulticastRsp is the owner's merged read response. It carries one 64-B
@@ -231,4 +275,16 @@ func t18Hops(a, b [2]int) int {
 		dy = -dy
 	}
 	return dx + dy
+}
+
+// t18DistGroup maps a hop count to the ISCA'27 v3 distance group: 0 near
+// (<= 3 hops), 1 mid (4-6), 2 far (>= 7).
+func t18DistGroup(h int) int {
+	switch {
+	case h <= 3:
+		return 0
+	case h <= 6:
+		return 1
+	}
+	return 2
 }

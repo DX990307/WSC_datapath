@@ -178,8 +178,8 @@ func (c *Comp) obsWaiting() int {
 func (c *Comp) obsDestCounts(out map[sim.Port]int) {
 	if s := c.t18; s != nil && (s.reqActive || s.compose) &&
 		s.credits != nil && s.topo != nil {
-		for d, v := range s.credits.inflight {
-			if v > 0 {
+		for d := range s.credits.inflight {
+			if v := s.credits.Inflight(d); v > 0 {
 				out[s.topo.ports[d]] += v
 			}
 		}
