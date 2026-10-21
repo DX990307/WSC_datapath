@@ -328,3 +328,14 @@
 - 读了 10-20 的 `[cowork]` 条目（范围只做通信、T19 放弃、机制编号、RDMA 64 的来源、observations/、P13、D23 暂缓）和改过的文件，Cowork 的改动已在 `e6688dd`、`944f2a0` 提交。STATUS 里 T19 改为放弃。
 - 用户 10-20 的新要求（覆盖 P13 B 的运行范围）：workload = 16 个新 benchmark + 7 个旧远程型 + T17（LLM）；每个实验 6–8 小时，尽量选大的 memory footprint；先跑 baseline（收集 observation 数据），再跑同规模的 Complete，再跑消融 M1+M2、M2+M3、M1+M3。另外先修 5 个新 benchmark 的 LDS 越界崩溃（用户判断是 kernel 的边界问题）。
 - 统计分支：P13 要求从 `isca27/t18-merge` 开出；因为新 benchmark 和 Complete 都在 `isca27/w2-complete`（`d09b18b`，其中 T18 代码和 `ca8b831` 相同、回归逐位一致），改为从 `d09b18b` 开出。
+
+- 2026-10-20 · cowork · 给导师讲 M1 / M2 / M3 用的 8 张中文讲解图：`figs/advisor_1021/`（`CuPath_M1M2M3_figs.pdf` 每页一张，另有 fig1–8.png 和生成脚本 `explain.py`）。内容：1 基线瓶颈（64 项跟踪表、排队、链路空闲）；2 为什么 wafer 才严重（需要的表项随跳数增长）；3 M2（同 line 合并、同页打包、预取捎带）；4 M1 新 1（跟踪表 64 → 1024，cuckoo 索引 + 完整地址核对）；5 M1 新 2（只放大跟踪表 → incast；owner 合并表 + 路由树多播）；6 M3（看到复用才留在本地 L2）；7 Complete 一次远程读的 10 步；8 初步结果（标明是冒烟和中小规模）。机制细节按 `isca27/m1m2` 的代码核对过（complete_new：去重归 M1；M2 的预取是同 owner 同页内的步长预测、捎在已有位图包上；M3 在第二次读到、≥2 个请求在等或预取被用上时才回填）。另：Motion 动画（"CuPath M1 M2 M3"）做了两段后按用户要求停了，改成静态图。
+
+- 2026-10-20 晚 · cowork · **用户决定：RDMA 的请求表 / owner 表保持 64 项，不作为机制去放大（"我不希望修改这个 feature"）。** 影响（待用户定 M1 的新方向后再改文档）：T18 的"新 1：跟踪表规模化"不再是机制；`-t18-window` > 64、`complete_new` 的 W=1024、P13 的 R2（W=4096）/ R3（W=1024）、T18 评估里 W=256/1024/4096 的配置，最多只能当"64 项限制代价多少"的上限分析，不能当机制结果。现有数据里 W=64 的 M1：FW 2.13×（旧 m2 2.51×）、R-GAT 1.36×、PagedAttention ≈1.01×；同 11 个新 benchmark 上 HPCA 版 Complete（64 项）1.88×，新 Complete（W=1024）2.98×。**给 Claude Code：在用户定方向前，不要启动任何 W > 64 的新运行。**
+
+- 2026-10-20 晚 · cowork · **用户定了 M1 的新重心（RDMA 表保持 64 项）：** ① owner 端 RDMA 的拥塞：wafer 上多个 GPM 访问同一个 GPM 时，owner 端 RDMA 比 MCM 更容易堵——在 owner 端（发数据的一端）合并跨 GPM 的同 line 请求；② 顺路拾取：多个 GPM 要同一份数据时，一个 response 从 owner 到请求方会路过很多 GPM，路过的 GPM 如果也在等这条 line 就顺路拿走，减轻 RDMA 压力；③ 请求表按远近分区：远的通信占满 64 项时，近的请求即使很快能完成也得等——给近 / 远各留一部分表项（可借用）。待 Cowork 整理成设计和测量项，用户确认后再给 Claude Code。注意：T18 现有的"按距离分 credit"是按往返时间给远的更多份额，和第 ③ 点的出发点相反，要按新思路重做。
+
+### 2026-10-20 [claude-code] 用户要求：停掉所有实验
+- 20:3x EDT 按用户要求停掉全部实验：停掉正式运行（`~/akita-exp-test/main`，baseline 开统计 vs Complete，二进制 `8446d36`）、T18 评估/填空、LDS 修复的子代理和服务器上的调度器；两台服务器上按各目录 `pids.txt` 记录的 PID（含子进程）和调度器 PID 终止，`~/akita-exp-test` 下已无进程。正式运行全部未完成（约 1–1.5 小时）。
+- 统计代码回归（P13 A）完成：统计关闭时逐位一致，打开时模拟时间不变，开销在噪声内。发现模拟器有运行间波动（bfs-s16 同一二进制同参数三次差 2–3%，allreduce 极小），和统计无关，待查。M3 失效和 L2 空余统计的口径小漏洞修在 `isca27/obs-m3-inval`（`29d41c7`），未合并。
+- 已推送备份：`isca27/obs-stats`、`fix-lds-m3`、`mesh-size`、`main-run`、`obs-m3-inval`。

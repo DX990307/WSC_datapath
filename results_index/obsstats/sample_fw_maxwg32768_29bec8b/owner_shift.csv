@@ -1,0 +1,5 @@
+workload,config,owner_queue_mean,owner_same_line_concurrent_frac,owner_same_line_concurrent_other_gpm_frac,rtt_mean,remote_bw,link_max,link_window_max
+obsreg-fw-on,mi200,1196.8,0.245002,0.0442581,3397.54,52.09701000000002,0.0606571,0.141375
+obsreg-fw-on,mi200+m2old,1014.7,0.0726521,0.0726521,2547.61,131.23014,0.0924491,0.135667
+obsreg-fw-on,mi200+t18full+w1024+dist,13.2801,0.396109,0.396109,532.741,444.1809599999999,0.131502,0.271
+obsreg-fw-on,mi200+completenew,19.1003,0.375804,0.375804,508.639,448.2713799999999,0.143842,0.334958

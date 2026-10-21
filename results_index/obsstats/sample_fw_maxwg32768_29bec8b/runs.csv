@@ -1,0 +1,5 @@
+exp_id,workload,config,commit,exit_code,total_time_s,host,start,end
+1020_diag_obsreg-fw-on_mi200_29bec8b,obsreg-fw-on,mi200,29bec8b,0,0.000088314000,yss3,2026-10-20T22:16:33+00:00,2026-10-20T22:25:08+00:00
+1020_diag_obsreg-fw-on_mi200+m2old_29bec8b,obsreg-fw-on,mi200+m2old,29bec8b,0,0.000035248000,yss3,2026-10-20T22:26:38+00:00,2026-10-20T22:34:47+00:00
+1020_diag_obsreg-fw-on_mi200+t18full+w1024+dist_29bec8b,obsreg-fw-on,mi200+t18full+w1024+dist,29bec8b,0,0.000010323000,yss3,2026-10-20T22:16:33+00:00,2026-10-20T22:26:16+00:00
+1020_diag_obsreg-fw-on_mi200+completenew_29bec8b,obsreg-fw-on,mi200+completenew,29bec8b,0,0.000010139000,yss3,2026-10-20T22:16:33+00:00,2026-10-20T22:24:22+00:00
