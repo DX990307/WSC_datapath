@@ -1,0 +1,380 @@
+From 38a9d2ba6438fa139c8dc741cbb0d00cf93c72c4 Mon Sep 17 00:00:00 2001
+From: daoxuan <daoxuan@daoxuandeMac-mini.local>
+Date: Wed, 21 Oct 2026 16:08:42 -0400
+Subject: [PATCH 1/2] CuPath P18: Mesh2D (YX) topology, per-link statistics
+
+---
+ common/network-parser/NetworkParser.cpp       |  4 +
+ congestion_aware/basic-topology/Mesh2D.cpp    | 78 +++++++++++++++++++
+ congestion_aware/network/Device.cpp           |  1 +
+ congestion_aware/network/Link.cpp             | 63 +++++++++++++++
+ congestion_aware/topology/Helper.cpp          |  3 +
+ .../astra-network-analytical/common/Type.h    |  2 +-
+ .../congestion_aware/Link.h                   | 30 +++++++
+ .../congestion_aware/Mesh2D.h                 | 49 ++++++++++++
+ 8 files changed, 229 insertions(+), 1 deletion(-)
+ create mode 100644 congestion_aware/basic-topology/Mesh2D.cpp
+ create mode 100644 include/astra-network-analytical/congestion_aware/Mesh2D.h
+
+diff --git a/common/network-parser/NetworkParser.cpp b/common/network-parser/NetworkParser.cpp
+index 51a9fbe..27206f1 100644
+--- a/common/network-parser/NetworkParser.cpp
++++ b/common/network-parser/NetworkParser.cpp
+@@ -98,6 +98,10 @@ TopologyBuildingBlock NetworkParser::parse_topology_name(const std::string& topo
+         return TopologyBuildingBlock::Switch;
+     }
+ 
++    if (topology_name == "Mesh2D") {
++        return TopologyBuildingBlock::Mesh2D;
++    }
++
+     // shouldn't reach here
+     std::cerr << "[Error] (network/analytical) " << "Topology name " << topology_name << " not supported" << std::endl;
+     std::exit(-1);
+diff --git a/congestion_aware/basic-topology/Mesh2D.cpp b/congestion_aware/basic-topology/Mesh2D.cpp
+new file mode 100644
+index 0000000..add4707
+--- /dev/null
++++ b/congestion_aware/basic-topology/Mesh2D.cpp
+@@ -0,0 +1,78 @@
++/******************************************************************************
++This source code is licensed under the MIT license found in the
++LICENSE file in the root directory of this source tree.
++*******************************************************************************/
++
++#include "congestion_aware/Mesh2D.h"
++#include <cassert>
++#include <cmath>
++#include <cstdlib>
++
++using namespace NetworkAnalyticalCongestionAware;
++
++Mesh2D::Mesh2D(const int npus_count, const Bandwidth bandwidth, const Latency latency) noexcept
++    : BasicTopology(npus_count, 2 * npus_count, bandwidth, latency) {
++    assert(npus_count > 0);
++    assert(bandwidth > 0);
++    assert(latency >= 0);
++
++    side = static_cast<int>(std::lround(std::sqrt(npus_count)));
++    assert(side * side == npus_count);
++
++    basic_topology_type = TopologyBuildingBlock::Mesh2D;
++
++    // endpoint link latency
++    auto ep_latency = Latency(0);
++    if (const char* env = std::getenv("ASTRA_MESH_EP_LATENCY")) {
++        ep_latency = std::atof(env);
++    }
++
++    // npu <-> its router
++    for (auto t = 0; t < npus_count; t++) {
++        connect(t, router_of(t), bandwidth, ep_latency, true);
++    }
++
++    // router <-> right and lower neighbours
++    for (auto y = 0; y < side; y++) {
++        for (auto x = 0; x < side; x++) {
++            const auto t = x + side * y;
++            if (x + 1 < side) {
++                connect(router_of(t), router_of(t + 1), bandwidth, latency, true);
++            }
++            if (y + 1 < side) {
++                connect(router_of(t), router_of(t + side), bandwidth, latency, true);
++            }
++        }
++    }
++}
++
++DeviceId Mesh2D::router_of(const DeviceId npu) const noexcept {
++    return npus_count + npu;
++}
++
++Route Mesh2D::route(DeviceId src, DeviceId dest) const noexcept {
++    // assert npus are in valid range
++    assert(0 <= src && src < npus_count);
++    assert(0 <= dest && dest < npus_count);
++
++    auto route = Route();
++    route.push_back(devices[src]);
++
++    // Y first, then X
++    auto x = src % side;
++    auto y = src / side;
++    const auto dx = dest % side;
++    const auto dy = dest / side;
++    route.push_back(devices[router_of(x + side * y)]);
++    while (y != dy) {
++        y += (dy > y) ? 1 : -1;
++        route.push_back(devices[router_of(x + side * y)]);
++    }
++    while (x != dx) {
++        x += (dx > x) ? 1 : -1;
++        route.push_back(devices[router_of(x + side * y)]);
++    }
++
++    route.push_back(devices[dest]);
++    return route;
++}
+diff --git a/congestion_aware/network/Device.cpp b/congestion_aware/network/Device.cpp
+index 5ba6eca..af60c97 100644
+--- a/congestion_aware/network/Device.cpp
++++ b/congestion_aware/network/Device.cpp
+@@ -52,6 +52,7 @@ void Device::connect(const DeviceId id, const Bandwidth bandwidth, const Latency
+ 
+     // create link
+     links[id] = std::make_shared<Link>(bandwidth, latency);
++    links[id]->set_ends(device_id, id);
+ }
+ 
+ bool Device::connected(const DeviceId dest) const noexcept {
+diff --git a/congestion_aware/network/Link.cpp b/congestion_aware/network/Link.cpp
+index 6149a0b..8072d39 100644
+--- a/congestion_aware/network/Link.cpp
++++ b/congestion_aware/network/Link.cpp
+@@ -7,13 +7,27 @@ LICENSE file in the root directory of this source tree.
+ #include "common/NetworkFunction.h"
+ #include "congestion_aware/Chunk.h"
+ #include "congestion_aware/Device.h"
++#include <algorithm>
+ #include <cassert>
++#include <cstdlib>
++#include <fstream>
+ 
+ using namespace NetworkAnalytical;
+ using namespace NetworkAnalyticalCongestionAware;
+ 
+ // declaring static event_queue
+ std::shared_ptr<EventQueue> Link::event_queue;
++std::vector<Link*> Link::all_links;
++
++namespace {
++EventTime link_window() noexcept {
++    static const EventTime window = [] {
++        const char* env = std::getenv("ASTRA_LINK_WINDOW");
++        return env ? static_cast<EventTime>(std::atoll(env)) : EventTime(0);
++    }();
++    return window;
++}
++}  // namespace
+ 
+ void Link::link_become_free(void* const link_ptr) noexcept {
+     assert(link_ptr != nullptr);
+@@ -42,6 +56,7 @@ Link::Link(const Bandwidth bandwidth, const Latency latency) noexcept
+       latency(latency),
+       pending_chunks(),
+       busy(false) {
++    all_links.push_back(this);
+     assert(bandwidth > 0);
+     assert(latency >= 0);
+ 
+@@ -55,6 +70,10 @@ void Link::send(std::unique_ptr<Chunk> chunk) noexcept {
+     if (busy) {
+         // link is busy, add to pending chunks
+         pending_chunks.push_back(std::move(chunk));
++        pending_since.push_back(Link::event_queue->get_current_time());
++        if (pending_chunks.size() > stat_max_queue) {
++            stat_max_queue = pending_chunks.size();
++        }
+     } else {
+         // service this chunk immediately
+         schedule_chunk_transmission(std::move(chunk));
+@@ -68,6 +87,8 @@ void Link::process_pending_transmission() noexcept {
+     // get chunk to process
+     auto chunk = std::move(pending_chunks.front());
+     pending_chunks.pop_front();
++    stat_wait += Link::event_queue->get_current_time() - pending_since.front();
++    pending_since.pop_front();
+ 
+     // service this chunk
+     schedule_chunk_transmission(std::move(chunk));
+@@ -129,7 +150,49 @@ void Link::schedule_chunk_transmission(std::unique_ptr<Chunk> chunk) noexcept {
+ 
+     // schedule link free time
+     const auto serialization_time = serialization_delay(chunk_size);
++    stat_chunks++;
++    stat_bytes += chunk_size;
++    record_busy(current_time, serialization_time);
+     const auto link_free_time = current_time + serialization_time;
+     auto* const link_ptr = static_cast<void*>(this);
+     Link::event_queue->schedule_event(link_free_time, link_become_free, link_ptr);
+ }
++
++void Link::set_ends(const DeviceId src, const DeviceId dst) noexcept {
++    src_id = src;
++    dst_id = dst;
++}
++
++void Link::record_busy(const EventTime start, const EventTime duration) noexcept {
++    stat_busy += duration;
++    const auto window = link_window();
++    if (window == 0 || duration == 0) {
++        return;
++    }
++    auto t = start;
++    const auto end = start + duration;
++    while (t < end) {
++        const auto w = t / window;
++        const auto w_end = std::min(end, (w + 1) * window);
++        if (stat_window_busy.size() <= w) {
++            stat_window_busy.resize(w + 1, 0);
++        }
++        stat_window_busy[w] += w_end - t;
++        t = w_end;
++    }
++}
++
++void Link::dump_stats(const std::string& path) noexcept {
++    std::ofstream out(path);
++    out << "src,dst,chunks,bytes,busy,wait,max_queue,max_window_busy,end_time\n";
++    const auto now = Link::event_queue->get_current_time();
++    for (const auto* link : all_links) {
++        uint64_t max_window = 0;
++        for (const auto b : link->stat_window_busy) {
++            max_window = std::max(max_window, b);
++        }
++        out << link->src_id << "," << link->dst_id << "," << link->stat_chunks << "," << link->stat_bytes << ","
++            << link->stat_busy << "," << link->stat_wait << "," << link->stat_max_queue << "," << max_window << ","
++            << now << "\n";
++    }
++}
+diff --git a/congestion_aware/topology/Helper.cpp b/congestion_aware/topology/Helper.cpp
+index cf719a3..0d4e552 100644
+--- a/congestion_aware/topology/Helper.cpp
++++ b/congestion_aware/topology/Helper.cpp
+@@ -5,6 +5,7 @@ LICENSE file in the root directory of this source tree.
+ 
+ #include "congestion_aware/Helper.h"
+ #include "congestion_aware/FullyConnected.h"
++#include "congestion_aware/Mesh2D.h"
+ #include "congestion_aware/Ring.h"
+ #include "congestion_aware/Switch.h"
+ #include <cstdlib>
+@@ -41,6 +42,8 @@ std::shared_ptr<Topology> NetworkAnalyticalCongestionAware::construct_topology(
+         return std::make_shared<Switch>(npus_count, bandwidth, latency);
+     case TopologyBuildingBlock::FullyConnected:
+         return std::make_shared<FullyConnected>(npus_count, bandwidth, latency);
++    case TopologyBuildingBlock::Mesh2D:
++        return std::make_shared<Mesh2D>(npus_count, bandwidth, latency);
+     default:
+         // shouldn't reaach here
+         std::cerr << "[Error] (network/analytical/congestion_aware) " << "not supported basic-topology" << std::endl;
+diff --git a/include/astra-network-analytical/common/Type.h b/include/astra-network-analytical/common/Type.h
+index b18e70a..fa45a4c 100644
+--- a/include/astra-network-analytical/common/Type.h
++++ b/include/astra-network-analytical/common/Type.h
+@@ -31,6 +31,6 @@ using Latency = double;
+ using EventTime = uint64_t;
+ 
+ /// Basic multi-dimensional topology building blocks
+-enum class TopologyBuildingBlock { Undefined, Ring, FullyConnected, Switch };
++enum class TopologyBuildingBlock { Undefined, Ring, FullyConnected, Switch, Mesh2D };
+ 
+ }  // namespace NetworkAnalytical
+diff --git a/include/astra-network-analytical/congestion_aware/Link.h b/include/astra-network-analytical/congestion_aware/Link.h
+index 4041e33..53f69a2 100644
+--- a/include/astra-network-analytical/congestion_aware/Link.h
++++ b/include/astra-network-analytical/congestion_aware/Link.h
+@@ -8,7 +8,10 @@ LICENSE file in the root directory of this source tree.
+ #include "common/EventQueue.h"
+ #include "common/Type.h"
+ #include "congestion_aware/Type.h"
++#include <list>
+ #include <memory>
++#include <string>
++#include <vector>
+ 
+ using namespace NetworkAnalytical;
+ 
+@@ -75,7 +78,34 @@ class Link {
+      */
+     void set_free() noexcept;
+ 
++    /**
++     * (CuPath P18 patch) Record the device ids at both ends of the link.
++     */
++    void set_ends(DeviceId src, DeviceId dst) noexcept;
++
++    /**
++     * (CuPath P18 patch) Write per-link statistics of every link to a CSV
++     * file: chunks, bytes, busy time, queueing wait and the busiest window
++     * (window length in env ASTRA_LINK_WINDOW, in event-time units).
++     */
++    static void dump_stats(const std::string& path) noexcept;
++
+   private:
++    /// (CuPath P18 patch) every link, for dump_stats
++    static std::vector<Link*> all_links;
++
++    /// (CuPath P18 patch) statistics
++    DeviceId src_id = -1;
++    DeviceId dst_id = -1;
++    uint64_t stat_chunks = 0;
++    uint64_t stat_bytes = 0;
++    uint64_t stat_busy = 0;
++    uint64_t stat_wait = 0;
++    uint64_t stat_max_queue = 0;
++    std::vector<uint64_t> stat_window_busy;
++    std::list<EventTime> pending_since;
++    void record_busy(EventTime start, EventTime duration) noexcept;
++
+     /// event queue Link uses to schedule events
+     static std::shared_ptr<EventQueue> event_queue;
+ 
+diff --git a/include/astra-network-analytical/congestion_aware/Mesh2D.h b/include/astra-network-analytical/congestion_aware/Mesh2D.h
+new file mode 100644
+index 0000000..281246a
+--- /dev/null
++++ b/include/astra-network-analytical/congestion_aware/Mesh2D.h
+@@ -0,0 +1,49 @@
++/******************************************************************************
++This source code is licensed under the MIT license found in the
++LICENSE file in the root directory of this source tree.
++*******************************************************************************/
++
++#pragma once
++
++#include "common/Type.h"
++#include "congestion_aware/BasicTopology.h"
++
++using namespace NetworkAnalytical;
++
++namespace NetworkAnalyticalCongestionAware {
++
++/**
++ * Mesh2D (CuPath P18 patch) implements a k x k 2D mesh without wrap-around.
++ * NPU t (t = x + k * y) is attached to router device k*k + t through an
++ * endpoint link; routers are connected to their 4 neighbours.
++ * Routing is dimension-order, Y first then X.
++ *
++ * Router-to-router links use the given bandwidth and latency. Endpoint links
++ * use the same bandwidth and the latency in env ASTRA_MESH_EP_LATENCY
++ * (default 0).
++ */
++class Mesh2D final : public BasicTopology {
++  public:
++    /**
++     * Constructor.
++     *
++     * @param npus_count number of npus, must be a square (k * k)
++     * @param bandwidth bandwidth of link
++     * @param latency latency of a router-to-router link
++     */
++    Mesh2D(int npus_count, Bandwidth bandwidth, Latency latency) noexcept;
++
++    /**
++     * Implementation of route function in Topology.
++     */
++    [[nodiscard]] Route route(DeviceId src, DeviceId dest) const noexcept override;
++
++  private:
++    /// mesh side length k
++    int side;
++
++    /// router device id of npu t
++    [[nodiscard]] DeviceId router_of(DeviceId npu) const noexcept;
++};
++
++}  // namespace NetworkAnalyticalCongestionAware
+-- 
+2.50.1 (Apple Git-155)
+

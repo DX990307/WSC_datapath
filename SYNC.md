@@ -446,3 +446,9 @@
 - 删掉 owner 合并、原版 M2 网内多播、按距离分配（rtt/near）。`akkalat/configs/v4_complete.json` 提交到 `isca27/cupath-v3` 并推送；bfs s12 `-verify` 通过，`[Config]` 显示 owner-merge=false、multicast=false、credit-policy=shared。代码不删（geo-push 复用多播复制）。
 - geo-push 的对照改为 v4_complete（已通知 geo 会话）。v4 在 25 个 workload 上的主配置结果待 page migration 跑完后安排。
 - 其他：网络紧张场景（48 GB/s、W=256）19 个 workload 跑完，21 个有成对结果，GMEAN 1.74（不含 PR 1.55）；LUD、shocsort、MG 两个配置和 atax Complete 挂住（L2TLB→IOMMU 丢唤醒 bug）。挂住的 v3c384 MG M1+M2（PID 2415098）按用户要求已杀。W 扫描（w128b384/w256b384）和 geo-push 实验暂停（PAUSE），优先跑完 page migration。
+
+### 2026-10-21 [claude-code] P18：ASTRA-sim 交叉验证、Llama-7B 试验、机制的网络层评估完成
+- 新增 `results_index/astra/`（README、analysis、校准 / 流量检查 / 对照 CSV、configs、scripts、ASTRA-sim 补丁、`llm/`）。
+- 改了 `STATUS.md`（P18 待决事项标为已决定；"结果摘要 → P18"；日志一条）、`SYNC.md`。
+- 代码：没有改 MGPUSim / akita。ASTRA-sim 补丁在本机 `~/Desktop/CuPath/astrasim` 分支 `cupath-p18`（`a4e4cc1`，analytical submodule `9c1ffed`），没有推送；结果和二进制在 yss3 `~/astrasim-test/`。
+- 别的会话未提交的 `results_index/pm/`、`results_index/geo/`、`related_work_ideas_1021.md` 没有动。

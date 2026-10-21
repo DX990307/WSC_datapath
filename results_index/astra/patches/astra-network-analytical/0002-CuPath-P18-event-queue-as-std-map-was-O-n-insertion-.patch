@@ -1,0 +1,101 @@
+From 9c1ffed57fa21050f1e9043650f9d94b3fde490b Mon Sep 17 00:00:00 2001
+From: daoxuan <daoxuan@daoxuandeMac-mini.local>
+Date: Wed, 21 Oct 2026 16:36:50 -0400
+Subject: [PATCH 2/2] CuPath P18: event queue as std::map (was O(n) insertion
+ into a sorted list)
+
+---
+ common/event-queue/EventQueue.cpp             | 30 +++++--------------
+ .../common/EventQueue.h                       |  7 +++--
+ 2 files changed, 13 insertions(+), 24 deletions(-)
+
+diff --git a/common/event-queue/EventQueue.cpp b/common/event-queue/EventQueue.cpp
+index 08387c8..cb1d4ed 100644
+--- a/common/event-queue/EventQueue.cpp
++++ b/common/event-queue/EventQueue.cpp
+@@ -10,7 +10,7 @@ using namespace NetworkAnalytical;
+ 
+ EventQueue::EventQueue() noexcept : current_time(0) {
+     // create empty event queue
+-    event_queue = std::list<EventList>();
++    event_queue = std::map<EventTime, EventList>();
+ }
+ 
+ EventTime EventQueue::get_current_time() const noexcept {
+@@ -27,7 +27,7 @@ void EventQueue::proceed() noexcept {
+     assert(!finished());
+ 
+     // proceed to the next event time
+-    auto& current_event_list = event_queue.front();
++    auto& current_event_list = event_queue.begin()->second;
+ 
+     // check the validity and update current time
+     assert(current_event_list.get_event_time() > current_time);
+@@ -37,7 +37,7 @@ void EventQueue::proceed() noexcept {
+     current_event_list.invoke_events();
+ 
+     // drop processed event list
+-    event_queue.pop_front();
++    event_queue.erase(event_queue.begin());
+ }
+ 
+ void EventQueue::schedule_event(const EventTime event_time,
+@@ -47,25 +47,11 @@ void EventQueue::schedule_event(const EventTime event_time,
+     assert(event_time >= current_time);
+ 
+     // find the entry to insert event
+-    auto event_list_it = event_queue.begin();
+-    while (event_list_it != event_queue.end() && event_list_it->get_event_time() < event_time) {
+-        event_list_it++;
++    auto event_list_it = event_queue.find(event_time);
++    if (event_list_it == event_queue.end()) {
++        event_list_it = event_queue.emplace(event_time, EventList(event_time)).first;
+     }
+ 
+-    // There can be three scenarios:
+-    // (1) event list matching with event_time is found
+-    // (2) there's no event list matching with event_time
+-    //   (2-1) the event_time requested is
+-    //   larger than the largest event time scheduled
+-    //   (2-2) the event_time requested is
+-    //   smaller than the largest event time scheduled
+-    // for both (2-1) or (2-2), a new event should be created
+-    if (event_list_it == event_queue.end() || event_time < event_list_it->get_event_time()) {
+-        // insert new event_list
+-        event_list_it = event_queue.insert(event_list_it, EventList(event_time));
+-    }
+-
+-    // now, whether (1) or (2), the entry to insert the event is found
+-    // add event to event_list
+-    event_list_it->add_event(callback, callback_arg);
++    // add the event to the event list
++    event_list_it->second.add_event(callback, callback_arg);
+ }
+diff --git a/include/astra-network-analytical/common/EventQueue.h b/include/astra-network-analytical/common/EventQueue.h
+index d3feef0..29b2462 100644
+--- a/include/astra-network-analytical/common/EventQueue.h
++++ b/include/astra-network-analytical/common/EventQueue.h
+@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
+ 
+ #include "common/EventList.h"
+ #include "common/Type.h"
++#include <map>
+ 
+ namespace NetworkAnalytical {
+ 
+@@ -56,8 +57,10 @@ class EventQueue {
+     /// current time of the event queue
+     EventTime current_time;
+ 
+-    /// list of EventLists
+-    std::list<EventList> event_queue;
++    /// EventLists keyed by event time (CuPath P18 patch: was a sorted
++    /// std::list with a linear scan per insertion, quadratic in the number
++    /// of pending event times)
++    std::map<EventTime, EventList> event_queue;
+ };
+ 
+ }  // namespace NetworkAnalytical
+-- 
+2.50.1 (Apple Git-155)
+

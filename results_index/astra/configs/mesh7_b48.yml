@@ -1,0 +1,6 @@
+# 7x7 mesh, YX routing (P18 Mesh2D patch); 1 tick = 1/24 ns
+# 2 B/tick = 48 B/ns per direction; hop latency in ticks (calibrated, see README)
+topology: [ Mesh2D ]
+npus_count: [ 49 ]
+bandwidth: [ 1.862645149230957 ]
+latency: [ 863 ]

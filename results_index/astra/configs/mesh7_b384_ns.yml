@@ -1,0 +1,5 @@
+# 7x7 mesh, YX (P18 Mesh2D); 1 tick = 1 ns; 384 B/ns per direction; hop 36 ns (+ endpoint 5 ns via ASTRA_MESH_EP_LATENCY)
+topology: [ Mesh2D ]
+npus_count: [ 49 ]
+bandwidth: [ 357.62786865234375 ]
+latency: [ 36 ]

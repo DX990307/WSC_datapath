@@ -37,7 +37,7 @@
 
 ## 需要用户决定
 
-- [ ] (P18 网络结论的交叉验证) **第 1 步调研完成，⏸ 等你确认方案再安装和运行。** 只读了源码和文档，没有编译、没有运行，服务器没动。
+- [x] (P18 网络结论的交叉验证) **用户 10-21 决定：坚持用 ASTRA-sim（很多 wafer 论文用它）；之后又要求试 Llama-7B，以及把 CuPath 机制移植到 ASTRA（选项 A：网络层评估）。全部完成，结果见"结果摘要 → P18"。** 原问题：第 1 步调研完成，⏸ 等你确认方案再安装和运行。 只读了源码和文档，没有编译、没有运行，服务器没动。
   - **ASTRA-sim 不适合直接用**（master `4ce9ecf`，2026-09-19；最新 tag `2.2.0`，2023-11；源码在本机 scratch，已核对关键两处）：
     1. 拓扑：analytical 后端只有 Ring（带回绕）/ FullyConnected / Switch 三种按维叠加，**没有 2D mesh**（只能 2D torus）；congestion-aware 在 master 上**只支持 1 维**（`congestion_aware/topology/Helper.cpp:27` 直接报错退出），多维的分支 `will/congestion-multidim` 没合并，且固定先 X 后 Y；congestion-unaware 的多维点对点只计第一个不同的维度。ns-3 后端能建任意拓扑，但路由是最短路 + ECMP（不是维序路由），每条消息是一个 RDMA 流（ACK、拥塞控制）。Garnet 后端在 master 上已经没有了（submodule 目录不存在）。
     2. 在途数：`astra-sim/workload/HardwareResource.cc:54` `assert(num_in_flight_gpu_comm_ops == 0)`，**每个 NPU 同一时刻只能有 1 个在途 send**，W = 64 / 256 / 448 的闭环做不了，除非改它的核心代码。
@@ -211,6 +211,18 @@
   - **CACTI**：`akkalat/cost/CUPATH_CACTI_AREA.md`（`95b4f46` 版）按**每阵列 8K bucket**算：4 个 filter 共 336 KiB/GPM、2.50 mm²，CuPath 全部规则阵列 3.74 mm²，占 4 MB L2（54.51 mm²）的 6.86%，和实际运行的容量一致。`CUPATH_4K_CACTI_AREA.md` 是更早的 **4K bucket** 版本，文件开头写明是“earlier 4K-bucket what-if point”。投稿时（论文写 4K）引用的面积如果来自这个 4K 版本，那么**面积是按实际运行容量的一半算的**。投稿版 PDF 里引用的是哪个面积数字，需要用户对照投稿稿确认。用户 10-13 说论文写的是“每 GPM 168 KiB”：这正好是 4 个分区 × 4K bucket × 4 槽 × 21 bit = 64K 槽 × 21 bit = 168 KiB，对应 4K bucket 的配置；**实际运行的容量对应 336 KiB/GPM**（8K bucket × 4 槽 × 4 个分区 = 128K 槽），是论文写的 2 倍。
 
 ## 结果摘要
+
+### P18 ASTRA-sim 交叉验证（10-21，`results_index/astra/`）
+
+- **工具**：ASTRA-sim master `4ce9ecf` 的 analytical congestion-aware 后端，装在 yss3 的 `~/astrasim-test/`。打了 6 处补丁（`results_index/astra/patches/`）：先 Y 后 X 的 `Mesh2D` 拓扑、链路统计、事件队列由有序链表换成 map（原版是平方级）、点对点 send 不限在途数、SEND 延迟属性、逐条消息日志。没有改 MGPUSim。
+- **校准**：384 GB/s 下零负载单程延迟 1–12 跳和 akita 差 ≤ 0.8 ns（请求）/ ≤ 2.4 ns（响应）。流量用 dm 的 pairs ÷ RTT 再 IPF 重建，每链路 flit 和 akita 实测的相关系数 0.94–0.9998。
+- **第 1、2 条复现**：384 GB/s、非热点流量，W 64 → 448 时往返时间只涨 1–5%（sssp 384 → 404 ns，akita 401 → 408），吞吐 ≈ W × 64 B ÷ RTT；W = 448 时最忙链路 0.32–0.44、平均 0.21–0.24。
+- **第 3 条复现**：PR @48 GB/s，W = 64 / 256 / 448 的往返时间 ASTRA 5.91 / 23.7 / 41.4 µs，akita 5.82 / 23.5 / 41.0 µs；0→7 都是 0.87。npbcg 差 4–10%。同负载开环只有 0.2–0.6 µs，说明 µs 级排队是闭环饱和（47 × W 个在途堆在瓶颈处）造成的，不是网络模型多算的。
+- **第 4 条复现并修正**：瓶颈是 **tile 0 的注入口**（0.97–1.0），0→7 只分走 87%，所以停在 0.87。换路由提高不了热点 owner 的上限。
+- **唯一的不一致**：384 GB/s、W = 64 的 PR / npbcg，akita 往返时间是 ASTRA 的 2.1 倍。差的正好是 akita 的 owner 排队（532 / 372 ns），也就是主配置下这两个 workload 卡在 owner 端的处理能力，不在网络。
+- **选项 A（机制的网络层评估）**：用 akita Complete 的流量（M3 / 合并不进网络、实测打包直方图）闭环，"逻辑远程读吞吐"的提升：PR 20–23×、npbcg 6.8–16×、sssp 2.0–2.7×、cfd 1.2–2.0×、ar 1.05–1.9×、bfs 1.4–1.6×。36 组里 35 组 ≥ akita 端到端加速比，Spearman 0.88。384 GB/s 下非热点 workload 的往返时间不变，收益 ≈ 每个包承载的逻辑读数：在 W × RTT 的上限下，机制让同一个窗口位置做更多事，而不是降低延迟。多播没有建（保守，≤ 7%）。
+- **LLM 试验**：Llama-7B 推理，TP 8 × PP 6，每个配置 5–9 s。相邻放置 148 / 217 ms（384 / 48 GB/s），随机放置 162 / 293 ms。只作趋势参考。
+- **速度**：ASTRA 约 4,000–5,400 次远程读/秒（akita 全 GPU 约 1,300 次/秒），大运行每 100 万次读约 5 GB 内存。
 
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
 
@@ -1246,4 +1258,13 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 - **同步**：提交 page-migration 会话留下的未提交文件（原样，`d34d99a`），推送 `isca27/docs`。
 - **调研**（两个只读子代理 + 我抽查）：ASTRA-sim（master `4ce9ecf`）没有 2D mesh、congestion-aware 只支持 1 维、每个 NPU 只能有 1 个在途 send、没有链路统计，不适合直接验证；BookSim2 改约 150 行就能做闭环 + 矩阵流量；Garnet standalone 只有开环。akita 的 32 周期是不占缓冲的全流水线、没有 credit，其他模拟器要按两种缓冲语义配。方案和待决事项见"需要用户决定"第一条。
 - 没有安装、编译、运行任何东西；服务器没动。ASTRA-sim / BookSim2 / gem5 / noxim 的浅克隆在本机 scratch（不进仓库）。
+
+### 2026-10-21 (P18) ASTRA-sim 交叉验证完成；Llama-7B 试验；机制的网络层评估（选项 A）
+
+- **用户决定**：用 ASTRA-sim（不用 BookSim2）；问速度；要求试 Llama-7B；机制移植选 A（网络层评估）。
+- **安装**：本机克隆 `~/Desktop/CuPath/astrasim`（分支 `cupath-p18`，没有推送），同步到 yss3 的 `~/astrasim-test/` 编译（venv cmake + 系统 protobuf 3.12）。没有碰 `~/exp`、`~/akita-exp-test/` 和调度器；`run_all.py` 最多 8 个并发，按 MemAvailable 留 30 GB。
+- **运行**：校准 2 个，E1 闭环 48 个，E2a 同负载开环 18 个，E2b 开环扫描 96 个，E3 机制 36 个，LLM 4 个，全部 exit 0。一个 100 万次读的试跑卡了 8 分钟，查出原版事件队列是平方级，修好后停掉了那次试跑重跑。
+- **结果**：见"结果摘要 → P18"和 `results_index/astra/analysis.md`。
+- **没做的**：48 GB/s 下 akita 的零负载跳数延迟没有直接测量（需要的话用当前二进制在服务器重跑 T14 跳数矩阵）；ASTRA 里没有实现多播。
+- 工作区里 `results_index/pm/`、`results_index/geo/`、`related_work_ideas_1021.md` 是别的会话正在改的文件，这次没有提交。
 

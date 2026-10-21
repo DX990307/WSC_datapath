@@ -1,0 +1,220 @@
+From a4e4cc170dbf562c03f385dff2c77976fbde34b4 Mon Sep 17 00:00:00 2001
+From: daoxuan <daoxuan@daoxuandeMac-mini.local>
+Date: Wed, 21 Oct 2026 16:08:42 -0400
+Subject: [PATCH] CuPath P18: unlimited p2p sends (ASTRA_P2P_UNLIMITED),
+ send_delay attr, message log, link stats dump
+
+---
+ .../analytical/common/CommonNetworkApi.cc     | 40 +++++++++++++++++++
+ .../CongestionAwareNetworkApi.cc              |  1 +
+ .../analytical/congestion_aware/main.cc       |  7 ++++
+ .../include/common/CommonNetworkApi.hh        |  7 ++++
+ astra-sim/workload/HardwareResource.cc        | 22 ++++++++--
+ astra-sim/workload/Workload.cc                |  7 +++-
+ extern/network_backend/analytical             |  2 +-
+ 7 files changed, 81 insertions(+), 5 deletions(-)
+
+diff --git a/astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc b/astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc
+index faf2061..6394469 100644
+--- a/astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc
++++ b/astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc
+@@ -5,6 +5,11 @@ LICENSE file in the root directory of this source tree.
+ 
+ #include "common/CommonNetworkApi.hh"
+ #include <cassert>
++#include <cstdlib>
++#include <fstream>
++#include <map>
++#include <memory>
++#include <tuple>
+ 
+ using namespace AstraSim;
+ using namespace AstraSimAnalytical;
+@@ -20,6 +25,31 @@ int CommonNetworkApi::dims_count = -1;
+ 
+ std::vector<Bandwidth> CommonNetworkApi::bandwidth_per_dim = {};
+ 
++namespace {
++// CuPath P18 patch: per-message log
++std::ofstream* msg_log() {
++    static std::unique_ptr<std::ofstream> log = [] {
++        const char* path = std::getenv("ASTRA_MSG_LOG");
++        if (path == nullptr) {
++            return std::unique_ptr<std::ofstream>();
++        }
++        auto out = std::make_unique<std::ofstream>(path);
++        *out << "src,dst,tag,bytes,send_time,arrival_time\n";
++        return out;
++    }();
++    return log.get();
++}
++std::map<std::tuple<int, int, int>, uint64_t> send_times;
++}  // namespace
++
++void CommonNetworkApi::record_send(const int tag,
++                                   const int src,
++                                   const int dst) noexcept {
++    if (msg_log() != nullptr) {
++        send_times[{tag, src, dst}] = event_queue->get_current_time();
++    }
++}
++
+ void CommonNetworkApi::set_event_queue(
+     std::shared_ptr<EventQueue> event_queue_ptr) noexcept {
+     assert(event_queue_ptr != nullptr);
+@@ -40,6 +70,16 @@ void CommonNetworkApi::process_chunk_arrival(void* args) noexcept {
+     const auto [tag, src, dest, count, chunk_id] = *data;
+     delete data;
+ 
++    if (auto* const log = msg_log()) {
++        const auto it = send_times.find({tag, src, dest});
++        if (it != send_times.end()) {
++            *log << src << "," << dest << "," << tag << "," << count << ","
++                 << it->second << "," << event_queue->get_current_time()
++                 << "\n";
++            send_times.erase(it);
++        }
++    }
++
+     // search tracker
+     auto& tracker = CommonNetworkApi::get_callback_tracker();
+     const auto entry = tracker.search_entry(tag, src, dest, count, chunk_id);
+diff --git a/astra-sim/network_frontend/analytical/congestion_aware/CongestionAwareNetworkApi.cc b/astra-sim/network_frontend/analytical/congestion_aware/CongestionAwareNetworkApi.cc
+index b8303ce..a51f57c 100644
+--- a/astra-sim/network_frontend/analytical/congestion_aware/CongestionAwareNetworkApi.cc
++++ b/astra-sim/network_frontend/analytical/congestion_aware/CongestionAwareNetworkApi.cc
+@@ -72,6 +72,7 @@ int CongestionAwareNetworkApi::sim_send(void* const buffer,
+         arg_ptr);
+ 
+     // initiate transmission from src -> dst.
++    record_send(tag, src, dst);
+     topology->send(std::move(chunk));
+ 
+     // return
+diff --git a/astra-sim/network_frontend/analytical/congestion_aware/main.cc b/astra-sim/network_frontend/analytical/congestion_aware/main.cc
+index d81686b..ba9ee9f 100644
+--- a/astra-sim/network_frontend/analytical/congestion_aware/main.cc
++++ b/astra-sim/network_frontend/analytical/congestion_aware/main.cc
+@@ -6,6 +6,8 @@ LICENSE file in the root directory of this source tree.
+ #include "astra-sim/common/Logging.hh"
+ #include "common/CmdLineParser.hh"
+ #include "congestion_aware/CongestionAwareNetworkApi.hh"
++#include <astra-network-analytical/congestion_aware/Link.h>
++#include <cstdlib>
+ #include <astra-network-analytical/common/EventQueue.h>
+ #include <astra-network-analytical/common/NetworkParser.h>
+ #include <astra-network-analytical/congestion_aware/Helper.h>
+@@ -100,6 +102,11 @@ int main(int argc, char* argv[]) {
+         event_queue->proceed();
+     }
+ 
++    // CuPath P18 patch: per-link statistics
++    if (const char* path = std::getenv("ASTRA_LINK_STATS")) {
++        NetworkAnalyticalCongestionAware::Link::dump_stats(path);
++    }
++
+     for (auto it : systems) {
+         delete it;
+     }
+diff --git a/astra-sim/network_frontend/analytical/include/common/CommonNetworkApi.hh b/astra-sim/network_frontend/analytical/include/common/CommonNetworkApi.hh
+index 770fd9e..2d1c18a 100644
+--- a/astra-sim/network_frontend/analytical/include/common/CommonNetworkApi.hh
++++ b/astra-sim/network_frontend/analytical/include/common/CommonNetworkApi.hh
+@@ -47,6 +47,13 @@ class CommonNetworkApi : public AstraNetworkAPI {
+      */
+     static void process_chunk_arrival(void* args) noexcept;
+ 
++    /**
++     * (CuPath P18 patch) Remember when a message entered the network, so
++     * that its arrival can be logged to the CSV file in env ASTRA_MSG_LOG
++     * as src,dst,tag,bytes,send_time,arrival_time.
++     */
++    static void record_send(int tag, int src, int dst) noexcept;
++
+     /**
+      * Constructor.
+      *
+diff --git a/astra-sim/workload/HardwareResource.cc b/astra-sim/workload/HardwareResource.cc
+index 9a50509..3419b27 100644
+--- a/astra-sim/workload/HardwareResource.cc
++++ b/astra-sim/workload/HardwareResource.cc
+@@ -6,8 +6,24 @@ LICENSE file in the root directory of this source tree.
+ // TODO: HardwareResource.cc should be moved to the system layer.
+ 
+ #include "astra-sim/workload/HardwareResource.hh"
++#include <cstdlib>
++#include <string>
+ 
+ using namespace std;
++
++namespace {
++// CuPath P18 patch: with ASTRA_P2P_UNLIMITED=1, point-to-point sends are not
++// limited to one in flight per NPU (like recvs); collectives are unchanged.
++bool p2p_exempt(const shared_ptr<Chakra::FeederV3::ETFeederNode>& node) {
++    static const bool unlimited = [] {
++        const char* env = getenv("ASTRA_P2P_UNLIMITED");
++        return env != nullptr && string(env) == "1";
++    }();
++    return node->type() == ChakraProtoMsg::NodeType::COMM_RECV_NODE ||
++           (unlimited &&
++            node->type() == ChakraProtoMsg::NodeType::COMM_SEND_NODE);
++}
++}  // namespace
+ using namespace AstraSim;
+ using namespace Chakra;
+ 
+@@ -48,7 +64,7 @@ void HardwareResource::occupy(
+             // gpu_ops_node = node;
+             gpu_ops_node.emplace(node->id());
+         } else {
+-            if (node->type() == ChakraNodeType::COMM_RECV_NODE) {
++            if (p2p_exempt(node)) {
+                 return;
+             }
+             assert(num_in_flight_gpu_comm_ops == 0);
+@@ -72,7 +88,7 @@ void HardwareResource::release(
+             assert(num_in_flight_gpu_comp_ops == 0);
+             this->gpu_ops_node.erase(node->id());
+         } else {
+-            if (node->type() == ChakraNodeType::COMM_RECV_NODE) {
++            if (p2p_exempt(node)) {
+                 return;
+             }
+             --num_in_flight_gpu_comm_ops;
+@@ -101,7 +117,7 @@ bool HardwareResource::is_available(
+             if (num_in_flight_gpu_comm_ops == 0) {
+                 return true;
+             } else {
+-                if (node->type() == ChakraNodeType::COMM_RECV_NODE) {
++                if (p2p_exempt(node)) {
+                     return true;
+                 }
+                 if (num_in_flight_gpu_comm_ops == 0) {
+diff --git a/astra-sim/workload/Workload.cc b/astra-sim/workload/Workload.cc
+index 8b33979..e54e64f 100644
+--- a/astra-sim/workload/Workload.cc
++++ b/astra-sim/workload/Workload.cc
+@@ -411,7 +411,12 @@ void Workload::issue_send_comm(
+     sehd->wlhd = new WorkloadLayerHandlerData;
+     sehd->wlhd->node_id = node->id();
+     sehd->event = EventType::PacketSent;
+-    sys->front_end_sim_send(0, Sys::dummy_data, size, UINT8, dst, tag, &snd_req,
++    // CuPath P18 patch: optional delay before the send enters the network
++    const uint64_t delay =
++        node->has_attr("send_delay") ? node->get_attr<uint64_t>("send_delay")
++                                     : 0;
++    sys->front_end_sim_send(delay, Sys::dummy_data, size, UINT8, dst, tag,
++                            &snd_req,
+                             Sys::FrontEndSendRecvType::NATIVE,
+                             &Sys::handleEvent, sehd);
+ }
+diff --git a/extern/network_backend/analytical b/extern/network_backend/analytical
+index e8c5119..38a9d2b 160000
+--- a/extern/network_backend/analytical
++++ b/extern/network_backend/analytical
+@@ -1 +1 @@
+-Subproject commit e8c5119f8d5a690b955e25c37a74359f23ac64cc
++Subproject commit 38a9d2ba6438fa139c8dc741cbb0d00cf93c72c4
+-- 
+2.50.1 (Apple Git-155)
+
