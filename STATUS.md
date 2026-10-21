@@ -37,6 +37,37 @@
 
 ## 需要用户决定
 
+- [ ] (P18 网络结论的交叉验证) **第 1 步调研完成，⏸ 等你确认方案再安装和运行。** 只读了源码和文档，没有编译、没有运行，服务器没动。
+  - **ASTRA-sim 不适合直接用**（master `4ce9ecf`，2026-09-19；最新 tag `2.2.0`，2023-11；源码在本机 scratch，已核对关键两处）：
+    1. 拓扑：analytical 后端只有 Ring（带回绕）/ FullyConnected / Switch 三种按维叠加，**没有 2D mesh**（只能 2D torus）；congestion-aware 在 master 上**只支持 1 维**（`congestion_aware/topology/Helper.cpp:27` 直接报错退出），多维的分支 `will/congestion-multidim` 没合并，且固定先 X 后 Y；congestion-unaware 的多维点对点只计第一个不同的维度。ns-3 后端能建任意拓扑，但路由是最短路 + ECMP（不是维序路由），每条消息是一个 RDMA 流（ACK、拥塞控制）。Garnet 后端在 master 上已经没有了（submodule 目录不存在）。
+    2. 在途数：`astra-sim/workload/HardwareResource.cc:54` `assert(num_in_flight_gpu_comm_ops == 0)`，**每个 NPU 同一时刻只能有 1 个在途 send**，W = 64 / 256 / 448 的闭环做不了，除非改它的核心代码。
+    3. 粒度：congestion-aware 把整条消息当一个 chunk、逐跳存储转发、链路队列无限长，没有 flit、缓冲、反压；时间是整数 ns（64 B 在 384 GB/s 下串行化 0.17 ns，被截掉）。
+    4. 统计：analytical 后端没有链路利用率和排队延迟。
+    - 结论：ASTRA-sim 是为大块集合通信设计的。要验证我们的结论，得自己加 mesh 拓扑、先 Y 后 X 路由、在途数限制和统计，改完之后验证的其实是我们自己写的代码，说服力弱。**不推荐作为主要工具。**
+  - **akita 侧的网络语义**（读代码确认，`wt-v3` @ `4235991`），决定了别的模拟器该怎么配：
+    - `-bandwidth=24` 是**每 ns 24 个 16 B flit**（384 B/ns）：链路时钟 = 1 GHz × 24（`akita/noc/networking/mesh/mesh.go:408`），不是 24 B/周期；`=3` 是 3 flit/ns。
+    - 每跳 32 周期 = 交换机每个输入口一条 **32 级、每级 24 flit 宽的全流水线**（`switching/switch.go:583-585`），流水线里最多 768 flit，不占缓冲；`-switch-buffer-flits=16` 只管流水线后面的 route / forward 缓冲，入口缓冲是 max(16, 24) = 24。反压是"下一级能不能 push"的即时判断，**没有 credit 往返**。
+    - 所以 BookSim / Garnet 如果按常规配成"32 周期流水 + 每 VC 16 flit、credit 流控"，单 VC 会被 credit 往返卡在约 16/35 flit/周期，比 akita 早饱和，比的就不是同一个模型。要分两种配法：**(i) 等价配置**：模仿 akita（延迟放进不占输入缓冲的 crossbar 级、缓冲足够大），检验 akita 的实现本身；**(ii) 现实配置**：credit + 每 VC 16 flit，检验"akita 的缓冲语义偏乐观"会不会改变 48 GB/s 下的结论。
+    - 现有平台数据 `results_index/platform_mi200/` 是 768 GB/s（`-bandwidth=48`）、旧二进制、默认缓冲测的。跳数矩阵"198.1 ns + 71.8 ns/跳"（往返）可以做零负载对照，饱和带宽要按当前配置重测。
+  - **方案（推荐 A + B）**
+    - **A 解析模型**（自己写 Python，本机，约半天）：dm 的流量矩阵按先 Y 后 X 路由算出每条有向链路的 flit 负载 → 先和 akita 的 `metrics_obs_links` 逐条对照 flit 数（检验流量重建和路由）→ 链路利用率、瓶颈链路、饱和点（链路带宽 ÷ 最大链路负载）→ 逐跳 M/D/1 得开环延迟—负载曲线 → 闭环 MVA（每 GPM W 个客户，链路是排队站，固定的每跳延迟是延迟站）得 W = 64 / 256 / 448 的吞吐和往返。能验证第 1、2、4 条；第 3 条只能近似（M/D/1 在高利用率下不准，不建模反压和队头阻塞）。
+    - **B BookSim2**（cycle 级、flit 级，作为独立模拟器）：`booksim/booksim2` HEAD `28f4329`（2017，不活跃但稳定），`make`，依赖 flex / bison。
+      - 7×7 mesh：`topology=mesh; k=7; n=2; routing_function=dim_order`。BookSim 先走第 0 维，把节点编号成 `y + 7x` 就是先 Y 后 X，不用改代码。
+      - 带宽：BookSim 每条通道每周期 1 flit，用时钟缩放：384 GB/s 时 1 周期 = 1/24 ns、每跳 768 周期；48 GB/s 时 1 周期 = 1/3 ns、每跳 96 周期。
+      - 闭环：`sim_type=batch; use_read_write=1; max_outstanding_requests=W; read_request_size=1; read_reply_size=6`。
+      - 需要的补丁（约 150 行，放进 `results_index/astra/patches/`）：① 只读（batch 模式写死 50% 读 50% 写）；② 按 owner→requester 矩阵抽目的地的流量模式；③ 中心 tile 24 不注入、不做目的地；④ 输出每条通道的 flit 数（`FlitChannel` 已有计数，只是没输出）；⑤ 可选：owner 端的服务时间（不加的话只测网络本身）。
+      - 开环：`sim_type=latency` 扫描注入率（hotspot、均匀、矩阵）。统计：包延迟 / 网络延迟直方图、吞吐、每对延迟、每链路 flit 数。
+    - **C（可选）gem5 Garnet standalone**：v26.0.0.0 很活跃，但合成流量只有开环，路由写死先 X 后 Y（要先 Y 后 X 得用表路由、改权重），scons 编译几十分钟，没有请求 / 响应。只在 B 的开环结果有疑问时作为第三个对照。
+    - **D（不推荐）坚持用 ASTRA-sim**：要么用 ns-3 后端（ECMP、RDMA 语义，不是 NoC），要么改 `HardwareResource` 并自己写 mesh 拓扑。最多能做一个"W = 1、2D torus 近似"的零负载对照，说服力有限。
+  - **流量怎么生成**：`dm/raw` 的 `pairs` 是每个请求方 GPM 按目的 owner 的平均在途数（1 µs 采样）。按 Little 定律，请求率 ∝ 在途数 ÷ 这一对的往返时间，用 `latency` 表按跳数分组的往返时间修正（不修正的话，远的 pair 会被高估）；再按每个 owner 的精确读次数缩放。写和多播不建（占比小，写进说明）。合成模式：均匀 all-to-all（47 个 GPM 互相）、47 个 GPM 读 tile 0。
+  - **条件和比较的量**：384 / 48 GB/s × W = 64 / 256 / 448 闭环（8 种流量 × 2 × 3 = 48 组，每组两种缓冲语义），加开环注入率扫描（每种流量约 10 个点）。比较链路平均 / 峰值利用率（同样取 1 µs 窗口）、往返时间分布（对照 akita 按跳数分组的 latency 表）、每 GPM 吞吐和 W × 64 B ÷ RTT、0→7 链路的份额和利用率、饱和点（开环 accepted 对 offered 的拐点）。和第 1–4 条逐项对照。
+  - **成本**：A 约半天；B 安装、补丁、校准约 1 天；每个闭环运行在 7×7 上模拟 100 µs（384 GB/s 下 240 万周期），分钟级。
+  - **需要你决定**：
+    1. 方案：**A + B（推荐）** / 再加 C / 仍要 ASTRA-sim（D）。
+    2. BookSim 装在哪：**本机（推荐，完全不碰服务器）** / 服务器的独立目录 `~/noc-xcheck/`。
+    3. MGPUSim 侧校准要不要按当前配置重测：**推荐**在服务器用当前二进制 `4235991`、`-bandwidth=24` 和 `=3`、`-switch-buffer-flits=16` 重跑 T14 的跳数矩阵（1–12 跳）、单链路饱和和 incast（baseline、只开统计，约 30 个短运行，放在独立目录）。不跑的话只能用 768 GB/s 的旧数据做零负载对照（零负载延迟和带宽关系很小：6 flit 在 3 flit/ns 下每跳多约 2 ns），没有饱和带宽的对照。
+  - 结果目录仍按 prompt 用 `results_index/astra/`，README 里写明实际用的工具。
+
 - [x] (T19) **放弃（用户 10-20：ISCA'27 只做通信，T19 留给下一篇，代码保留在 `isca27/t19-steal`）。** 原问题：**方向问题（先定这个，再定评估计划）**：T17 的主 kernel 每个 CU 不超过 40 个 WF，静态切分下 t≈0 时所有 WG 就已上 CU，**没有还没开始的 WG 可偷**；冒烟里 R-GAT 1.43×、MoE 1.075× 只来自 kernel 启动瞬间的“抢跑”（中心附近的 GPM 先收到 launch）。均衡的初始切分（C′，`-t19-initial-split=balanced`）不偷就有 R-GAT 2.45×、MoE 2.70×。—— (a) T19 只做窃取；(b) T19 = C′ + 窃取；(c) C′ 当作 baseline 的修正（影响之前所有结果）；(d) T17 改成更细的 WG（方案 B）。另外：filter 指导和只按距离偷一样（mi200 请求方 L2 不缓存远程数据，“我已有的数据”只覆盖 L1V/TLB），要不要单独评估，还是等 T18 / B1 之后再说。
 - [x] (T19) **放弃（同上），不跑评估。** 原问题：**评估的配置确认**（没有运行；二进制 `eaa9c73`；配置 `mi200` / `t19_dist` / `t19_filter`，只加 `-t19-*` 开关 + 统计开关 `-report-gpm-trace`）。**截断规则建议**：按 T15 的 WG 数截断，14 个 workload 里 12 个在第一个 kernel 内就停，T19 完全不起作用；主结论只用完整 kernel（小输入），截断运行只当开销检查（同一 WG 数停止、指令差 ≤ 1%、报告成功窃取数）。计划：A 完整小输入 10 个 workload × 3 配置 = 30；B T15 截断 16（MT、kmeans 3 配置，其余 base + filter）；C 本地型 24；D 敏感性 20（半径 1/3、chunk 4/16、filter 大 / 小）；E 可选 C′ 6。共 90（96）个，约 218（233）CPU 小时；关键路径 kmeans 截断 14.4 小时。其他问题：R-GAT 数据（2.2 GB）要不要拷到 yss3；本地型要不要做完整的小输入；要不要加 NACK 退避 / 本地性保护（spmv 慢了 0.09%）。
 - [x] (T18) **用户 10-20：在 HPCA 论文规模下和 HPCA 的 baseline 比较。** 二进制 `ca8b831`，配置 `hpca.json`（不改任何参数），`-max-wg 78600`（和 `1013_abl_full_hpca` 相同）；workload 只用远程型 7 个（FW、I2C、PR、MT、SPMV、KM、MM，用户 10-20 选定）；配置 4 个：HPCA baseline、HPCA Complete（1013 那次的同一组参数）、T18 全开 W=1024 + 按距离分 credit、只放大窗口 W=1024；共 28 个，kmeans 24 小时超时。排在当前 T18 评估之后，同样按内存规则分配。
@@ -1209,3 +1240,10 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 - **用户 10-19 决定**：T18、T19 不再停在 `[提案]`，两个同时实现，直接做真实版（有限大小的 cuckoo 表 / filter）；评估的 baseline 用 mi200 原样（地址转换不变）；workload 用远程型 7 个 + T17 三个，本地型只确认不变慢。代码分别在 `isca27/t18-merge`、`isca27/t19-steal`（都从 `isca27/p12-measure` @ `0b85bef` 开出）。
 - **T18**：`ca8b831`（已推送），4 个提交，只加代码（2,466 行；配置相关文件只加了接线）。回归逐位一致；冒烟和正确性见“结果摘要 → T18 冒烟测试”；评估计划见“需要用户决定”。
 - **T19**：`eaa9c73`（已推送）。冒烟见“结果摘要 → T19 冒烟测试”；T17 主 kernel 在静态切分下没有可偷的 WG，方向问题见“需要用户决定”。
+
+### 2026-10-21 (P18) 网络结论交叉验证：调研完成（⏸ 等用户确认方案）
+
+- **同步**：提交 page-migration 会话留下的未提交文件（原样，`d34d99a`），推送 `isca27/docs`。
+- **调研**（两个只读子代理 + 我抽查）：ASTRA-sim（master `4ce9ecf`）没有 2D mesh、congestion-aware 只支持 1 维、每个 NPU 只能有 1 个在途 send、没有链路统计，不适合直接验证；BookSim2 改约 150 行就能做闭环 + 矩阵流量；Garnet standalone 只有开环。akita 的 32 周期是不占缓冲的全流水线、没有 credit，其他模拟器要按两种缓冲语义配。方案和待决事项见"需要用户决定"第一条。
+- 没有安装、编译、运行任何东西；服务器没动。ASTRA-sim / BookSim2 / gem5 / noxim 的浅克隆在本机 scratch（不进仓库）。
+

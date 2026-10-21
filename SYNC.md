@@ -433,3 +433,11 @@
 
 ### 2026-10-21 [claude-code] 新 prompt P18：ASTRA-sim 交叉验证
 - 用户想用 ASTRA-sim 看网络结论是不是模拟器的问题，并换新的会话窗口。`prompts/P18_astrasim_crosscheck.md`：先调研 ASTRA-sim 能验证什么（及 BookSim2 / Garnet 替代），⏸ 等用户确认，再在独立目录搭建、校准、用 `results_index/dm/` 的流量矩阵做交叉验证。README 索引加了 P18。
+
+- 2026-10-21 · cowork · 新 idea 的文献检查（用户要求）：新增 `related_work_ideas_1021.md`。结论：A1（跨 kernel 保留只读远程 line）、A2（从邻居取 / 区域代理）、A4（热点放中间 / 复制）作为机制都有先例（HMG HPCA'20、CARVE MICRO'18、CPElide MICRO'24；Virtual Hierarchies ISCA'07、Proxies、DASH RAC、Delegated Replies HPCA'22，以及本组 HDPAT HPCA'26 在同一 wafer 上对翻译用过区域 + 地址哈希；Carrefour ASPLOS'13、R-NUCA、SelRep、NDPExt）；A3（子页放置）部分新（最接近 Affinity Alloc MICRO'23、Micro-Pages ASPLOS'10、Pal HPCA'19）。新意要落在 wafer 特有的论点（跳数 × 64 项窗口），每个 idea 还能算新的角度见文件。
+
+
+### 2026-10-21 [claude-code] P18 第 1 步：ASTRA-sim 等工具调研完成（⏸）
+- 改了：`STATUS.md`（"需要用户决定"第一条：调研结论、akita 网络语义、方案 A 解析模型 / B BookSim2 / C Garnet / D ASTRA-sim、流量生成、比较的量、3 个待决问题；日志追加一条）、`SYNC.md`。
+- 同步：page-migration 会话未提交的文件原样提交（`d34d99a`）。
+- 没有代码改动，没有运行；`results_index/astra/` 等用户确认后再建。
