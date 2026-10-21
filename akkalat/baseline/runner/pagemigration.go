@@ -126,7 +126,9 @@ type gpmPageMigrationParts struct {
 	tlbs    []pagemigration.PageInvalidator
 	rdma    *rdma.Comp
 	engine  *pagemigration.CopyEngine
-	l2s     []*writeback.Cache
+	// l2Of returns the L2 slice that holds (or would hold) a physical line,
+	// local or remote (M3 replica), with the GPM's slice interleaving.
+	l2Of func(pAddr uint64) *writeback.Cache
 }
 
 func (b *R9NanoGPUBuilder) buildPageMigrationEngine() {
@@ -163,7 +165,11 @@ func (b *R9NanoGPUBuilder) recordPageMigrationParts() {
 		p.tlbs = append(p.tlbs, t)
 	}
 	p.tlbs = append(p.tlbs, b.l2TLB)
-	p.l2s = append(p.l2s, b.l2Caches...)
+	l2s := append([]*writeback.Cache(nil), b.l2Caches...)
+	interleave := uint64(1) << b.log2MemoryBankInterleavingSize
+	p.l2Of = func(a uint64) *writeback.Cache {
+		return l2s[a/interleave%uint64(len(l2s))]
+	}
 	b.gpu.pm = p
 }
 
@@ -182,20 +188,16 @@ func (b *R9NanoPlatformBuilder) buildPageMigrationManager(
 		if p.memBase != gpu.GPUID*8*mem.GB {
 			panic("page migration: unexpected GPM physical layout")
 		}
-		l2s := p.l2s
+		l2Of := p.l2Of
 		gpms[gpu.GPUID] = &pagemigration.GPM{
 			DeviceID: gpu.GPUID,
 			MemBase:  p.memBase,
 			TLBs:     p.tlbs,
 			Engine:   p.engine,
 			HoldsLine: func(a uint64) bool {
-				for _, l2 := range l2s {
-					if l2.AuthoritativeResidentLookup(0, a) ||
-						l2.AuthoritativeMSHRLookup(0, a) {
-						return true
-					}
-				}
-				return false
+				l2 := l2Of(a)
+				return l2.AuthoritativeResidentLookup(0, a) ||
+					l2.AuthoritativeMSHRLookup(0, a)
 			},
 		}
 	}

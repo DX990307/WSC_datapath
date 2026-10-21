@@ -32,22 +32,28 @@ type GPM struct {
 	HoldsLine func(pAddr uint64) bool
 }
 
+// phase is where a unit is in its migration (DESIGN.md 2.3):
+// idle -> queued -> service -> shootdown -> drain -> copy -> (remap) -> idle.
 type phase int
 
 const (
-	phaseIdle phase = iota
-	phaseQueued
-	phaseService
-	phaseShootdown
-	phaseDrain
-	phaseCopy
+	phaseIdle      phase = iota // not migrating; may be triggered if eligible
+	phaseQueued                 // in the destination GPM's software queue
+	phaseService                // in a batch being serviced (SoftwareLatency)
+	phaseShootdown              // TLBs invalidated; all accesses held
+	phaseDrain                  // waiting for in-flight accesses to the old frames
+	phaseCopy                   // copy engines moving the pages
 )
 
+// unitKey identifies a migration unit: the aligned 2^Log2Unit-byte block of
+// virtual addresses of one process.
 type unitKey struct {
 	pid vm.PID
 	idx uint64
 }
 
+// unit is the migration and counting granule (a 4-KB page, or a group of
+// 4-KB pages for a 2-MB unit) and its migration state.
 type unit struct {
 	key   unitKey
 	phase phase
@@ -124,6 +130,8 @@ func (m *Manager) violation(format string, args ...interface{}) {
 	panic(Violation(fmt.Sprintf("page migration invariant: "+format, args...)))
 }
 
+// handler is the per-GPM software service (UVM bottom half): it takes up to
+// BatchSize queued units at a time and services them for SoftwareLatency.
 type handler struct {
 	queue     []*unit
 	service   []*unit
@@ -154,7 +162,10 @@ type Stats struct {
 	CheckedFrames      uint64   // frames verified uncached (Config.Check)
 }
 
-// Manager decides and orchestrates migrations.
+// Manager decides and orchestrates migrations. It is a ticking component only
+// to advance time-driven steps (software service, shootdown latency, drain
+// polling); everything else happens in direct calls from the hooks and the
+// copy engines, which is safe because migration requires the serial engine.
 type Manager struct {
 	*sim.TickingComponent
 
@@ -393,7 +404,9 @@ func (m *Manager) trigger(now sim.VTimeInSec, u *unit, dst uint64) {
 	m.TickLater(now)
 }
 
-// Tick advances the software handlers and the migrations in flight.
+// Tick advances the software handlers (start a batch, finish a batch) and the
+// migrations in flight (shootdown latency elapsed -> drain; drained -> copy).
+// The copy finishes in chunkDone, called by the destination copy engine.
 func (m *Manager) Tick(now sim.VTimeInSec) bool {
 	progress := false
 	for _, h := range m.handlers {
