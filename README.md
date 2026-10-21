@@ -1,11 +1,71 @@
 # CuPath → ISCA 2027 工作目录
 
-> 维护：dx（决策在 Cowork 中讨论，由 Cowork 侧的 Claude 同步到这里）。最后更新：2026-10-12。
+> 维护：dx（决策在 Cowork 中讨论，由 Cowork 侧的 Claude 同步到这里）。最后更新：2026-10-21（"当前进展与 idea 汇总"一节）。
 > 这里**一个任务对应一个文档**。为了让每个文档单独打开也能看懂，必要的背景会在各文档里重复。
 
 ## 项目一句话
 
 论文 CuPath（HPCA 2027 #1329）第一轮被拒，评分 1 WA + 5 WR。现在改投 **ISCA 2027**。截稿时间按 ISCA 2026 推算：摘要约 **11/9**，全文约 **11/16**，以 CFP 发布为准。主要改动有三块：补齐强 baseline、换用现代 workload、改进机制以提升新颖性。
+
+## 当前进展与 idea 汇总（10-21，Claude Code 按用户要求写入）
+
+> 数据出处：`results_index/abl3c384/`（384 GB/s 主配置消融）、`results_index/m2w/`（W 和带宽的敏感性）、`results_index/dm/`（data movement 离线分析）、`results_index/pm/`（page migration，在跑）。摘要都在 `STATUS.md`。以下"新 idea"全部是 `[提案]`，没有用户确认前不写代码。
+
+### 1. 主要结论
+
+- **模拟器**：修了两个 timing bug（barrier 缓冲区满跳指令、kernel 启动不失效 L1），`isca27/cupath-v3` @ `4235991`；修复前的结果不可信。还有一个原有 bug 没修：L2TLB 直接用 IOMMUCache 的端口发送，丢唤醒，会挂死（MG 的 M1+M2）或造成翻译延迟尖峰。
+- **主配置**（384 GB/s、W = 64，25 个 workload）：Complete 对 baseline GMEAN **1.73×**。瓶颈是请求方等那 64 个窗口位（链路平均只用 1–5%）。
+- **W 的敏感性**：W 放大到 256，baseline 自己快约 3 倍，Complete 的收益大幅缩小；每 GPM 的在途读还会被 L1V 封顶在 28 × 16 = 448（`-l1v-mshr-entries` 和 `-l1v-max-concurrent-trans` 两个都是 16）。
+- **网络紧张、表和带宽匹配**（48 GB/s ≈ 220 CU 配 384 GB/s 的每 CU 比例，W = 256）：6 个 workload 的 Complete GMEAN 2.71×（不含 PR 1.86×），放大窗口不再削弱收益；剩下 19 个 workload 在跑。
+- **用户的判断（10-21）**：带宽大概率不是瓶颈，wafer 相关的是 **hop**（每跳 32 cycle，对角线单程约 400 ns）。数据支持的说法：hop 通过"往返时间 × 有限的在途资源"限制吞吐（吞吐 = W × 64 B ÷ RTT），wafer 直径越大，需要的表越大，所以**减少往返次数比减少字节更重要**。
+- **热点**：7 个 workload（MM、PR 100%，npbcg 92%，graphtc 79%，atax 67%，shocsort 63%，FW 54%）的远程读集中在一个 owner，**都在角落**（tile 0 / 48：小于 192 KB 的 buffer 整个放在 GPM 0、余数页放在最后一个 GPM）；角落只有 2 条出链路，先 Y 后 X 路由让 PR 87% 的出流量走一条链路。其余 18 个基本均匀。
+- **区域性共享**：同时读同一条 line 的 GPM 多数是邻居（MG、shocsort、CFD、MoE、PA 的共享者平均相距 1.9–2.6 跳，随机是 4.7 跳；npbcg 88%、MG 79%、PR 69% 的最近共享者在 1 跳内）。图和检索类（sssp、bfs、IVF）是随机的。
+- **page migration**（对比 baseline，新写的迁移管理器，分支 `isca27/page-migration`，设计见 `results_index/pm/DESIGN.md`）：目前只在 PR 上有收益（fault-4K 2.9×，Complete 13.3×）；bfs、sssp、allreduce 上变慢，2 MB 最差（0.29–0.44×）；零软件开销的理想版本几乎不变 → 问题在于页被很多 GPM 共享，不在软件开销。
+
+### 2. 现有机制的去留
+
+| 机制 | 结论 | 依据 |
+|---|---|---|
+| M1 打包 | **保留**，最重要 | 去掉慢 22%；作用是让一个窗口位带 1.8–2.1 条 line（按字节只省 3–15%） |
+| M1 请求方合并 | **保留** | 去掉慢 11%；MM、atax、FW 上最大 |
+| M3 请求方 L2 保留 | **保留**，省数据搬运的主力 | 去掉慢 21%；省下的字节×跳数主要来自它 |
+| M1 owner 合并 | 待定，倾向删 | 合并率 0–18%，没单独测过 |
+| M2 网内多播 | **删或重做** | 所有条件下 ±3%；共享在时间上相隔几百 ns 到几 µs，owner 合并窗口只有 10–20 ns |
+| M1 按距离分配（rtt / near） | **删**，改共享池 | shared 与 rtt ±1%；near 更差；唯一例外 allreduce @ W=256、48 GB/s rtt 快 18%（疑似限流作用，未确认） |
+
+### 3. 新 idea（全部 `[提案]`）
+
+**A. 有数据支持、上限较高**
+
+| # | idea | 上限 / 依据 | 状态 |
+|---|---|---|---|
+| A1 | **M3 跨 kernel 保留只读远程 line**：kernel 边界只作废被写过的 line（owner 记录写过的页 / line，或写纪元）；重用距离长时放宽"两次触碰才保留" | M3 之后剩余网络 line 平均省 32%（npbcg 84%、MG 64%、CFD 62%）；npbcg 141 万次填入 135 万在边界被作废；L2 70–95% 空闲 | 离线分析完成，**最推荐** |
+| A2 | **从邻居取**：1–2 跳内的邻居 L2 已有副本就从邻居拿，不去 5–6 跳外的 owner | 共享者多数是邻居（见上）；省跳数、缩短 RTT、分散热点 | 上限未算 |
+| A3 | **子页放置**（用户 10-21 提出）：一页的不同部分放到各自使用者的区域，例如 GPM 1–10 用前 2 KB、11–20 用后 2 KB，就把两半分别放到 GPM 4 和 GPM 14。可以在 RDMA 加一张"子页重定向表"实现，不改页大小和 TLB | 可能拆散角落的小 buffer 热点，也解决页迁移的"页级伪共享"来回搬；对广播数据（PR rank 向量）和随机访问无效 | 需要先用页共享 trace（`-page-sharing-trace`，要确认记录了页内偏移）确认模式 |
+| A4 | **热点小数据放中间或复制** | 放中间：PR 最忙链路负载 ×0.63；4 份副本：×0.15，字节×跳数 ×0.27；M3 已替 PR 做了复制，主要在 48 GB/s 下有用 | 离线分析完成；论文里作为放置问题单独交代 |
+
+**B. 有潜力但风险大**
+
+| # | idea | 上限 | 风险 |
+|---|---|---|---|
+| B1 | 按共享者主动推送（替代 M2）：owner 记住最近读者，读时多播并存入其 L2 | oracle K=4：sssp 31%、IVF 36%、bfs 21%、ar 17% 的远程读 | 无用推送 13–99%，需要预测器；和 A1 重叠 |
+| B2 | 分配方式改成拥塞控制（按实测 RTT 限制发往拥塞目的地的在途数） | 只有 allreduce 一个线索（+18%） | 先跑 rtt 对 shared 带完整统计的对照 |
+| B3 | 按准确率开关预取 | 无用预取让 ar、mt、mg 多出 45–130 MB·跳 | 收益小 |
+
+**C. 基本放弃**：owner 等待后再多播（字节省 1–5%，W=64 下净负）；压缩（384 GB/s 下串行化每跳只有约 0.25 ns，没有性能空间；需要的只读统计提案在 `results_index/dm/analysis.md`）；单纯加大 MSHR。
+
+### 4. 论文定位（讨论中）
+
+- 核心论点：wafer 上远程访问的代价由 hop 决定，GPM 的在途资源跟不上 wafer 的直径 → 减少往返次数、减少每次往返占用的资源。
+- 实验：W 作为变量扫描（64 / 128 / 256）；wafer 规模扫描（5×5 / 7×7 / 9×9，有 `isca27/mesh-size` 分支）；48 GB/s 网络紧张场景作补充；page migration 作为"为什么不直接迁移页"的对照。
+
+### 5. 待用户决定
+
+1. 是否实现 A1（M3 跨 kernel 保留只读数据）。
+2. 是否先做 A2、A3 的数据分析（从邻居取的上限、子页访问模式）。
+3. 是否安排 wafer 规模扫描。
+4. 什么时候修 L2TLB→IOMMU 丢唤醒 bug（修了会改时序）。
+5. yss2 上挂住的 MG 进程（PID 2415098，v3c384）要不要杀。
 
 ## 状态标记
 
@@ -51,6 +111,7 @@
 | [`prompts/P14_config_14cu.md`](prompts/P14_config_14cu.md) | 给 Claude Code：论文配置改为每 GPM 14 个 CU（D23）——新预设、校准、28 对 14 CU 验证、workload 重新定规模 | 待执行 | 10-20 |
 | [`prompts/P15_complete_w64.md`](prompts/P15_complete_w64.md) | 给 Claude Code：Complete 不用 1024 窗口（`t18-window` 64，距离 credit 开，表默认 128 槽），15 个 W2 benchmark × baseline / M1+M2+M3 = 30 个运行，二进制 `d09b18b` | 待执行 | 10-20 |
 | [`prompts/P16_cupath_v3_ablation.md`](prompts/P16_cupath_v3_ablation.md) | 给 Claude Code：按新结构实现（M1 RDMA 端 = 合并 / 打包 / 分配，新增"近处多留"份额；M2 网络 = 多播；M3 保留），再跑小 footprint 消融：26 个 workload × 9 个配置，baseline ≤ 1 小时、每个 benchmark 用到全部 48 个 GPM | 待执行 | 10-20 |
+| [`prompts/P17_data_movement_next.md`](prompts/P17_data_movement_next.md) | 给 Claude Code：接手 10-21 的进展（收尾在跑的实验 → A2/A3 数据分析 → ⏸ 等用户选 A1 实现、wafer 规模扫描、IOMMU bug） | 待执行 | 10-21 |
 | [`guides/G1_port_workload_to_mgpusim.md`](guides/G1_port_workload_to_mgpusim.md) | **操作指南**：怎么把新 workload 移植进 MGPUSim（以 GCN 为例） | 参考资料 | — |
 
 ## 时间线

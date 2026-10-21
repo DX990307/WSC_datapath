@@ -425,3 +425,8 @@
 - v3m2w 追加 38 个运行（tag `w256b48m`，48 GB/s、W=256，19 个 workload 的 baseline/Complete，完整统计），在跑。
 - 停掉 MSHR=64 两组（`w256b48mshr64`：只改 MSHR 被 `-l1v-max-concurrent-trans=16` 卡住；`w256b48m64`：用户要求停）。
 - page migration（分支 `isca27/page-migration`，二进制 c74ef96，未推送）：DESIGN.md 在 `results_index/pm/`；扩到 25 个 workload × 9 个配置（225 个运行）在跑。PR 首个结果：fault-4K 2.9×（ideal 同），Complete 13.3×。
+
+### 2026-10-21 [claude-code] README 加"当前进展与 idea 汇总（10-21）"；新 prompt P17
+- 用户要求把目前所有结论和 idea 写进 README，并给一个 prompt。README 新增一节（主要结论、机制去留、新 idea A1–A4 / B1–B3 / C、论文定位、待决事项），文件索引加 P17。
+- `prompts/P17_data_movement_next.md`：给新会话接手——收尾 v3m2w `w256b48m` 和 page migration → A2（从邻居取）/ A3（子页放置）分析 → ⏸ 等用户决定 A1 实现、wafer 规模扫描、IOMMU bug、PID 2415098。
+- 新 idea 全部是 `[提案]`。`results_index/pm/` 下 page-migration 会话的未提交文件没有动。
