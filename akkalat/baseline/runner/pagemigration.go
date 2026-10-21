@@ -131,9 +131,13 @@ type gpmPageMigrationParts struct {
 	l2Of func(pAddr uint64) *writeback.Cache
 }
 
+// buildPageMigrationEngine creates the GPM's copy engine. Only a migrating
+// policy gets one: the observe policy must leave the hardware unchanged (an
+// extra network port or connection port shifts the round-robin arbitration
+// of the mesh endpoint and of the direct connections, which changes timing).
 func (b *R9NanoGPUBuilder) buildPageMigrationEngine() {
 	b.pmEngine = nil
-	if !b.pageMigration.Enabled() {
+	if !b.pageMigration.Migrates() {
 		return
 	}
 	b.pmEngine = pagemigration.NewCopyEngine(
@@ -143,8 +147,10 @@ func (b *R9NanoGPUBuilder) buildPageMigrationEngine() {
 	}
 }
 
+// recordPageMigrationParts keeps what the manager needs from this GPM (its
+// translators, TLBs, RDMA engine, copy engine and L2 slices).
 func (b *R9NanoGPUBuilder) recordPageMigrationParts() {
-	if b.pmEngine == nil {
+	if !b.pageMigration.Enabled() {
 		return
 	}
 	p := &gpmPageMigrationParts{
@@ -276,8 +282,10 @@ func (r *Runner) reportPageMigrationStats() {
 		for _, at := range gpu.pm.otherAT {
 			held += at.HeldAccesses
 		}
-		pulled += gpu.pm.engine.PulledBytes
-		served += gpu.pm.engine.ServedBytes
+		if gpu.pm.engine != nil {
+			pulled += gpu.pm.engine.PulledBytes
+			served += gpu.pm.engine.ServedBytes
+		}
 	}
 	col("pm_held_accesses", float64(held))
 	col("pm_dma_pulled_bytes", float64(pulled))
