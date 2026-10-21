@@ -223,6 +223,7 @@
 - **选项 A（机制的网络层评估）**：用 akita Complete 的流量（M3 / 合并不进网络、实测打包直方图）闭环，"逻辑远程读吞吐"的提升：PR 20–23×、npbcg 6.8–16×、sssp 2.0–2.7×、cfd 1.2–2.0×、ar 1.05–1.9×、bfs 1.4–1.6×。36 组里 35 组 ≥ akita 端到端加速比，Spearman 0.88。384 GB/s 下非热点 workload 的往返时间不变，收益 ≈ 每个包承载的逻辑读数：在 W × RTT 的上限下，机制让同一个窗口位置做更多事，而不是降低延迟。多播没有建（保守，≤ 7%）。
 - **LLM 试验**：Llama-7B 推理，TP 8 × PP 6，每个配置 5–9 s。相邻放置 148 / 217 ms（384 / 48 GB/s），随机放置 162 / 293 ms。只作趋势参考。
 - **速度**：ASTRA 约 4,000–5,400 次远程读/秒（akita 全 GPU 约 1,300 次/秒），大运行每 100 万次读约 5 GB 内存。
+- **akita 当前配置的平台校准**（10-21 晚，用户同意；二进制 `4235991`，T14 参数不变，只加 `-bandwidth=24/3 -switch-buffer-flits=16`，16 个运行，yss3 `~/astrasim-test/mgpusim_hop/`）：零负载往返每跳 72 ns，48 GB/s 比 384 GB/s 在 12 跳时只多 5 ns（ASTRA 存储转发多 28.6 ns，即约 3% 的偏差）。incast：48 GB/s 下 akita 和 ASTRA 都停在 32 B/ns（注入口上限，差 0.3%）；384 / 768 GB/s 下 akita 的单个 owner 最多 113 B/ns（1.77 line/ns），ASTRA 网络能到 224，所以主配置下热点 owner 的上限是 **owner 的服务能力**。
 
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
 
@@ -1267,4 +1268,11 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 - **结果**：见"结果摘要 → P18"和 `results_index/astra/analysis.md`。
 - **没做的**：48 GB/s 下 akita 的零负载跳数延迟没有直接测量（需要的话用当前二进制在服务器重跑 T14 跳数矩阵）；ASTRA 里没有实现多播。
 - 工作区里 `results_index/pm/`、`results_index/geo/`、`related_work_ideas_1021.md` 是别的会话正在改的文件，这次没有提交。
+
+### 2026-10-21 晚 (P18) akita 当前配置的平台校准；ASTRA incast（E4）
+
+- **用户 10-21**："都可以"（重测 48 / 384 GB/s 平台数据；ASTRA 补丁推到远程）。
+- **运行**：akita 16 个（跳数矩阵 2、incast 12、all-to-all 2），只读使用 `~/akita-exp-test/v3c384/bin/baseline_4235991`（md5 `058680df…`）和同目录的 `mi200.json`，输出在 `~/astrasim-test/mgpusim_hop/`，`nice` 运行，最多 2 个同时，按 MemAvailable 留 30 GB；没有碰别的调度器。ASTRA incast 24 个。全部 exit 0。结果见 `results_index/astra/{calibration_incast.csv, mgpusim_calib/, analysis.md 第 0、3、4 节}`。
+- **推送 `isca27/astrasim` 被 Claude Code 自动模式拦下**（新仓库加 remote 判为远程重定向）。补丁已在 `results_index/astra/patches/`。如果还要单独的分支，请在终端运行：`cd /private/tmp/claude-502/-Users-daoxuan-Desktop-CuPath/c6d28c9e-9c9f-4ab8-88ab-e761a9a1b937/scratchpad/astrasim_snapshot && rm -f .gitmodules && git init -b isca27/astrasim && git add -A && git commit -m "ASTRA-sim 4ce9ecf + CuPath P18 patches" && git remote add origin git@github.com:DX990307/WSC_datapath.git && git push origin isca27/astrasim`（scratch 目录会话结束后可能被清掉，届时用本机 `~/Desktop/CuPath/astrasim` 重做快照）。
+- ASTRA 还有超线性（incast k = 47 的 77 万次读要 12.5 分钟），没 profile。
 
