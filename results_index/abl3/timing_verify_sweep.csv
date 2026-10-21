@@ -1,0 +1,30 @@
+benchmark,args,binary,env,exit,result,note
+npb_mg,default -verify,diag3(5643c95+diag hooks off),none,1,mismatches=70240/78608 final_l2 8.82e-3 vs ref 2.93e-3,L1 stale
+npb_mg,default -verify,diag3,CUPATH_DIAG_L1INV=1,0,mismatches=0 (stale-barrier=0),L1 invalidated at each kernel launch
+rodinia_lud,default(n=256) -verify,diag3,none,1,relative_residual=2.865e-02,L1 stale
+rodinia_lud,default(n=256) -verify,diag3,CUPATH_DIAG_L1INV=1,0,relative_residual=1.256e-07 (stale-barrier=0),
+w2-fft2d,default(n=512) -verify,diag3,none,1,roundtrip_max_err=56.2,L1 stale
+w2-fft2d,default(n=512) -verify,diag3,CUPATH_DIAG_L1INV=1,0,roundtrip_max_err=5.96e-07 (stale-barrier=0),
+w2-shocsort,-shocsort-n 65536 -verify,diag3,none,1,mismatches=65473/65536,L1 stale
+w2-shocsort,-shocsort-n 65536 -verify,diag3,CUPATH_DIAG_L1INV=1,0,mismatches=0,
+w2-npbis,-npbis-iterations 2 -verify (n=65536),fixlds_fix_5643c95 / diag2,none,1,LDS OOB panic [:4294967280],L1 stale
+w2-npbis,-npbis-iterations 2 -verify (n=65536),diag2,CUPATH_DIAG_L1INV=1,0,mismatches=0,
+graphtc,default -verify,diag3,none,1,LDS OOB panic [:1044] cap 1040,barrier stale wave (bb64 rerun killed externally before finishing)
+altis_cfd,default -verify,diag3,none,0,state/old mismatches=0,
+embbag,default -verify,diag3,none,0,mismatches=0,
+lonestar_bh,default -verify,diag3,none,0,mismatches=0,
+npbcg,default -verify,diag3,none,0,x_max_rel_err=3.25e-07 zeta_mismatches=0,
+w2-atax,default(1024) -verify,diag3,none,0,mismatches=0,
+w2-npbis,default(1 iteration) -verify,diag3,none,0,mismatches=0,
+pagedattn,default -verify,diag3,none,0,mismatches=0,
+moe,default -verify,diag3,none,0,mismatches=0,
+bfs,-bfs-scale 12 -verify,diag3,none / L1INV,0 / 0,mismatches=0 both,
+sssp,-sssp-scale 12 -sssp-max-rounds 4 -verify,diag3,none / L1INV,0 / 0,mismatches=0 both,
+allreduce,default -verify,diag3,none,124,timeout 20 min,unknown
+gups,default -verify,diag3,none,124,timeout 20 min,unknown
+floydwarshall,default -verify,diag3,none,124,timeout 20 min,unknown
+pagerank,default -verify,diag3,none,124,timeout 20 min,unknown
+kmeans,default -verify,diag3,none,124,timeout 20 min,unknown
+spmv,default -verify,diag3,none,124,timeout 20 min,unknown
+im2col,default -verify,diag3,none,124,timeout 20 min,unknown
+matrixmultiplication / matrixtranspose,default -verify,diag3,none,-,no exit status (launched twice by a duplicate queue; processes gone),invalid
