@@ -430,3 +430,6 @@
 - 用户要求把目前所有结论和 idea 写进 README，并给一个 prompt。README 新增一节（主要结论、机制去留、新 idea A1–A4 / B1–B3 / C、论文定位、待决事项），文件索引加 P17。
 - `prompts/P17_data_movement_next.md`：给新会话接手——收尾 v3m2w `w256b48m` 和 page migration → A2（从邻居取）/ A3（子页放置）分析 → ⏸ 等用户决定 A1 实现、wafer 规模扫描、IOMMU bug、PID 2415098。
 - 新 idea 全部是 `[提案]`。`results_index/pm/` 下 page-migration 会话的未提交文件没有动。
+
+### 2026-10-21 [claude-code] 新 prompt P18：ASTRA-sim 交叉验证
+- 用户想用 ASTRA-sim 看网络结论是不是模拟器的问题，并换新的会话窗口。`prompts/P18_astrasim_crosscheck.md`：先调研 ASTRA-sim 能验证什么（及 BookSim2 / Garnet 替代），⏸ 等用户确认，再在独立目录搭建、校准、用 `results_index/dm/` 的流量矩阵做交叉验证。README 索引加了 P18。

@@ -112,6 +112,7 @@
 | [`prompts/P15_complete_w64.md`](prompts/P15_complete_w64.md) | 给 Claude Code：Complete 不用 1024 窗口（`t18-window` 64，距离 credit 开，表默认 128 槽），15 个 W2 benchmark × baseline / M1+M2+M3 = 30 个运行，二进制 `d09b18b` | 待执行 | 10-20 |
 | [`prompts/P16_cupath_v3_ablation.md`](prompts/P16_cupath_v3_ablation.md) | 给 Claude Code：按新结构实现（M1 RDMA 端 = 合并 / 打包 / 分配，新增"近处多留"份额；M2 网络 = 多播；M3 保留），再跑小 footprint 消融：26 个 workload × 9 个配置，baseline ≤ 1 小时、每个 benchmark 用到全部 48 个 GPM | 待执行 | 10-20 |
 | [`prompts/P17_data_movement_next.md`](prompts/P17_data_movement_next.md) | 给 Claude Code：接手 10-21 的进展（收尾在跑的实验 → A2/A3 数据分析 → ⏸ 等用户选 A1 实现、wafer 规模扫描、IOMMU bug） | 待执行 | 10-21 |
+| [`prompts/P18_astrasim_crosscheck.md`](prompts/P18_astrasim_crosscheck.md) | 给 Claude Code：用 ASTRA-sim（或 BookSim2 / Garnet）独立交叉验证网络结论（384 GB/s 下网络不是瓶颈、W×RTT、48 GB/s 下 µs 级排队、角落热点链路）；先调研 ⏸ 再搭建 | 待执行 | 10-21 |
 | [`guides/G1_port_workload_to_mgpusim.md`](guides/G1_port_workload_to_mgpusim.md) | **操作指南**：怎么把新 workload 移植进 MGPUSim（以 GCN 为例） | 参考资料 | — |
 
 ## 时间线
