@@ -183,6 +183,14 @@
 
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
 
+### M2 / 分配方式的敏感性：W 和带宽（10-21，二进制 `4235991`；`results_index/m2w/`）
+- 6 个 workload（PR、npbcg、sssp、bfs、allreduce、CFD）× 4 个配置（baseline、M1+M3、Complete、Complete 分配 shared）；条件 W=64@384（复用 abl3c384）、W=256@384、W=2048@384、W=64@48（`-bandwidth=3`）。W=256@48 用户中途取消（结果留在服务器，不进分析）。72 个新运行全部 exit 0，无挂住。
+- **M2 增益**（M1+M3 / Complete 的 GMEAN）：0.984 / 1.008 / 1.004 / 1.007。最大 PR @W=2048 +2.7%（热点 owner 出口链路饱和处）。sssp/bfs 的负值来自单个最慢 GPM 的关键路径波动和翻译延迟尖峰，不是数据通路变慢。
+- **分配方式**（shared / rtt）：0.989 / 1.000 / 0.999 / 1.006，W=2048 时窗口从不满。
+- **窗口上限**：每 GPM 在途读被 L1V MSHR 封顶在 28×16 = 448，W=2048 等于窗口不限；384 GB/s 最多用到对分带宽的 20–32%，填不满。
+- **对主结论的影响**：W=256 时 baseline 自己快 1.25–3.4×，这 6 个 workload 的 Complete GMEAN 从 2.68 降到 1.91（ar 1.86→1.08，CFD 1.88→1.33）；W=2048 时 ar 1.02、CFD 1.06、sssp 1.42。W=64@48 时 Complete 2.75（PR 17.0×）。v3 收益依赖"W=64 是现实窗口"的前提，论文要论证或把 W 作为敏感性维度。
+- 推测（未验证）：L2TLB→IOMMU 丢唤醒 bug 除了挂死，还会造成翻译延迟尖峰（bfs k10 远程 TLB 缺失 667→4840 ns），可能是图类 workload ±5% 波动的来源。
+
 ### v3 @ 384 GB/s：baseline / Complete / 消融（10-21，二进制 `4235991`，修复 Bug A/B，组合表 128 项；`results_index/abl3c384/`）
 - 网络 `-bandwidth=24 -switch-buffer-flits=16`；25 个 workload × 10 个配置 = 250 个运行：249 个 exit 0，WG 数和指令数与 baseline 逐对一致；**MG 的 M1+M2 挂住**（L2TLB 直接用 IOMMUCache 的端口发送，丢唤醒；原有 bug，没修没杀，PID 2415098 @ yss2，见 README 第 3 节）。
 - 以前崩溃的 5 个规模（sssp s19、atax 12096、ivf 2M、graphtc s14、shocsort 6.19M）全部 exit 0；fir、MM（768 GB/s）修复前后逐位一致。

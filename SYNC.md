@@ -408,3 +408,11 @@
 - 更正上一条：用户随后要求组合模式下请求方表用 128 项（不要 1024）。代码 `isca27/cupath-v3` @ `4235991`：Bug A（`scheduler.go` barrier 缓冲区满时重试、PC 只推进一次）、Bug B（kernel 启动时经 `KernelLaunchHooks` 失效 L1V/L1S/L1I，`-legacy-no-kernel-l1-invalidate` 可恢复旧行为）、新参数 `-t18-compose-table-entries`（8 个 `v3_*.json` 设成 128）。因此 `v3_complete` 不再等于 W = 64 的 `complete_new`（1024 项）。
 - 结果在 `results_index/abl3c384/`（README、abl3c384.csv、mechanism_analysis.md、mechanism_stats.csv、verify.csv、obs_raw/、scripts/）；摘要见 STATUS"v3 @ 384 GB/s"。
 - 待用户决定：杀掉 MG M1+M2 挂住的进程；是否修 L2TLB→IOMMU 丢唤醒 bug（会改时序）；PR 等热点 owner workload 在论文里怎么处理；改进提案 P1–P6 做哪些。
+
+- 2026-10-21 · cowork · 网站 v41（用户要求）：删掉"想和老师讨论的问题"，换成"Discussion"一节（导航加"讨论"），两个议题：① 网络配置——现在用的链路 384 GB/s（每 GPM 约 1.5 TB/s，和 Pal 等一致）、64 项、每跳 32 周期、switch 缓冲 16 flit；带宽 384 → 48 GB/s 对 baseline 和 Complete 的影响、窗口 64 → 256 / 2048 对 baseline 的影响和 Complete@64 拿回的差距（数据来自 m2w，部分完成）；② benchmark 规模——≤ 1 h 的小 footprint、7 个结构上用不满 48 个 GPM、busy48 偏低、小 buffer 放在 GPM 0 造成的热点 owner（GMEAN 1.73× → 去掉 8 个热点 workload 1.35×）。数据都来自修复后的二进制（abl3c384、m2w、abl3/sizes.md）。源文件已备份到 `site/presentation_1019.html`。
+
+
+### 2026-10-21 [claude-code] M2 / 分配方式的 W 和带宽敏感性（m2w）
+- 用户要求验证 M2 和按距离分配在更大 W 或更窄网络下是否有用；中途加 W=2048@384、取消 W=256@48（主会话直接改队列并杀掉 15 个运行）。结果在 `results_index/m2w/`，摘要见 STATUS。
+- 结论：M2 在所有条件下 ±3%，分配方式 ±3.5% 以内；W 放大后 baseline 大幅变快，v3 收益显著缩小；每 GPM 在途读被 L1V MSHR 封顶 448。
+- 待用户决定：是否修 L2TLB→IOMMU 丢唤醒 bug 并做前后对比；是否补"只关 owner 合并"消融；是否加 W=2048@48（≈220 CU @384 GB/s 等效）；论文如何论证 W=64 或把 W 作为敏感性维度。
