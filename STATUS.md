@@ -184,7 +184,7 @@
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
 
 ### v3 @ 384 GB/s：baseline / Complete / 消融（10-21，二进制 `4235991`，修复 Bug A/B，组合表 128 项；`results_index/abl3c384/`）
-- 网络 `-bandwidth=24 -switch-buffer-flits=16`；25 个 workload × 10 个配置 = 250 个运行：249 个 exit 0，WG 数和指令数与 baseline 逐对一致；**MG 的 M1+M2 挂住**（L2TLB 直接用 IOMMUCache 的端口发送，丢唤醒；原有 bug，没修没杀，PID 2415098 @ yss3，见 README 第 3 节）。
+- 网络 `-bandwidth=24 -switch-buffer-flits=16`；25 个 workload × 10 个配置 = 250 个运行：249 个 exit 0，WG 数和指令数与 baseline 逐对一致；**MG 的 M1+M2 挂住**（L2TLB 直接用 IOMMUCache 的端口发送，丢唤醒；原有 bug，没修没杀，PID 2415098 @ yss2，见 README 第 3 节）。
 - 以前崩溃的 5 个规模（sssp s19、atax 12096、ivf 2M、graphtc s14、shocsort 6.19M）全部 exit 0；fir、MM（768 GB/s）修复前后逐位一致。
 - **Complete 对 baseline GMEAN 1.73×（25 个）**。M1 / M1+M2 / M1+M3 / Complete = 1.44 / 1.43 / 1.73 / 1.73；只开 M3 1.28。
 - 从 Complete 去掉一个部件（T_without / T_Complete）：M1 1.358、M2 **0.998**、M3 1.213；合并 1.111、打包 **1.222**、分配 shared 0.998、分配 near 1.056。
