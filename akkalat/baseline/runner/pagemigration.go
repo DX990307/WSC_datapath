@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/bits"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/mem/vm/addresstranslator"
@@ -55,6 +56,12 @@ var pmIdealFlag = flag.Bool("pm-ideal", false,
 		"latency (TLB invalidation, drain, held accesses and the data copy over "+
 		"the network are still modeled).")
 
+var pmCheckFlag = flag.Bool("pm-check", false,
+	"Page migration: expensive invariant checks (every L2 of every GPM is "+
+		"searched for lines of each new frame at allocation and at remap; "+
+		"a hit panics). The cheap checks (no access to a frozen or retired "+
+		"frame, new frames never accessed) are always on.")
+
 func pageMigrationConfigFromFlags() pagemigration.Config {
 	policy, err := pagemigration.ParsePolicy(*pageMigrationFlag)
 	if err != nil {
@@ -76,6 +83,7 @@ func pageMigrationConfigFromFlags() pagemigration.Config {
 	c.ChunkBytes = uint64(*pmChunkBytesFlag)
 	c.PullWindow = *pmPullWindowFlag
 	c.L2Window = *pmL2WindowFlag
+	c.Check = *pmCheckFlag
 	if *pmIdealFlag {
 		c.SoftwareLatencyNS = 0
 		c.ShootdownLatencyNS = 0
@@ -89,10 +97,10 @@ func printPageMigrationConfig(c pagemigration.Config) {
 	}
 	fmt.Printf("[Config] page-migration policy=%s unit=%dKB sw=%dns batch=%d "+
 		"shootdown=%dns threshold=%d cooldown=%dns max-migrations=%d "+
-		"chunk=%dB pull-window=%d l2-window=%d ideal=%v\n",
+		"chunk=%dB pull-window=%d l2-window=%d ideal=%v check=%v\n",
 		c.Policy, (uint64(1)<<c.Log2Unit)>>10, c.SoftwareLatencyNS, c.BatchSize,
 		c.ShootdownLatencyNS, c.Threshold, c.CooldownNS, c.MaxMigrations,
-		c.ChunkBytes, c.PullWindow, c.L2Window, *pmIdealFlag)
+		c.ChunkBytes, c.PullWindow, c.L2Window, *pmIdealFlag, c.Check)
 }
 
 // WithPageMigration configures page migration.
@@ -118,6 +126,7 @@ type gpmPageMigrationParts struct {
 	tlbs    []pagemigration.PageInvalidator
 	rdma    *rdma.Comp
 	engine  *pagemigration.CopyEngine
+	l2s     []*writeback.Cache
 }
 
 func (b *R9NanoGPUBuilder) buildPageMigrationEngine() {
@@ -154,6 +163,7 @@ func (b *R9NanoGPUBuilder) recordPageMigrationParts() {
 		p.tlbs = append(p.tlbs, t)
 	}
 	p.tlbs = append(p.tlbs, b.l2TLB)
+	p.l2s = append(p.l2s, b.l2Caches...)
 	b.gpu.pm = p
 }
 
@@ -172,11 +182,21 @@ func (b *R9NanoPlatformBuilder) buildPageMigrationManager(
 		if p.memBase != gpu.GPUID*8*mem.GB {
 			panic("page migration: unexpected GPM physical layout")
 		}
+		l2s := p.l2s
 		gpms[gpu.GPUID] = &pagemigration.GPM{
 			DeviceID: gpu.GPUID,
 			MemBase:  p.memBase,
 			TLBs:     p.tlbs,
 			Engine:   p.engine,
+			HoldsLine: func(a uint64) bool {
+				for _, l2 := range l2s {
+					if l2.AuthoritativeResidentLookup(0, a) ||
+						l2.AuthoritativeMSHRLookup(0, a) {
+						return true
+					}
+				}
+				return false
+			},
 		}
 	}
 	m := pagemigration.NewManager("PageMigrationManager", b.engine,
@@ -260,6 +280,8 @@ func (r *Runner) reportPageMigrationStats() {
 	col("pm_held_accesses", float64(held))
 	col("pm_dma_pulled_bytes", float64(pulled))
 	col("pm_dma_served_bytes", float64(served))
+	col("pm_check_enabled", boolMetric(c.Check))
+	col("pm_checked_frames", float64(s.CheckedFrames))
 	for dev, n := range s.RemoteReadsByOwner {
 		if n > 0 {
 			r.metricsCollector.Collect(fmt.Sprintf("GPU%d", dev),

@@ -315,3 +315,101 @@ func TestParsePolicyAndValidate(t *testing.T) {
 		t.Fatal("unit smaller than the page accepted")
 	}
 }
+
+func expectViolation(t *testing.T, what string, f func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if _, ok := r.(Violation); !ok {
+			t.Fatalf("%s: expected an invariant violation, got %v", what, r)
+		}
+	}()
+	f()
+}
+
+// A write already in flight to the old frame when the migration starts must
+// land before the copy reads the page (drain), so the new frame has it.
+func TestInFlightWriteLandsBeforeCopy(t *testing.T) {
+	r := newRig(t, testConfig(PolicyOnFault))
+	src := 1*8*gb + 0x5000
+	r.addPage(0x50000, src, 1, 9)
+	h1 := r.m.ATHook(1, true)
+	h2 := r.m.ATHook(2, true)
+	w := &fakeWaker{}
+	h1.Issued(0, 1, 0x50100, src+0x100) // GPM 1's write, in flight
+	r.at(0, func(now sim.VTimeInSec) { h2.Resolve(now, w, 1, 0x50000, page(t, r, 0x50000)) })
+	r.at(3e-6, func(now sim.VTimeInSec) {
+		// The write is performed at the owner, then acknowledged.
+		if err := r.storage.Write(src+0x100, []byte{0xAB, 0xCD}); err != nil {
+			t.Error(err)
+		}
+		h1.Completed(now, src+0x100)
+	})
+	if err := r.engine.Run(); err != nil {
+		t.Fatal(err)
+	}
+	p := page(t, r, 0x50000)
+	got, _ := r.storage.Read(p.PAddr+0x100, 2)
+	if p.DeviceID != 2 || got[0] != 0xAB || got[1] != 0xCD {
+		t.Fatalf("in-flight write lost: %+v %x", p, got)
+	}
+}
+
+// After the remap no access may use the old frame (stale L1 / M3 copies of it
+// are unreachable), and frames are never reused.
+func TestRetiredFramesAndFreshFrames(t *testing.T) {
+	cfg := testConfig(PolicyOnFault)
+	r := newRig(t, cfg)
+	src := 1*8*gb + 0x6000
+	r.addPage(0x60000, src, 1, 1)
+	h1 := r.m.ATHook(1, true)
+	h2 := r.m.ATHook(2, true)
+	w := &fakeWaker{}
+	h1.Issued(0, 1, 0x60000, src)
+	h1.Completed(0, src)
+	r.at(0, func(now sim.VTimeInSec) { h2.Resolve(now, w, 1, 0x60000, page(t, r, 0x60000)) })
+	if err := r.engine.Run(); err != nil {
+		t.Fatal(err)
+	}
+	first := page(t, r, 0x60000).PAddr
+	expectViolation(t, "access to retired frame", func() { h1.Issued(1e-3, 1, 0x60000, src) })
+	expectViolation(t, "remote access to retired frame", func() { remoteRead(r.m, 2, 1e-3, src) })
+
+	// Move it back: GPM 1 gets a fresh frame, not its old one.
+	np := page(t, r, 0x60000)
+	h2.Issued(2e-3, 1, 0x60000, np.PAddr)
+	h2.Completed(2e-3, np.PAddr)
+	r.at(2e-3, func(now sim.VTimeInSec) { h1.Resolve(now, w, 1, 0x60000, np) })
+	if err := r.engine.Run(); err != nil {
+		t.Fatal(err)
+	}
+	back := page(t, r, 0x60000)
+	if back.DeviceID != 1 || back.PAddr == src || back.PAddr == first {
+		t.Fatalf("frame reused: src %#x first %#x back %#x", src, first, back.PAddr)
+	}
+}
+
+// With Check on, a line of a new frame cached anywhere is a violation.
+func TestCheckFindsCachedLineOfNewFrame(t *testing.T) {
+	cfg := testConfig(PolicyOnFault)
+	cfg.Check = true
+	r := newRig(t, cfg)
+	r.addPage(0x70000, 1*8*gb+0x7000, 1, 1)
+	newFrame := 2*8*gb + 6*gb
+	r.m.gpms[1].HoldsLine = func(a uint64) bool { return a == newFrame+0x40 }
+	h2 := r.m.ATHook(2, true)
+	w := &fakeWaker{}
+	r.at(0, func(now sim.VTimeInSec) { h2.Resolve(now, w, 1, 0x70000, page(t, r, 0x70000)) })
+	expectViolation(t, "cached new frame", func() { _ = r.engine.Run() })
+
+	r2 := newRig(t, cfg)
+	r2.addPage(0x70000, 1*8*gb+0x7000, 1, 1)
+	h := r2.m.ATHook(2, true)
+	r2.at(0, func(now sim.VTimeInSec) { h.Resolve(now, w, 1, 0x70000, page(t, r2, 0x70000)) })
+	if err := r2.engine.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if r2.m.Stats.CheckedFrames != 2 { // at allocation and at remap
+		t.Fatalf("checked %d frames", r2.m.Stats.CheckedFrames)
+	}
+}

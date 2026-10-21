@@ -1,0 +1,4 @@
+{
+  "_description": "Page-migration hooks and statistics only (owner histogram of remote reads); never migrates. Timing must equal the configuration without it.",
+  "page-migration": "observe"
+}

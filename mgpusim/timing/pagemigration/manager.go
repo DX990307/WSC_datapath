@@ -21,9 +21,15 @@ type Waker = addresstranslator.Waker
 // GPM is what the manager needs to know about one GPM.
 type GPM struct {
 	DeviceID uint64
-	MemBase  uint64
-	TLBs     []PageInvalidator
-	Engine   *CopyEngine
+	MemBase  uint64 // first physical address of the GPM's 8-GB range
+	// TLBs are every TLB of the GPM that can hold a translation (L1V, L1S,
+	// L1I, L2TLB); the shootdown drops the migrating pages from them.
+	TLBs   []PageInvalidator
+	Engine *CopyEngine
+	// HoldsLine (optional, used with Config.Check) reports whether any L2
+	// slice of the GPM holds the line at a physical address or has an MSHR
+	// for it (local lines and M3 remote replicas alike).
+	HoldsLine func(pAddr uint64) bool
 }
 
 type phase int
@@ -94,12 +100,28 @@ func (u *unit) addWaiter(w Waker) {
 	u.waiters = append(u.waiters, w)
 }
 
-// ppnInfo is what the manager knows about one physical page.
+// Frame states, for the invariant checks.
+const (
+	frameLive    uint8 = iota // mapped, accesses allowed
+	frameFrozen               // being copied away: no access may be issued
+	frameRetired              // migrated away: no access may ever reach it
+)
+
+// ppnInfo is what the manager knows about one physical page (frame). It is
+// created by the first access issued to the frame.
 type ppnInfo struct {
 	pid      vm.PID
-	vAddr    uint64 // page-aligned
-	inflight int32
+	vAddr    uint64 // page-aligned virtual address mapped to the frame
+	inflight int32  // accesses issued by address translators, not answered
 	devMask  uint64 // GPMs that accessed it (their TLBs may hold it)
+	state    uint8
+}
+
+// Violation is the panic value of a broken migration invariant.
+type Violation string
+
+func (m *Manager) violation(format string, args ...interface{}) {
+	panic(Violation(fmt.Sprintf("page migration invariant: "+format, args...)))
 }
 
 type handler struct {
@@ -129,6 +151,7 @@ type Stats struct {
 	DrainWaitSum       float64
 	CopyTimeSum        float64
 	RemoteReadsByOwner []uint64 // by device ID
+	CheckedFrames      uint64   // frames verified uncached (Config.Check)
 }
 
 // Manager decides and orchestrates migrations.
@@ -294,6 +317,10 @@ func (h *atHook) Issued(now sim.VTimeInSec, pid vm.PID, vAddr, pAddr uint64) {
 		info = &ppnInfo{pid: pid, vAddr: vAddr >> m.log2PageSize << m.log2PageSize}
 		m.ppns[ppn] = info
 	}
+	if info.state != frameLive {
+		m.violation("GPM %d issued an access to frame %#x (va %#x) in state %d",
+			h.dev, pAddr, vAddr, info.state)
+	}
 	info.inflight++
 	info.devMask |= 1 << h.dev
 }
@@ -325,12 +352,15 @@ func (m *Manager) remoteAccess(now sim.VTimeInSec, dev uint64, req mem.AccessReq
 			m.Stats.RemoteReadsByOwner[owner]++
 		}
 	}
-	if m.cfg.Policy != PolicyAccessCounter {
-		return
-	}
 	info := m.ppns[pAddr>>m.log2PageSize]
 	if info == nil {
 		return // not translated by an address translator (never expected)
+	}
+	if info.state == frameRetired {
+		m.violation("GPM %d sent a remote access to retired frame %#x", dev, pAddr)
+	}
+	if m.cfg.Policy != PolicyAccessCounter {
+		return
 	}
 	u := m.getUnit(m.unitOf(info.pid, info.vAddr))
 	if u.phase != phaseIdle {
@@ -498,7 +528,42 @@ func (m *Manager) allocFrame(dev uint64) uint64 {
 		panic(fmt.Sprintf("page migration: GPM %d ran out of migration frames", dev))
 	}
 	m.nextFrame[dev] = f + pageSize
+	// A new frame has never been accessed, so no L1, L2 or M3 replica can
+	// hold a line of it; the copy may write it in DRAM directly.
+	if m.ppns[f>>m.log2PageSize] != nil {
+		m.violation("new frame %#x was accessed before", f)
+	}
+	if m.cfg.Check {
+		m.checkNoCachedLines(f, "allocation")
+	}
 	return f
+}
+
+// checkNoCachedLines (Config.Check) verifies that no L2 slice of any GPM
+// holds or is fetching a line of the frame.
+func (m *Manager) checkNoCachedLines(frame uint64, when string) {
+	pageSize := uint64(1) << m.log2PageSize
+	for a := frame; a < frame+pageSize; a += m.cfg.LineBytes {
+		for _, g := range m.gpms {
+			if g != nil && g.HoldsLine != nil && g.HoldsLine(a) {
+				m.violation("GPM %d caches line %#x of new frame %#x at %s",
+					g.DeviceID, a, frame, when)
+			}
+		}
+	}
+	m.Stats.CheckedFrames++
+}
+
+// frameInfo returns the record of the frame mapped by p, creating it for a
+// frame that no access has touched yet.
+func (m *Manager) frameInfo(p vm.Page) *ppnInfo {
+	ppn := p.PAddr >> m.log2PageSize
+	info := m.ppns[ppn]
+	if info == nil {
+		info = &ppnInfo{pid: p.PID, vAddr: p.VAddr}
+		m.ppns[ppn] = info
+	}
+	return info
 }
 
 func (m *Manager) startCopy(now sim.VTimeInSec, u *unit) {
@@ -509,6 +574,7 @@ func (m *Manager) startCopy(now sim.VTimeInSec, u *unit) {
 	u.newPAddrs = u.newPAddrs[:0]
 	u.pendingChunks = 0
 	for _, p := range u.pages {
+		m.frameInfo(p).state = frameFrozen
 		frame := m.allocFrame(u.dst)
 		u.newPAddrs = append(u.newPAddrs, frame)
 		src := m.gpms[p.DeviceID].Engine
@@ -540,6 +606,11 @@ func (m *Manager) remap(now sim.VTimeInSec, u *unit) {
 	pageSize := uint64(1) << m.log2PageSize
 	var prevOwners uint64
 	for i, p := range u.pages {
+		if m.cfg.Check {
+			// Nothing may have cached the new frame while it was filled.
+			m.checkNoCachedLines(u.newPAddrs[i], "remap")
+		}
+		m.frameInfo(p).state = frameRetired
 		prevOwners |= 1 << p.DeviceID
 		p.PAddr = u.newPAddrs[i]
 		p.DeviceID = u.dst

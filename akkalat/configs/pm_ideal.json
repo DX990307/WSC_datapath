@@ -1,0 +1,4 @@
+{
+  "_description": "Page-migration upper bound overlay: zero software latency and zero shootdown latency (invalidation, drain, held accesses and the copy over the network are still modeled). Combine after a pm_* policy overlay.",
+  "pm-ideal": true
+}

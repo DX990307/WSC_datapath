@@ -82,6 +82,10 @@ type Config struct {
 	// allocations).
 	FrameRegionOffset uint64
 	FrameRegionSize   uint64
+
+	// Check enables the expensive invariant checks (every L2 of every GPM is
+	// searched for lines of each new frame at allocation and at remap).
+	Check bool
 }
 
 // DefaultConfig returns the defaults (see README of results_index/pm for
