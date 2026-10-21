@@ -58,6 +58,12 @@ elif phase == "complete":
     tag, ov = best[0], best[1]
     for item, host, args in W + EXT:
         rows.append((host, item, args, "v3_complete", "v3complete", tag, ov, ""))
+elif phase == "sens9":
+    # sensitivity on the 9 main workloads (tag|overlays|extra flags)
+    for spec in sys.argv[2:]:
+        tag, ov, extra = spec.split("|")
+        for item, host, args in W:
+            rows.append((host, item, args, "mi200", "mi200", tag, ov, extra))
 elif phase == "sens":
     # sys.argv[2:]: tag overlays extra... given as tag|overlays|extra triples
     for spec in sys.argv[2:]:

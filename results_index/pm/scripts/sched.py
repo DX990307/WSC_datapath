@@ -175,6 +175,41 @@ def watchdog():
             log(f"STUCK-BUT-BUSY {exp} now={t} stuck={stuck/60:.0f}min cpu={frac} (not killed)")
 
 
+class Adopted:
+    """A run launched by an earlier instance of this scheduler (restart)."""
+    def __init__(self, pid, exp):
+        self.pid, self.exp = pid, exp
+
+    def poll(self):
+        try:
+            st = open(f"/proc/{self.pid}/stat").read().rsplit(")", 1)[1].split()[0]
+            if st != "Z":
+                return None
+        except Exception:
+            pass
+        try:
+            return json.load(open(f"{D}/src/results/{self.exp}/meta.json"))["exit_code"]
+        except Exception:
+            return -1
+
+
+def est_of(exp):
+    for r in read_queue():
+        if r["exp"] == exp:
+            return r["est"]
+    return 5.0
+
+
+# adopt runs launched by a previous instance that are still alive
+if os.path.exists(f"{D}/launched.tsv"):
+    for l in open(f"{D}/launched.tsv"):
+        p = l.rstrip("\n").split("\t")
+        if len(p) < 2 or p[0] in done:
+            continue
+        a = Adopted(int(p[1]), p[0])
+        if a.poll() is None:
+            running[p[0]] = dict(proc=a, sim=None, est=est_of(p[0]), start=time.time(), paused=False)
+
 with open(f"{D}/sched.pid", "w") as f:
     f.write(str(os.getpid()))
 log("scheduler start")
