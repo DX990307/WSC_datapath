@@ -33,6 +33,8 @@
 | M2 网内多播 | **删或重做** | 所有条件下 ±3%；共享在时间上相隔几百 ns 到几 µs，owner 合并窗口只有 10–20 ns |
 | M1 按距离分配（rtt / near） | **删**，改共享池 | shared 与 rtt ±1%；near 更差；唯一例外 allreduce @ W=256、48 GB/s rtt 快 18%（疑似限流作用，未确认） |
 
+**用户决定（10-21）`[已定]`**：删掉 owner 合并、原版 M2 网内多播、按距离分配（rtt / near）。新的基线配置 `akkalat/configs/v4_complete.json`（`isca27/cupath-v3`）= M1（请求方合并 + 打包，共享池）+ M3。代码和 flag 保留（geo-push 复用 M2 的交换机复制），只是 v4 配置里关闭。v4 在 25 个 workload 上的结果待跑。
+
 ### 3. 新 idea（全部 `[提案]`）
 
 **A. 有数据支持、上限较高**

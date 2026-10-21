@@ -441,3 +441,8 @@
 - 改了：`STATUS.md`（"需要用户决定"第一条：调研结论、akita 网络语义、方案 A 解析模型 / B BookSim2 / C Garnet / D ASTRA-sim、流量生成、比较的量、3 个待决问题；日志追加一条）、`SYNC.md`。
 - 同步：page-migration 会话未提交的文件原样提交（`d34d99a`）。
 - 没有代码改动，没有运行；`results_index/astra/` 等用户确认后再建。
+
+### 2026-10-21 [claude-code] 用户：删掉没用的部件；新配置 v4_complete
+- 删掉 owner 合并、原版 M2 网内多播、按距离分配（rtt/near）。`akkalat/configs/v4_complete.json` 提交到 `isca27/cupath-v3` 并推送；bfs s12 `-verify` 通过，`[Config]` 显示 owner-merge=false、multicast=false、credit-policy=shared。代码不删（geo-push 复用多播复制）。
+- geo-push 的对照改为 v4_complete（已通知 geo 会话）。v4 在 25 个 workload 上的主配置结果待 page migration 跑完后安排。
+- 其他：网络紧张场景（48 GB/s、W=256）19 个 workload 跑完，21 个有成对结果，GMEAN 1.74（不含 PR 1.55）；LUD、shocsort、MG 两个配置和 atax Complete 挂住（L2TLB→IOMMU 丢唤醒 bug）。挂住的 v3c384 MG M1+M2（PID 2415098）按用户要求已杀。W 扫描（w128b384/w256b384）和 geo-push 实验暂停（PAUSE），优先跑完 page migration。
