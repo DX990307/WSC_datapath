@@ -1,0 +1,17 @@
+host,ref_run,fix_run,config,benchmark,ref_bin,fix_bin,exit_ref,exit_fix,total_time_ref_s,total_time_fix_s,md5_sorted_ref,md5_sorted_fix,identical,note
+yss2,r_ref_base_fir,r_fix_base_fir,mi200.json,fir,d09b18b,5643c95,0,0,0.000026568000,0.000026568000,d56a681494ae,d56a681494ae,YES,
+yss2,r_ref_base_mm,r_fix_base_mm,mi200.json,mm,d09b18b,5643c95,0,0,0.000345433000,0.000345433000,22a58b272d89,22a58b272d89,YES,
+yss2,r_ref_m1_fir,r_fix_m1_fir,m1.json,fir,d09b18b,5643c95,0,0,0.000026159000,0.000026159000,d8dc83928e87,d8dc83928e87,YES,
+yss2,r_ref_m1_mm,r_fix_m1_mm,m1.json,mm,d09b18b,5643c95,0,0,0.000129543000,0.000129543000,eb646bff1ddf,eb646bff1ddf,YES,
+yss2,r_ref_m2_fir,r_fix_m2_fir,m2_old.json,fir,d09b18b,5643c95,0,0,0.000026146000,0.000026146000,2c128ca041f7,2c128ca041f7,YES,
+yss2,r_ref_m2_mm,r_fix_m2_mm,m2_old.json,mm,d09b18b,5643c95,0,0,0.000152068000,0.000152068000,ba096e70358a,ba096e70358a,YES,
+yss3,r_ref_m3_fir,r_fix_m3off_fir,m3_noinval.json,fir,d09b18b,5643c95,0,0,0.000026385000,0.000026385000,564557bbafe3,564557bbafe3,YES,changed_or_removed_ref_lines=0
+yss3,r_ref_m3_fir,r_fix_m3on_fir,m3.json,fir,d09b18b,5643c95,0,0,0.000026385000,0.000026385000,564557bbafe3,5d0cc4f119e1,NO,changed_or_removed_ref_lines=0; only added remote_reuse_boundary_* stat lines
+yss3,r_ref_m3_mm,r_fix_m3off_mm,m3_noinval.json,mm,d09b18b,5643c95,0,0,0.000220581000,0.000220581000,e0ceab79f1d2,e0ceab79f1d2,YES,changed_or_removed_ref_lines=0
+yss3,r_ref_m3_mm,r_fix_m3on_mm,m3.json,mm,d09b18b,5643c95,0,0,0.000220581000,0.000220581000,e0ceab79f1d2,99c3dcea23e9,NO,changed_or_removed_ref_lines=0; only added remote_reuse_boundary_* stat lines
+yss3,r_ref_cn_fir,r_fix_cnoff_fir,complete_new_d09.json,fir,d09b18b,5643c95,0,0,0.000026232000,0.000026232000,3b04ff48b129,3b04ff48b129,YES,changed_or_removed_ref_lines=0
+yss3,r_ref_cn_fir,r_fix_cnon_fir,complete_new.json,fir,d09b18b,5643c95,0,0,0.000026232000,0.000026232000,3b04ff48b129,876aa3ba576c,NO,changed_or_removed_ref_lines=0; only added remote_reuse_boundary_* stat lines
+yss3,r_ref_cn_mm,r_fix_cnoff_mm,complete_new_d09.json,mm,d09b18b,5643c95,0,0,0.000130297000,0.000130297000,169260a08495,169260a08495,YES,changed_or_removed_ref_lines=0
+yss3,r_ref_cn_mm,r_fix_cnon_mm,complete_new.json,mm,d09b18b,5643c95,0,0,0.000130297000,0.000130297000,169260a08495,f275d8e66dca,NO,changed_or_removed_ref_lines=0; only added remote_reuse_boundary_* stat lines
+yss3,r_fix_cnoff_bfs16,r_fix_cnon_bfs16,complete_new_d09.json vs complete_new.json (inval off vs on),bfs16,5643c95,5643c95,0,0,0.000582454000,0.000586962000,c4508c575e15,2695efae1d93,NO,changed_or_removed_ref_lines=65859
+yss3,r_fix_cnoff_fw,r_fix_cnon_fw,complete_new_d09.json vs complete_new.json (inval off vs on),fw,5643c95,5643c95,0,0,0.000010139000,0.000010139000,339ae33372bc,a033f0e3f75e,NO,changed_or_removed_ref_lines=0; only added remote_reuse_boundary_* stat lines
