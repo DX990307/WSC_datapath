@@ -139,3 +139,153 @@
 [Config] T18 req-merge=true owner-merge=true multicast=false window=64 dist-credits=true owner-window=0 req-entries=0 owner-entries=0 ways=4 fp-bits=12 max-kicks=32 req-waiters=0 bypass-when-full=false
 [Config] T18 credit-policy=rtt v3-stats=false
 
+
+###### Two-level ablation configs (added 2026-10-21 02:46 UTC, user addition). Expected: m3 = M3 on (l2-enable, kernel invalidate), T18 off (window 0, no merge; the multicast flag shows its default true but is inert because T18 is off: no [Config] T18/M1+M2 line), batching off, filter-prefetch off, dedup off. All as expected, so m3.json is used unchanged (no v3_m3.json created). nomerge: req/owner merge off, multicast off, dedup owner none. nopack: batching + filter-prefetch off. alloc_shared: credit policy shared (dist-credits=false). alloc_near: credit policy near, reserve 16, hops 3.
+
+== 1021_diag_v3-smoke-fir_mi200+m3_2784487 (yss2, fir -max-wg 4096, binary baseline_2784487 md5 57b60e1f)
+-- config_used.json all_flags (selected):
+  t18-window = 0  (default)
+  t18-req-merge = false  (default)
+  t18-owner-merge = false  (default)
+  t18-owner-multicast = true  (default)
+  t18-credit-policy =   (default)
+  t18-near-reserve = 16  (default)
+  t18-near-hops = 3  (default)
+  cupath-dedup-owner =   (default)
+  remote-data-path-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/m3.json)
+  remote-data-path-batching-enable = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/m3.json)
+  remote-filter-prefetch-enable = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/m3.json)
+  remote-data-path-dedup-enable = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/m3.json)
+  remote-data-path-l2-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/m3.json)
+  remote-reuse-kernel-invalidate = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/m3.json)
+  magic-memory-copy = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/m3.json)
+  gpm-preset = mi200  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/m3.json)
+  verify = false  (default)
+  report-l2-source = false  (default)
+-- [Config] lines:
+[Config] config files: /home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/m3.json
+[Config] L1V MSHR entries=16 max-concurrent-transactions=16
+[Config] L2 capacity=2 MiB adaptive-pair-region=2 cachelines
+[Config] GPM preset=mi200 CUs=28 (14 SA x 2) L2 partitions=8
+[Config] DRAM model: channels=2 ranks=2 cmd-queue=16 trans-queue=64 tRFC=423 tFAW=26 act-cycles=2 address-layout strip-slice-interleave dual-command-bus row-hold pipelined-columns all-bank-refresh cross-rank-tRRD hbm2-turnaround
+
+== 1021_diag_v3-smoke-fir_mi200+v3c-nomerge_2784487 (yss2, fir -max-wg 4096, binary baseline_2784487 md5 57b60e1f)
+-- config_used.json all_flags (selected):
+  t18-window = 64  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  t18-req-merge = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  t18-owner-merge = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  t18-owner-multicast = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  t18-credit-policy = rtt  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  t18-near-reserve = 16  (default)
+  t18-near-hops = 3  (default)
+  cupath-dedup-owner = none  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  remote-data-path-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  remote-data-path-batching-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  remote-filter-prefetch-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  remote-data-path-dedup-enable = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  remote-data-path-l2-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  remote-reuse-kernel-invalidate = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  magic-memory-copy = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  gpm-preset = mi200  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json)
+  verify = false  (default)
+  report-l2-source = false  (default)
+-- [Config] lines:
+[Config] config files: /home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nomerge.json
+[Config] L1V MSHR entries=16 max-concurrent-transactions=16
+[Config] L2 capacity=2 MiB adaptive-pair-region=2 cachelines
+[Config] GPM preset=mi200 CUs=28 (14 SA x 2) L2 partitions=8
+[Config] DRAM model: channels=2 ranks=2 cmd-queue=16 trans-queue=64 tRFC=423 tFAW=26 act-cycles=2 address-layout strip-slice-interleave dual-command-bus row-hold pipelined-columns all-bank-refresh cross-rank-tRRD hbm2-turnaround
+[Config] M1+M2: T18 composed with the remote data path (dedup owner "none": M1 merge=false, M2 dedup=false)
+[Config] T18 req-merge=false owner-merge=false multicast=false window=64 dist-credits=true owner-window=0 req-entries=0 owner-entries=0 ways=4 fp-bits=12 max-kicks=32 req-waiters=0 bypass-when-full=false
+[Config] T18 credit-policy=rtt v3-stats=false
+
+== 1021_diag_v3-smoke-fir_mi200+v3c-nopack_2784487 (yss2, fir -max-wg 4096, binary baseline_2784487 md5 57b60e1f)
+-- config_used.json all_flags (selected):
+  t18-window = 64  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  t18-req-merge = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  t18-owner-merge = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  t18-owner-multicast = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  t18-credit-policy = rtt  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  t18-near-reserve = 16  (default)
+  t18-near-hops = 3  (default)
+  cupath-dedup-owner = m1  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  remote-data-path-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  remote-data-path-batching-enable = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  remote-filter-prefetch-enable = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  remote-data-path-dedup-enable = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  remote-data-path-l2-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  remote-reuse-kernel-invalidate = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  magic-memory-copy = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  gpm-preset = mi200  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json)
+  verify = false  (default)
+  report-l2-source = false  (default)
+-- [Config] lines:
+[Config] config files: /home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_nopack.json
+[Config] L1V MSHR entries=16 max-concurrent-transactions=16
+[Config] L2 capacity=2 MiB adaptive-pair-region=2 cachelines
+[Config] GPM preset=mi200 CUs=28 (14 SA x 2) L2 partitions=8
+[Config] DRAM model: channels=2 ranks=2 cmd-queue=16 trans-queue=64 tRFC=423 tFAW=26 act-cycles=2 address-layout strip-slice-interleave dual-command-bus row-hold pipelined-columns all-bank-refresh cross-rank-tRRD hbm2-turnaround
+[Config] M1+M2: T18 composed with the remote data path (dedup owner "m1": M1 merge=true, M2 dedup=false)
+[Config] T18 req-merge=true owner-merge=true multicast=true window=64 dist-credits=true owner-window=0 req-entries=0 owner-entries=0 ways=4 fp-bits=12 max-kicks=32 req-waiters=0 bypass-when-full=false
+[Config] T18 credit-policy=rtt v3-stats=false
+
+== 1021_diag_v3-smoke-fir_mi200+v3c-allocshared_2784487 (yss2, fir -max-wg 4096, binary baseline_2784487 md5 57b60e1f)
+-- config_used.json all_flags (selected):
+  t18-window = 64  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  t18-req-merge = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  t18-owner-merge = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  t18-owner-multicast = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  t18-credit-policy = shared  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  t18-near-reserve = 16  (default)
+  t18-near-hops = 3  (default)
+  cupath-dedup-owner = m1  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  remote-data-path-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  remote-data-path-batching-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  remote-filter-prefetch-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  remote-data-path-dedup-enable = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  remote-data-path-l2-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  remote-reuse-kernel-invalidate = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  magic-memory-copy = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  gpm-preset = mi200  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json)
+  verify = false  (default)
+  report-l2-source = false  (default)
+-- [Config] lines:
+[Config] config files: /home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_shared.json
+[Config] L1V MSHR entries=16 max-concurrent-transactions=16
+[Config] L2 capacity=2 MiB adaptive-pair-region=2 cachelines
+[Config] GPM preset=mi200 CUs=28 (14 SA x 2) L2 partitions=8
+[Config] DRAM model: channels=2 ranks=2 cmd-queue=16 trans-queue=64 tRFC=423 tFAW=26 act-cycles=2 address-layout strip-slice-interleave dual-command-bus row-hold pipelined-columns all-bank-refresh cross-rank-tRRD hbm2-turnaround
+[Config] M1+M2: T18 composed with the remote data path (dedup owner "m1": M1 merge=true, M2 dedup=false)
+[Config] T18 req-merge=true owner-merge=true multicast=true window=64 dist-credits=false owner-window=0 req-entries=0 owner-entries=0 ways=4 fp-bits=12 max-kicks=32 req-waiters=0 bypass-when-full=false
+[Config] T18 credit-policy=shared v3-stats=false
+
+== 1021_diag_v3-smoke-fir_mi200+v3c-allocnear_2784487 (yss2, fir -max-wg 4096, binary baseline_2784487 md5 57b60e1f)
+-- config_used.json all_flags (selected):
+  t18-window = 64  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  t18-req-merge = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  t18-owner-merge = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  t18-owner-multicast = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  t18-credit-policy = near  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  t18-near-reserve = 16  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  t18-near-hops = 3  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  cupath-dedup-owner = m1  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  remote-data-path-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  remote-data-path-batching-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  remote-filter-prefetch-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  remote-data-path-dedup-enable = false  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  remote-data-path-l2-enable = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  remote-reuse-kernel-invalidate = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  magic-memory-copy = true  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  gpm-preset = mi200  (/home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json)
+  verify = false  (default)
+  report-l2-source = false  (default)
+-- [Config] lines:
+[Config] config files: /home/daoxuanxu/akita-exp-test/v3run/src/akkalat/configs/v3_complete_alloc_near.json
+[Config] L1V MSHR entries=16 max-concurrent-transactions=16
+[Config] L2 capacity=2 MiB adaptive-pair-region=2 cachelines
+[Config] GPM preset=mi200 CUs=28 (14 SA x 2) L2 partitions=8
+[Config] DRAM model: channels=2 ranks=2 cmd-queue=16 trans-queue=64 tRFC=423 tFAW=26 act-cycles=2 address-layout strip-slice-interleave dual-command-bus row-hold pipelined-columns all-bank-refresh cross-rank-tRRD hbm2-turnaround
+[Config] M1+M2: T18 composed with the remote data path (dedup owner "m1": M1 merge=true, M2 dedup=false)
+[Config] T18 req-merge=true owner-merge=true multicast=true window=64 dist-credits=true owner-window=0 req-entries=0 owner-entries=0 ways=4 fp-bits=12 max-kicks=32 req-waiters=0 bypass-when-full=false
+[Config] T18 credit-policy=near near-reserve=16 near-hops=3 v3-stats=false
+

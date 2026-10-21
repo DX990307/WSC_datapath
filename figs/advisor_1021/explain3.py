@@ -204,7 +204,7 @@ def figPack():
     s.text(1405, 520, '先读完的 line', size=18, anchor='middle')
     s.text(1405, 548, '先返回', size=18, anchor='middle')
     factbox(s, 50, 650, 740, 220, '规则', ['同一 owner、同一 4 KB 页；每包最多 8 条，最多 64 个包在收集', '不设等待计时器：包在等表项或发射宽度时顺便收', '预取：步长预测器 256 项，只在同 owner 同页里预测，', '只捎在已有的包上'], col=INK, light=FILL)
-    factbox(s, 810, 650, 740, 220, '数据：表项越紧，包越满', ['64 项（HPCA 版 Complete）：平均每包 1.1–4.7 条', '（allreduce 4.67、ivfflat 3.41、fft2d 3.10）', 'W = 1024（新 Complete）：只剩 1.0–2.1 条', '→ 回到 64 项后打包又重要；P15 会确认'], col=M1, light=M1L)
+    factbox(s, 810, 650, 740, 220, '数据：表项越紧，包越满', ['64 项（HPCA 版 Complete）：平均每包 1.1–4.7 条', '（allreduce 4.67、ivfflat 3.41、fft2d 3.10）', 'W = 1024（新 Complete）：只剩 1.0–2.1 条', '→ 回到 64 项后打包又重要；P16 的消融会确认'], col=M1, light=M1L)
     return s
 
 
@@ -262,7 +262,7 @@ def figAlloc():
     s.text(840, 580, '目标：近的请求（155 ns 就能完成）不被远的挤在门口', size=16)
     factbox(s, 50, 650, 490, 220, '两种份额共用的规则', ['有请求在等的目的地，', '没用完的保底给它留着', '空闲的可以借；借走的要等', '响应回来才还（不抢回）'], col=INK, light=FILL)
     factbox(s, 560, 650, 490, 220, '为什么是 wafer 才有的问题', ['往返 155–941 ns，差 6 倍', '2×2 MCM 最多 2 跳，只差 1.5 倍', '远的借一次要占约 800 ns', '共享 64 项时远的占大头'], col=M2, light=M2L)
-    factbox(s, 1070, 650, 480, 220, '要先测', ['按距离分组的表占用（统计 ①）', 'Complete@64：credit 开 / 关', '近处多留：在 t18_credits.go', '加一种份额（Claude Code）'], col=RED, light=REDL)
+    factbox(s, 1070, 650, 480, 220, '要先测（P16）', ['按距离分组的表占用（统计 ①）', '三种份额都跑：共享 /', '按往返时间 / 近处多留', '（≤ 3 跳，近区 16 项）'], col=RED, light=REDL)
     return s
 
 
@@ -374,8 +374,8 @@ def figE3():
     s.text(830, 640, '差距说明 64 项的限制很贵；三个机制要在不改 64 的前提下拿回一部分', size=17, fill=MUT)
     s.rect(50, 690, 1500, 180, fill=REDL, stroke=RED, sw=1.5, rx=12)
     s.text(75, 728, '接下来（表都保持 64 项）：', size=21, weight='bold', fill=RED)
-    for i, t in enumerate(['① P15（已写好）：Complete@64 vs baseline，15 个新 benchmark、30 个运行，和 W = 1024 的 2.82× 对比',
-                           '② 消融：baseline、M1、M1 + M2、M1 + M3、Complete；M1 内部去掉合并 / 打包 / 分配各一次',
+    for i, t in enumerate(['① P16：按新结构实现，分配加"近处多留"（≤ 3 跳，近区 16 项）；26 个 workload，每个都用到全部 48 个 GPM',
+                           '② 消融 9 个配置：baseline、M1、M1 + M2、M1 + M3、Complete；Complete 去掉合并 / 打包，分配换成共享 / 近处多留',
                            '③ 统计：按距离分组的表占用（分配）、owner 合并数和表满时间（合并）、多播目的地数和退回单播比例（M2）']):
         s.text(95, 768 + i * 34, t, size=18)
     return s

@@ -375,3 +375,16 @@
 - 用户 10-20 晚：不等规模校准，先跑一波 baseline 和 Complete（24 个 workload：17 个用校准中的规模、5 个 W2 用中等规模、PA 默认 batch、MoE 64 token；graphtc、R-GAT 暂不跑），`~/akita-exp-test/v3run`；每对跑完就接着跑消融。
 - 用户确认的消融设计（两层，顺着依赖关系；M2 依赖 M1 的 owner 合并，不能单独开）：机制级 baseline / M1 / M1+M2 / M1+M3 / M3 / Complete（累加 + 从 Complete 去掉一个）；M1 内部 Complete −合并 / −打包 / 分配 shared / 分配 near。每个 workload 11 个配置。
 - 用户：以后不看 W=1024 的结果。
+
+- 2026-10-20 晚 · cowork · 网站 v35（用户要求）：删掉"③ 新结果 · 2 旧 benchmark 的上限（T15）"（今晚会有新结果）；后面的编号顺延（位置效应 → 2、新 workload → 3、论点和风险 → 4）。工作总览表里 T15 那一行和详细页 `t15_1019.html` 保留。源文件已备份到 `site/presentation_1019.html`。
+
+- 2026-10-20 晚 · cowork · 网站 v36（用户要求）：删掉"位置效应（T16）"一页；新 workload（T17）改为"③ 新结果 · 2"（含补充和图两页），论点和风险改为 3。工作总览表里 T16 那一行和详细页 `t16_1019.html` 保留。源文件已备份到 `site/presentation_1019.html`。
+
+- 2026-10-20 晚 · cowork · 网站 v37（用户要求把新加的 workload 也算进去）："③ 新结果 · 2"改名为"新 workload（T17 + W2）"，在 T17 三个之后加了 W2 的 16 个 benchmark：类别、小输入的远程比例 / 远程延迟占比和用到的 GPM 数、中小规模参数、数据量、baseline 时间（来自 STATUS 的 W2 两张表和 `results_index/w2complete/`）；加了 W2 的观察（远程读 66–98%、12 类通信模式、数据量偏小、小输入 GPM 没铺满）和问题（graphtc / npbis 2 次迭代崩溃、L2 TLB 只覆盖 2 MB、模拟器指令 bug）。没放 W = 1024 的 Complete 加速比。源文件已备份到 `site/presentation_1019.html`。
+
+- 2026-10-20 晚 · cowork · 网站 v38（用户要求）：主页的"新 workload 的实现与 GPM 映射"和"新 workload 在 wafer 上怎么跑"两页移到子页 `t17_mapping_1020.html`（内容不变，返回链接指回主页的新 workload 一节）；主页"③ 新结果 · 2 新 workload（T17 + W2）"开头加了子页链接。主页现在的结果部分：1 平台特征（T14）、2 新 workload（T17 + W2）、3 论点和风险。源文件已备份到 `site/`。
+
+- 2026-10-20 晚 · cowork · 网站 v39：新机制详细页（`next_1019.html`）按当前状态更新——开头说明改成 10-20 晚的状态（64 项、三个机制按硬件位置、P16 待执行）；第 3 节开头加了两张对比表：①"HPCA 投稿版和现在的 M1 / M2 / M3"（旧 M1 Local Pairing 删除、旧 M2 拆开（打包和预取并入新 M1，filter 去重被在途表取代）、M3 不变）；②整体对比（瓶颈的说法、机制关系、cuckoo 结构、对 wafer 独特的地方、mi200 上的结果）；另加了"平台测量发现的瓶颈"一段。主页"下一步"加了指向对比表的链接。源文件已备份到 `site/`。
+
+- 2026-10-20 晚 · cowork · 讲解图 v3 的图 5、6、10 改成按 P16 写（原来写的是 P15 和"credit 开 / 关"）：图 5"P16 的消融会确认"；图 6"要先测（P16）：三种份额都跑"；图 10"接下来"改成 P16 的实现、9 个配置和统计。`CuPath_M1M2M3_figs_v3.pdf` 和 fig5 / 6 / 10.png、`explain3.py` 已更新。网站 v40：新机制详细页的讲解图换成新版，去掉标题里"（给导师讲用，PDF 在 …）"。
+
