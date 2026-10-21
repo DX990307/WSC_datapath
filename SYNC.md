@@ -392,3 +392,11 @@
 ### 2026-10-20 [claude-code] 用户：网络按 CU 比例缩小（试验）；768 GB/s 的 v3 运行全部停掉
 - 第一波 v3（768 GB/s）停掉前的结果：17 个 workload 的 Complete GMEAN 1.82×（pagerank 15.0× 待查放置），消融显示几乎全部收益来自 M1（打包为主），M2、M3、分配贡献 0–3%，`near` 在 npbis 上更差。这些作为 768 GB/s 的对照保留在 `~/akita-exp-test/v3run/src/results/`。
 - 用户 10-20：网络按 CU 比例缩小。MI250X 两个 GCD（各 110 CU）之间单向约 200 GB/s → 每 CU 1.82 GB/s → 28 CU 的 GPM 约 51 GB/s → 每条 mesh 链路 `-bandwidth=3`（mesh 1 GHz、flit 16 B，48 GB/s 单向，原来 768 GB/s 的 1/16）。交换机缓冲区原来等于每周期 flit 数，缩到 3 会放不下一个响应包、多播分 4 支会死锁，所以加参数把缓冲区深度和带宽分开（默认保持原行为，新配置 16 flit）。每跳延迟等其他参数不变。用户同意“按这个试试”。
+
+### 2026-10-21 [claude-code] 发现两个模拟器 bug；用户要求停掉所有实验
+- P16 的 LDS 越界查清：不是 kernel 问题，是 timing 模拟器的两个 bug（`results_index/abl3/lds_crash_diagnosis.csv`、`timing_verify_sweep.csv`）：
+  - **Bug A**：`mgpusim/timing/cu/scheduler.go:430-450` `evalSBarrier`，每 CU barrier 缓冲区 16 个位置满了以后 wave 状态已改却留在执行列表，放行时 PC 推进两次，跳过 barrier 后一条指令（归约里的 `s_and_saveexec`），造成 sssp、atax、shocsort、ivfflat、graphtc 崩溃，更多时候悄悄算错（ivfflat 一次运行 1371 次）。
+  - **Bug B**：timing 模式 kernel 启动时不失效 L1V，后一个 kernel 读到旧数据：npbis 2 次迭代崩溃；shocsort、npb_mg、rodinia_lud、w2-fft2d 时序验证结果错（加 L1V 失效后正确）。
+  - 两处修法已写出但没改代码，等用户决定；修了会改变时序，现有结果（v3 各网络、W2、可能还有 T15–T18）中碰到这两个 bug 的都不可信。
+- P16 其他：`cupath-v3` @ `2784487` 实现和回归（见 `results_index/abl3/v3impl.md`、`config_confirm.md`）；`5952d19` 加 `-switch-buffer-flits`；规模校准 17/26 满足（`sizes.md`）。组合模式下请求方表实际是 1024 槽（取 max(2W, 旧 m2 line 表)），不是用户要的 128 槽。
+- 用户 10-21 凌晨：不跑了。停掉 v3net（48 GB/s / 400 GB/s）全部运行和调度器，两台服务器 `~/akita-exp-test` 下已无进程。已完成的 48 GB/s 结果（PA、ATAX、NPB IS、allreduce、embbag 等）留在 `~/akita-exp-test/v3net/src/results/`，属于修复前的结果。
