@@ -49,6 +49,8 @@
 | [`observations/README.md`](observations/README.md) | ISCA'27 observation 一节要收集的数据：删 O6（Local Pairing）、换 O2/O3，新 O1–O6 各自的数据、统计定义、运行清单 | `[提案]`，等用户确认后写提示词 | 10-20 |
 | [`prompts/P13_observation_data.md`](prompts/P13_observation_data.md) | 给 Claude Code：observation / evaluation 第一批数据（新统计 + R1–R3、m3 修复 + R8、mesh 尺寸 flag、CACTI、R4 / R6 / R7 的配置确认准备） | 待执行 | 10-20 |
 | [`prompts/P14_config_14cu.md`](prompts/P14_config_14cu.md) | 给 Claude Code：论文配置改为每 GPM 14 个 CU（D23）——新预设、校准、28 对 14 CU 验证、workload 重新定规模 | 待执行 | 10-20 |
+| [`prompts/P15_complete_w64.md`](prompts/P15_complete_w64.md) | 给 Claude Code：Complete 不用 1024 窗口（`t18-window` 64，距离 credit 开，表默认 128 槽），15 个 W2 benchmark × baseline / M1+M2+M3 = 30 个运行，二进制 `d09b18b` | 待执行 | 10-20 |
+| [`prompts/P16_cupath_v3_ablation.md`](prompts/P16_cupath_v3_ablation.md) | 给 Claude Code：按新结构实现（M1 RDMA 端 = 合并 / 打包 / 分配，新增"近处多留"份额；M2 网络 = 多播；M3 保留），再跑小 footprint 消融：26 个 workload × 9 个配置，baseline ≤ 1 小时、每个 benchmark 用到全部 48 个 GPM | 待执行 | 10-20 |
 | [`guides/G1_port_workload_to_mgpusim.md`](guides/G1_port_workload_to_mgpusim.md) | **操作指南**：怎么把新 workload 移植进 MGPUSim（以 GCN 为例） | 参考资料 | — |
 
 ## 时间线

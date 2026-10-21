@@ -339,3 +339,27 @@
 - 20:3x EDT 按用户要求停掉全部实验：停掉正式运行（`~/akita-exp-test/main`，baseline 开统计 vs Complete，二进制 `8446d36`）、T18 评估/填空、LDS 修复的子代理和服务器上的调度器；两台服务器上按各目录 `pids.txt` 记录的 PID（含子进程）和调度器 PID 终止，`~/akita-exp-test` 下已无进程。正式运行全部未完成（约 1–1.5 小时）。
 - 统计代码回归（P13 A）完成：统计关闭时逐位一致，打开时模拟时间不变，开销在噪声内。发现模拟器有运行间波动（bfs-s16 同一二进制同参数三次差 2–3%，allreduce 极小），和统计无关，待查。M3 失效和 L2 空余统计的口径小漏洞修在 `isca27/obs-m3-inval`（`29d41c7`），未合并。
 - 已推送备份：`isca27/obs-stats`、`fix-lds-m3`、`mesh-size`、`main-run`、`obs-m3-inval`。
+
+- 2026-10-20 晚 · cowork · 用户确认：请求方的表不放大（owner 端同样 64 项）。论文结构：3 个机制，M1 = (a) 远近分区 + (b) owner 端合并（含门口排队）+ (c) 顺路拾取；M2、M3 不变。T18 文档顶部加了说明。给导师的讲解图重做为 9 张：`figs/advisor_1021/CuPath_M1M2M3_figs_v2.pdf`（1 基线两张 64 项的表；2 为什么 wafer 更严重；3–5 M1 (a)(b)(c)；6 M2；7 M3；8 Complete 的 10 步；9 现有 64 项数据和 1024 项上限参考 + 还缺的三个统计），旧版（1024 项）移到 `figs/advisor_1021/old_v1_1024/`。observations/README 和 P13 里 W=1024/4096 的运行（R2、R3）还没改，等用户确认测量项后一起改。
+
+- 2026-10-20 晚 · cowork · **用户决定：M1 (b)、(c) 改回 T18 原版。** M1 = (a) 请求表按远近分区（新）+ (b) owner 端合并（T18 原版：L2 读完之前到达的同 line 请求并成一项，**不合并门口排队的请求**）+ (c) 网内多播（T18 原版：合并后只发一份响应，switch 沿 YX 路由树复制，没合并的单播；**"顺路拾取"不做**）。表仍然两端各 64 项。所以 (b)(c) 就是 `ca8b831` 里已有的 owner 合并表和多播，只有 (a) 要新实现（和现有"按距离分 credit"方向相反）。现有数据：T18 @64（请求方合并 + (b) + (c)）FW 2.13×、R-GAT 1.36×、PA ≈ 1.01×；只开 owner 端 FW 88.3 → 87.8 µs。待测统计：① 按距离分组的请求表占用 → (a)；② owner 端实际合并的请求数、owner 表满的时间 → (b)；③ 多播的目的地个数、owner 少发的响应数、退回单播的比例 → (c)。改动：T18 文档顶部说明；`figs/advisor_1021/` 的图 2、4、5、8、9 和 `CuPath_M1M2M3_figs_v2.pdf`、`explain2.py`（图 4 改成合并窗口时间线，图 5 改成单播 vs 路由树多播）。P13、observations/README 等用户确认测量项后再改。**给 Claude Code：请把 isca27 文档的这批改动（含上一条 figs v2、old_v1_1024/）提交并推到 `isca27/docs`；不要启动任何运行。**
+
+- 2026-10-20 晚 · cowork · **用户要求：Complete 不用 1024 窗口试试（"那就不要搞这个 1024 window 试试"）。** 用户选择：表用 T18 默认的 128 槽（"128 槽就行"，不设严格 64）；按距离分 credit 保持开；跑 baseline 和 M1 + M2 + M3 两个配置。新增 `prompts/P15_complete_w64.md`：`complete_w64.json` = `complete_new.json` 只把 `t18-window` 从 1024 改成 64；W2 的 15 个有效 benchmark（graphtc 跳过、npbis 1 次迭代），规模同 `w2complete`，二进制 `d09b18b`，baseline 也重跑（应和 `w2complete` 逐位一致，顺便查运行间波动），共 30 个运行；结果放 `results_index/w2complete64/`，和 W = 1024 的 2.82× 对比。README 索引加了 P15。**给 Claude Code：上一条说的"不要启动任何运行"，对 P15 例外——按 P15 做，开跑前照长期规则把配置差异给用户确认；W > 64 仍然不跑。**
+
+- 2026-10-20 晚 · cowork · **用户决定：机制按硬件位置重新分（覆盖之前所有 M1 / M2 / M3 的定义）。** 表两端仍各 64 项。
+  - **M1 = RDMA 端**：合并（T18 的请求方在途表合并 + owner 合并表）、打包（旧 m2 的同页打包 + 预取捎带）、分配（T18 的按距离分 credit；用户认为距离是 wafer 特有的，要算进机制；再加一种"近处多留"的份额方式，待实现，和按往返时间分比较）。
+  - **M2 = 网络**：T18 的网内多播，建立在 M1 的 owner 合并上，不能单独开。
+  - **M3 = 保留**：旧 m3（Remote Reuse），非重点。
+  - 旧 m2 的 filter 去重不再用（`cupath-dedup-owner = m1`）。T18 在论文里不再是一个机制。Complete 的组成不变（P15 照常）。
+  - 补充说明（Cowork 读 `t18_credits.go` 后更正）：按距离分 credit 本身就是"保底 + 可借"的分区，和"近处多留"结构相同，只是份额怎么定不同。W = 64 时每个目的地只有 0–3 项保底（角上的 GPM：1 跳邻居 0 项，远的 2 项），借走的要等响应回来才还。
+  - 改动：讲解图重做为 v3（`figs/advisor_1021/CuPath_M1M2M3_figs_v3.pdf`、fig1–10.png、`explain3.py`；v2 移到 `old_v2/`，`explain2.py` 留着，因为 v3 引用它）；T18 文档标题和顶部说明；`observations/README.md` 顶部加了新编号、observation 对应关系、新消融（baseline、M1、M1 + M2、M1 + M3、Complete；M1 内部各去掉合并 / 打包 / 分配；分配比较按往返时间 / 近处多留 / 共享）和三个新统计。P13 正文还没按新结构改，等 P15 结果和用户确认后再改。
+  - **给 Claude Code：** 提交并推送这批文档改动（`isca27/docs`）。"近处多留"的份额方式、消融配置都**先不要实现、不要跑**，等用户确认。
+
+- 2026-10-20 晚 · cowork · **用户要求：按新结构重新实现，再跑小 footprint 的消融，每个 benchmark 都要用到全部 GPU。** 新增 `prompts/P16_cupath_v3_ablation.md`，README 索引加了一行。用户的选择：
+  - workload = W2 新 16 个 + 旧远程型 7 个 + T17 三个（26 个）；
+  - baseline 每个运行墙钟 ≤ 1 小时；
+  - "近处多留"默认 ≤ 3 跳算近、近区 16 项（之后可以扫）。
+  - P16 内容：新分支 `isca27/cupath-v3`；`-t18-credit-policy = shared | rtt | near`；每个机制组合能单独开；统计 ①②③ + 每 GPM 的 WG 数和活跃时间；9 个配置（baseline、M1、M1 + M2、M1 + M3、Complete、Complete 去掉合并 / 去掉打包 / 分配 shared / 分配 near）；先做规模校准给用户确认（每个主要 kernel 给 48 个 GPM 都发 WG、每 GPM ≥ 28 个 WG）。R-GAT 现在不满足"用到全部 GPM"，方案 B 要用户同意。
+  - P15：还没开跑就不跑了（P16 覆盖）；已经在跑或跑完就保留，作为同规模下 W = 64 对 W = 1024 的对照。
+  - **给 Claude Code：** 按 P16 做。上一条说的"近处多留、消融先不要实现、不要跑"，由 P16 取代；开跑前仍按长期规则把配置和规模表给用户确认。
+
