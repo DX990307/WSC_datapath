@@ -90,13 +90,14 @@ func NewCopyEngine(name string, engine sim.Engine, cfg Config) *CopyEngine {
 	return e
 }
 
-// DRAMPort is the port that writes to the GPM's memory controllers.
+// DRAMPort is the port that writes new frames to the GPM's memory
+// controllers (destination side), around the L2.
 func (e *CopyEngine) DRAMPort() sim.Port { return e.dramPort }
 
 // RemotePort is the port on the wafer network.
 func (e *CopyEngine) RemotePort() sim.Port { return e.remotePort }
 
-// L2Port is the port that talks to the GPM's L2 slices.
+// L2Port is the port that reads the GPM's L2 slices (source side).
 func (e *CopyEngine) L2Port() sim.Port { return e.l2Port }
 
 // Busy reports whether the engine has work left.

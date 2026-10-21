@@ -10,7 +10,9 @@
 //     per-GPM batch after a software latency and the page (or the 2-MB group
 //     holding it) moves to the faulting GPM.
 //   - access counter (NVIDIA Volta+ style): every access that leaves a GPM's
-//     L1 for remote memory increments a per-(unit, GPM) counter; when a
+//     L1 for remote memory (accepted by the RDMA engine from the L1; with M3
+//     this includes accesses later served by a replica in the requester L2)
+//     increments a per-(unit, GPM) counter; when a
 //     counter reaches the threshold the unit migrates, asynchronously, to the
 //     GPM with the largest count. Accesses continue remotely until the
 //     shootdown.
@@ -30,7 +32,9 @@
 //  4. copy: the destination GPM's CopyEngine pulls each page in chunks from
 //     the source GPM's CopyEngine over the wafer network; the source reads
 //     through its L2 (so dirty lines are copied) and the destination writes
-//     through its L2;
+//     the new frame in its DRAM directly, around the L2 (a new frame was never
+//     accessed, so no cache holds it; writing around the L2 leaves no dirty
+//     lines that a functional host copy could later shadow);
 //  5. remap: the page table points to the new frames and held accesses
 //     resume with the new translation.
 package pagemigration
