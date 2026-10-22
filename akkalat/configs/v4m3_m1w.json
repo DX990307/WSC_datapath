@@ -1,0 +1,12 @@
+{
+  "_description": "ISCA'27 quick trials Q0b (P19): v4m3 + the best m1w combination (isca27/results_index/m1w/): adaptive turn-point combining hub (= v4_complete_hubturna) + hold 100 ns only while at least half of the requester window is in flight (= v4_complete_hold100o).",
+  "extends": "v4m3.json",
+  "m1w-hub-mode": "turn",
+  "m1w-hub-min-hops": 2,
+  "m1w-hub-retain-ns": 0,
+  "m1w-hub-entries": 1024,
+  "m1w-hub-adaptive": true,
+  "m1w-hold-ns": 100,
+  "m1w-hold-min-hops": 2,
+  "m1w-hold-min-occ": 0.5
+}

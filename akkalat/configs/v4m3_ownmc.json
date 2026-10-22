@@ -1,0 +1,6 @@
+{
+  "_description": "ISCA'27 quick trials Q0 (P19): v4m3 + owner merge (one L2 read per line at the owner, 48-bit requester bitmap) + in-network multicast of the merged response. Re-tests the two components dropped from v4_complete on the old binary at W = 64.",
+  "extends": "v4m3.json",
+  "t18-owner-merge": true,
+  "t18-owner-multicast": true
+}
