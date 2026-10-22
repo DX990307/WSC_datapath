@@ -45,6 +45,9 @@ var m1wHoldNSFlag = flag.Float64("m1w-hold-ns", 0,
 var m1wHoldAlphaFlag = flag.Float64("m1w-hold-alpha", 0,
 	"m1w batch holding with a distance-scaled hold time: alpha x modeled "+
 		"RTT(hops) (84 + 71.4 ns x hops); overrides -m1w-hold-ns (0 = off).")
+var m1wHoldMinOccFlag = flag.Float64("m1w-hold-min-occ", 0,
+	"m1w batch holding: hold only while at least this fraction of the "+
+		"requester window is in flight (0 = always).")
 var m1wHoldMinHopsFlag = flag.Int("m1w-hold-min-hops", 2,
 	"m1w batch holding: batches to owners at most this many hops away are "+
 		"never held.")
@@ -100,7 +103,8 @@ func (r *Runner) configureM1W() {
 	rdma.DisableM1WBound()
 	hub := m1wHubConfigFromFlags()
 	hold := rdma.M1WHoldConfig{FixedNS: *m1wHoldNSFlag,
-		Alpha: *m1wHoldAlphaFlag, MinHops: *m1wHoldMinHopsFlag}
+		Alpha: *m1wHoldAlphaFlag, MinHops: *m1wHoldMinHopsFlag,
+		MinOcc: *m1wHoldMinOccFlag}
 	if !r.Timing || (!*m1wBoundFlag && !hub.Enabled() && !hold.Enabled()) {
 		return
 	}
@@ -127,8 +131,8 @@ func (r *Runner) configureM1W() {
 			hub.RetainNS, hub.Entries, hub.Adaptive)
 	}
 	if hold.Enabled() {
-		fmt.Printf("[Config] m1w hold fixed=%gns alpha=%g min-hops=%d\n",
-			hold.FixedNS, hold.Alpha, hold.MinHops)
+		fmt.Printf("[Config] m1w hold fixed=%gns alpha=%g min-hops=%d min-occ=%g\n",
+			hold.FixedNS, hold.Alpha, hold.MinHops, hold.MinOcc)
 	}
 	for _, gpu := range r.platform.GPUs {
 		engine := gpu.RDMAEngine

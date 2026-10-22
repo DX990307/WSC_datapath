@@ -46,8 +46,9 @@ type M1WHubConfig struct {
 	MinHops  int    // only reads to owners more than MinHops away
 	RetainNS float64
 	Entries  int // hub line-table capacity (lines)
-	// Adaptive: the requester keeps a 4-bit counter per owner, raised when
-	// a hub response carries lines merged at the hub and lowered when it
+	// Adaptive: the requester keeps a 4-bit counter per owner, raised by 8
+	// when a hub response carries lines merged at the hub and lowered by 1
+	// when it
 	// carries none; below 8 the owner is read directly (every 16th
 	// transaction still goes through the hub to re-check).
 	Adaptive bool
@@ -272,7 +273,7 @@ func (c *Comp) m1wHubFeedback(owner sim.Port, src sim.Port, merged int) {
 	}
 	if merged > 0 {
 		s.stats.FeedbackMerged++
-		if s.pred[o] += 2; s.pred[o] > 15 {
+		if s.pred[o] += 8; s.pred[o] > 15 {
 			s.pred[o] = 15
 		}
 	} else {

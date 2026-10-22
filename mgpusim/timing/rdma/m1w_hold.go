@@ -16,6 +16,9 @@ type M1WHoldConfig struct {
 	FixedNS float64
 	Alpha   float64
 	MinHops int
+	// MinOcc: hold only while at least this fraction of the window is in
+	// flight (0 = always); with a mostly idle window a hold only adds latency.
+	MinOcc float64
 }
 
 // Enabled reports whether holding is on.
@@ -80,7 +83,9 @@ func (c *Comp) m1wHeld(now sim.VTimeInSec, batch *remoteBatch) bool {
 		return false
 	}
 	t := s.holdT[c.t18DstIndex(batch.dst)]
-	if t == 0 || now-batch.createdAt >= t {
+	a := c.t18.credits
+	if t == 0 || now-batch.createdAt >= t ||
+		float64(a.total) < s.cfg.MinOcc*float64(a.window) {
 		delete(s.seen, batch)
 		return false
 	}
