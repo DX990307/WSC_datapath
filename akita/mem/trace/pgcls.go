@@ -45,15 +45,20 @@ type PgclsConfig struct {
 	SampleEvery uint64
 	// WindowNS is the time window of the per-window reader sets.
 	WindowNS float64
+	// PlaceExt additionally writes <prefix>_place.csv.gz: per page and
+	// accessing GPM, the L1V writes per 1 KB sub-block (ISCA27 placement
+	// oracle, pass 1). Reads per 512 B are already in _readers.csv.gz.
+	PlaceExt bool
 }
 
 type pgclsReader struct {
 	reads    [pgclsSubs]uint32 // line reads per 512 B sub-block
 	writes   uint32
 	wbytes   uint64
-	lineMask uint64 // lines ever read
-	maskThis uint64 // lines read in the current own kernel (no write since)
-	maskPrev uint64 // lines read in earlier own kernels (no write since)
+	wsub     [4]uint32 // writes per 1 KB sub-block (PlaceExt)
+	lineMask uint64    // lines ever read
+	maskThis uint64    // lines read in the current own kernel (no write since)
+	maskPrev uint64    // lines read in earlier own kernels (no write since)
 	curK     int32
 	nK       uint32 // own kernels with at least one read
 	firstK   int32
@@ -295,6 +300,7 @@ func PgclsAccess(requester, owner, id string, addr, bytes uint64,
 	if !isRead {
 		r.writes++
 		r.wbytes += bytes
+		r.wsub[off>>10]++
 		if local {
 			p.wrLocal++
 		} else {
@@ -507,6 +513,11 @@ func PgclsWrite(endNS float64) error {
 	if err := rclose(); err != nil {
 		return err
 	}
+	if s.cfg.PlaceExt {
+		if err := s.writePlaceExt(keys); err != nil {
+			return err
+		}
+	}
 
 	kf, err := os.Create(s.cfg.Prefix + "_kernels.csv")
 	if err != nil {
@@ -557,4 +568,35 @@ func pgclsGz(path string) (*csv.Writer, func() error, error) {
 		}
 		return fh.Close()
 	}, nil
+}
+
+// writePlaceExt writes <prefix>_place.csv.gz: page, GPM tile, L1V writes
+// per 1 KB sub-block (only rows with at least one write).
+func (s *pgclsState) writePlaceExt(keys []uint64) error {
+	w, closeFn, err := pgclsGz(s.cfg.Prefix + "_place.csv.gz")
+	if err != nil {
+		return err
+	}
+	_ = w.Write([]string{"page", "tile", "wsub1k"})
+	for _, pg := range keys {
+		p := s.pages[pg]
+		gs := make([]int, 0, len(p.readers))
+		for g := range p.readers {
+			gs = append(gs, g)
+		}
+		sort.Ints(gs)
+		for _, g := range gs {
+			r := p.readers[g]
+			if r.writes == 0 {
+				continue
+			}
+			ws := make([]string, len(r.wsub))
+			for i, v := range r.wsub {
+				ws[i] = strconv.FormatUint(uint64(v), 10)
+			}
+			_ = w.Write([]string{strconv.FormatUint(pg, 10), strconv.Itoa(g),
+				strings.Join(ws, ";")})
+		}
+	}
+	return closeFn()
 }

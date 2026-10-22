@@ -1,0 +1,7 @@
+{
+  "_description": "ISCA'27 P20 M3+ (retention only) = v4m3 (v4_complete + A1 + reset of own-write uncacheable marks + first-touch admission ft1) without packing and merging: -remote-data-path-batching-enable, -remote-filter-prefetch-enable and -t18-req-merge off. Window flags (-rdma-max-outstanding / -t18-window / -t18-compose-table-entries) are given on the command line. See isca27/paper_placement_m3/README.md.",
+  "extends": "v4m3.json",
+  "remote-data-path-batching-enable": false,
+  "remote-filter-prefetch-enable": false,
+  "t18-req-merge": false
+}

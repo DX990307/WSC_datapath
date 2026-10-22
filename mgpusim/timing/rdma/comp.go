@@ -103,6 +103,11 @@ func (c *Comp) SetLocalModuleFinder(lmf mem.LowModuleFinder) {
 	c.localModules = lmf
 }
 
+// LocalModuleFinder returns the finder set by SetLocalModuleFinder.
+func (c *Comp) LocalModuleFinder() mem.LowModuleFinder {
+	return c.localModules
+}
+
 // SetRemoteCacheModuleFinder sets the requester-local L2 slice finder. Unlike
 // localModules, this finder must not reject addresses owned by another GPU.
 func (c *Comp) SetRemoteCacheModuleFinder(lmf mem.LowModuleFinder) {

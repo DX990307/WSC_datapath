@@ -24,6 +24,9 @@ var pgclsFileFlag = flag.String("pgcls-file", "",
 var pgclsSampleFlag = flag.Uint64("pgcls-sample", 0,
 	"-report-pgcls raw trace: keep every access of 1/N of the pages "+
 		"(page-hash sampling); 0 = no raw trace.")
+var pgclsPlaceExtFlag = flag.Bool("pgcls-place-ext", false,
+	"-report-pgcls: also write <prefix>_place.csv.gz (L1V writes per page, "+
+		"GPM and 1 KB sub-block; placement oracle pass 1). Read-only.")
 var pgclsWindowFlag = flag.Float64("pgcls-window-ns", 10000,
 	"-report-pgcls time window of the per-window reader sets (ns).")
 
@@ -41,7 +44,7 @@ func (r *Runner) addPgcls() {
 	}
 	err := memtrace.EnablePgcls(memtrace.PgclsConfig{
 		Prefix: prefix, SampleEvery: *pgclsSampleFlag,
-		WindowNS: *pgclsWindowFlag})
+		WindowNS: *pgclsWindowFlag, PlaceExt: *pgclsPlaceExtFlag})
 	if err != nil {
 		panic(err)
 	}
@@ -55,8 +58,8 @@ func (r *Runner) addPgcls() {
 		c.KernelLaunchHooks = append(c.KernelLaunchHooks,
 			func(now sim.VTimeInSec) { memtrace.PgclsKernelLaunch(tile, now) })
 	}
-	fmt.Printf("[Config] pgcls: prefix=%s sample=%d window=%gns\n",
-		prefix, *pgclsSampleFlag, *pgclsWindowFlag)
+	fmt.Printf("[Config] pgcls: prefix=%s sample=%d window=%gns place-ext=%v\n",
+		prefix, *pgclsSampleFlag, *pgclsWindowFlag, *pgclsPlaceExtFlag)
 }
 
 func pgclsTile(name string) int {

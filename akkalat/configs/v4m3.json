@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 quick trials (P19, 2026-10-22) comparison base v4m3 = v4_complete + A1 (cross-kernel retention of read-only replicas) + reset of own-write uncacheable marks at kernel boundaries + first-touch admission into an invalid way only (ft1). Same flags as the a1/ runs labelled v4+A1+reset+ft1 (v4_complete_a1u + -a1-first-touch-admission=1, binary 1335def). Window flags (-rdma-max-outstanding / -t18-window / -t18-compose-table-entries) are given on the command line. See isca27/results_index/a1/.",
+  "extends": "v4_complete_a1u.json",
+  "a1-first-touch-admission": 1
+}

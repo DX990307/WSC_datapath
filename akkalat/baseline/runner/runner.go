@@ -67,6 +67,7 @@ type Runner struct {
 	cuCPITraces         []cuCPIStackTracer
 	sharingTraceWriter  *pageSharingTraceWriter
 	pgcls               *pgclsRunner
+	place               *placeTable
 	observationDRAM     *windowedPhysicalDRAMObserver
 	gpmTracer           *gpmTracer
 	p12                 *p12Tracer
@@ -653,6 +654,7 @@ func (r *Runner) flushMetrics() {
 		r.writeP12Traces()
 		r.writeObsStats()
 		r.writePgcls()
+		r.reportPlacement()
 		r.closeSharingTrace()
 	})
 }
