@@ -53,6 +53,11 @@ type GeoPushConfig struct {
 	SharedFilter  bool // push only lines seen read by >= 2 GPMs recently
 	FilterEntries int  // owner sharing table entries (shared filter)
 	FillQueue     int  // neighbor: pending L2 push fills (0: 64)
+	// Readers mode (P19 Q2): reader bitmaps per page (geo_readers.go).
+	ReaderWindowNS float64         // window length (0: 5000)
+	ReaderMin      int             // online hot rule: readers per window (0: 4)
+	ReaderMaxPages int             // pages tracked per owner, LRU (0: 1024)
+	ReaderPages    map[uint64]bool // oracle hot pages (page addresses); nil = online
 }
 
 // GeoPushMode selects whom the owner pushes to.
@@ -62,18 +67,23 @@ type GeoPushMode int
 const (
 	GeoPushNeighbor GeoPushMode = iota
 	GeoPushAffinity
+	GeoPushReaders
 )
 
 func (m GeoPushMode) String() string {
 	if m == GeoPushAffinity {
 		return "affinity"
 	}
+	if m == GeoPushReaders {
+		return "readers"
+	}
 	return "neighbor"
 }
 
 // Enabled reports whether geo-push is on.
 func (c GeoPushConfig) Enabled() bool {
-	return c.Radius > 0 || (c.Mode == GeoPushAffinity && c.AffinityK > 0)
+	return c.Radius > 0 || (c.Mode == GeoPushAffinity && c.AffinityK > 0) ||
+		c.Mode == GeoPushReaders
 }
 
 // GeoPushStats are the per-RDMA geo-push counters.
@@ -323,6 +333,7 @@ type geoPushState struct {
 	affCnt   []uint8
 	affHints int
 	affTop   []int
+	readers      *q2Readers // readers mode (P19 Q2)
 	fillQ        []*geoFillItem
 	fillInflight map[string]*geoFillItem
 	stats        GeoPushStats
@@ -367,6 +378,9 @@ func (c *Comp) ConfigureGeoPush(cfg GeoPushConfig) {
 		g.partnersOf = make([][]int, n)
 		g.affCnt = make([]uint8, n)
 	}
+	if cfg.Mode == GeoPushReaders {
+		g.readers = newQ2Readers(cfg)
+	}
 	c.geo = g
 }
 
@@ -384,6 +398,17 @@ func (c *Comp) GetGeoPushStats() GeoPushStats {
 // the owner.
 func (c *Comp) geoOwnerRecordRead(msg sim.Msg) {
 	g := c.geo
+	if g != nil && g.readers != nil && c.geoTopo != nil {
+		now := c.Engine.CurrentTime()
+		switch req := msg.(type) {
+		case *BitmapReadReq:
+			g.readers.record(uint32(req.PID), req.PagePAddr,
+				c.geoTopo.Index(req.Src), now)
+		case *mem.ReadReq:
+			g.readers.record(uint32(req.PID), req.Address,
+				c.geoTopo.Index(req.Src), now)
+		}
+	}
 	if g == nil || g.share == nil || c.geoTopo == nil {
 		return
 	}
@@ -444,7 +469,10 @@ func (c *Comp) geoWrap(
 		}
 	}
 	var targets []int
-	if g.cfg.Mode == GeoPushAffinity {
+	if g.cfg.Mode == GeoPushReaders {
+		excl := append([]int{c.geoIdx}, reqIdx...)
+		targets = g.readers.targets(uint32(pid), lines[0].addr, now, excl)
+	} else if g.cfg.Mode == GeoPushAffinity {
 		targets = c.affTargets(reqIdx)
 	} else {
 		targets = c.geoTopo.PushTargets(c.geoIdx, reqIdx, g.cfg.Radius)

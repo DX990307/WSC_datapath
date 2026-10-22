@@ -9,6 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/sim"
@@ -157,6 +159,17 @@ var affinityDecayFlag = flag.Int("affinity-decay-hints", 512,
 	"affinity-push: halve the requester's co-read counters every this many hints.")
 var affinityMinCountFlag = flag.Int("affinity-min-count", 2,
 	"affinity-push: a GPM is a partner only with a counter >= this value.")
+var q2PagesFlag = flag.String("q2-pages", "",
+	"P19 Q2 (-geo-push-mode readers): file of hot page numbers (4 KiB pages, "+
+		"decimal, one per line; pgcls 'hot broadcast' = oracle classification). "+
+		"Empty: online rule (-q2-min-readers).")
+var q2WindowFlag = flag.Float64("q2-window-ns", 5000,
+	"P19 Q2: reader-bitmap window; push targets = readers of the current and "+
+		"previous window.")
+var q2MinReadersFlag = flag.Int("q2-min-readers", 4,
+	"P19 Q2 online rule: a page is hot when a window had at least this many readers.")
+var q2MaxPagesFlag = flag.Int("q2-max-pages", 1024,
+	"P19 Q2: pages with reader bitmaps per owner (LRU).")
 var geoPushFillQueueFlag = flag.Int("geo-push-fill-queue", 64,
 	"geo-push: pending push fills per RDMA before pushes are dropped.")
 
@@ -179,8 +192,19 @@ func geoPushConfigFromFlags() rdma.GeoPushConfig {
 		if c.Radius != 0 {
 			panic("-geo-push-radius must be 0 with -geo-push-mode affinity")
 		}
+	case "readers":
+		c.Mode = rdma.GeoPushReaders
+		c.ReaderWindowNS = *q2WindowFlag
+		c.ReaderMin = *q2MinReadersFlag
+		c.ReaderMaxPages = *q2MaxPagesFlag
+		if *q2PagesFlag != "" {
+			c.ReaderPages = readQ2Pages(*q2PagesFlag)
+		}
+		if c.Radius != 0 {
+			panic("-geo-push-radius must be 0 with -geo-push-mode readers")
+		}
 	default:
-		panic("-geo-push-mode must be neighbor or affinity")
+		panic("-geo-push-mode must be neighbor, affinity or readers")
 	}
 	switch *geoPushFilterFlag {
 	case "none", "":
@@ -290,4 +314,22 @@ func (r *Runner) reportGeoPushStats() {
 	put("useful", l2.PushUseful)
 	put("hits", l2.PushHits)
 	put("unused_retirements", l2.PushUnusedRetirements)
+}
+
+// readQ2Pages reads a list of 4 KiB page numbers (decimal) into page addresses.
+func readQ2Pages(path string) map[uint64]bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+	out := map[uint64]bool{}
+	for _, l := range strings.Fields(string(data)) {
+		n, err := strconv.ParseUint(l, 10, 64)
+		if err != nil {
+			panic(fmt.Sprintf("-q2-pages: bad page %q", l))
+		}
+		out[n<<12] = true
+	}
+	fmt.Printf("[Config] q2 oracle hot pages: %d\n", len(out))
+	return out
 }
