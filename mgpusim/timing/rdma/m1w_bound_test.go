@@ -1,6 +1,7 @@
 package rdma
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/sarchlab/akita/v3/sim"
@@ -137,5 +138,60 @@ func TestM1WHold(t *testing.T) {
 		if want == 1 && h.stats.SlotSavedNS != 1100 {
 			t.Fatalf("%s slot saved %g", h.name, h.stats.SlotSavedNS)
 		}
+	}
+}
+
+func m1wTestTopoPorts() (*M1WTopology, map[[2]int]int) {
+	var coords [][2]int
+	var ports []sim.Port
+	idx := map[[2]int]int{}
+	for y := 0; y < 7; y++ {
+		for x := 0; x < 7; x++ {
+			if x == 3 && y == 3 {
+				continue
+			}
+			idx[[2]int{x, y}] = len(coords)
+			coords = append(coords, [2]int{x, y})
+			ports = append(ports, sim.NewLimitNumMsgPort(nil, 1,
+				fmt.Sprintf("GPM%d", len(ports))))
+		}
+	}
+	return NewM1WTopology(7, 7, coords, ports), idx
+}
+
+func TestM1WHubRouting(t *testing.T) {
+	topo, idx := m1wTestTopoPorts()
+	mk := func(x, y int, cfg M1WHubConfig) *Comp {
+		c := &Comp{}
+		c.m1wTopo = topo
+		c.m1wIdx = idx[[2]int{x, y}]
+		c.ConfigureM1WHub(cfg)
+		return c
+	}
+	turn := mk(0, 0, M1WHubConfig{Mode: "turn", MinHops: 2, Entries: 64})
+	// owner (6,6): hub at (0,6)
+	if got := turn.m1wHub.hubFor[idx[[2]int{6, 6}]]; got != topo.Ports[idx[[2]int{0, 6}]] {
+		t.Fatalf("turn hub of (0,0)->(6,6) wrong")
+	}
+	// same row or too close: direct
+	if turn.m1wHub.hubFor[idx[[2]int{6, 0}]] != nil ||
+		turn.m1wHub.hubFor[idx[[2]int{1, 1}]] != nil {
+		t.Fatalf("turn: direct owners routed to a hub")
+	}
+	// (3,y_o=3) is the center tile: (3,0) -> (6,3) has no GPM at (3,3)
+	c := mk(3, 0, M1WHubConfig{Mode: "turn", MinHops: 0, Entries: 64})
+	if c.m1wHub.hubFor[idx[[2]int{6, 3}]] != nil {
+		t.Fatalf("turn: center tile used as a hub")
+	}
+	reg := mk(0, 0, M1WHubConfig{Mode: "region", Part: 2, MinHops: 2, Entries: 64})
+	if got := reg.m1wHub.hubFor[idx[[2]int{6, 6}]]; got != topo.Ports[idx[[2]int{1, 1}]] {
+		t.Fatalf("region hub of (0,0) wrong")
+	}
+	if reg.m1wHub.hubFor[idx[[2]int{2, 2}]] != nil { // same region
+		t.Fatalf("region: same-region owner routed to a hub")
+	}
+	hub := mk(1, 1, M1WHubConfig{Mode: "region", Part: 2, MinHops: 2, Entries: 64})
+	if hub.m1wHub.hubFor[idx[[2]int{6, 6}]] != nil {
+		t.Fatalf("region: the hub routed its own reads to itself")
 	}
 }

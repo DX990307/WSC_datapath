@@ -1113,10 +1113,14 @@ func (c *Comp) sendRemoteEntryDirect(
 	}
 	info := memtrace.WithL2RemoteInfo(
 		entry.info, c.Name(), entry.key.ownerName)
+	dst := entry.owner
+	if c.m1wHub != nil {
+		dst = c.m1wRoute(entry.owner, []*remoteLineEntry{entry})
+	}
 	req := mem.ReadReqBuilder{}.
 		WithSendTime(now).
 		WithSrc(c.ToOutside).
-		WithDst(entry.owner).
+		WithDst(dst).
 		WithAddress(entry.key.lineAddr).
 		WithByteSize(remoteLineBytes).
 		WithPID(entry.key.pid).
@@ -1291,10 +1295,14 @@ func (c *Comp) flushRemoteBatch(
 		entry := batch.lines[line]
 		info := memtrace.WithL2RemoteInfo(
 			entry.info, c.Name(), entry.key.ownerName)
+		dst := batch.dst
+		if c.m1wHub != nil {
+			dst = c.m1wRoute(batch.dst, []*remoteLineEntry{entry})
+		}
 		req := mem.ReadReqBuilder{}.
 			WithSendTime(now).
 			WithSrc(c.ToOutside).
-			WithDst(batch.dst).
+			WithDst(dst).
 			WithAddress(entry.key.lineAddr).
 			WithByteSize(remoteLineBytes).
 			WithPID(entry.key.pid).
@@ -1325,11 +1333,15 @@ func (c *Comp) flushRemoteBatch(
 
 	info := memtrace.WithL2RemoteInfo(
 		batch.info, c.Name(), batch.key.ownerName)
+	bdst := batch.dst
+	if c.m1wHub != nil {
+		bdst = c.m1wRoute(batch.dst, c.m1wBatchEntries(batch))
+	}
 	req := &BitmapReadReq{
 		MsgMeta: sim.MsgMeta{
 			ID:           sim.GetIDGenerator().Generate(),
 			Src:          c.ToOutside,
-			Dst:          batch.dst,
+			Dst:          bdst,
 			SendTime:     now,
 			TrafficBytes: bitmapReqTraffic,
 		},
@@ -1773,5 +1785,6 @@ func (c *Comp) remoteDataPathHasPendingWork() bool {
 		len(c.remoteOwnerPendingReq) > 0 ||
 		len(c.remoteOwnerSubReqs) > 0 ||
 		len(c.remoteOwnerPendingRsp) > 0 ||
-		len(c.remoteOwnerBatches) > 0
+		len(c.remoteOwnerBatches) > 0 ||
+		c.m1wHubPending()
 }

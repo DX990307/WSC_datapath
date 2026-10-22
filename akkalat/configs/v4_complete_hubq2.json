@@ -1,0 +1,9 @@
+{
+  "_description": "ISCA'27 m1w: v4_complete + regional combining hubs (2 x 2 regions; reads to owners > 2 hops away and outside the region go through the region's hub GPM, which merges same-line reads while in flight). Prototype; see isca27/results_index/m1w/DESIGN.md.",
+  "extends": "v4_complete.json",
+  "m1w-hub-mode": "region",
+  "m1w-hub-part": 2,
+  "m1w-hub-min-hops": 2,
+  "m1w-hub-retain-ns": 0,
+  "m1w-hub-entries": 1024
+}

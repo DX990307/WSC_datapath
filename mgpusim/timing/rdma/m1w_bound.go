@@ -83,6 +83,7 @@ func DefaultM1WBoundConfig() M1WBoundConfig {
 type M1WTopology struct {
 	Width, Height int
 	Coords        [][2]int
+	Ports         []sim.Port
 	index         map[sim.Port]int
 	tileGPM       []int // tile -> GPM index or -1
 }
@@ -95,6 +96,7 @@ func NewM1WTopology(width, height int, coords [][2]int, ports []sim.Port) *M1WTo
 	t := &M1WTopology{
 		Width: width, Height: height,
 		Coords:  append([][2]int(nil), coords...),
+		Ports:   append([]sim.Port(nil), ports...),
 		index:   make(map[sim.Port]int, len(ports)),
 		tileGPM: make([]int, width*height),
 	}

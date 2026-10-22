@@ -100,6 +100,8 @@ type Comp struct {
 	// ISCA'27 wafer M1 bound (m1w_bound.go); nil topology when off.
 	m1wTopo *M1WTopology
 	m1wIdx  int
+	// ISCA'27 wafer M1 combining hubs (m1w_hub.go); nil when off.
+	m1wHub *m1wHubState
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -182,6 +184,10 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 		if c.t18.ownerActive {
 			madeProgress = c.t18OwnerSend(now) || madeProgress
 		}
+	}
+	if c.m1wHub != nil {
+		c.m1wHubSweep(now)
+		madeProgress = c.m1wHubSend(now) || madeProgress
 	}
 	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
@@ -503,6 +509,22 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			switch req.(type) {
 			case *BitmapReadReq, *mem.ReadReq:
 				c.m1wOwnerArrive(req)
+			}
+		}
+		if c.m1wHub != nil {
+			if c.m1wHubIsReq(req) {
+				if !c.m1wHubServe(now, req) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
+			if rsp, ok := req.(*BitmapReadRsp); ok && c.m1wHubIsRsp(rsp.RespondTo) {
+				if !c.m1wHubOwnerRsp(now, rsp) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
 			}
 		}
 		switch req := req.(type) {
