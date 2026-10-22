@@ -39,6 +39,7 @@ PRESET_REASON = {
 }
 UNKNOWN_REASON = "未知，需要检查"
 STAT_FLAGS = {
+    "-report-wg-dist": "统计开关：打印每个 kernel 每个 GPM 的 WG 数（WGDIST 行）",
     "-report-l2-source": "统计开关：L2 数据来源（本地/远程 × L2/DRAM）",
     "-l2-source-tile-width": "统计开关的参数：7×7 mesh 宽度，用来算跳数",
     "-heartbeat-file": "运行监控：心跳文件",
@@ -64,6 +65,7 @@ ORACLE_FLAGS = {
 MESH_FLAGS = {
     "-mesh-size": "规模实验（有意偏离 mi200.json，需要用户确认）：N×N mesh，CPU/IOMMU 在中心，N²−1 个 GPM",
     "-problem-gpms": "规模实验：按多少个 GPM 计算随 GPM 数变化的问题规模（T16 small 网格、allreduce 份数）；默认 48 = 任何 mesh 上都用 7×7 的问题规模（强扩展）",
+    "-wg-distribution": "规模实验：kernel 的 WG 怎样切到各 GPM（ceil = 原行为；balanced = 按 CU 数等分，WG 数 ≥ GPM 数时每个 GPM 都有 WG），kernel、问题规模和数据放置不变",
     "-switch-buffer-flits": "网络按 CU 比例缩小（有意偏离 mi200.json，用户 10-20 确认）：交换机端口缓冲深度 = max(-bandwidth, N) flit，与链路带宽分开；0 = 原行为",
 }
 

@@ -68,3 +68,27 @@ func ProblemGPMs() int {
 	}
 	return n
 }
+
+// WG split over GPMs (mesh9, user 10-22 option c): the problem stays the
+// 48-GPM size; balanced spreads each kernel's WGs over every GPM.
+var wgDistributionFlag = flag.String("wg-distribution", "ceil",
+	"How the driver splits a kernel's contiguous WG range over the GPMs: "+
+		"ceil (default) = cuCount x ceil(WGs / all CUs) per GPM, so small "+
+		"kernels leave the last GPMs idle; balanced = proportional to the CU "+
+		"count, every GPM gets WGs when WGs >= GPMs. Kernels and data are unchanged.")
+var reportWGDistFlag = flag.Bool("report-wg-dist", false,
+	"Print the per-GPM WG counts of every kernel (WGDIST lines on stdout).")
+
+func (r *Runner) configureWGDistribution() {
+	applyConfigFiles()
+	switch *wgDistributionFlag {
+	case "ceil":
+	case "balanced":
+		r.platform.Driver.SetBalancedWGDistribution(true)
+	default:
+		panic(fmt.Sprintf("-wg-distribution=%s: want ceil or balanced", *wgDistributionFlag))
+	}
+	if *reportWGDistFlag {
+		r.platform.Driver.SetReportWGDistribution(true)
+	}
+}
