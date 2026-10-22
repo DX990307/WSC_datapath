@@ -59,6 +59,14 @@ type L2TLB struct {
 	iommuSendFailCount uint64
 	iommuWakeupCount   uint64
 
+	// Miss latency statistics (observation only), index 0 = local GMMU,
+	// 1 = IOMMU: round trip of the downstream request, and per request from
+	// its arrival in the TopPort to the response leaving the L2TLB.
+	missRTTSum   [2]float64
+	missRTTCount [2]uint64
+	missReqSum   [2]float64
+	missReqCount [2]uint64
+
 	isPaused   bool
 	DeviceID   uint64
 	pageTable  vm.PageTable
@@ -111,6 +119,15 @@ func (tlb *L2TLB) sendToIOMMUPort(req *vm.TranslationReq) bool {
 	return true
 }
 
+func (tlb *L2TLB) missKind(e *mshrEntry) int {
+	if e.reqToBottom != nil && tlb.IOMMUPort != nil &&
+		e.reqToBottom.Dst == tlb.IOMMUPort {
+		return 1
+	}
+
+	return 0
+}
+
 // Tick defines how TLB update states at each cycle
 func (tlb *L2TLB) Tick(now sim.VTimeInSec) bool {
 	madeProgress := false
@@ -156,6 +173,10 @@ func (tlb *L2TLB) respondMSHREntry(now sim.VTimeInSec) bool {
 	if err != nil {
 		return false
 	}
+
+	k := tlb.missKind(mshrEntry)
+	tlb.missReqSum[k] += float64(now - req.RecvTime)
+	tlb.missReqCount[k]++
 
 	mshrEntry.Requests = mshrEntry.Requests[1:]
 	if len(mshrEntry.Requests) == 0 {
@@ -502,6 +523,12 @@ func (tlb *L2TLB) processRsp(now sim.VTimeInSec, rsp *vm.TranslationRsp, bottom 
 			tlb.OutsidePort.Retrieve(now)
 		}
 		return true
+	}
+
+	if mshrEntry.reqToBottom != nil {
+		k := tlb.missKind(mshrEntry)
+		tlb.missRTTSum[k] += float64(now - mshrEntry.reqToBottom.SendTime)
+		tlb.missRTTCount[k]++
 	}
 
 	tlb.respondingMSHREntry = append(tlb.respondingMSHREntry, mshrEntry)

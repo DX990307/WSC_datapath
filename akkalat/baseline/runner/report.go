@@ -1276,6 +1276,41 @@ func (r *Runner) reportIOMMUTLBStats() {
 	)
 
 	r.reportL2TLBIOMMUSendStats()
+	r.reportL2TLBMissLatency()
+}
+
+// reportL2TLBMissLatency writes the L2TLB miss latencies (seconds), summed
+// over all GPMs, split by where the miss was served (local GMMU or IOMMU):
+// rtt = downstream request to its response; req = TopPort arrival to
+// response, for every request that waited on a miss (miss or MSHR hit).
+func (r *Runner) reportL2TLBMissLatency() {
+	var rttSum, reqSum [2]float64
+	var rttN, reqN [2]uint64
+	for _, gpu := range r.platform.GPUs {
+		if gpu.L2TLB == nil {
+			continue
+		}
+		a, b, c, d := gpu.L2TLB.MissLatencyStats()
+		for k := 0; k < 2; k++ {
+			rttSum[k] += a[k]
+			rttN[k] += b[k]
+			reqSum[k] += c[k]
+			reqN[k] += d[k]
+		}
+	}
+
+	for k, kind := range []string{"local", "iommu"} {
+		r.metricsCollector.Collect("L2TLBs", kind+"_miss_count", float64(rttN[k]))
+		r.metricsCollector.Collect("L2TLBs", kind+"_miss_req_count", float64(reqN[k]))
+		if rttN[k] > 0 {
+			r.metricsCollector.Collect("L2TLBs", kind+"_miss_rtt_avg",
+				rttSum[k]/float64(rttN[k]))
+		}
+		if reqN[k] > 0 {
+			r.metricsCollector.Collect("L2TLBs", kind+"_miss_req_latency_avg",
+				reqSum[k]/float64(reqN[k]))
+		}
+	}
 }
 
 // reportL2TLBIOMMUSendStats prints (to stderr, not to the metrics file, so

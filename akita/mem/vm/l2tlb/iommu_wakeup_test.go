@@ -206,6 +206,11 @@ func TestL2TLBWakesUpAfterIOMMUEndpointDrains(t *testing.T) {
 			failed, wakeups)
 	}
 
+	_, rttN, _, reqN := tlb.MissLatencyStats()
+	if rttN[1] != numReq || reqN[1] != numReq || rttN[0] != 0 {
+		t.Fatalf("miss statistics: rtt counts %v, request counts %v", rttN, reqN)
+	}
+
 	if tlb.toIOMMUPort.Component() != tlb {
 		t.Fatal("the ToIOMMU port must belong to the L2TLB")
 	}
