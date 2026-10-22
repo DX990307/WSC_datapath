@@ -561,7 +561,10 @@ func (b *R9NanoGPUBuilder) populateExternalPorts() {
 	b.gpu.Domain.AddPort("PageMigrationController",
 		b.pageMigrationController.GetPortByName("Remote"))
 	b.gpu.Domain.AddPort("L2TLB", b.l2TLB.OutsidePort)
-	b.gpu.Domain.AddPort("L2TLBToIOMMU", b.l2TLB.IOMMUPort)
+	// The L2TLB's own send port to the IOMMU (whose Top port sits on the
+	// center tile). It used to export the IOMMU TLB's Top port itself, which
+	// put that one port on every GPU tile.
+	b.gpu.Domain.AddPort("L2TLBToIOMMU", b.l2TLB.GetPortByName("ToIOMMU"))
 	if b.pmEngine != nil {
 		b.gpu.Domain.AddPort("PageMigrationDMA", b.pmEngine.RemotePort())
 	}

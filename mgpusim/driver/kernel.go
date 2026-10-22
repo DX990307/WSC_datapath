@@ -90,6 +90,7 @@ func (d *Driver) LaunchKernel(
 	wgSize [3]uint16,
 	kernelArgs interface{},
 ) {
+	d.checkNoPendingCommands(ctx, "LaunchKernel")
 	queue := d.CreateCommandQueue(ctx)
 	d.EnqueueLaunchKernel(queue, co, gridSize, wgSize, kernelArgs)
 	d.DrainCommandQueue(queue)

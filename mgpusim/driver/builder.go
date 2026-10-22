@@ -1,6 +1,8 @@
 package driver
 
 import (
+	"sync"
+
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
@@ -119,7 +121,10 @@ func (b Builder) Build(name string) *Driver {
 	driver.AddPort("MMU", driver.mmuPort)
 
 	driver.enqueueSignal = make(chan bool)
+	driver.enqueueAck = make(chan bool)
 	driver.driverStopped = make(chan bool)
+	driver.engineIdle = sync.NewCond(&driver.engineRunningMutex)
+	driver.hostSyncWarnSites = make(map[string]bool)
 
 	b.createCPU(driver)
 

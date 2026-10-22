@@ -159,11 +159,21 @@ func (b *Benchmark) Run() {
 	zeros := make([]int32, n)
 	wgs := (n + wgSize - 1) / wgSize
 	ewgs := (n + VertsPerWG - 1) / VertsPerWG
+	// All host-to-device copies and allocations happen before the first
+	// kernel is enqueued: a synchronous upload after an enqueue starts the
+	// engine with those kernels pending, so the copy would be ordered against
+	// them by host thread timing instead of by the program.
+	nexts := make([]driver.Ptr, levels)
+	vOuts := make([]driver.Ptr, levels)
+	fOuts := make([]driver.Ptr, levels)
+	for l := 0; l < levels; l++ {
+		nexts[l] = b.upload(zeros, fmt.Sprintf("bfs_next_l%d", l))
+		vOuts[l] = b.alloc(n, fmt.Sprintf("bfs_visited_l%d", l+1))
+		fOuts[l] = b.alloc(n, fmt.Sprintf("bfs_frontier_l%d", l+1))
+	}
 	q := b.driver.CreateCommandQueue(b.context)
 	for l := 0; l < levels; l++ {
-		next := b.upload(zeros, fmt.Sprintf("bfs_next_l%d", l))
-		vOut := b.alloc(n, fmt.Sprintf("bfs_visited_l%d", l+1))
-		fOut := b.alloc(n, fmt.Sprintf("bfs_frontier_l%d", l+1))
+		next, vOut, fOut := nexts[l], vOuts[l], fOuts[l]
 		ea := ExpandArgs{RowPtr: dRow, ColIdx: dCol, Frontier: frontier, Visited: visited,
 			Next: next, NumNodes: int32(n)}
 		b.driver.EnqueueLaunchKernel(q, b.expand, [3]uint32{uint32(ewgs * wgSize), 1, 1},

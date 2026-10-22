@@ -13,9 +13,10 @@ import (
 )
 
 type tile struct {
-	ports []sim.Port
-	sw    int
-	rt    *meshRoutingTable
+	ports  []sim.Port
+	sw     int
+	rt     *meshRoutingTable
+	epPort sim.Port
 }
 
 // A Connector can help establishing a mesh or torus network.
@@ -34,6 +35,7 @@ type Connector struct {
 	gridCap  [3]int
 	grid     [][][]tile
 	dstTable map[string]*tile
+	portLoc  map[string][3]int
 }
 
 // NewConnector creates a new mesh Connector.
@@ -43,6 +45,7 @@ func NewConnector() *Connector {
 		flitSize:             16,
 		linkTransferPerCycle: 1,
 		dstTable:             make(map[string]*tile),
+		portLoc:              make(map[string][3]int),
 	}
 
 	c.connector = networkconnector.
@@ -166,6 +169,17 @@ func (c *Connector) AddTile(loc [3]int, ports []sim.Port) {
 		panic("coordinate is negative")
 	}
 
+	// A port can be plugged into only one endpoint: adding it to a second
+	// tile would silently move its connection and its routing entry to
+	// whichever tile was added (or built) last.
+	for _, port := range ports {
+		if prev, dup := c.portLoc[port.Name()]; dup {
+			panic(fmt.Sprintf("port %s is added to tile %v but is already on tile %v",
+				port.Name(), loc, prev))
+		}
+		c.portLoc[port.Name()] = loc
+	}
+
 	c.resizeGridToHold(loc)
 	c.updateSize(loc)
 
@@ -174,6 +188,25 @@ func (c *Connector) AddTile(loc [3]int, ports []sim.Port) {
 	for _, port := range ports {
 		c.dstTable[port.Name()] = &c.grid[loc[0]][loc[1]][loc[2]]
 	}
+}
+
+// TileOf returns the tile that a port was added to.
+func (c *Connector) TileOf(port sim.Port) ([3]int, bool) {
+	loc, ok := c.portLoc[port.Name()]
+	return loc, ok
+}
+
+// EndPointOf returns the endpoint (a connection) of a tile. It is only
+// available after EstablishNetwork.
+func (c *Connector) EndPointOf(loc [3]int) sim.Connection {
+	t := &c.grid[loc[0]][loc[1]][loc[2]]
+	if t.epPort == nil {
+		return nil
+	}
+
+	conn, _ := t.epPort.Component().(sim.Connection)
+
+	return conn
 }
 
 func (c *Connector) mergePorts(loc [3]int, ports []sim.Port) {
@@ -300,7 +333,7 @@ func (c *Connector) createSwitches() {
 				endpointTransferPerCycle := c.endpointTransferPerCycleOrDefault(transferPerCycle)
 				endpointBufferSize := c.endpointBufferSizeOrDefault(endpointTransferPerCycle)
 				epName := fmt.Sprintf("EP[%d][%d][%d]", x, y, z)
-				_, swPort := c.connector.ConnectDeviceWithEPName(
+				epPort, swPort := c.connector.ConnectDeviceWithEPName(
 					epName,
 					sw, c.grid[x][y][z].ports,
 					networkconnector.DeviceToSwitchLinkParameter{
@@ -328,6 +361,7 @@ func (c *Connector) createSwitches() {
 					})
 
 				rt.local = swPort
+				c.grid[x][y][z].epPort = epPort
 			}
 		}
 	}
