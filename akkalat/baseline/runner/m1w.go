@@ -49,6 +49,11 @@ var m1wHoldMinHopsFlag = flag.Int("m1w-hold-min-hops", 2,
 	"m1w batch holding: batches to owners at most this many hops away are "+
 		"never held.")
 
+var m1wHubAdaptiveFlag = flag.Bool("m1w-hub-adaptive", false,
+	"m1w hubs: per-owner 4-bit predictor at the requester; owners whose hub "+
+		"responses carry no merged lines are read directly (every 16th "+
+		"transaction still probes the hub).")
+
 func m1wHubConfigFromFlags() rdma.M1WHubConfig {
 	c := rdma.M1WHubConfig{
 		Mode:     *m1wHubModeFlag,
@@ -56,6 +61,7 @@ func m1wHubConfigFromFlags() rdma.M1WHubConfig {
 		MinHops:  *m1wHubMinHopsFlag,
 		RetainNS: *m1wHubRetainFlag,
 		Entries:  *m1wHubEntriesFlag,
+		Adaptive: *m1wHubAdaptiveFlag,
 	}
 	if err := c.Validate(); err != nil {
 		panic(err)
@@ -117,8 +123,8 @@ func (r *Runner) configureM1W() {
 				"kernel-boundary invalidation (v4_complete)")
 		}
 		fmt.Printf("[Config] m1w hub mode=%s part=%d min-hops=%d "+
-			"retain=%gns entries=%d\n", hub.Mode, hub.Part, hub.MinHops,
-			hub.RetainNS, hub.Entries)
+			"retain=%gns entries=%d adaptive=%v\n", hub.Mode, hub.Part, hub.MinHops,
+			hub.RetainNS, hub.Entries, hub.Adaptive)
 	}
 	if hold.Enabled() {
 		fmt.Printf("[Config] m1w hold fixed=%gns alpha=%g min-hops=%d\n",
@@ -156,6 +162,10 @@ func (r *Runner) reportM1W() {
 			put("routed_txns", st.RoutedTxns)
 			put("routed_lines", st.RoutedLines)
 			put("direct_written_txns", st.DirectTxns)
+			put("adaptive_direct_txns", st.AdaptiveDirect)
+			put("feedback_merged", st.FeedbackMerged)
+			put("feedback_plain", st.FeedbackPlain)
+			put("merged_lines", st.HubMergedLines)
 			put("reqs", st.HubReqs)
 			put("lines", st.HubLines)
 			put("inflight_hits", st.HubInflightHits)

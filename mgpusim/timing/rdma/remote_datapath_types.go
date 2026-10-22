@@ -182,6 +182,9 @@ type BitmapReadRsp struct {
 	sim.MsgMeta
 	RespondTo string
 	LineData  map[uint64][]byte
+	// HubMerged: lines of this response an m1w hub served from another
+	// requester's entry (adaptive hub feedback; 0 from an owner).
+	HubMerged int
 }
 
 // Meta returns message metadata.

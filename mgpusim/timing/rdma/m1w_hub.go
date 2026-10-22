@@ -46,6 +46,11 @@ type M1WHubConfig struct {
 	MinHops  int    // only reads to owners more than MinHops away
 	RetainNS float64
 	Entries  int // hub line-table capacity (lines)
+	// Adaptive: the requester keeps a 4-bit counter per owner, raised when
+	// a hub response carries lines merged at the hub and lowered when it
+	// carries none; below 8 the owner is read directly (every 16th
+	// transaction still goes through the hub to re-check).
+	Adaptive bool
 }
 
 // Enabled reports whether hubs are on.
@@ -73,6 +78,10 @@ type M1WHubStats struct {
 	RoutedTxns       uint64 // requester: transactions sent to a hub
 	RoutedLines      uint64
 	DirectTxns       uint64 // requester: eligible owner but sent direct (written line)
+	AdaptiveDirect   uint64 // requester: eligible owner sent direct by the predictor
+	FeedbackMerged   uint64 // requester: hub responses with merged lines
+	FeedbackPlain    uint64 // requester: hub responses without merged lines
+	HubMergedLines   uint64 // hub: lines answered from an entry another requester opened
 	HubReqs          uint64 // hub: requests received
 	HubLines         uint64
 	HubInflightHits  uint64 // line found in flight at the hub
@@ -97,8 +106,9 @@ type M1WHubStats struct {
 }
 
 type m1wHubWaiter struct {
-	req  *m1wHubReq
-	line uint64 // offset in the page
+	req    *m1wHubReq
+	line   uint64 // offset in the page
+	merged bool
 }
 
 type m1wHubLine struct {
@@ -119,7 +129,15 @@ type m1wHubReq struct {
 	page      uint64
 	remaining uint64 // lines not answered yet
 	collected map[uint64][]byte
+	merged    int // collected lines served by another requester's entry
 	queued    bool
+}
+
+// M1WHubDataRsp is a hub's single-line answer: a DataReadyRsp plus the
+// one-bit "merged at the hub" feedback of the adaptive hub policy.
+type M1WHubDataRsp struct {
+	mem.DataReadyRsp
+	Merged bool
 }
 
 type m1wHubFwd struct {
@@ -130,6 +148,8 @@ type m1wHubFwd struct {
 
 type m1wHubState struct {
 	cfg       M1WHubConfig
+	pred      []int8 // requester: per-owner predictor (adaptive)
+	probe     []uint8
 	lastSweep sim.VTimeInSec
 	hubFor    []sim.Port // owner GPM index -> hub port (nil: direct)
 	lines     map[m1wLineKey]*m1wHubLine
@@ -159,6 +179,11 @@ func (c *Comp) ConfigureM1WHub(cfg M1WHubConfig) {
 	}
 	s.stats.Enabled = true
 	topo := c.m1wTopo
+	s.pred = make([]int8, topo.NumGPMs())
+	s.probe = make([]uint8, topo.NumGPMs())
+	for i := range s.pred {
+		s.pred[i] = 15
+	}
 	n := topo.NumGPMs()
 	s.hubFor = make([]sim.Port, n)
 	r := c.m1wIdx
@@ -234,6 +259,30 @@ func (c *Comp) m1wHubProcess(now sim.VTimeInSec) bool {
 	return progress
 }
 
+// m1wHubFeedback updates the adaptive predictor with a hub response for a
+// transaction to owner (merged lines in it).
+func (c *Comp) m1wHubFeedback(owner sim.Port, src sim.Port, merged int) {
+	s := c.m1wHub
+	if s == nil {
+		return
+	}
+	o := c.m1wTopo.Index(owner)
+	if o < 0 || s.hubFor[o] == nil || src != s.hubFor[o] {
+		return
+	}
+	if merged > 0 {
+		s.stats.FeedbackMerged++
+		if s.pred[o] += 2; s.pred[o] > 15 {
+			s.pred[o] = 15
+		}
+	} else {
+		s.stats.FeedbackPlain++
+		if s.pred[o] > 0 {
+			s.pred[o]--
+		}
+	}
+}
+
 // m1wRoute returns the port a requester transaction to owner is sent to.
 func (c *Comp) m1wRoute(owner sim.Port, entries []*remoteLineEntry) sim.Port {
 	s := c.m1wHub
@@ -247,6 +296,13 @@ func (c *Comp) m1wRoute(owner sim.Port, entries []*remoteLineEntry) sim.Port {
 	for _, e := range entries {
 		if e != nil && c.remoteUncacheable[e.key.remoteLineIdentity] {
 			s.stats.DirectTxns++
+			return owner
+		}
+	}
+	if s.cfg.Adaptive && s.pred[o] < 8 {
+		s.probe[o]++
+		if s.probe[o]%16 != 0 {
+			s.stats.AdaptiveDirect++
 			return owner
 		}
 	}
@@ -319,10 +375,10 @@ func (c *Comp) m1wHubServe(now sim.VTimeInSec, msg sim.Msg) bool {
 		if s.live(e, now) {
 			if e.ready {
 				s.stats.HubReadyHits++
-				c.m1wHubDeliver(req, off, e.data)
+				c.m1wHubDeliver(req, off, e.data, true)
 			} else {
 				s.stats.HubInflightHits++
-				e.waiters = append(e.waiters, m1wHubWaiter{req: req, line: off})
+				e.waiters = append(e.waiters, m1wHubWaiter{req: req, line: off, merged: true})
 			}
 			continue
 		}
@@ -393,13 +449,17 @@ func msgPID(msg sim.Msg) vm.PID {
 	return 0
 }
 
-func (c *Comp) m1wHubDeliver(req *m1wHubReq, off uint64, data []byte) {
+func (c *Comp) m1wHubDeliver(req *m1wHubReq, off uint64, data []byte, merged bool) {
 	bit := uint64(1) << off
 	if req.remaining&bit == 0 {
 		panic("m1w hub: line delivered twice")
 	}
 	req.remaining &^= bit
 	req.collected[off] = data
+	if merged {
+		req.merged++
+		c.m1wHub.stats.HubMergedLines++
+	}
 	if !req.queued {
 		req.queued = true
 		c.m1wHub.touched = append(c.m1wHub.touched, req)
@@ -420,12 +480,13 @@ func (c *Comp) m1wHubFlushTouched(now sim.VTimeInSec) {
 			for _, d := range req.collected {
 				data = d
 			}
-			rsp = mem.DataReadyRspBuilder{}.
+			d := mem.DataReadyRspBuilder{}.
 				WithSrc(c.M1WHubPort).
 				WithDst(req.src).
 				WithRspTo(req.id).
 				WithData(append([]byte(nil), data...)).
 				Build()
+			rsp = &M1WHubDataRsp{DataReadyRsp: *d, Merged: req.merged > 0}
 		} else {
 			lineData := make(map[uint64][]byte, len(req.collected))
 			for off, d := range req.collected {
@@ -440,9 +501,11 @@ func (c *Comp) m1wHubFlushTouched(now sim.VTimeInSec) {
 				},
 				RespondTo: req.id,
 				LineData:  lineData,
+				HubMerged: req.merged,
 			}
 		}
 		req.collected = make(map[uint64][]byte)
+		req.merged = 0
 		s.out = append(s.out, rsp)
 		s.outAt = append(s.outAt, now)
 		s.stats.HubResponses++
@@ -489,7 +552,7 @@ func (c *Comp) m1wHubOwnerRsp(now sim.VTimeInSec, rsp sim.Msg) bool {
 		e.readyAt = now
 		e.data = append([]byte(nil), data...)
 		for _, w := range e.waiters {
-			c.m1wHubDeliver(w.req, w.line, e.data)
+			c.m1wHubDeliver(w.req, w.line, e.data, w.merged)
 		}
 		e.waiters = nil
 		if e.tracked && (e.stale || s.cfg.RetainNS <= 0) {

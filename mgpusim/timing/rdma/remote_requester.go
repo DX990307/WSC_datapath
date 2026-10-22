@@ -1497,6 +1497,14 @@ func (c *Comp) processRemoteSingleRsp(
 	rsp mem.AccessRsp,
 ) bool {
 	entry := c.remoteSingleInflight[rsp.GetRspTo()]
+	if h, isHub := rsp.(*M1WHubDataRsp); isHub {
+		merged := 0
+		if h.Merged {
+			merged = 1
+		}
+		c.m1wHubFeedback(entry.owner, h.Src, merged)
+		rsp = &h.DataReadyRsp
+	}
 	dataRsp, ok := rsp.(*mem.DataReadyRsp)
 	if !ok || entry == nil {
 		panic("remote single-line read returned an invalid response")
@@ -1532,6 +1540,9 @@ func (c *Comp) processBitmapRspFromOutside(
 	batch := c.remoteBitmapInflight[rsp.GetRspTo()]
 	if batch == nil {
 		panic("bitmap response has no matching requester batch")
+	}
+	if c.m1wHub != nil {
+		c.m1wHubFeedback(batch.dst, rsp.Src, rsp.HubMerged)
 	}
 	for line := range rsp.LineData {
 		if line >= 64 {
