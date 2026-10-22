@@ -136,6 +136,7 @@ func (r *Runner) defineMetrics() {
 	r.addGPMTracer()
 	r.addP12Tracers()
 	r.addObsStats()
+	r.addPgcls()
 	r.addMaxWGStopper()
 	r.addCUCPIHook()
 	r.addCacheLatencyTracer()

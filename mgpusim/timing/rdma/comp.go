@@ -555,6 +555,9 @@ func (c *Comp) processReqFromL1(
 			c.RemoteDataPathStats.ObservedRemoteWrites++
 		}
 		c.obsAdmit(req, dst)
+		if memtrace.PgclsEnabled() {
+			c.pgclsAdmit(req, dst)
+		}
 	}
 	if !previouslySeen && memtrace.ObservationRemoteTraceEnabled() {
 		// Admission is recorded on the first processing attempt rather than
