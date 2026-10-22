@@ -33,7 +33,7 @@ Claude Code，2026-10-21 / 22。设计和正确性论证见 [`DESIGN.md`](DESIGN
 
 - 条件：384 GB/s、W = 256（`-bandwidth=24 -switch-buffer-flits=16 -rdma-max-outstanding=256 -t18-window=256 -t18-compose-table-entries=512`），25 个 workload，参数和 `~/akita-exp-test/pgcls/` 的行完全相同（去掉 pgcls 统计 flag）。用户 10-22：不跑 48 GB/s。
 - 对照：baseline（mi200）和 v4_complete 复用 `~/akita-exp-test/pgcls/` 的结果（二进制 `149dff0` = `c08698b` + 统计；pgcls 的 verify2 证明统计开 / 关和 `c08698b` 逐位一致；本目录又证明 A1 关闭的 `c4082ae` / `1335def` 和 `c08698b` 逐位一致）。注意 pgcls 的 baseline 行没有加 `-t18-window` / `-t18-compose-table-entries`（对 baseline 无关）。
-- 配置：v4+A1（`c4082ae`）、v4+ft2（A1 关，首次触碰准入 2）、v4+A1+ft2、v4+A1+ft1（7 个 workload）、v4+A1+reset（`1335def`）、v4+A1+reset+ft2（`1335def`）。
+- 配置（另有 10-22 补排的 v4+A1+reset+ft1，7:45 时 24/25 完成，moe-t64 未完成）：v4+A1（`c4082ae`）、v4+ft2（A1 关，首次触碰准入 2）、v4+A1+ft2、v4+A1+ft1（7 个 workload）、v4+A1+reset（`1335def`）、v4+A1+reset+ft2（`1335def`）。
 - exp_id：`1022_sens_a1-w256b384-<workload>_<配置>_<commit>`；验证运行 `1021_diag_a1*`、`1022_diag_a1*`。
 - 服务器文件：`~/akita-exp-test/a1/{sched.py, queue.tsv, done.tsv, launched.tsv, sched.log, ext_a1.py, m3why.py, src/results/…, src_0c39bab/results/…（旧基线验证）}`。
 - 本目录 `scripts/`：`sched.py`（v3m2w 的副本，加了每行 commit 列）、`mkqueue_*.py`、`queue_*.tsv`、`ext_a1.py`、`m3why.py`、`collect2.py`（生成 a1.csv）、`analyze.py`（生成 analysis.md 里的表）。
@@ -52,6 +52,7 @@ GMEAN（25 个 workload，384 GB/s、W = 256，对 v4_complete；括号内为对
 | v4+A1+ft2 | 1.020 | 1.341 |
 | v4+A1+reset | 1.021 | 1.343 |
 | v4+A1+reset+ft2 | **1.049** | **1.379** |
+| v4+A1+reset+ft1（24/25，缺 moe） | 1.051 | 1.391 |
 
 - A1 单独只有 +0.5%：9 个 workload 只有 1 个 kernel；npbcg 网络 line −74% 但时间不变（W = 256 下不受窗口限制）。
 - 单 kernel workload 的重复取来自 M3 的两次触碰准入（第二次取占网络 line 的 13–48%），不是驱逐或在途重复；KM、fft2d、FW、MG、CFD、gups、LUD 的重复取主要来自"本 GPM 写过的远程 line 永久不可缓存"。

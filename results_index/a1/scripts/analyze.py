@@ -2,7 +2,7 @@
 """Markdown tables from a1.csv. usage: analyze.py a1.csv"""
 import csv, math, sys
 rows = list(csv.DictReader(open(sys.argv[1])))
-CF = ["v4", "v4+A1", "v4+ft2", "v4+A1+ft1", "v4+A1+ft2", "v4+A1+reset", "v4+A1+reset+ft2"]
+CF = ["v4", "v4+A1", "v4+ft2", "v4+A1+ft1", "v4+A1+ft2", "v4+A1+reset", "v4+A1+reset+ft2", "v4+A1+reset+ft1"]
 W = sorted({r["workload"] for r in rows})
 get = {(r["workload"], r["config"]): r for r in rows}
 def f(x):

@@ -62,7 +62,8 @@ v4_complete = M1（请求方合并 + 同页打包，窗口位共享池）+ M3（
 
 - A1 本身几乎没用：9 个 workload 在模拟窗口里只有 1 个 kernel；npbcg / MG 网络 line 大降但 W = 256 下不受窗口限制。
 - 真正的 M3 问题是两条规则：**两次触碰才保留**（PR、MM、graphtc 等第二次取占网络 line 13–48%）和**本 GPM 写过的远程 line 永久不可缓存**（KM 100%、fft2d 79%、FW 64%、MG 53%、CFD 49%）。
-- 全部合用：KM 1.65×、FW 1.27×、CFD 1.10×、graphtc 1.09×、bfs 1.07×、PR 1.05×；sssp −2.4%（ft2 造成，ft1 不变慢）、fft2d −1.3%。v4 + A1 + reset + ft1 正在补跑。
+- 全部合用：KM 1.65×、FW 1.27×、CFD 1.10×、graphtc 1.09×、bfs 1.07×、PR 1.05×；sssp −2.4%（ft2 造成）、fft2d −1.3%。
+- **v4 + A1 + reset + ft1（推荐，7:45 补出 24/25，MoE 还在跑）**：对 v4 1.051、对 baseline 1.391；和 ft2 总体持平，但消除了 sssp 的退化（+0.5%），IVF +3.7%；KM 1.62×；最差 fft2d −1.3%，其余都 ≥ −0.2%。
 - KM 的 `-verify` 在所有配置（含 baseline）都失败，是 benchmark 自身问题。
 
 ## 4. M1 的 wafer 相关改进（`m1w/analysis.md`，8 个 workload）

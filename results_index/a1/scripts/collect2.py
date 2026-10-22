@@ -7,7 +7,8 @@ OUT = sys.argv[1]
 CFG = {"mi200": "baseline", "mi200+v4complete": "v4", "mi200+v4complete+a1": "v4+A1",
        "mi200+v4complete+a1+ft1": "v4+A1+ft1", "mi200+v4complete+a1+ft2": "v4+A1+ft2",
        "mi200+v4complete+ft2": "v4+ft2", "mi200+v4complete+a1u": "v4+A1+reset",
-       "mi200+v4complete+a1u+ft2": "v4+A1+reset+ft2"}
+       "mi200+v4complete+a1u+ft2": "v4+A1+reset+ft2",
+       "mi200+v4complete+a1u+ft1": "v4+A1+reset+ft1"}
 def ext(host, d, pat):
     r = subprocess.run(["ssh", host, f"cd ~/akita-exp-test/{d} && python3 ~/akita-exp-test/a1/ext_a1.py {pat}"],
                        capture_output=True, text=True, check=True).stdout
