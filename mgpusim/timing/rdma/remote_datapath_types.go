@@ -255,6 +255,8 @@ type remoteLineEntry struct {
 	patternToken            writeback.PatternToken
 	patternKey              writeback.TypedFilterKey
 	prefetchCandidate       *remotePrefetchCandidate
+	// q1: queued by the P19 Q1 hop-dependent depth (no stride pattern).
+	q1 bool
 	// M1+M2: the entry is in M1's in-flight table (and open for merging).
 	m1Indexed bool
 	m1Open    bool

@@ -79,6 +79,7 @@ type Comp struct {
 	remoteReady                []*remoteLineEntry
 	remoteEpochs               map[remoteLineIdentity]uint64
 	remoteUncacheable          map[remoteLineIdentity]bool
+	q1                         *q1State // P19 Q1; nil = off
 	remoteOutstandingReads     int
 	remoteOwnerPendingReq      []*remoteOwnerSubReq
 	remoteOwnerSubReqs         map[string]*remoteOwnerSubReq

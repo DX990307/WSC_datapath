@@ -1,0 +1,9 @@
+{
+  "_description": "ISCA'27 quick trials Q1 (P19): v4m3 + hop-dependent prefetch depth. A network demand read also queues the next 1 / 2 / 4 lines of its page for owners <= 2 / 3-5 / >= 6 hops away; the lines only ride the demand's batch (no extra transactions), skip lines in flight, written by this GPM or already fetched in this kernel, and owners with >= 30% of the requester's recent lines (hot owners) get none. See mgpusim/timing/rdma/q1_depth.go.",
+  "extends": "v4m3.json",
+  "q1-depth-near": 1,
+  "q1-depth-mid": 2,
+  "q1-depth-far": 4,
+  "q1-hot-share": 0.3,
+  "q1-recent-lines": 8192
+}

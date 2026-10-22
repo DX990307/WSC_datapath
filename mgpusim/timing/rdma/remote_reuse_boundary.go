@@ -32,6 +32,7 @@ func (c *Comp) GetRemoteReuseBoundaryStats() RemoteReuseBoundaryStats {
 func (c *Comp) MarkRemoteReuseKernelBoundary() {
 	c.remoteReuseBoundaryStats.Boundaries++
 	c.m1wHubBoundary()
+	c.q1Boundary()
 	if !c.remoteConfig.Enabled || c.remoteConfig.DisableRequesterL2 {
 		return
 	}

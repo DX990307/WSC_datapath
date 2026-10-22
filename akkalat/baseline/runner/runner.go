@@ -655,6 +655,7 @@ func (r *Runner) flushMetrics() {
 		r.writeObsStats()
 		r.writePgcls()
 		r.writeQtDiag()
+		r.writeQ1()
 		r.closeSharingTrace()
 	})
 }

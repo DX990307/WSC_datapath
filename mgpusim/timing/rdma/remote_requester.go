@@ -573,6 +573,9 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 	c.insertRemoteLine(key, entry)
 	c.remotePendingBatch = append(c.remotePendingBatch, entry)
 	c.queueRemotePrefetchCandidate(now, read, c.takeRemotePrefetchCandidate(read.ID))
+	if c.q1 != nil {
+		c.q1QueueDepth(now, entry, dst)
+	}
 	if c.remoteConfig.DisableBatching {
 		c.recordRequesterOutstandingPeak()
 	}
@@ -894,9 +897,13 @@ func (c *Comp) addRemoteWaiter(
 	if entry.speculative && !entry.speculativeUseful {
 		entry.speculativeUseful = true
 		entry.admit = true
-		c.RemoteDataPathStats.PrefetchUseful++
-		if c.remotePrefetcher != nil {
-			c.remotePrefetcher.Reward(entry.patternToken)
+		if entry.q1 {
+			c.q1.stats.Useful++
+		} else {
+			c.RemoteDataPathStats.PrefetchUseful++
+			if c.remotePrefetcher != nil {
+				c.remotePrefetcher.Reward(entry.patternToken)
+			}
 		}
 		// The predicted line is no longer speculative once a real request
 		// owns it. In particular, an unsent takeover must fall back to an
@@ -1087,6 +1094,9 @@ func (c *Comp) processRemoteProbeRsp(
 
 	entry.state = remoteLinePendingBatch
 	c.remotePendingBatch = append(c.remotePendingBatch, entry)
+	if c.q1 != nil && len(entry.waiters) > 0 {
+		c.q1QueueDepth(now, entry, entry.owner)
+	}
 	if entry.prefetchCandidate != nil && len(entry.waiters) > 0 {
 		c.queueRemotePrefetchCandidate(
 			now, entry.waiters[0].req, entry.prefetchCandidate)
@@ -1690,8 +1700,10 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 				fillBuilder = fillBuilder.WithRequireInvalidVictim()
 			}
 			if entry.speculative {
-				fillBuilder = fillBuilder.WithPattern(
-					entry.patternKey.Owner, entry.patternKey.Address)
+				if !entry.q1 {
+					fillBuilder = fillBuilder.WithPattern(
+						entry.patternKey.Owner, entry.patternKey.Address)
+				}
 				if !entry.speculativeUseful && !entry.seenAdmission {
 					fillBuilder = fillBuilder.WithRequireInvalidVictim()
 				}
@@ -1753,7 +1765,9 @@ func (c *Comp) removeRemoteLine(entry *remoteLineEntry) {
 			filter.ScheduleUpdate(c.Engine.CurrentTime(), remoteTypedFilterKey(
 				identity, writeback.FilterPending), true)
 		}
-		if entry.speculative && !entry.speculativeUseful && !entry.fillInstalled {
+		if entry.q1 && !entry.speculativeUseful && !entry.fillInstalled {
+			c.q1.stats.Unused++
+		} else if entry.speculative && !entry.speculativeUseful && !entry.fillInstalled {
 			c.RemoteDataPathStats.PrefetchUnused++
 			if c.remotePrefetcher != nil {
 				c.remotePrefetcher.Penalize(entry.patternToken)
