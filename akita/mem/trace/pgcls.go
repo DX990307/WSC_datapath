@@ -119,8 +119,10 @@ type pgclsPage struct {
 	writerMask uint64
 	subMask    [pgclsSubs]uint64
 	readers    map[int]*pgclsReader
-	lastWriter []int8 // per line, allocated on the first write
-	rdOtherWr  uint64 // reads of a line last written by another GPM
+	lastWriter []int8  // per line, allocated on the first write
+	lastWrK    []int32 // global kernel of the line's last write
+	rdOtherWr  uint64  // reads of a line last written by another GPM ...
+	rdOtherWrK uint64  // ... of which in the same (global) kernel as the write
 	kset       pgclsSet
 	wset       pgclsSet
 }
@@ -130,6 +132,7 @@ type pgclsState struct {
 	tile     map[string]int
 	pages    map[uint64]*pgclsPage
 	kcount   [64]int32
+	kepoch   [64]int32 // global kernel of the tile's last launch
 	globalK  int32
 	kernels  []string
 	totals   map[string]uint64
@@ -202,9 +205,13 @@ func PgclsKernelLaunch(tile int, now sim.VTimeInSec) {
 		return
 	}
 	s.kcount[tile]++
-	if s.kcount[tile] > s.globalK {
-		s.globalK = s.kcount[tile]
+	// Kernels run one after another; a kernel launches on a GPM at most
+	// once, so a second launch on a GPM within the current global kernel
+	// starts the next global kernel.
+	if s.globalK == 0 || s.kepoch[tile] == s.globalK {
+		s.globalK++
 	}
+	s.kepoch[tile] = s.globalK
 	s.kernels = append(s.kernels, fmt.Sprintf("%d,%d,%d,%.3f",
 		tile, s.kcount[tile], s.globalK, float64(now)*1e9))
 }
@@ -285,6 +292,7 @@ func PgclsAccess(requester, owner string, addr, bytes uint64, isRead bool,
 		p.writerMask |= 1 << uint(g)
 		if p.lastWriter == nil {
 			p.lastWriter = make([]int8, 1<<(pgclsLog2Page-pgclsLog2Line))
+			p.lastWrK = make([]int32, 1<<(pgclsLog2Page-pgclsLog2Line))
 			for i := range p.lastWriter {
 				p.lastWriter[i] = -1
 			}
@@ -298,6 +306,7 @@ func PgclsAccess(requester, owner string, addr, bytes uint64, isRead bool,
 		}
 		for l := line; l <= last; l++ {
 			p.lastWriter[l] = int8(g)
+			p.lastWrK[l] = s.globalK
 			clr := ^(uint64(1) << l)
 			for _, rr := range p.readers {
 				rr.maskThis &= clr
@@ -315,6 +324,9 @@ func PgclsAccess(requester, owner string, addr, bytes uint64, isRead bool,
 	if p.lastWriter != nil && p.lastWriter[line] >= 0 &&
 		int(p.lastWriter[line]) != g {
 		p.rdOtherWr++
+		if p.lastWrK[line] == s.globalK {
+			p.rdOtherWrK++
+		}
 	}
 	p.subMask[sub] |= 1 << uint(g)
 	p.kset.add(int64(s.globalK), g)
@@ -380,7 +392,7 @@ func PgclsWrite(endNS float64) error {
 	}
 	_ = pw.Write([]string{"page", "owner", "first_ns", "last_ns",
 		"rd_remote", "rd_local", "wr_remote", "wr_local", "writer_mask",
-		"sub_masks", "rd_other_written",
+		"sub_masks", "rd_other_written", "rd_other_written_same_k",
 		"k_n", "k_wsum", "k_rsum", "k_jacc", "k_trans", "k_maxpop",
 		"w_n", "w_wsum", "w_rsum", "w_jacc", "w_trans", "w_maxpop"})
 	_ = rw.Write([]string{"page", "reader", "sub_reads", "reads", "writes",
@@ -400,7 +412,7 @@ func PgclsWrite(endNS float64) error {
 		_ = pw.Write([]string{u(pg), strconv.Itoa(p.owner), f(p.firstNS),
 			f(p.lastNS), u(p.rdRemote), u(p.rdLocal), u(p.wrRemote),
 			u(p.wrLocal), hex(p.writerMask), strings.Join(subs, ";"),
-			u(p.rdOtherWr),
+			u(p.rdOtherWr), u(p.rdOtherWrK),
 			u(uint64(p.kset.n)), f(p.kset.wsum), u(p.kset.rsum),
 			f(p.kset.jacc), u(uint64(p.kset.trans)), u(uint64(p.kset.maxPop)),
 			u(uint64(p.wset.n)), f(p.wset.wsum), u(p.wset.rsum),
