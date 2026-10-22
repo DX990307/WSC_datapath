@@ -85,6 +85,14 @@ type M1WHubStats struct {
 	HubBoundaries    uint64
 	HubOutPeak       uint64
 	HubOwnerRspLines uint64
+	// Timing breakdown (ns sums; statistics only).
+	ReqInNetNS   float64 // requester send -> hub receive (per request)
+	ReqInWaitNS  float64 // hub receive -> served (per request)
+	FwdRTTNS     float64 // hub forward send -> owner response received
+	FwdRsps      uint64  // owner responses received for forwards
+	FwdRspWaitNS float64 // owner response received -> handled
+	OutWaitNS    float64 // queued at the hub -> sent (per message)
+	OutMsgs      uint64
 }
 
 type m1wHubWaiter struct {
@@ -114,8 +122,9 @@ type m1wHubReq struct {
 }
 
 type m1wHubFwd struct {
-	owner sim.Port
-	lines map[uint64]*m1wHubLine
+	sentAt sim.VTimeInSec
+	owner  sim.Port
+	lines  map[uint64]*m1wHubLine
 }
 
 type m1wHubState struct {
@@ -125,6 +134,7 @@ type m1wHubState struct {
 	lines     map[m1wLineKey]*m1wHubLine
 	fwd       map[string]*m1wHubFwd
 	out       []sim.Msg
+	outAt     []sim.VTimeInSec
 	touched   []*m1wHubReq
 	stats     M1WHubStats
 }
@@ -271,6 +281,8 @@ func (c *Comp) m1wHubServe(now sim.VTimeInSec, msg sim.Msg) bool {
 		info = r.Info
 	}
 	s.stats.HubReqs++
+	s.stats.ReqInNetNS += float64(msg.Meta().RecvTime-msg.Meta().SendTime) * 1e9
+	s.stats.ReqInWaitNS += float64(now-msg.Meta().RecvTime) * 1e9
 	var missing uint64
 	fwd := &m1wHubFwd{owner: owner, lines: make(map[uint64]*m1wHubLine)}
 	for off := uint64(0); off < 64; off++ {
@@ -323,10 +335,11 @@ func (c *Comp) m1wHubServe(now sim.VTimeInSec, msg sim.Msg) bool {
 		}
 		s.fwd[f.ID] = fwd
 		s.out = append(s.out, f)
+		s.outAt = append(s.outAt, now)
 		s.stats.HubForwardTxns++
 		s.stats.HubForwardLines += uint64(len(fwd.lines))
 	}
-	c.m1wHubFlushTouched()
+	c.m1wHubFlushTouched(now)
 	c.ToOutside.Retrieve(now)
 	return true
 }
@@ -355,7 +368,7 @@ func (c *Comp) m1wHubDeliver(req *m1wHubReq, off uint64, data []byte) {
 }
 
 // m1wHubFlushTouched queues one response per requester that got lines.
-func (c *Comp) m1wHubFlushTouched() {
+func (c *Comp) m1wHubFlushTouched(now sim.VTimeInSec) {
 	s := c.m1wHub
 	for _, req := range s.touched {
 		req.queued = false
@@ -392,6 +405,7 @@ func (c *Comp) m1wHubFlushTouched() {
 		}
 		req.collected = make(map[uint64][]byte)
 		s.out = append(s.out, rsp)
+		s.outAt = append(s.outAt, now)
 		s.stats.HubResponses++
 	}
 	s.touched = s.touched[:0]
@@ -413,6 +427,9 @@ func (c *Comp) m1wHubOwnerRsp(now sim.VTimeInSec, rsp sim.Msg) bool {
 		panic("m1w hub: unexpected owner response")
 	}
 	f := s.fwd[rspTo]
+	s.stats.FwdRsps++
+	s.stats.FwdRTTNS += float64(rsp.Meta().RecvTime-f.sentAt) * 1e9
+	s.stats.FwdRspWaitNS += float64(now-rsp.Meta().RecvTime) * 1e9
 	for off := uint64(0); off < 64; off++ {
 		data, ok := lineData[off]
 		if !ok {
@@ -440,7 +457,7 @@ func (c *Comp) m1wHubOwnerRsp(now sim.VTimeInSec, rsp sim.Msg) bool {
 	if len(f.lines) == 0 {
 		delete(s.fwd, rspTo)
 	}
-	c.m1wHubFlushTouched()
+	c.m1wHubFlushTouched(now)
 	c.ToOutside.Retrieve(now)
 	return true
 }
@@ -458,7 +475,13 @@ func (c *Comp) m1wHubSend(now sim.VTimeInSec) bool {
 		if err := c.ToOutside.Send(msg); err != nil {
 			break
 		}
+		if f := s.fwd[msg.Meta().ID]; f != nil {
+			f.sentAt = now
+		}
+		s.stats.OutWaitNS += float64(now-s.outAt[0]) * 1e9
+		s.stats.OutMsgs++
 		s.out = s.out[1:]
+		s.outAt = s.outAt[1:]
 		progress = true
 	}
 	return progress || len(s.out) > 0

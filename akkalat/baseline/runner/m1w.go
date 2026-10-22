@@ -159,6 +159,16 @@ func (r *Runner) reportM1W() {
 			put("stale_at_boundary", st.HubStaleAtBound)
 			put("peak_entries", st.HubPeakEntries)
 			put("out_peak", st.HubOutPeak)
+			putf := func(name string, v float64) {
+				r.metricsCollector.Collect(where, "m1w_hub_"+name, v)
+			}
+			putf("req_in_net_ns_sum", st.ReqInNetNS)
+			putf("req_in_wait_ns_sum", st.ReqInWaitNS)
+			putf("fwd_rtt_ns_sum", st.FwdRTTNS)
+			put("fwd_rsps", st.FwdRsps)
+			putf("fwd_rsp_wait_ns_sum", st.FwdRspWaitNS)
+			putf("out_wait_ns_sum", st.OutWaitNS)
+			put("out_msgs", st.OutMsgs)
 		}
 	}
 	if r.Timing && (*m1wHoldNSFlag > 0 || *m1wHoldAlphaFlag > 0) {
