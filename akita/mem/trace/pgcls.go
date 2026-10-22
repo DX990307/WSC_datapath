@@ -45,6 +45,12 @@ type PgclsConfig struct {
 	SampleEvery uint64
 	// WindowNS is the time window of the per-window reader sets.
 	WindowNS float64
+	// TraceExt (ISCA'27 P19 -pgcls-trace-ext) adds two row kinds to the raw
+	// trace of sampled pages: op N = a remote read line leaving the
+	// requester RDMA for the network (demand or prefetch), op D = the reply
+	// to the L1V of a remote read (lat_ns = reply - RDMA admission; t_ns is
+	// the reply time), plus the lat_ns column.
+	TraceExt bool
 }
 
 type pgclsReader struct {
@@ -132,8 +138,11 @@ type pgclsPage struct {
 }
 
 type pgclsPending struct {
-	page uint64
-	t0   float64
+	page  uint64
+	t0    float64
+	g, o  int    // TraceExt only
+	off   uint64 // TraceExt only
+	gk, k int32  // TraceExt only
 }
 
 type pgclsState struct {
@@ -176,8 +185,12 @@ func EnablePgcls(cfg PgclsConfig) error {
 		s.rawFile = f
 		s.rawGz = gzip.NewWriter(f)
 		s.raw = csv.NewWriter(s.rawGz)
-		_ = s.raw.Write([]string{"t_ns", "gk", "k", "req", "own", "page",
-			"off", "bytes", "op", "src"})
+		head := []string{"t_ns", "gk", "k", "req", "own", "page",
+			"off", "bytes", "op", "src"}
+		if cfg.TraceExt {
+			head = append(head, "lat_ns")
+		}
+		_ = s.raw.Write(head)
 	}
 	pgclsS = s
 	pgclsOn = true
@@ -284,7 +297,7 @@ func PgclsAccess(requester, owner, id string, addr, bytes uint64,
 			strconv.Itoa(int(s.globalK)), strconv.Itoa(int(k)),
 			strconv.Itoa(g), strconv.Itoa(o),
 			strconv.FormatUint(pageNo, 10), strconv.FormatUint(off, 10),
-			strconv.FormatUint(bytes, 10), op, src})
+			strconv.FormatUint(bytes, 10), op, src, ""}[:10+s.extCols()])
 	}
 	r := p.readers[g]
 	if r == nil {
@@ -332,7 +345,8 @@ func PgclsAccess(requester, owner, id string, addr, bytes uint64,
 	} else {
 		p.rdRemote++
 		if id != "" {
-			s.pending[id] = pgclsPending{page: pageNo, t0: t}
+			s.pending[id] = pgclsPending{page: pageNo, t0: t, g: g, o: o,
+				off: off, gk: int32(s.globalK), k: int32(k)}
 		}
 	}
 	if p.lastWriter != nil && p.lastWriter[line] >= 0 &&
@@ -391,6 +405,17 @@ func PgclsNetLine(requester, owner string, addr uint64, now sim.VTimeInSec) {
 	if h := manhattanHops(g, o, 7); h > 0 {
 		p.netHops += uint64(h)
 	}
+	pageNo := addr >> pgclsLog2Page
+	if s.cfg.TraceExt && s.raw != nil &&
+		pgclsHash(pageNo)%s.cfg.SampleEvery == 0 {
+		s.rawCount++
+		_ = s.raw.Write([]string{
+			strconv.FormatFloat(float64(now)*1e9, 'f', 1, 64),
+			strconv.Itoa(int(s.globalK)), "", strconv.Itoa(g), strconv.Itoa(o),
+			strconv.FormatUint(pageNo, 10),
+			strconv.FormatUint(addr&(1<<pgclsLog2Page-1), 10), "64", "N",
+			"net", ""})
+	}
 }
 
 // PgclsDone records the reply to the L1 of a remote read admitted by
@@ -413,6 +438,16 @@ func PgclsDone(id string, now sim.VTimeInSec) {
 	if p := s.pages[pd.page]; p != nil {
 		p.latSum += float64(now)*1e9 - pd.t0
 		p.latN++
+	}
+	if s.cfg.TraceExt && s.raw != nil &&
+		pgclsHash(pd.page)%s.cfg.SampleEvery == 0 {
+		s.rawCount++
+		t := float64(now) * 1e9
+		_ = s.raw.Write([]string{strconv.FormatFloat(t, 'f', 1, 64),
+			strconv.Itoa(int(pd.gk)), strconv.Itoa(int(pd.k)),
+			strconv.Itoa(pd.g), strconv.Itoa(pd.o),
+			strconv.FormatUint(pd.page, 10), strconv.FormatUint(pd.off, 10),
+			"", "D", "v", strconv.FormatFloat(t-pd.t0, 'f', 1, 64)})
 	}
 }
 
@@ -557,4 +592,11 @@ func pgclsGz(path string) (*csv.Writer, func() error, error) {
 		}
 		return fh.Close()
 	}, nil
+}
+
+func (s *pgclsState) extCols() int {
+	if s.cfg.TraceExt {
+		return 1
+	}
+	return 0
 }

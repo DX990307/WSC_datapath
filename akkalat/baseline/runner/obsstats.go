@@ -94,6 +94,7 @@ func (r *Runner) addObsStats() {
 		WindowNS:        *obsSampleNSFlag,
 		LinkBytesPerNS:  float64(*bandwidthFlag * *networkFlitSizeFlag),
 		FlitBytes:       *networkFlitSizeFlag,
+		PerOwner:        *qtDiagFlag,
 	}
 	memtrace.EnableObsStats(cfg)
 

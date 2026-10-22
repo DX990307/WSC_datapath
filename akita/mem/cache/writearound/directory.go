@@ -159,6 +159,7 @@ func (d *directory) processReadMiss(
 	}
 
 	if d.cache.mshr.IsFull() {
+		d.cache.mshrStatsFullStall()
 		return false
 	}
 
@@ -337,6 +338,7 @@ func (d *directory) fetchFromBottom(
 	d.cache.trackBottomTransaction(trans, bottomModule)
 
 	mshrEntry := d.cache.mshr.Add(pid, cacheLineID)
+	d.cache.mshrStatsChange(now)
 	mshrEntry.Requests = append(mshrEntry.Requests, trans)
 	mshrEntry.ReadReq = readToBottom
 	mshrEntry.Block = victim

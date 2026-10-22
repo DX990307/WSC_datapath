@@ -21,6 +21,8 @@ type Cache struct {
 	storage          *mem.Storage
 	directory        cache.Directory
 	mshr             cache.MSHR
+	mshrCapacity     int
+	mshrStats        *MSHRStats // P19 statistics; nil = off
 	bankLatency      int
 	wayAssociativity int
 	lowModuleFinder  mem.LowModuleFinder

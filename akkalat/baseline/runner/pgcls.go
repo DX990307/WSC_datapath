@@ -41,7 +41,7 @@ func (r *Runner) addPgcls() {
 	}
 	err := memtrace.EnablePgcls(memtrace.PgclsConfig{
 		Prefix: prefix, SampleEvery: *pgclsSampleFlag,
-		WindowNS: *pgclsWindowFlag})
+		WindowNS: *pgclsWindowFlag, TraceExt: *pgclsTraceExtFlag})
 	if err != nil {
 		panic(err)
 	}

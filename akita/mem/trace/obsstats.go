@@ -68,6 +68,9 @@ type ObsConfig struct {
 	LinkBytesPerNS float64
 	// FlitBytes is the bytes accounted per flit on a link.
 	FlitBytes int
+	// PerOwner (ISCA'27 P19 -report-qt-diag) also splits the Latency
+	// segments by owner tile into <prefix>_latency_owner.csv.
+	PerOwner bool
 }
 
 var (
@@ -344,6 +347,7 @@ type obsState struct {
 	own     map[uint64]*obsOwnLine
 
 	hop        [obsMaxHops]obsHopStats
+	ownerStats [64]obsHopStats // by owner tile (cfg.PerOwner)
 	writesSeen uint64
 	bytesByGPM map[int]uint64
 	readsByGPM map[int]uint64
@@ -902,7 +906,11 @@ func ObsL1Done(id string, now sim.VTimeInSec) {
 	st := s.reqLine[k]
 	if s.cfg.Latency {
 		h := &s.hop[s.hops(l.g, l.owner)]
-		s.classify(h, l, st, t6)
+		if s.cfg.PerOwner && l.owner >= 0 && l.owner < len(s.ownerStats) {
+			s.classify(h, l, st, t6, &s.ownerStats[l.owner])
+		} else {
+			s.classify(h, l, st, t6)
+		}
 	}
 	if st != nil {
 		st.active--
@@ -913,58 +921,69 @@ func ObsL1Done(id string, now sim.VTimeInSec) {
 }
 
 func (s *obsState) classify(h *obsHopStats, l *obsLogical, st *obsReqLine,
-	t6 float64) {
-	h.n++
-	h.seg[obsSegTotal].add(t6 - l.t0)
+	t6 float64, extra ...*obsHopStats) {
+	hs := append([]*obsHopStats{h}, extra...)
+	add := func(seg int, v float64) {
+		for _, x := range hs {
+			x.seg[seg].add(v)
+		}
+	}
+	inc := func(f func(x *obsHopStats)) {
+		for _, x := range hs {
+			f(x)
+		}
+	}
+	inc(func(x *obsHopStats) { x.n++ })
+	add(obsSegTotal, t6-l.t0)
 	if st == nil || !st.hasNet || st.lastArrive < l.t0 || st.lastArrive > t6 {
-		h.nLocal++
-		h.seg[obsSegLocal].add(t6 - l.t0)
+		inc(func(x *obsHopStats) { x.nLocal++ })
+		add(obsSegLocal, t6-l.t0)
 		return
 	}
 	n := &st.net
 	t5 := st.lastArrive
-	h.seg[obsSegToL1].add(t6 - t5)
+	add(obsSegToL1, t6-t5)
 	if l.t0 > n.t1 {
-		h.nMergedFlight++
-		h.seg[obsSegMergeWait].add(t5 - l.t0)
+		inc(func(x *obsHopStats) { x.nMergedFlight++ })
+		add(obsSegMergeWait, t5-l.t0)
 		return
 	}
-	h.nNet++
+	inc(func(x *obsHopStats) { x.nNet++ })
 	if st.netClaimed {
-		h.nMergedQueued++
+		inc(func(x *obsHopStats) { x.nMergedQueued++ })
 	}
 	st.netClaimed = true
-	h.seg[obsSegWait].add(n.t1 - l.t0)
-	h.seg[obsSegRTT].add(t5 - n.t1)
+	add(obsSegWait, n.t1-l.t0)
+	add(obsSegRTT, t5-n.t1)
 	if n.multicast {
-		h.nMulticastLeaf++
+		inc(func(x *obsHopStats) { x.nMulticastLeaf++ })
 	}
 	if n.t2 == 0 || n.t3 == 0 || n.t4 == 0 {
-		h.nIncomplete++
+		inc(func(x *obsHopStats) { x.nIncomplete++ })
 		return
 	}
-	h.seg[obsSegFwd].add(n.t2 - n.t1)
-	h.seg[obsSegOwnerQueue].add(n.t3 - n.t2)
+	add(obsSegFwd, n.t2-n.t1)
+	add(obsSegOwnerQueue, n.t3-n.t2)
 	switch {
 	case n.ownerMerged:
-		h.nOwnerMerged++
-		h.seg[obsSegSvcMerged].add(n.t4 - n.t3)
+		inc(func(x *obsHopStats) { x.nOwnerMerged++ })
+		add(obsSegSvcMerged, n.t4-n.t3)
 	case n.cls == obsClsHit:
-		h.nOwnerHit++
-		h.seg[obsSegSvcHit].add(n.t4 - n.t3)
+		inc(func(x *obsHopStats) { x.nOwnerHit++ })
+		add(obsSegSvcHit, n.t4-n.t3)
 	case n.cls == obsClsMiss || n.cls == obsClsMSHRHit:
-		h.nOwnerMiss++
+		inc(func(x *obsHopStats) { x.nOwnerMiss++ })
 		if n.cls == obsClsMSHRHit {
-			h.nOwnerMSHRHit++
+			inc(func(x *obsHopStats) { x.nOwnerMSHRHit++ })
 		}
-		h.seg[obsSegSvcMiss].add(n.t4 - n.t3)
+		add(obsSegSvcMiss, n.t4-n.t3)
 	default:
-		h.nOwnerUnknown++
+		inc(func(x *obsHopStats) { x.nOwnerUnknown++ })
 	}
-	h.seg[obsSegRet].add(t5 - n.t4)
+	add(obsSegRet, t5-n.t4)
 	if n.t4s > 0 {
-		h.seg[obsSegOwnerRspWait].add(n.t4s - n.t4)
-		h.seg[obsSegRetNet].add(t5 - n.t4s)
+		add(obsSegOwnerRspWait, n.t4s-n.t4)
+		add(obsSegRetNet, t5-n.t4s)
 	}
 }
 
@@ -1205,6 +1224,12 @@ func ObsWrite(prefix, label string, endNS float64) error {
 		if err := s.writeLatency(prefix+"_latency.csv", label); err != nil {
 			errs = append(errs, err.Error())
 		}
+		if s.cfg.PerOwner {
+			if err := s.writeLatencyBy(prefix+"_latency_owner.csv", label,
+				"owner", s.ownerStats[:]); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
 	}
 	if s.cfg.Links {
 		if err := s.writeLinks(prefix+"_links.csv", label, endNS); err != nil {
@@ -1252,11 +1277,16 @@ func (c *obsCSV) close() error {
 }
 
 func (s *obsState) writeLatency(path, label string) error {
+	return s.writeLatencyBy(path, label, "hops", s.hop[:])
+}
+
+func (s *obsState) writeLatencyBy(path, label, key string,
+	stats []obsHopStats) error {
 	c, err := obsCreate(path)
 	if err != nil {
 		return err
 	}
-	head := []string{"workload", "hops", "n", "n_net", "n_req_merged_queued",
+	head := []string{"workload", key, "n", "n_net", "n_req_merged_queued",
 		"n_req_merged_inflight", "n_local", "n_incomplete", "n_owner_hit",
 		"n_owner_miss", "n_owner_mshr_hit", "n_owner_merged", "n_owner_unknown",
 		"n_multicast_leaf"}
@@ -1280,8 +1310,8 @@ func (s *obsState) writeLatency(path, label string) error {
 		}
 		c.row(cols...)
 	}
-	for hop := 0; hop < obsMaxHops; hop++ {
-		h := &s.hop[hop]
+	for hop := range stats {
+		h := &stats[hop]
 		if h.n == 0 {
 			continue
 		}

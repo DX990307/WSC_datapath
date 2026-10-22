@@ -137,6 +137,7 @@ func (r *Runner) defineMetrics() {
 	r.addP12Tracers()
 	r.addObsStats()
 	r.addPgcls()
+	r.addQtDiag()
 	r.addPgclsOracle()
 	r.addMaxWGStopper()
 	r.addCUCPIHook()

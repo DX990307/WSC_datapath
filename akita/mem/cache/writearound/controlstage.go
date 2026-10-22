@@ -64,6 +64,7 @@ func (s *controlStage) hardResetCache(now sim.VTimeInSec) {
 
 	s.directory.Reset()
 	s.cache.mshr.Reset()
+	s.cache.mshrStatsChange(now)
 	s.cache.coalesceStage.Reset()
 	for _, bankStage := range s.cache.bankStages {
 		bankStage.Reset()

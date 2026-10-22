@@ -166,6 +166,7 @@ func (b *Builder) Build(name string) *Cache {
 	}
 
 	c.mshr = cache.NewMSHR(b.numMSHREntry)
+	c.mshrCapacity = b.numMSHREntry
 	blockSize := 1 << b.log2BlockSize
 	numSets := int(b.totalByteSize / uint64(b.wayAssociativity*blockSize))
 	c.directory = cache.NewDirectory(

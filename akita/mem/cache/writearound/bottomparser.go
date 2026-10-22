@@ -99,6 +99,7 @@ func (p *bottomParser) processDataReady(
 	p.mergeMSHRData(mshrEntry, data, dirtyMask)
 	p.finalizeMSHRTrans(mshrEntry, data, now)
 	p.cache.mshr.Remove(pid, cachelineID)
+	p.cache.mshrStatsChange(now)
 
 	trans.bankAction = bankActionWriteFetched
 	trans.data = data
