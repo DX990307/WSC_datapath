@@ -102,6 +102,10 @@ type Cache struct {
 	replicaBoundarySet   bool
 	replicaBoundaryTime  sim.VTimeInSec
 	replicaBoundaryStats RemoteReplicaBoundaryStats
+	// A1: home write reporting and selective boundary counters. nil / zero
+	// unless A1 is enabled.
+	homeWriteObserver HomeWriteObserver
+	retainStats       RemoteRetainBoundaryStats
 
 	localMemoryPathStats LocalMemoryPathStats
 	fillForwarding       bool

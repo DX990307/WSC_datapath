@@ -30,6 +30,9 @@ type Driver struct {
 	magicCopyPeekers  []MagicCopyPeeker
 	magicCopyCoherent bool
 
+	// A1: hooks told about driver-side physical memory writes.
+	physicalWriteHooks []PhysicalWriteHook
+
 	GPUs        []sim.Port
 	devices     []*internal.Device
 	pageTable   vm.PageTable

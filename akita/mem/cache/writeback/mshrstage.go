@@ -116,6 +116,7 @@ func (s *mshrStage) respondWrite(
 	now sim.VTimeInSec,
 	write *mem.WriteReq,
 ) {
+	s.cache.noteHomeWrite(now, write.Address, uint64(len(write.Data)))
 	writeDoneRsp := mem.WriteDoneRspBuilder{}.
 		WithSendTime(now).
 		WithSrc(s.cache.topPort).

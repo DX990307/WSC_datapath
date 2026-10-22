@@ -63,6 +63,7 @@ type R9NanoGPUBuilder struct {
 	typedFilterConfig              writeback.TypedFilterConfig
 	dramRowContinuation            bool
 	remoteDataPath                 rdma.RemoteDataPathConfig
+	remoteRetain                   *writeback.RemoteRetainTracker
 	rdmaPipelineWidth              int
 	rdmaPipelineLatency            int
 	rdmaMaxOutstanding             int
@@ -492,6 +493,16 @@ func (b R9NanoGPUBuilder) Build(name string, id uint64) *GPU {
 	return b.gpu
 }
 
+// WithRemoteRetainTracker enables A1: the GPM's L2 slices report home writes
+// to the shared tracker and the M3 kernel-boundary invalidation drops only
+// replica lines whose region was written since the GPM's previous boundary.
+func (b R9NanoGPUBuilder) WithRemoteRetainTracker(
+	t *writeback.RemoteRetainTracker,
+) R9NanoGPUBuilder {
+	b.remoteRetain = t
+	return b
+}
+
 // WithLegacyNoKernelL1Invalidate disables the kernel-launch L1 invalidation.
 func (b R9NanoGPUBuilder) WithLegacyNoKernelL1Invalidate(
 	legacy bool,
@@ -542,6 +553,22 @@ func (b *R9NanoGPUBuilder) installRemoteReuseKernelInvalidation() {
 	}
 	l2s := append([]*writeback.Cache(nil), b.l2Caches...)
 	rdmaEngine := b.rdmaEngine
+	if tracker := b.remoteRetain; tracker != nil {
+		// A1: selective invalidation (see writeback/remote_retain.go).
+		id := tracker.RegisterRequester()
+		b.cp.KernelLaunchHooks = append(b.cp.KernelLaunchHooks,
+			func(now sim.VTimeInSec) {
+				since := tracker.BeginBoundary(id, now)
+				written := func(line uint64) bool {
+					return tracker.WrittenSince(line, since)
+				}
+				for _, l2 := range l2s {
+					l2.InvalidateWrittenRemoteReplicas(now, written)
+				}
+				rdmaEngine.MarkRemoteReuseKernelBoundary()
+			})
+		return
+	}
 	b.cp.KernelLaunchHooks = append(b.cp.KernelLaunchHooks,
 		func(now sim.VTimeInSec) {
 			for _, l2 := range l2s {
@@ -891,6 +918,9 @@ func (b *R9NanoGPUBuilder) buildL2Caches() {
 		).Build(cacheName)
 		b.l2Caches = append(b.l2Caches, l2)
 		b.gpu.L2Caches = append(b.gpu.L2Caches, l2)
+		if b.remoteRetain != nil {
+			l2.SetHomeWriteObserver(b.remoteRetain)
+		}
 		if i == b.numMemoryBank-1 && b.l2FilterPrefetch {
 			writeback.ConnectFilterCoupledPrefetchGroup(
 				b.l2Caches, b.prefetchPredictorEntries,

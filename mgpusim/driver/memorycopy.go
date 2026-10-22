@@ -67,6 +67,7 @@ func (m *defaultMemoryCopyMiddleware) processMemCopyH2DCommand(
 			sizeToCopy = sizeLeft
 		}
 
+		m.driver.notePhysicalWrite(now, pAddr, sizeToCopy)
 		gpuID := m.driver.memAllocator.GetDeviceIDByPAddr(pAddr)
 		req := protocol.NewMemCopyH2DReq(now,
 			m.driver.gpuPort, m.driver.GPUs[gpuID-1],
@@ -237,6 +238,7 @@ func (m *defaultMemoryCopyMiddleware) processMemCopyH2DReturn(
 	req *protocol.MemCopyH2DReq,
 ) bool {
 	m.driver.gpuPort.Retrieve(now)
+	m.driver.notePhysicalWrite(now, req.DstAddress, uint64(len(req.SrcBuffer)))
 
 	m.driver.logTaskToGPUClear(now, req)
 

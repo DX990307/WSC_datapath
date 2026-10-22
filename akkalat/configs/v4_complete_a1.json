@@ -1,0 +1,8 @@
+{
+  "_description": "ISCA'27 A1 (user 2026-10-21): v4_complete + cross-kernel retention of read-only remote replica lines. At a kernel boundary the requester L2 drops only the replica lines whose 4 KiB page was written (at its home: local or remote write, DMA/magic host copy, buffer free/remap) since the GPM's previous boundary; see isca27/results_index/a1/DESIGN.md. Exact home write sets, two-touch admission unchanged.",
+  "extends": "v4_complete.json",
+  "a1-retain": true,
+  "a1-region-log2": 12,
+  "a1-signature-bits": 0,
+  "a1-first-touch-admission": 0
+}

@@ -309,6 +309,7 @@ func (s *bankStage) finalizeWriteHit(
 	block := trans.block
 
 	dirtyMask := s.writeData(block, write, offset)
+	s.cache.noteHomeWrite(now, write.Address, uint64(len(write.Data)))
 
 	block.IsValid = true
 	block.IsLocked = false

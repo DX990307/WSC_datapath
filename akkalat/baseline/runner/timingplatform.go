@@ -28,6 +28,7 @@ import (
 
 // R9NanoPlatformBuilder can build a platform that equips R9Nano GPU.
 type R9NanoPlatformBuilder struct {
+	remoteRetain              *writeback.RemoteRetainConfig
 	useParallelEngine         bool
 	debugISA                  bool
 	traceVis                  bool
@@ -456,6 +457,16 @@ func (b R9NanoPlatformBuilder) WithRDMAPipeline(
 	return b
 }
 
+// WithRemoteRetain enables A1 (cross-kernel retention of read-only remote
+// replica lines) with the given home write tracker configuration. nil (the
+// default) keeps the M3 kernel-boundary invalidation unchanged.
+func (b R9NanoPlatformBuilder) WithRemoteRetain(
+	config *writeback.RemoteRetainConfig,
+) R9NanoPlatformBuilder {
+	b.remoteRetain = config
+	return b
+}
+
 // Build builds a platform with R9Nano GPUs.
 func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 	b.engine = b.createEngine()
@@ -504,6 +515,12 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 	connector := b.createConnection(b.engine, gpuDriver)
 
 	gpuBuilder := b.createGPUBuilder(b.engine, gpuDriver, mmuComponent, numMemoryBank, pageTable)
+	var remoteRetain *writeback.RemoteRetainTracker
+	if b.remoteRetain != nil {
+		remoteRetain = writeback.NewRemoteRetainTracker(*b.remoteRetain)
+		gpuBuilder = gpuBuilder.WithRemoteRetainTracker(remoteRetain)
+		gpuDriver.AddPhysicalWriteHook(remoteRetain.NoteWrite)
+	}
 
 	mmuComponent.MigrationServiceProvider = gpuDriver.GetPortByName("MMU")
 
@@ -554,10 +571,11 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 	}
 
 	return &Platform{
-		Engine:   b.engine,
-		Driver:   gpuDriver,
-		GPUs:     b.gpus,
-		IOMMUTLB: b.IOMMUTLB,
+		Engine:       b.engine,
+		Driver:       gpuDriver,
+		GPUs:         b.gpus,
+		IOMMUTLB:     b.IOMMUTLB,
+		RemoteRetain: remoteRetain,
 	}
 }
 

@@ -190,6 +190,22 @@ var remoteReuseKernelInvalidateFlag = flag.Bool(
 		"requester L2 and keep in-flight remote lines out of it. Only has "+
 		"an effect with -remote-data-path-enable and "+
 		"-remote-data-path-l2-enable. Default off (pre-fix behavior).")
+var a1RetainFlag = flag.Bool("a1-retain", false,
+	"A1: at a kernel boundary, invalidate only the requester-L2 remote "+
+		"replica lines whose page (region) was written since the GPM's "+
+		"previous boundary (home-side write epochs); read-only lines stay. "+
+		"Requires -remote-reuse-kernel-invalidate. Default off (= M3).")
+var a1RegionLog2Flag = flag.Int("a1-region-log2", 12,
+	"A1 write-tracking granularity, log2 bytes (12 = 4 KiB page).")
+var a1SignatureBitsFlag = flag.Int("a1-signature-bits", 0,
+	"A1 per-home per-epoch Bloom write signature size in bits; 0 = exact "+
+		"write sets.")
+var a1SignatureHashesFlag = flag.Int("a1-signature-hashes", 2,
+	"A1 number of hash functions of the write signature.")
+var a1FirstTouchAdmissionFlag = flag.Int("a1-first-touch-admission", 0,
+	"A1 (optional) requester-L2 admission: 0 = two touches (default), "+
+		"1 = admit a first touch into an invalid way only, 2 = admit a "+
+		"first touch like a second.")
 var typedFilterAuthoritativeAuditFlag = flag.Bool(
 	"typed-filter-authoritative-audit", false,
 	"Enable timing-neutral exact-state checks for typed-Filter negative decisions.")

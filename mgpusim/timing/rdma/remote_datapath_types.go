@@ -40,6 +40,10 @@ type RemoteDataPathConfig struct {
 	// invalidation of the HPCA paper, Section IV-C (requester-L2 replica
 	// lines are dropped when a kernel is launched). Off by default.
 	KernelBoundaryInvalidate bool
+	// FirstTouchAdmission (A1, optional) relaxes the two-touch admission of
+	// requester-L2 replicas: 0 = two touches (default), 1 = admit a first
+	// touch only into an invalid way, 2 = admit a first touch like a second.
+	FirstTouchAdmission int
 }
 
 func normalizeRemoteDataPathConfig(c RemoteDataPathConfig) RemoteDataPathConfig {
@@ -163,6 +167,7 @@ type RemoteDataPathStats struct {
 	PrefetchUnused                         uint64
 	PrefetchStandalonePrevented            uint64
 	PrefetchPredictor                      writeback.DemandStridePredictorStats
+	FirstTouchAdmissions                   uint64
 }
 
 // BitmapReadReq names multiple 64B cache lines in one remote 4KiB page.
@@ -231,6 +236,7 @@ type remoteLineEntry struct {
 	fillComplete            bool
 	multipleDemandAdmission bool
 	seenAdmission           bool
+	firstTouchAdmission     bool
 	fillInstalled           bool
 	replicaGeneration       uint64
 	info                    interface{}

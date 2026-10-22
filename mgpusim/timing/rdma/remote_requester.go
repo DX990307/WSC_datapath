@@ -531,6 +531,7 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 				c.RemoteDataPathStats.SecondTouchAdmissions++
 				c.RemoteDataPathStats.TwoTouchCandidates++
 			}
+			c.admitFirstTouch(entry)
 			c.addRemoteWaiter(entry, read, now, firstSeen, 0)
 			c.insertRemoteLine(key, entry)
 			if c.remoteConfig.DisableBatching {
@@ -566,6 +567,7 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 		c.RemoteDataPathStats.SecondTouchAdmissions++
 		c.RemoteDataPathStats.TwoTouchCandidates++
 	}
+	c.admitFirstTouch(entry)
 	entry.state = remoteLinePendingBatch
 	c.addRemoteWaiter(entry, read, now, firstSeen, 0)
 	c.insertRemoteLine(key, entry)
@@ -577,6 +579,17 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 	c.consumeRemoteRead(now, read)
 	c.clearRemoteHintResults(read.ID)
 	return true, true
+}
+
+// admitFirstTouch applies the optional A1 first-touch admission to a new
+// demand entry that the two-touch rule did not admit.
+func (c *Comp) admitFirstTouch(entry *remoteLineEntry) {
+	if entry.admit || c.remoteConfig.FirstTouchAdmission <= 0 {
+		return
+	}
+	entry.admit = true
+	entry.firstTouchAdmission = true
+	c.RemoteDataPathStats.FirstTouchAdmissions++
 }
 
 func (c *Comp) remoteHintMayContain(
@@ -1631,6 +1644,10 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 				WithData(append([]byte(nil), entry.data...)).
 				WithInfo(entry.info).
 				WithGeneration(entry.replicaGeneration)
+			if entry.firstTouchAdmission &&
+				c.remoteConfig.FirstTouchAdmission == 1 {
+				fillBuilder = fillBuilder.WithRequireInvalidVictim()
+			}
 			if entry.speculative {
 				fillBuilder = fillBuilder.WithPattern(
 					entry.patternKey.Owner, entry.patternKey.Address)

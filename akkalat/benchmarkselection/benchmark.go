@@ -221,6 +221,8 @@ func SelectBenchmark(name string, driver *driver.Driver) benchmarks.Benchmark {
 		benchmark = fft
 	case "probe":
 		benchmark = newProbe(driver)
+	case "a1check":
+		benchmark = newA1Check(driver)
 	case "platbench":
 		benchmark = newPlatbench(driver)
 	case "pagedattn":

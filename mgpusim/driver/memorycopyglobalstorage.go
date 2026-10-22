@@ -57,6 +57,7 @@ func (m *globalStorageMemoryCopyMiddleware) processMemCopyH2DCommand(
 		}
 
 		m.driver.globalStorage.Write(pAddr, rawBytes[offset:offset+sizeToCopy])
+		m.driver.notePhysicalWrite(now, pAddr, sizeToCopy)
 
 		sizeLeft -= sizeToCopy
 		addr += sizeToCopy

@@ -19,6 +19,10 @@ type remoteReplicaRecord struct {
 	used       bool
 	hits       uint64
 	patternKey *TypedFilterKey
+	// A1: the line survived at least one selective kernel boundary, and
+	// whether it was hit after that.
+	retained        bool
+	usedAfterRetain bool
 }
 
 // RemoteReplicaStats reports only the work performed by the requester-side
@@ -211,12 +215,14 @@ func (c *Cache) recordRemoteReplicaHit(
 		c.remoteReplicaStats.UsefulTwoTouchFills++
 	}
 	record.used = true
+	c.recordRetainedHit(record)
 	return true
 }
 
 func (c *Cache) recordRemoteReplicaRetirement(
 	record *remoteReplicaRecord,
 ) {
+	c.recordRetainedRetirement(record)
 	if record == nil || record.used {
 		return
 	}

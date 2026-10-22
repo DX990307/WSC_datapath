@@ -173,6 +173,7 @@ func (d *Driver) AllocateUnifiedMemory(
 // Remap keeps the virtual address unchanged and moves the physical address to
 // another GPU
 func (d *Driver) Remap(ctx *Context, addr, size uint64, deviceID int) {
+	d.notePhysicalRangeOfVirtual(ctx, addr, size)
 	d.memAllocator.Remap(ctx.pid, addr, size, deviceID)
 }
 
@@ -189,6 +190,7 @@ func (d *Driver) Distribute(
 		return []uint64{byteSize}
 	}
 
+	d.notePhysicalRangeOfVirtual(ctx, uint64(addr), byteSize)
 	return d.distributor.Distribute(ctx, uint64(addr), byteSize, gpuIDs)
 }
 
@@ -211,6 +213,13 @@ func unique(in []int) []int {
 // provided is invalid.
 func (d *Driver) FreeMemory(ctx *Context, ptr Ptr) error {
 	// log.Printf("Free %d\n", ptr)
+	if len(d.physicalWriteHooks) > 0 {
+		for _, buffer := range ctx.buffers {
+			if buffer.vAddr == ptr && !buffer.freed {
+				d.notePhysicalRangeOfVirtual(ctx, uint64(ptr), buffer.size)
+			}
+		}
+	}
 	d.memAllocator.Free(uint64(ptr))
 
 	for i, buffer := range ctx.buffers {

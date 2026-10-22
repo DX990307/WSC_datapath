@@ -53,6 +53,7 @@ func (p *topParser) Tick(now sim.VTimeInSec) bool {
 		trans.read = req
 	case *mem.WriteReq:
 		trans.write = req
+		p.cache.noteHomeWrite(now, req.Address, uint64(len(req.Data)))
 	}
 	if trans.read != nil && !trans.read.LookupOnly {
 		// Train exactly once, when the real demand is accepted. A request that

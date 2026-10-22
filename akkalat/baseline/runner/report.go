@@ -51,6 +51,7 @@ func (r *Runner) reportStats() {
 	r.reportFillForwardingStats()
 	r.reportDRAMRowContinuationStats()
 	r.reportRemoteDataPathStats()
+	r.reportRemoteRetainStats()
 	r.reportT18Stats()
 	if err := memtrace.DumpMemoryPathTrace(); err != nil {
 		panic(err)
@@ -769,6 +770,9 @@ func (r *Runner) reportRemoteDataPathStats() {
 		r.metricsCollector.Collect(where, "remote_response_fanout_width_stalls", float64(stats.ResponseFanoutWidthStalls))
 		r.metricsCollector.Collect(where, "remote_owner_issue_width_stalls", float64(stats.OwnerIssueWidthStalls))
 		r.metricsCollector.Collect(where, "remote_owner_response_width_stalls", float64(stats.OwnerResponseWidthStalls))
+		if *a1FirstTouchAdmissionFlag > 0 {
+			r.metricsCollector.Collect(where, "remote_first_touch_admissions", float64(stats.FirstTouchAdmissions))
+		}
 		if *remoteReuseKernelInvalidateFlag {
 			b := gpu.RDMAEngine.GetRemoteReuseBoundaryStats()
 			r.metricsCollector.Collect(where, "remote_reuse_kernel_boundaries", float64(b.Boundaries))
@@ -815,6 +819,16 @@ func (r *Runner) reportRemoteDataPathStats() {
 			r.metricsCollector.Collect(l2Where, "remote_requester_l2_unused_pattern_retirements", float64(l2Stats.UnusedPatternRetirements))
 			r.metricsCollector.Collect(l2Where, "remote_speculative_invalid_only_attempts", float64(l2Stats.SpeculativeInvalidOnlyAttempts))
 			r.metricsCollector.Collect(l2Where, "remote_speculative_invalid_only_drops", float64(l2Stats.SpeculativeInvalidOnlyDrops))
+			if *a1RetainFlag {
+				a := l2.GetRemoteRetainBoundaryStats()
+				r.metricsCollector.Collect(l2Where, "a1_boundaries", float64(a.Boundaries))
+				r.metricsCollector.Collect(l2Where, "a1_lines_checked", float64(a.LinesChecked))
+				r.metricsCollector.Collect(l2Where, "a1_lines_invalidated", float64(a.LinesInvalidated))
+				r.metricsCollector.Collect(l2Where, "a1_lines_retained", float64(a.LinesRetained))
+				r.metricsCollector.Collect(l2Where, "a1_retained_hits", float64(a.RetainedHits))
+				r.metricsCollector.Collect(l2Where, "a1_retained_lines_used", float64(a.RetainedLinesUsed))
+				r.metricsCollector.Collect(l2Where, "a1_retained_lines_unused", float64(a.RetainedLinesUnused))
+			}
 			if *remoteReuseKernelInvalidateFlag {
 				b := l2.GetRemoteReplicaBoundaryStats()
 				r.metricsCollector.Collect(l2Where, "remote_reuse_boundary_invalidations", float64(b.Invalidations))
@@ -1335,3 +1349,21 @@ func (r *Runner) reportMMUCoalescingStats() {
 // 		)
 // 	}
 // }
+
+// reportRemoteRetainStats reports the A1 home write tracker (one global row).
+func (r *Runner) reportRemoteRetainStats() {
+	if r.platform == nil || r.platform.RemoteRetain == nil {
+		return
+	}
+	t := r.platform.RemoteRetain.Stats()
+	where := "A1"
+	r.metricsCollector.Collect(where, "a1_epochs", float64(t.Epochs))
+	r.metricsCollector.Collect(where, "a1_tracker_boundaries", float64(t.Boundaries))
+	r.metricsCollector.Collect(where, "a1_write_notes", float64(t.WriteNotes))
+	r.metricsCollector.Collect(where, "a1_region_epoch_writes", float64(t.RegionEpochWrites))
+	r.metricsCollector.Collect(where, "a1_max_regions_owner_epoch", float64(t.MaxRegionsOwnerEpoch))
+	r.metricsCollector.Collect(where, "a1_max_regions_epoch", float64(t.MaxRegionsEpoch))
+	r.metricsCollector.Collect(where, "a1_queries", float64(t.Queries))
+	r.metricsCollector.Collect(where, "a1_exact_written", float64(t.ExactWritten))
+	r.metricsCollector.Collect(where, "a1_signature_false_positives", float64(t.SignatureFalsePositive))
+}

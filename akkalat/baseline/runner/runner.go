@@ -484,7 +484,9 @@ func (r *Runner) buildTimingPlatform() {
 			MaxBatchLines:            *remoteDataPathBatchLinesFlag,
 			MaxBatches:               *remoteDataPathBatchesFlag,
 			KernelBoundaryInvalidate: *remoteReuseKernelInvalidateFlag,
+			FirstTouchAdmission:      *a1FirstTouchAdmissionFlag,
 		}).
+		WithRemoteRetain(remoteRetainConfigFromFlags()).
 		WithT18(t18ConfigFromFlags()).
 		WithLegacyNoKernelL1Invalidate(*legacyNoKernelL1InvalidateFlag)
 
@@ -659,4 +661,30 @@ func (r *Runner) Driver() *driver.Driver {
 // Engine returns the event-driven simulation engine used by the current runner.
 func (r *Runner) Engine() sim.Engine {
 	return r.platform.Engine
+}
+
+// remoteRetainConfigFromFlags returns the A1 tracker configuration, or nil
+// when A1 is off.
+func remoteRetainConfigFromFlags() *writeback.RemoteRetainConfig {
+	if !*a1RetainFlag {
+		return nil
+	}
+	if !*remoteReuseKernelInvalidateFlag || !*remoteDataPathEnableFlag ||
+		!*remoteDataPathL2EnableFlag {
+		log.Panic("-a1-retain needs -remote-data-path-enable, " +
+			"-remote-data-path-l2-enable and -remote-reuse-kernel-invalidate")
+	}
+	if *useUnifiedMemoryFlag {
+		log.Panic("-a1-retain does not track page migration " +
+			"(-use-unified-memory)")
+	}
+	if *a1RegionLog2Flag < 6 || *a1RegionLog2Flag > 30 {
+		log.Panic("-a1-region-log2 must be in [6, 30]")
+	}
+	return &writeback.RemoteRetainConfig{
+		Log2RegionSize:  uint(*a1RegionLog2Flag),
+		Log2OwnerSize:   33, // 8 GiB of physical address space per GPM
+		SignatureBits:   uint64(*a1SignatureBitsFlag),
+		SignatureHashes: *a1SignatureHashesFlag,
+	}
 }

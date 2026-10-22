@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/vm/gmmu"
 	"github.com/sarchlab/akita/v3/mem/vm/l2tlb"
 	"github.com/sarchlab/akita/v3/mem/vm/mmu"
@@ -24,6 +25,8 @@ type Platform struct {
 	Driver   *driver.Driver
 	GPUs     []*GPU
 	IOMMUTLB *mmuTLB.TLB
+	// RemoteRetain is the A1 home write tracker (nil when A1 is off).
+	RemoteRetain *writeback.RemoteRetainTracker
 }
 
 // A GPU is a collection of GPU internal Components
