@@ -1,0 +1,5 @@
+{
+  "_description": "Page-migration baseline (results_index/pm/DESIGN.md). Overlay on mi200.json or v3_complete.json; the other -pm-* parameters keep their defaults (sw 5 us, shootdown 1 us, counter threshold 256, cooldown 5 us, max 3 migrations per unit).",
+  "page-migration": "counter",
+  "pm-unit-kb": 2048
+}

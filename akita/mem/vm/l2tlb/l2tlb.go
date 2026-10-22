@@ -620,3 +620,19 @@ func (tlb *L2TLB) sendDownstream(
 
 	return translatedReq, true
 }
+
+// InvalidatePage drops the entry of the page that holds vAddr, if any. It
+// takes no simulated time; page migration charges the shootdown latency
+// separately. It returns true if a valid entry was dropped.
+func (tlb *L2TLB) InvalidatePage(pid vm.PID, vAddr uint64) bool {
+	setID := tlb.vAddrToSetID(vAddr)
+	set := tlb.Sets[setID]
+	wayID, page, found := set.Lookup(pid, vAddr)
+	if !found || !page.Valid {
+		return false
+	}
+	// Re-key the way to the zero page (never a real mapping: virtual page 0 is
+	// not allocated), so no stale key can later shadow a refilled entry.
+	set.Update(wayID, vm.Page{})
+	return true
+}
