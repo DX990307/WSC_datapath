@@ -22,6 +22,8 @@ type Waker = addresstranslator.Waker
 type GPM struct {
 	DeviceID uint64
 	MemBase  uint64 // first physical address of the GPM's 8-GB range
+	// Tile is the GPM's mesh tile (x + 7*y); used by -pm-target median/class.
+	Tile int
 	// TLBs are every TLB of the GPM that can hold a translation (L1V, L1S,
 	// L1I, L2TLB); the shootdown drops the migrating pages from them.
 	TLBs   []PageInvalidator
@@ -63,10 +65,13 @@ type unit struct {
 	// service phases (on-fault policy).
 	faulters []uint64
 
-	migrations   int
-	everMigrated bool
-	lastEnd      sim.VTimeInSec
-	owners       uint64 // bit mask of GPMs the unit has lived on (pages' owners)
+	migrations int
+	// P19 Q6 page-class filter (Config.AllowPages), decided at the unit's
+	// first counted remote access.
+	allowChecked, allowed bool
+	everMigrated          bool
+	lastEnd               sim.VTimeInSec
+	owners                uint64 // bit mask of GPMs the unit has lived on (pages' owners)
 
 	counts []uint32 // access counter per device ID
 
@@ -141,25 +146,30 @@ type handler struct {
 
 // Stats are the migration statistics.
 type Stats struct {
-	Faults             uint64 // on-fault triggers
-	CounterTriggers    uint64 // access-counter triggers
-	Batches            uint64
-	Migrations         uint64 // units migrated
-	NoopMigrations     uint64 // units with nothing to move when serviced
-	PagesMigrated      uint64
-	BytesMigrated      uint64
-	PingPong           uint64 // migrations to a GPM the unit lived on before
-	Pinned             uint64 // units that reached MaxMigrations
-	ShootdownEvents    uint64
-	TLBEntriesDropped  uint64
-	RemoteAccesses     uint64 // accesses that left an L1 for remote memory
-	RemoteReads        uint64
-	MigrationTimeSum   float64 // trigger to remap, seconds
-	BlockedTimeSum     float64 // shootdown start to remap, seconds
-	DrainWaitSum       float64
-	CopyTimeSum        float64
-	RemoteReadsByOwner []uint64 // by device ID
-	CheckedFrames      uint64   // frames verified uncached (Config.Check)
+	Faults                uint64 // on-fault triggers
+	CounterTriggers       uint64 // access-counter triggers
+	ClassFilteredAccesses uint64 // P19 Q6: remote accesses to pages outside AllowPages
+	// P20 -pm-target median/class: decisions when a counter fired.
+	TargetDominant, TargetMedian, TargetBroadcast             uint64
+	DeclinedSamePlace, DeclinedSmallSaving, DeclinedBroadcast uint64
+	LocalCounted, ReplicaUncounted                            uint64
+	Batches                                                   uint64
+	Migrations                                                uint64 // units migrated
+	NoopMigrations                                            uint64 // units with nothing to move when serviced
+	PagesMigrated                                             uint64
+	BytesMigrated                                             uint64
+	PingPong                                                  uint64 // migrations to a GPM the unit lived on before
+	Pinned                                                    uint64 // units that reached MaxMigrations
+	ShootdownEvents                                           uint64
+	TLBEntriesDropped                                         uint64
+	RemoteAccesses                                            uint64 // accesses that left an L1 for remote memory
+	RemoteReads                                               uint64
+	MigrationTimeSum                                          float64 // trigger to remap, seconds
+	BlockedTimeSum                                            float64 // shootdown start to remap, seconds
+	DrainWaitSum                                              float64
+	CopyTimeSum                                               float64
+	RemoteReadsByOwner                                        []uint64 // by device ID
+	CheckedFrames                                             uint64   // frames verified uncached (Config.Check)
 }
 
 // Manager decides and orchestrates migrations. It is a ticking component only
@@ -185,6 +195,11 @@ type Manager struct {
 
 	drainStart map[*unit]sim.VTimeInSec
 	copyStart  map[*unit]sim.VTimeInSec
+
+	// recent remote reads served per device (median/class tie-break),
+	// halved every LoadWindowNS; nil with the argmax target.
+	load  []float64
+	loadT float64
 
 	Stats Stats
 }
@@ -229,6 +244,9 @@ func NewManager(
 		}
 	}
 	m.Stats.RemoteReadsByOwner = make([]uint64, len(gpms))
+	if cfg.Target != TargetArgmax {
+		m.load = make([]float64, len(gpms))
+	}
 	return m
 }
 
@@ -362,6 +380,7 @@ func (m *Manager) remoteAccess(now sim.VTimeInSec, dev uint64, req mem.AccessReq
 		if owner < uint64(len(m.Stats.RemoteReadsByOwner)) {
 			m.Stats.RemoteReadsByOwner[owner]++
 		}
+		m.noteServed(float64(now), owner)
 	}
 	info := m.ppns[pAddr>>m.log2PageSize]
 	if info == nil {
@@ -374,11 +393,25 @@ func (m *Manager) remoteAccess(now sim.VTimeInSec, dev uint64, req mem.AccessReq
 		return
 	}
 	u := m.getUnit(m.unitOf(info.pid, info.vAddr))
+	if m.cfg.AllowPages != nil {
+		if !u.allowChecked {
+			u.allowChecked = true
+			u.allowed = m.cfg.AllowPages[pAddr>>12]
+		}
+		if !u.allowed {
+			m.Stats.ClassFilteredAccesses++
+			return
+		}
+	}
 	if u.phase != phaseIdle {
 		return
 	}
 	u.counts[dev]++
 	if u.counts[dev] < m.cfg.Threshold || !m.eligible(u, now) {
+		return
+	}
+	if m.cfg.Target != TargetArgmax {
+		m.counterFiredTarget(now, u, pAddr)
 		return
 	}
 	best := dev
@@ -393,6 +426,37 @@ func (m *Manager) remoteAccess(now sim.VTimeInSec, dev uint64, req mem.AccessReq
 	m.Stats.CounterTriggers++
 	u.faulters = u.faulters[:0]
 	m.trigger(now, u, best)
+}
+
+// counterFiredTarget is the -pm-target median/class version of the counter
+// trigger: choose the destination from the reader distribution, or decline.
+func (m *Manager) counterFiredTarget(now sim.VTimeInSec, u *unit, pAddr uint64) {
+	dst, dec, kind := m.chooseTarget(u.counts, m.ownerOf(pAddr), u.key.idx)
+	for i := range u.counts {
+		u.counts[i] = 0
+	}
+	m.Stats.CounterTriggers++
+	switch dec {
+	case DecideSamePlace:
+		m.Stats.DeclinedSamePlace++
+		return
+	case DecideSmallSaving:
+		m.Stats.DeclinedSmallSaving++
+		return
+	case DecideBroadcastStay:
+		m.Stats.DeclinedBroadcast++
+		return
+	}
+	switch kind {
+	case "dominant":
+		m.Stats.TargetDominant++
+	case "broadcast":
+		m.Stats.TargetBroadcast++
+	default:
+		m.Stats.TargetMedian++
+	}
+	u.faulters = u.faulters[:0]
+	m.trigger(now, u, dst)
 }
 
 func (m *Manager) trigger(now sim.VTimeInSec, u *unit, dst uint64) {

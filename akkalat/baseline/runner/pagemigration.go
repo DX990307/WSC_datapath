@@ -9,11 +9,16 @@ import (
 	"flag"
 	"fmt"
 	"math/bits"
+	"os"
+	"strconv"
+	"strings"
 
+	"github.com/sarchlab/akita/v3/mem/cache/writearound"
 	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/mem/vm/addresstranslator"
+	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/mgpusim/v3/timing/pagemigration"
 	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 )
@@ -62,6 +67,33 @@ var pmCheckFlag = flag.Bool("pm-check", false,
 		"a hit panics). The cheap checks (no access to a frozen or retired "+
 		"frame, new frames never accessed) are always on.")
 
+var pmPageListFlag = flag.String("pm-page-list", "",
+	"P19 Q6: only migrate 4 KiB pages listed in this file (decimal physical "+
+		"page numbers of the original placement, one per line; e.g. the pages "+
+		"pgcls classifies as private-misplaced). Empty: every page.")
+
+// P20 target selection (mgpusim/timing/pagemigration/target.go).
+var pmTargetFlag = flag.String("pm-target", "argmax",
+	"Access-counter migration target: argmax (largest count, original), "+
+		"median (weighted Manhattan median tile) or class (dominant reader / "+
+		"median / broadcast spread or stay).")
+var pmDomShareFlag = flag.Float64("pm-dom-share", 0.6,
+	"-pm-target class: a GPM with at least this share of the count gets the page.")
+var pmMedianMaxReadersFlag = flag.Int("pm-median-max-readers", 31,
+	"-pm-target class: pages with more readers than this use the broadcast rule.")
+var pmBroadcastKFlag = flag.Int("pm-broadcast-k", 4,
+	"-pm-target class: broadcast pages go page by page to the k tiles closest "+
+		"to the median (0 = broadcast pages do not migrate).")
+var pmMinSavingFlag = flag.Float64("pm-min-saving", 0.1,
+	"-pm-target median/class: do not migrate if the weighted hops drop by "+
+		"less than this fraction.")
+var pmReaderNoiseFlag = flag.Float64("pm-reader-noise", 0.01,
+	"-pm-target class: a GPM counts as a reader with at least this share.")
+var pmCountLocalFlag = flag.Bool("pm-count-local", false,
+	"Access counter: also count the owner's own L1V misses (never triggers).")
+var pmCountNetworkFlag = flag.Bool("pm-count-network", false,
+	"Access counter: do not count remote accesses served by an M3 replica.")
+
 func pageMigrationConfigFromFlags() pagemigration.Config {
 	policy, err := pagemigration.ParsePolicy(*pageMigrationFlag)
 	if err != nil {
@@ -84,6 +116,33 @@ func pageMigrationConfigFromFlags() pagemigration.Config {
 	c.PullWindow = *pmPullWindowFlag
 	c.L2Window = *pmL2WindowFlag
 	c.Check = *pmCheckFlag
+	t, ok := pagemigration.ParseTarget(*pmTargetFlag)
+	if !ok {
+		panic(fmt.Sprintf("unknown -pm-target %q", *pmTargetFlag))
+	}
+	c.Target = t
+	c.DomShare = *pmDomShareFlag
+	c.MedianMaxReaders = *pmMedianMaxReadersFlag
+	c.BroadcastK = *pmBroadcastKFlag
+	c.MinSaving = *pmMinSavingFlag
+	c.ReaderNoise = *pmReaderNoiseFlag
+	c.CountLocal = *pmCountLocalFlag
+	c.CountNetwork = *pmCountNetworkFlag
+	if *pmPageListFlag != "" {
+		data, err := os.ReadFile(*pmPageListFlag)
+		if err != nil {
+			panic(err)
+		}
+		c.AllowPages = map[uint64]bool{}
+		for _, l := range strings.Fields(string(data)) {
+			n, err := strconv.ParseUint(l, 10, 64)
+			if err != nil {
+				panic(fmt.Sprintf("-pm-page-list: bad page %q", l))
+			}
+			c.AllowPages[n] = true
+		}
+		fmt.Printf("[Config] page-migration page list: %d pages\n", len(c.AllowPages))
+	}
 	if *pmIdealFlag {
 		c.SoftwareLatencyNS = 0
 		c.ShootdownLatencyNS = 0
@@ -101,6 +160,13 @@ func printPageMigrationConfig(c pagemigration.Config) {
 		c.Policy, (uint64(1)<<c.Log2Unit)>>10, c.SoftwareLatencyNS, c.BatchSize,
 		c.ShootdownLatencyNS, c.Threshold, c.CooldownNS, c.MaxMigrations,
 		c.ChunkBytes, c.PullWindow, c.L2Window, *pmIdealFlag, c.Check)
+	if c.Target != pagemigration.TargetArgmax || c.CountLocal || c.CountNetwork {
+		fmt.Printf("[Config] page-migration target=%s dom-share=%g "+
+			"median-max-readers=%d broadcast-k=%d min-saving=%g reader-noise=%g "+
+			"count-local=%v count-network=%v\n", c.Target, c.DomShare,
+			c.MedianMaxReaders, c.BroadcastK, c.MinSaving, c.ReaderNoise,
+			c.CountLocal, c.CountNetwork)
+	}
 }
 
 // WithPageMigration configures page migration.
@@ -198,6 +264,7 @@ func (b *R9NanoPlatformBuilder) buildPageMigrationManager(
 		gpms[gpu.GPUID] = &pagemigration.GPM{
 			DeviceID: gpu.GPUID,
 			MemBase:  p.memBase,
+			Tile:     pgclsTile(p.rdma.Name()),
 			TLBs:     p.tlbs,
 			Engine:   p.engine,
 			HoldsLine: func(a uint64) bool {
@@ -222,6 +289,24 @@ func (b *R9NanoPlatformBuilder) buildPageMigrationManager(
 			at.SetMigrationHook(m.ATHook(gpu.GPUID, false))
 		}
 		p.rdma.RemoteAccessHook = m.RDMAHook(gpu.GPUID)
+		if b.pageMigration.CountNetwork {
+			dev := gpu.GPUID
+			p.rdma.RemoteReplicaHitHook = func(now sim.VTimeInSec, addr uint64) {
+				m.ReplicaHit(dev, addr)
+			}
+		}
+	}
+	writearound.LocalBottomHook = nil
+	if b.pageMigration.CountLocal {
+		devOf := map[int]uint64{}
+		for _, gpu := range b.gpus {
+			devOf[pgclsTile(gpu.pm.rdma.Name())] = gpu.GPUID
+		}
+		writearound.LocalBottomHook = func(name string, addr uint64, now sim.VTimeInSec) {
+			if dev, ok := devOf[pgclsTile(name)]; ok {
+				m.LocalAccess(dev, addr)
+			}
+		}
 	}
 	return m
 }
@@ -245,6 +330,7 @@ func (r *Runner) reportPageMigrationStats() {
 	col("pm_max_migrations", float64(c.MaxMigrations))
 	col("pm_faults", float64(s.Faults))
 	col("pm_counter_triggers", float64(s.CounterTriggers))
+	col("pm_class_filtered_accesses", float64(s.ClassFilteredAccesses))
 	col("pm_batches", float64(s.Batches))
 	col("pm_migrations", float64(s.Migrations))
 	col("pm_noop_migrations", float64(s.NoopMigrations))
@@ -286,6 +372,17 @@ func (r *Runner) reportPageMigrationStats() {
 			pulled += gpu.pm.engine.PulledBytes
 			served += gpu.pm.engine.ServedBytes
 		}
+	}
+	if c.Target != pagemigration.TargetArgmax || c.CountLocal || c.CountNetwork {
+		col("pm_target_code", float64(c.Target))
+		col("pm_target_dominant", float64(s.TargetDominant))
+		col("pm_target_median", float64(s.TargetMedian))
+		col("pm_target_broadcast", float64(s.TargetBroadcast))
+		col("pm_declined_same_place", float64(s.DeclinedSamePlace))
+		col("pm_declined_small_saving", float64(s.DeclinedSmallSaving))
+		col("pm_declined_broadcast", float64(s.DeclinedBroadcast))
+		col("pm_local_counted", float64(s.LocalCounted))
+		col("pm_replica_uncounted", float64(s.ReplicaUncounted))
 	}
 	col("pm_held_accesses", float64(held))
 	col("pm_dma_pulled_bytes", float64(pulled))

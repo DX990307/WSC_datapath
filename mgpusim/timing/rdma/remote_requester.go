@@ -1082,6 +1082,15 @@ func (c *Comp) processRemoteProbeRsp(
 		c.m1UnindexLine(entry)
 		c.queueRemoteReady(entry)
 		c.RemoteDataPathStats.L2ProbeHits++
+		if c.RemoteReplicaHitHook != nil {
+			n := len(entry.waiters)
+			if n == 0 {
+				n = 1
+			}
+			for i := 0; i < n; i++ {
+				c.RemoteReplicaHitHook(now, entry.key.lineAddr)
+			}
+		}
 		return true
 	}
 

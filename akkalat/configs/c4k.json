@@ -1,0 +1,6 @@
+{
+  "_description": "ISCA'27 P20: mi200 + page migration counter unit 4 KB, target argmax; pm defaults (sw 5 us, shootdown 1 us, threshold 256, batch 256, cooldown 5 us, max 3 migrations). class: dom-share 0.6, median-max-readers 31, broadcast-k 4 (k0 = broadcast pages stay), min-saving 0.1. local = also count the owner's own L1V misses; net = do not count accesses served by an M3 replica. See isca27/prompts/P20_placement_m3.md.",
+  "extends": "mi200.json",
+  "page-migration": "counter",
+  "pm-unit-kb": 4
+}

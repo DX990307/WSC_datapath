@@ -240,6 +240,9 @@ func (d *directory) writeBottom(now sim.VTimeInSec, trans *transaction) bool {
 	}
 
 	trans.writeToBottom = writeToBottom
+	if LocalBottomHook != nil {
+		d.localBottom(bottomModule, addr, now)
+	}
 	if memtrace.PgclsEnabled() {
 		d.pgclsLocal(bottomModule, addr, uint64(len(write.Data)), false, now)
 	}
@@ -328,6 +331,9 @@ func (d *directory) fetchFromBottom(
 
 	tracing.TraceReqInitiate(readToBottom, d.cache, trans.id)
 	trans.readToBottom = readToBottom
+	if LocalBottomHook != nil {
+		d.localBottom(bottomModule, cacheLineID, now)
+	}
 	if memtrace.PgclsEnabled() {
 		d.pgclsLocal(bottomModule, cacheLineID, blockSize, true, now)
 	}
@@ -421,4 +427,16 @@ func (d *directory) pgclsLocal(bottom sim.Port, addr, bytes uint64,
 		return
 	}
 	memtrace.PgclsAccess(d.cache.Name(), "", "", addr, bytes, isRead, "v", now)
+}
+
+// LocalBottomHook, when set (ISCA27 P20 -pm-count-local), is called for every
+// L1 miss or write the cache sends to a local L2 slice (not to the RDMA).
+// nil (the default) costs nothing.
+var LocalBottomHook func(cacheName string, addr uint64, now sim.VTimeInSec)
+
+func (d *directory) localBottom(bottom sim.Port, addr uint64, now sim.VTimeInSec) {
+	if bottom == nil || strings.Contains(bottom.Name(), "RDMA") {
+		return
+	}
+	LocalBottomHook(d.cache.Name(), addr, now)
 }

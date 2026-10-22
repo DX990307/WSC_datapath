@@ -38,6 +38,10 @@ type Comp struct {
 	// requester's own L2, i.e. it counts L1 misses to remote memory, not
 	// packets sent on the network.
 	RemoteAccessHook func(now sim.VTimeInSec, req mem.AccessReq)
+	// RemoteReplicaHitHook, when set (ISCA27 P20 -pm-count-network), is
+	// called once per L1 request served by a retained replica in this GPM's
+	// own L2 (an M3 probe hit), with the line address.
+	RemoteReplicaHitHook func(now sim.VTimeInSec, addr uint64)
 
 	isDraining              bool
 	pauseIncomingReqsFromL1 bool
