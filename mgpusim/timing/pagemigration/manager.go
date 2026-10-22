@@ -63,10 +63,13 @@ type unit struct {
 	// service phases (on-fault policy).
 	faulters []uint64
 
-	migrations   int
-	everMigrated bool
-	lastEnd      sim.VTimeInSec
-	owners       uint64 // bit mask of GPMs the unit has lived on (pages' owners)
+	migrations int
+	// P19 Q6 page-class filter (Config.AllowPages), decided at the unit's
+	// first counted remote access.
+	allowChecked, allowed bool
+	everMigrated          bool
+	lastEnd               sim.VTimeInSec
+	owners                uint64 // bit mask of GPMs the unit has lived on (pages' owners)
 
 	counts []uint32 // access counter per device ID
 
@@ -141,25 +144,26 @@ type handler struct {
 
 // Stats are the migration statistics.
 type Stats struct {
-	Faults             uint64 // on-fault triggers
-	CounterTriggers    uint64 // access-counter triggers
-	Batches            uint64
-	Migrations         uint64 // units migrated
-	NoopMigrations     uint64 // units with nothing to move when serviced
-	PagesMigrated      uint64
-	BytesMigrated      uint64
-	PingPong           uint64 // migrations to a GPM the unit lived on before
-	Pinned             uint64 // units that reached MaxMigrations
-	ShootdownEvents    uint64
-	TLBEntriesDropped  uint64
-	RemoteAccesses     uint64 // accesses that left an L1 for remote memory
-	RemoteReads        uint64
-	MigrationTimeSum   float64 // trigger to remap, seconds
-	BlockedTimeSum     float64 // shootdown start to remap, seconds
-	DrainWaitSum       float64
-	CopyTimeSum        float64
-	RemoteReadsByOwner []uint64 // by device ID
-	CheckedFrames      uint64   // frames verified uncached (Config.Check)
+	Faults                uint64 // on-fault triggers
+	CounterTriggers       uint64 // access-counter triggers
+	ClassFilteredAccesses uint64 // P19 Q6: remote accesses to pages outside AllowPages
+	Batches               uint64
+	Migrations            uint64 // units migrated
+	NoopMigrations        uint64 // units with nothing to move when serviced
+	PagesMigrated         uint64
+	BytesMigrated         uint64
+	PingPong              uint64 // migrations to a GPM the unit lived on before
+	Pinned                uint64 // units that reached MaxMigrations
+	ShootdownEvents       uint64
+	TLBEntriesDropped     uint64
+	RemoteAccesses        uint64 // accesses that left an L1 for remote memory
+	RemoteReads           uint64
+	MigrationTimeSum      float64 // trigger to remap, seconds
+	BlockedTimeSum        float64 // shootdown start to remap, seconds
+	DrainWaitSum          float64
+	CopyTimeSum           float64
+	RemoteReadsByOwner    []uint64 // by device ID
+	CheckedFrames         uint64   // frames verified uncached (Config.Check)
 }
 
 // Manager decides and orchestrates migrations. It is a ticking component only
@@ -374,6 +378,16 @@ func (m *Manager) remoteAccess(now sim.VTimeInSec, dev uint64, req mem.AccessReq
 		return
 	}
 	u := m.getUnit(m.unitOf(info.pid, info.vAddr))
+	if m.cfg.AllowPages != nil {
+		if !u.allowChecked {
+			u.allowChecked = true
+			u.allowed = m.cfg.AllowPages[pAddr>>12]
+		}
+		if !u.allowed {
+			m.Stats.ClassFilteredAccesses++
+			return
+		}
+	}
 	if u.phase != phaseIdle {
 		return
 	}

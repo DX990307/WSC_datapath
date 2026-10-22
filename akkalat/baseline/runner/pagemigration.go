@@ -9,6 +9,9 @@ import (
 	"flag"
 	"fmt"
 	"math/bits"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
@@ -62,6 +65,11 @@ var pmCheckFlag = flag.Bool("pm-check", false,
 		"a hit panics). The cheap checks (no access to a frozen or retired "+
 		"frame, new frames never accessed) are always on.")
 
+var pmPageListFlag = flag.String("pm-page-list", "",
+	"P19 Q6: only migrate 4 KiB pages listed in this file (decimal physical "+
+		"page numbers of the original placement, one per line; e.g. the pages "+
+		"pgcls classifies as private-misplaced). Empty: every page.")
+
 func pageMigrationConfigFromFlags() pagemigration.Config {
 	policy, err := pagemigration.ParsePolicy(*pageMigrationFlag)
 	if err != nil {
@@ -84,6 +92,21 @@ func pageMigrationConfigFromFlags() pagemigration.Config {
 	c.PullWindow = *pmPullWindowFlag
 	c.L2Window = *pmL2WindowFlag
 	c.Check = *pmCheckFlag
+	if *pmPageListFlag != "" {
+		data, err := os.ReadFile(*pmPageListFlag)
+		if err != nil {
+			panic(err)
+		}
+		c.AllowPages = map[uint64]bool{}
+		for _, l := range strings.Fields(string(data)) {
+			n, err := strconv.ParseUint(l, 10, 64)
+			if err != nil {
+				panic(fmt.Sprintf("-pm-page-list: bad page %q", l))
+			}
+			c.AllowPages[n] = true
+		}
+		fmt.Printf("[Config] page-migration page list: %d pages\n", len(c.AllowPages))
+	}
 	if *pmIdealFlag {
 		c.SoftwareLatencyNS = 0
 		c.ShootdownLatencyNS = 0
@@ -245,6 +268,7 @@ func (r *Runner) reportPageMigrationStats() {
 	col("pm_max_migrations", float64(c.MaxMigrations))
 	col("pm_faults", float64(s.Faults))
 	col("pm_counter_triggers", float64(s.CounterTriggers))
+	col("pm_class_filtered_accesses", float64(s.ClassFilteredAccesses))
 	col("pm_batches", float64(s.Batches))
 	col("pm_migrations", float64(s.Migrations))
 	col("pm_noop_migrations", float64(s.NoopMigrations))

@@ -1,0 +1,6 @@
+{
+  "_description": "ISCA'27 quick trials Q6 reference (P19): v4m3 + access-counter page migration of 4 KiB pages (= pm_counter_4k: sw 5 us, shootdown 1 us, threshold 256, cooldown 5 us, max 3 migrations), every page eligible.",
+  "extends": "v4m3.json",
+  "page-migration": "counter",
+  "pm-unit-kb": 4
+}

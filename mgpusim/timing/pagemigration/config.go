@@ -83,6 +83,12 @@ type Config struct {
 	FrameRegionOffset uint64
 	FrameRegionSize   uint64
 
+	// AllowPages (ISCA'27 P19 Q6): when non-nil, only units whose first
+	// remote access hit one of these 4 KiB physical page numbers (the
+	// driver's original placement) are counted and migrated, e.g. the pages
+	// pgcls classifies as "private, misplaced". nil = every page.
+	AllowPages map[uint64]bool
+
 	// Check enables the expensive invariant checks (every L2 of every GPM is
 	// searched for lines of each new frame at allocation and at remap).
 	Check bool

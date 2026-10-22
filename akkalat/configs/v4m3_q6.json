@@ -1,0 +1,4 @@
+{
+  "_description": "ISCA'27 quick trials Q6 (P19): v4m3_c4k with the page-class filter: only pages listed by -pm-page-list <file> (pgcls private-misplaced pages of the W = 128 baseline) are counted and migrated; hot-broadcast pages are never migrated.",
+  "extends": "v4m3_c4k.json"
+}

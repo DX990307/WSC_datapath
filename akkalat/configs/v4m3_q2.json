@@ -1,0 +1,9 @@
+{
+  "_description": "ISCA'27 quick trials Q2 (P19): v4m3 + reader-bitmap push of hot-broadcast pages (geo-push mode readers): the owner keeps per-page 48-bit reader bitmaps of the current and previous 5 us window (1024 pages, LRU) and pushes the lines of a hot page it serves to those readers along the multicast tree; receivers install them into invalid L2 ways as M3 replicas. Hot = online rule (>= 4 readers in a window); add -q2-pages <file> for the oracle pgcls classification. See mgpusim/timing/rdma/geo_readers.go.",
+  "extends": "v4m3.json",
+  "geo-push-mode": "readers",
+  "q2-window-ns": 5000,
+  "q2-min-readers": 4,
+  "q2-max-pages": 1024,
+  "geo-push-fill-queue": 64
+}
