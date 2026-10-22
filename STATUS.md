@@ -34,12 +34,12 @@
 | T18 新 m2（两端合并） | 实现完成（用户 10-19 决定直接做真实版）；⏸ 评估的配置确认，等用户 | 10-20 | 分支 `isca27/t18-merge` @ `ca8b831`（已推送）；全部开关关闭时 fir、MM、旧 m2 和 `0b85bef` 逐位一致；冒烟见“结果摘要 → T18”；评估计划 121 个运行，见“需要用户决定” |
 | T19 就近 WG 窃取 | **放弃**（用户 10-20：本篇只做通信，留给下一篇） | 10-20 | 代码保留在 `isca27/t19-steal` @ `eaa9c73`；不跑评估 |
 | P19 快速试错（D / Q0 / Q0b / Q1 / Q2 / Q5 / Q6） | 进行中（用户 10-22 已确认配置） | 10-22 | 分支 `isca27/quick-trials`（worktree `wt-qt`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `isca27/m1-wafer`）；W = 128、384 GB/s；配置确认见"需要用户决定"第一条 |
-| P20 放置 + M3+（两遍法放置 oracle） | ⏸ 配置确认，等用户（主会话代审） | 10-22 | 分支 `isca27/placement`（worktree `wt-place`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `20f323e` 放置表开关）；W = 128、组合表 128、384 GB/s；配置确认见"需要用户决定"第一条 |
+| P20 放置 + M3+（两遍法放置 oracle） | 进行中：第 1 步完成，第 2 步运行中（主会话 10-22 代用户确认配置） | 10-22 | 分支 `isca27/placement`（worktree `wt-place`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `20f323e` 放置表开关）；W = 128、组合表 128、384 GB/s；配置确认见"需要用户决定"第一条 |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
 
-- [ ] **(P20 第 0 步配置确认，10-22) ⏸ 等确认**（用户外出期间由主会话审核）。范围：P20 全部运行（回归、第 2 步两遍法 oracle 的 pass 1 / pass 2）；第 1 步是离线补算，不跑模拟。
+- [x] **(P20 第 0 步配置确认，10-22) 主会话已代用户确认**（用户外出前授权）：全部同意；MoE 照跑原规模（超过 1 小时的约定在报告里注明）；若回归证明 `20f323e` 和 `9e87ac5` 在 v4m3 上逐位一致，B 批的 v4m3 参照复用 P19 的 `qt-w128c128b384` 结果。第 1 步之后的调整（主会话同意）：P-按类 用 v2（热点页集中时拆到环 12，否则不动；其余页 1 KB 子块给主要使用者），见 `results_index/place/bound.md`。原内容：范围：P20 全部运行（回归、第 2 步两遍法 oracle 的 pass 1 / pass 2）；第 1 步是离线补算，不跑模拟。
   1. **二进制**：分支 `isca27/placement`（worktree `~/Desktop/CuPath/wt-place`，已推送）= `isca27/a1-retain` @ `1335def`（含 `c08698b`，已核对是祖先）+ merge `isca27/page-class` @ `149dff0`（`2735684`，无冲突）+ `20f323e`（本轮新代码）。**没有合并 `isca27/page-migration`**：两遍法 oracle 没有迁移开销，用不到它的计数器和拷贝引擎（第 3 步做在线版时再合）。没有合并 m1-wafer / quick-trials 的统计。交叉编译（linux/amd64）通过；`go test`：`akita/mem/trace`、`TestPlacementFinders` 通过。
   2. **新开关（默认全关）**：
      - `-place-table <文件>`：每行 `<1 KB 块号 = 物理地址 >> 10> <tile>`，列出的块整个运行都由该 tile 的 GPM 当 home（没有迁移开销，相当于分配时就放好）。实现：L1V / L1S 的下级查找（块在本 GPM → 本地 L2，任何地址；在别的 GPM → 本 GPM 的 RDMA）、共享的"地址 → owner RDMA"表（请求方：打包、合并、M3 保留、统计都看到新 owner）、RDMA owner 端的本地查找（放到这里的块 → 本地 L2）。每个块只有一个 home，**一致性和 baseline 相同**（不像 `-pgcls-oracle-pages` / `-force-local-data-access` 那样会有旧副本）。L1I 不改（指令块不会被写）。结束时打印 / 写 `<metric>_place_stats.csv`（L1 走本地 / 走远程次数、owner 端次数、misrouted，应为 0）。
@@ -1355,3 +1355,9 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 ### 2026-10-22 15:20 (P20) 第 0 步：同步、开分支、配置确认（⏸）
 
 - 同步；开 worktree `wt-place` / 分支 `isca27/placement`（`1335def` + merge `149dff0` = `2735684`；`20f323e` 放置表开关 `-place-table`、`-place-random-seed`、`-pgcls-place-ext`，配置 `v4m3.json`、`m3p.json`），已推送。没有运行任何模拟。配置确认写在"需要用户决定"第一条，⏸ 等确认。用户 10-22 下午：组合表取 128。
+
+### 2026-10-22 19:30 (P20) 第 1 步离线补算完成；第 2 步开跑
+
+- `results_index/place/bound.md`、`bound.csv`、`bound.json`，脚本 `results_index/place/scripts/`（`place_bound.py`、`place_stability.py`、`place_bound_agg.py`；服务器端 `server/mktable.py`、`gen_tables.py`）。数据：P19 的 W = 128 baseline pgcls 聚合；MoE 和 (b) 用 pgcls 的 W = 256 baseline（(b) 用 1/16 采样的原始 trace）。
+- 结论：热点页拆到中心环 12 只在热点原本集中在一个 owner 时有用（最忙链路 0.11–0.20），热点本来分散时往中心放会让最忙链路 ×1.1–7.7 → 规则：最忙 owner 份额 ≥ 0.3 才拆；最优位置按 kernel 几乎不变（MG 例外）；流式的搬运 ≈ 省下的；整页放置随页变大失效（KM 4 KB 0.06 → 2 MB 0.96），1 KB 子块不受影响；P-按类 v2 + M3+ 剩余读×跳 0.15（P20 的 14 个平均；只保留 0.42）。v2 里分类只用来找热点页，论文说法改为"热点识别 + 子块放置"。
+- 服务器 `~/akita-exp-test/place/`：二进制 `baseline_20f323e`（yss2 go 1.27.3 编译，复制到 yss3，md5 `b8ce30e2…`）；调度器 `sched.py`（复制 qt 的，nice 10，`MAXRUN` yss2 6、yss3 10，第 7 列 = 等这个放置表文件出现再启动）；`scripts/gen_tables.py` 在 pass 1 完成后生成放置表。批 A（回归 29 个，yss2）、B（pass 1 + M3+ + 全部本地）、C（pass 2）已排队：yss2 69 行、yss3 75 行；v4m3 参照等回归结果再定是否复用 P19。

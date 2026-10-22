@@ -503,3 +503,8 @@
 - 改了 `STATUS.md`（任务总览加 P20；"需要用户决定"第一条是 P20 的配置确认；日志一条）、`SYNC.md`。
 - 代码：worktree `wt-place`，`isca27/placement` = `isca27/a1-retain` @ `1335def` + merge `isca27/page-class` @ `149dff0` + `20f323e`（两遍法放置 oracle：`-place-table`、`-place-random-seed`；pass 1 统计 `-pgcls-place-ext`；配置 `v4m3.json`、`m3p.json`），已推送。默认全关。没有运行任何模拟。
 - 场景：384 GB/s、W = 128、组合表 128（用户 10-22 下午）；baseline 只加 `-rdma-max-outstanding=128`。
+
+### 2026-10-22 [claude-code] P20 第 1 步：放置的离线上限；第 2 步开跑
+- 新增 `results_index/place/`（`bound.md`、`bound.csv`、`bound.json`、`scripts/`）。改了 `STATUS.md`（P20 状态、配置确认标为已确认、日志一条）、`SYNC.md`。
+- 主会话代用户确认了配置，并同意按第 1 步的结果把 P-按类 改为 v2（热点集中才拆到环 12，其余页 1 KB 子块给主要使用者）。
+- 服务器 `~/akita-exp-test/place/`（yss2、yss3）开始跑批 A / B / C；没有碰 qt / pm / geo / mesh9* 的进程和调度器。
