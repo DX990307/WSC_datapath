@@ -3,6 +3,8 @@ package rdma
 import (
 	"testing"
 
+	"github.com/sarchlab/akita/v3/mem/mem"
+
 	"github.com/sarchlab/akita/v3/sim"
 )
 
@@ -234,5 +236,79 @@ func TestCoReadPairs(t *testing.T) {
 	}
 	if c.Pairs[1][4][1] != 0 || c.Reads[4] != 1 {
 		t.Fatal("boundary not respected")
+	}
+}
+
+func TestGeoShareTableHint(t *testing.T) {
+	tab := newGeoShareTable(64)
+	k := geoLineKey{1, 0x40}
+	if tab.hint(k, 3) != -1 {
+		t.Fatal("unknown line has a hint")
+	}
+	tab.record(k, 3)
+	if tab.hint(k, 3) != -1 || tab.hint(k, 5) != 3 {
+		t.Fatal("single reader hint wrong")
+	}
+	tab.record(k, 5)
+	tab.record(k, 5)
+	if tab.hint(k, 5) != 3 || tab.hint(k, 7) != 5 {
+		t.Fatalf("hint wrong: %d %d", tab.hint(k, 5), tab.hint(k, 7))
+	}
+}
+
+func affTestComp(k int) *Comp {
+	c := &Comp{geoTopo: geoTestTopology(), geoIdx: 10}
+	c.ConfigureGeoPush(GeoPushConfig{Mode: GeoPushAffinity, AffinityK: k,
+		DecayHints: 8, MinCount: 2})
+	return c
+}
+
+func affHint(c *Comp, id string, ps ...int) {
+	h := map[uint64]int{}
+	for i, p := range ps {
+		h[uint64(i)*64] = p
+	}
+	affRspHint[id] = h
+	c.affLearn(&mem.DataReadyRsp{MsgMeta: sim.MsgMeta{ID: id}})
+}
+
+func TestAffinityLearnTopKAndDecay(t *testing.T) {
+	c := affTestComp(2)
+	affHint(c, "a", 4)
+	if len(c.geo.affTop) != 0 {
+		t.Fatal("one hint must not make a partner (min count 2)")
+	}
+	affHint(c, "b", 4, 9, 9, 9, 10) // 10 = self, ignored
+	if got := c.geo.affTop; len(got) != 2 || got[0] != 9 || got[1] != 4 {
+		t.Fatalf("top = %v, want [9 4]", got)
+	}
+	if _, left := affRspHint["b"]; left {
+		t.Fatal("hint not consumed")
+	}
+	// 5 hints so far; 3 more reach DecayHints = 8 and halve: 9: 6 -> 3.
+	affHint(c, "c", 9, 9, 9)
+	if c.geo.affCnt[9] != 3 || c.geo.affCnt[4] != 1 || c.geo.stats.AffDecays != 1 {
+		t.Fatalf("after decay cnt9=%d cnt4=%d", c.geo.affCnt[9], c.geo.affCnt[4])
+	}
+	if got := c.geo.affTop; len(got) != 1 || got[0] != 9 {
+		t.Fatalf("top after decay = %v", got)
+	}
+	// The partner list rides on requests and reaches the owner's table.
+	c.affTagRequest("req1")
+	owner := affTestComp(2)
+	owner.geoTopo = c.geoTopo
+	src := c.geoTopo.Ports[c.geoIdx]
+	owner.affOwnerReadHeader(&mem.ReadReq{MsgMeta: sim.MsgMeta{ID: "req1", Src: src}})
+	if p := owner.geo.partnersOf[c.geoIdx]; len(p) != 1 || p[0] != 9 {
+		t.Fatalf("owner partners = %v", p)
+	}
+	owner.geoIdx = 0
+	if got := owner.affTargets([]int{10}); len(got) != 1 || got[0] != 9 {
+		t.Fatalf("targets = %v", got)
+	}
+	// The owner and the requesters themselves are never targets.
+	owner.geo.partnersOf[10] = []int{0, 11}
+	if got := owner.affTargets([]int{10, 11}); len(got) != 0 {
+		t.Fatalf("targets = %v, want none", got)
 	}
 }

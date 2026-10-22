@@ -74,8 +74,10 @@ func (r *Runner) configureGeo() {
 			"windows 1 us / 10 us)\n")
 	}
 	if push.Enabled() {
-		fmt.Printf("[Config] geo-push radius=%d shared-filter=%v "+
-			"filter-entries=%d fill-queue=%d\n", push.Radius,
+		fmt.Printf("[Config] geo-push mode=%s radius=%d affinity-k=%d "+
+			"decay-hints=%d min-count=%d shared-filter=%v "+
+			"filter-entries=%d fill-queue=%d\n", push.Mode, push.Radius,
+			push.AffinityK, push.DecayHints, push.MinCount,
 			push.SharedFilter, push.FilterEntries, push.FillQueue)
 	}
 	for _, gpu := range r.platform.GPUs {
@@ -142,6 +144,19 @@ var geoPushFilterFlag = flag.String("geo-push-filter", "none",
 		"owner has seen read by >= 2 distinct GPMs; -geo-push-filter-entries).")
 var geoPushFilterEntriesFlag = flag.Int("geo-push-filter-entries", 1024,
 	"geo-push shared filter: owner sharing-table entries (4-way, LRU).")
+var geoPushModeFlag = flag.String("geo-push-mode", "neighbor",
+	"geo-push: neighbor (push to the GPMs within -geo-push-radius hops of the "+
+		"requester) or affinity (push to the requester's -affinity-k learned "+
+		"co-readers; the owner piggybacks the previous reader of each line on "+
+		"its responses, requesters learn with saturating counters and send "+
+		"their partners in the request header).")
+var affinityKFlag = flag.Int("affinity-k", 0,
+	"affinity-push: partners per requester (1 or 2); with "+
+		"-geo-push-mode affinity, 0 is an error.")
+var affinityDecayFlag = flag.Int("affinity-decay-hints", 512,
+	"affinity-push: halve the requester's co-read counters every this many hints.")
+var affinityMinCountFlag = flag.Int("affinity-min-count", 2,
+	"affinity-push: a GPM is a partner only with a counter >= this value.")
 var geoPushFillQueueFlag = flag.Int("geo-push-fill-queue", 64,
 	"geo-push: pending push fills per RDMA before pushes are dropped.")
 
@@ -150,6 +165,22 @@ func geoPushConfigFromFlags() rdma.GeoPushConfig {
 		Radius:        *geoPushRadiusFlag,
 		FilterEntries: *geoPushFilterEntriesFlag,
 		FillQueue:     *geoPushFillQueueFlag,
+	}
+	switch *geoPushModeFlag {
+	case "neighbor", "":
+	case "affinity":
+		c.Mode = rdma.GeoPushAffinity
+		c.AffinityK = *affinityKFlag
+		c.DecayHints = *affinityDecayFlag
+		c.MinCount = *affinityMinCountFlag
+		if c.AffinityK < 1 || c.AffinityK > 2 {
+			panic("-geo-push-mode affinity needs -affinity-k 1 or 2")
+		}
+		if c.Radius != 0 {
+			panic("-geo-push-radius must be 0 with -geo-push-mode affinity")
+		}
+	default:
+		panic("-geo-push-mode must be neighbor or affinity")
 	}
 	switch *geoPushFilterFlag {
 	case "none", "":
@@ -219,6 +250,18 @@ func (r *Runner) reportGeoPushStats() {
 		put("catch_waiters", st.CatchWaiters)
 		put("fills_sent", st.FillsSent)
 		put("fills_installed", st.FillsInstalled)
+		if st.AffHintsSent+st.AffHintsLearned+st.AffHdrSent > 0 {
+			put("aff_hints_sent", st.AffHintsSent)
+			put("aff_hints_learned", st.AffHintsLearned)
+			put("aff_decays", st.AffDecays)
+			put("aff_hdr_sent", st.AffHdrSent)
+			put("aff_no_partner_rsps", st.AffNoPartnerRsps)
+			for h, v := range st.AffPartnerHops {
+				if v > 0 {
+					put(fmt.Sprintf("aff_partner_hops_%02d", h), v)
+				}
+			}
+		}
 		for _, c := range gpu.L2Caches {
 			if wb, ok := c.(*writeback.Cache); ok {
 				s := wb.GetRemoteReplicaStats()

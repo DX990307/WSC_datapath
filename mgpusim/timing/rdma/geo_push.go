@@ -43,14 +43,38 @@ import (
 
 // GeoPushConfig configures geo-push (all off in the zero value).
 type GeoPushConfig struct {
+	// Mode: neighbor (push to the GPMs within Radius hops of each requester)
+	// or affinity (push to each requester's learned top-K co-readers).
+	Mode          GeoPushMode
+	AffinityK     int // affinity: partners per requester (1 or 2)
+	DecayHints    int // affinity: halve the counters every this many hints (0: 512)
+	MinCount      int // affinity: a partner needs at least this count (0: 2)
 	Radius        int  // 0 off, 1 or 2 hops around the requester
 	SharedFilter  bool // push only lines seen read by >= 2 GPMs recently
 	FilterEntries int  // owner sharing table entries (shared filter)
 	FillQueue     int  // neighbor: pending L2 push fills (0: 64)
 }
 
+// GeoPushMode selects whom the owner pushes to.
+type GeoPushMode int
+
+// Geo-push modes.
+const (
+	GeoPushNeighbor GeoPushMode = iota
+	GeoPushAffinity
+)
+
+func (m GeoPushMode) String() string {
+	if m == GeoPushAffinity {
+		return "affinity"
+	}
+	return "neighbor"
+}
+
 // Enabled reports whether geo-push is on.
-func (c GeoPushConfig) Enabled() bool { return c.Radius > 0 }
+func (c GeoPushConfig) Enabled() bool {
+	return c.Radius > 0 || (c.Mode == GeoPushAffinity && c.AffinityK > 0)
+}
 
 // GeoPushStats are the per-RDMA geo-push counters.
 type GeoPushStats struct {
@@ -81,6 +105,13 @@ type GeoPushStats struct {
 	CatchWaiters      uint64 // L1 requests served early
 	FillsSent         uint64
 	FillsInstalled    uint64
+	// Affinity mode.
+	AffHintsSent     uint64 // previous-reader hints piggybacked on responses
+	AffHintsLearned  uint64 // hints received and counted (requester)
+	AffDecays        uint64
+	AffHdrSent       uint64 // requests carrying a non-empty partner list
+	AffPartnerHops   [t18MaxHops]uint64 // push destinations by hops to R
+	AffNoPartnerRsps uint64 // responses whose requesters had no partner
 }
 
 type geoPushLine struct {
@@ -204,6 +235,9 @@ type geoShareSlot struct {
 	first  int
 	shared bool
 	lru    uint64
+	// last / prev: the most recent reader and the most recent reader other
+	// than last (affinity hints); -1 when unknown.
+	last, prev int
 }
 
 func newGeoShareTable(entries int) *geoShareTable {
@@ -230,6 +264,10 @@ func (t *geoShareTable) record(k geoLineKey, reader int) {
 			if set[i].first != reader {
 				set[i].shared = true
 			}
+			if set[i].last != reader {
+				set[i].prev = set[i].last
+				set[i].last = reader
+			}
 			set[i].lru = t.tick
 			return
 		}
@@ -242,7 +280,21 @@ func (t *geoShareTable) record(k geoLineKey, reader int) {
 			victim = i
 		}
 	}
-	set[victim] = geoShareSlot{valid: true, key: k, first: reader, lru: t.tick}
+	set[victim] = geoShareSlot{valid: true, key: k, first: reader, lru: t.tick,
+		last: reader, prev: -1}
+}
+
+// hint returns the most recent reader of k other than reader, or -1.
+func (t *geoShareTable) hint(k geoLineKey, reader int) int {
+	for _, s := range t.set(k) {
+		if s.valid && s.key == k {
+			if s.last != reader {
+				return s.last
+			}
+			return s.prev
+		}
+	}
+	return -1
 }
 
 func (t *geoShareTable) shared(k geoLineKey) bool {
@@ -265,6 +317,12 @@ type geoFillItem struct {
 type geoPushState struct {
 	cfg          GeoPushConfig
 	share        *geoShareTable
+	// Affinity mode. Owner: the latest partner list each requester sent.
+	partnersOf [][]int
+	// Requester: saturating co-read counters per GPM and the current top K.
+	affCnt   []uint8
+	affHints int
+	affTop   []int
 	fillQ        []*geoFillItem
 	fillInflight map[string]*geoFillItem
 	stats        GeoPushStats
@@ -288,8 +346,26 @@ func (c *Comp) ConfigureGeoPush(cfg GeoPushConfig) {
 	}
 	g := &geoPushState{cfg: cfg, fillInflight: make(map[string]*geoFillItem)}
 	g.stats.Enabled = true
-	if cfg.SharedFilter {
+	if cfg.SharedFilter || cfg.Mode == GeoPushAffinity {
 		g.share = newGeoShareTable(cfg.FilterEntries)
+	}
+	if cfg.Mode == GeoPushAffinity {
+		if cfg.AffinityK < 1 || cfg.AffinityK > 2 {
+			panic("affinity-k must be 1 or 2")
+		}
+		if cfg.DecayHints <= 0 {
+			cfg.DecayHints = 512
+		}
+		if cfg.MinCount <= 0 {
+			cfg.MinCount = 2
+		}
+		g.cfg = cfg
+		n := 64
+		if c.geoTopo != nil {
+			n = c.geoTopo.NumGPMs()
+		}
+		g.partnersOf = make([][]int, n)
+		g.affCnt = make([]uint8, n)
 	}
 	c.geo = g
 }
@@ -310,6 +386,9 @@ func (c *Comp) geoOwnerRecordRead(msg sim.Msg) {
 	g := c.geo
 	if g == nil || g.share == nil || c.geoTopo == nil {
 		return
+	}
+	if g.partnersOf != nil {
+		c.affOwnerReadHeader(msg)
 	}
 	switch req := msg.(type) {
 	case *BitmapReadReq:
@@ -340,7 +419,10 @@ func (c *Comp) geoWrap(
 		return msg
 	}
 	g.stats.OwnerRspCandidates++
-	if g.share != nil {
+	if g.partnersOf != nil {
+		c.affSendHints(msg, reqs, pid, lines)
+	}
+	if g.share != nil && g.cfg.SharedFilter {
 		kept := lines[:0:0]
 		for _, l := range lines {
 			g.stats.FilterLookups++
@@ -361,7 +443,12 @@ func (c *Comp) geoWrap(
 			reqIdx = append(reqIdx, i)
 		}
 	}
-	targets := c.geoTopo.PushTargets(c.geoIdx, reqIdx, g.cfg.Radius)
+	var targets []int
+	if g.cfg.Mode == GeoPushAffinity {
+		targets = c.affTargets(reqIdx)
+	} else {
+		targets = c.geoTopo.PushTargets(c.geoIdx, reqIdx, g.cfg.Radius)
+	}
 	if len(targets) == 0 {
 		g.stats.OwnerNoTarget++
 		return msg

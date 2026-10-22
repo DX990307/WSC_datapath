@@ -1128,6 +1128,9 @@ func (c *Comp) sendRemoteEntryDirect(
 
 	c.obsNetSend(entry.owner, req.ID, entry.key.lineAddr, 1, now)
 	c.geoBoundEntryNetRead(entry.owner, entry, now)
+	if c.geo != nil {
+		c.affTagRequest(req.ID)
+	}
 	entry.state = remoteLineInflight
 	entry.fromRemote = true
 	c.remoteSingleInflight[req.ID] = entry
@@ -1303,6 +1306,9 @@ func (c *Comp) flushRemoteBatch(
 		}
 		c.obsNetSend(batch.dst, req.ID, entry.key.lineAddr, 1, now)
 		c.geoBoundEntryNetRead(batch.dst, entry, now)
+		if c.geo != nil {
+			c.affTagRequest(req.ID)
+		}
 		c.recordRemoteBatchMetrics(now, batch, req.Meta().TrafficBytes)
 		c.removeRemoteBatch(batch)
 		entry.state = remoteLineInflight
@@ -1336,6 +1342,9 @@ func (c *Comp) flushRemoteBatch(
 	}
 	if err := c.ToOutside.Send(req); err != nil {
 		return false
+	}
+	if c.geo != nil {
+		c.affTagRequest(req.ID)
 	}
 	if memtrace.ObsEnabled() {
 		memtrace.ObsNetPacket(batch.lineCount())
@@ -1495,6 +1504,9 @@ func (c *Comp) processRemoteSingleRsp(
 	}
 	c.geoBoundDeliver(entry.owner, entry.key.pid, entry.key.lineAddr,
 		rsp.Meta().SendTime, now)
+	if c.geo != nil {
+		c.affLearn(rsp)
+	}
 	c.m1UnindexLine(entry)
 	if c.m1Composed() {
 		c.m1Release(now, rsp.GetRspTo())
@@ -1552,6 +1564,9 @@ func (c *Comp) processBitmapRspFromOutside(
 	}
 	if len(rsp.LineData) == 0 {
 		panic("bitmap response contains no cache lines")
+	}
+	if c.geo != nil {
+		c.affLearn(rsp)
 	}
 	c.RemoteDataPathStats.NetworkResponseBytes += uint64(rsp.Meta().TrafficBytes)
 	if batch.responseBitmap == batch.lineBitmap {

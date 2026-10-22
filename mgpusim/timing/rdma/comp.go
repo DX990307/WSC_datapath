@@ -685,6 +685,11 @@ func (c *Comp) processReqFromL1(
 		if c.m1Composed() {
 			c.m1Acquire(now, dst, cloned.Meta().ID)
 		}
+		if c.geo != nil {
+			if _, isRead := req.(*mem.ReadReq); isRead {
+				c.affTagRequest(cloned.Meta().ID)
+			}
+		}
 		if geoBound != nil || coRead != nil {
 			switch req.(type) {
 			case *mem.ReadReq:
@@ -918,6 +923,9 @@ func (c *Comp) processRspFromOutside(
 
 		c.traceInsideOutEnd(trans)
 		c.recordRemoteGPMAccess(now, trans, rsp)
+		if c.geo != nil {
+			c.affLearnAccess(rsp)
+		}
 		if geoBound != nil {
 			if read, ok := trans.fromInside.(*mem.ReadReq); ok {
 				if _, isData := rsp.(*mem.DataReadyRsp); isData {

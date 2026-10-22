@@ -1,0 +1,10 @@
+{
+  "_description": "ISCA'27 affinity-push on top of v4 Complete: the owner multicasts each read response to the requester plus the requester's 2 learned co-reader partner(s) (top-2 of a 48-entry table of 4-bit saturating counters fed by the previous-reader hint the owner piggybacks on responses; counters halved every 512 hints, partner needs count >= 2; partner list sent in the request header). Partners handle pushes like geo-push neighbors (early delivery to waiting entries, else an invalid L2 way via the M3 fill path; kernel-boundary staleness). Filter: none (shared = only lines the owner's 1024-entry table has seen read by >= 2 GPMs). Extends v4_complete.json (unchanged).",
+  "extends": "v4_complete.json",
+  "geo-push-mode": "affinity",
+  "affinity-k": 2,
+  "affinity-decay-hints": 512,
+  "affinity-min-count": 2,
+  "geo-push-filter": "none",
+  "geo-push-filter-entries": 1024
+}
