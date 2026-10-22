@@ -59,6 +59,20 @@ var problemGPMsFlag = flag.Int("problem-gpms", 48,
 		"grids, allreduce ranks). Default 48 = the 7x7 problem on any mesh "+
 		"(strong scaling); set to N*N-1 for weak scaling.")
 
+var problemCUsPerGPMFlag = flag.Int("problem-cus-per-gpm", 0,
+	"CUs per GPM that CU-dependent problem sizes are computed for (T16 small "+
+		"grids, allreduce copy size); 0 (default) = the GPM preset's CUs. The "+
+		"scaled 9x9 config (mi200s, 16 CUs) sets 28 to keep the 7x7 problems.")
+
+// ProblemCUsPerGPM returns -problem-cus-per-gpm, or the preset's CUs per GPM.
+func ProblemCUsPerGPM() int {
+	applyConfigFiles()
+	if *problemCUsPerGPMFlag > 0 {
+		return *problemCUsPerGPMFlag
+	}
+	return CUsPerGPM()
+}
+
 // ProblemGPMs returns -problem-gpms (after -config files are applied).
 func ProblemGPMs() int {
 	applyConfigFiles()

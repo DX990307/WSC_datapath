@@ -68,5 +68,5 @@ func newAllReduce(d *driver.Driver) *allreduce.Benchmark {
 // allreduceParams: one gradient copy per GPM of the problem size
 // (-problem-gpms, 48 by default on any mesh).
 func allreduceParams() allreduce.Params {
-	return allreduce.Params{Ranks: runner.ProblemGPMs(), CUs: runner.CUsPerGPM(), PerCU: *arPerCUFlag}
+	return allreduce.Params{Ranks: runner.ProblemGPMs(), CUs: runner.ProblemCUsPerGPM(), PerCU: *arPerCUFlag}
 }

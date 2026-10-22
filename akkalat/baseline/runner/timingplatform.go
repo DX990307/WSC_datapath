@@ -319,6 +319,20 @@ func (b R9NanoPlatformBuilder) WithL2CacheSizeMB(
 	return b
 }
 
+// WithL2CacheSizeKB sets the total L2 capacity of each GPM in KiB; 0 keeps
+// the capacity set by WithL2CacheSizeMB.
+func (b R9NanoPlatformBuilder) WithL2CacheSizeKB(
+	capacityKB int,
+) R9NanoPlatformBuilder {
+	if capacityKB < 0 {
+		panic("L2 cache size must be positive")
+	}
+	if capacityKB > 0 {
+		b.l2CacheSize = uint64(capacityKB) * mem.KB
+	}
+	return b
+}
+
 // WithForceLocalDataAccess routes L1V data-cache misses to local L2/DRAM.
 func (b R9NanoPlatformBuilder) WithForceLocalDataAccess(
 	enable bool,

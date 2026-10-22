@@ -51,3 +51,24 @@ func TestProblemSizeFollowsProblemGPMsNotMesh(t *testing.T) {
 		t.Fatalf("weak scaling: t16TotalCUs = %d, want %d", got, 80*runner.CUsPerGPM())
 	}
 }
+
+// The scaled 9x9 config (mi200s, 16 CUs per GPM) keeps the 7x7 problem with
+// -problem-cus-per-gpm=28.
+func TestProblemSizeFollowsProblemCUs(t *testing.T) {
+	defer func() {
+		_ = flag.Set("gpm-preset", "hpca")
+		_ = flag.Set("problem-cus-per-gpm", "0")
+	}()
+	if err := flag.Set("gpm-preset", "mi200s"); err != nil {
+		t.Fatal(err)
+	}
+	if runner.CUsPerGPM() != 16 || t16TotalCUs() != 48*16 {
+		t.Fatalf("mi200s: %d CUs per GPM, t16TotalCUs %d", runner.CUsPerGPM(), t16TotalCUs())
+	}
+	if err := flag.Set("problem-cus-per-gpm", "28"); err != nil {
+		t.Fatal(err)
+	}
+	if t16TotalCUs() != 1344 || allreduceParams().CUs != 28 {
+		t.Fatalf("problem CUs: t16TotalCUs %d, allreduce CUs %d", t16TotalCUs(), allreduceParams().CUs)
+	}
+}

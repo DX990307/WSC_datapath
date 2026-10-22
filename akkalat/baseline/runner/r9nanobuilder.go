@@ -1022,7 +1022,10 @@ func (b *R9NanoGPUBuilder) buildDRAMControllers() {
 
 func (b *R9NanoGPUBuilder) createDramControllerBuilder() dram.Builder {
 	memBankSize := 8 * mem.GB / uint64(b.numMemoryBank)
-	if 4*mem.GB%uint64(b.numMemoryBank) != 0 {
+	// The capacity formula below (rank count from the controller's share)
+	// needs an even split; presets with an explicit rank count (mi200s: 5
+	// controllers) only need enough capacity, checked by the DRAM model.
+	if b.gpmPreset.DRAM.NumRank == 0 && 4*mem.GB%uint64(b.numMemoryBank) != 0 {
 		panic("GPU memory size is not a multiple of the number of memory banks")
 	}
 

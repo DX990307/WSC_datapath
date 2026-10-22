@@ -1,0 +1,17 @@
+{
+  "_description": "ISCA'27 mesh9 scaled baseline: mi200.json on a 9x9 mesh with every GPM scaled by about 0.6 (gpm preset mi200s). See _scaling.",
+  "extends": "mi200.json",
+  "_scaling": "mesh9 scaled config (user 10-22): 9x9 mesh, 80 GPMs, each GPM about 0.6 = 48/80 of an mi200 GPM so that the wafer has about the resources of the 7x7 mi200 wafer; problem sizes stay the 7x7 ones (-problem-gpms 48, -problem-cus-per-gpm 28). Hop latency 32 cycles as before.",
+  "_deviation-scaling": "Rounding: CUs 28 -> 16 (8 SA x 2; x0.571, wafer 1280 CUs = 95% of 1344); L2 8 x 256 KiB -> 5 x 256 KiB = 1.25 MiB (x0.625; slices must equal memory controllers); HBM2e 8 -> 5 channels (x0.625; wafer HBM bandwidth 104% of 7x7); link -bandwidth 24 -> 14 flits/cycle (224 GB/s, x0.583, 14.4 not representable; 14 is -2.8% from 0.6, 15 would be +4.2%); RDMA window 256 -> 154 (x0.602). -switch-buffer-flits stays 16. Interleaving over 5 slices/controllers is modulo 5.",
+  "gpm-preset": "mi200s",
+  "num-memory-banks": 5,
+  "l2-cache-size-kb": 1280,
+  "mesh-size": 9,
+  "_wg-distribution": "1344-WG kernels (one per CU of 7x7) would fill only 42 of 80 GPMs with the ceil split (1280 CUs); balanced spreads every kernel over all GPMs.",
+  "wg-distribution": "balanced",
+  "problem-gpms": 48,
+  "problem-cus-per-gpm": 28,
+  "bandwidth": 14,
+  "switch-buffer-flits": 16,
+  "rdma-max-outstanding": 154
+}

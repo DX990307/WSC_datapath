@@ -52,3 +52,41 @@ func TestTimingPlatformMeshSizes(t *testing.T) {
 		}
 	}
 }
+
+// The scaled 9x9 GPM (mi200s): 80 GPMs of 16 CUs, 5 L2 slices and 5 memory
+// controllers each; the L2 capacity comes from -l2-cache-size-kb.
+func TestScaledMI200GPMOn9x9(t *testing.T) {
+	p := lookupGPMPresetKB("mi200s", 5, 4, 1280)
+	if p.NumCU() != 16 || p.NumMemoryBanks != 5 || p.L2CacheSizeKB != 1280 {
+		t.Fatalf("mi200s: %d CUs, %d banks, %d KiB", p.NumCU(), p.NumMemoryBanks, p.L2CacheSizeKB)
+	}
+	b := MakeR9NanoBuilder().WithGPMPreset(p).WithMeshSize(9).WithBandwidth(14).
+		WithL2CacheSizeKB(1280)
+	if b.l2CacheSize != 1280*mem.KB {
+		t.Fatalf("L2 capacity %d", b.l2CacheSize)
+	}
+	pl := b.Build(5)
+	if len(pl.GPUs) != 80 {
+		t.Fatalf("%d GPUs", len(pl.GPUs))
+	}
+	for _, g := range pl.GPUs {
+		if len(g.CUs) != 16 || len(g.L2Caches) != 5 || len(g.MemControllers) != 5 {
+			t.Fatalf("%s: %d CUs, %d L2 slices, %d memory controllers",
+				g.Domain.Name(), len(g.CUs), len(g.L2Caches), len(g.MemControllers))
+		}
+	}
+	for _, bad := range []func(){
+		func() { lookupGPMPresetKB("mi200s", 8, 2, 1280) },
+		func() { lookupGPMPresetKB("mi200s", 5, 2, 0) },
+		func() { lookupGPMPresetKB("mi200", 8, 2, 1280) },
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("bad preset arguments did not panic")
+				}
+			}()
+			bad()
+		}()
+	}
+}

@@ -196,11 +196,18 @@ MI200_FLAGS = [
     "-num-memory-banks=8",
     "-l2-cache-size-mb=2",
 ]
+# mesh9 scaled GPM (mi200 x ~0.6 for 80 GPMs on 9x9; gpm_preset.go mi200s).
+MI200S_FLAGS = [
+    "-gpm-preset=mi200s",
+    "-num-memory-banks=5",
+    "-l2-cache-size-kb=1280",
+]
 DEFAULT_GPM_PRESET = "hpca"
 GPM_PRESET_FLAGS = {
     "hpca": [],
     "mi300x-eighth": MI300X_EIGHTH_FLAGS,
     "mi200": MI200_FLAGS,
+    "mi200s": MI200S_FLAGS,
 }
 DEFAULT_TIMEOUT_MINUTES = 0
 DEFAULT_SAMPLED_SWEEP_WARMUPS = [64, 128, 256, 512, 1024, 2048, 4096]

@@ -414,8 +414,12 @@ func (r *Runner) buildTimingPlatform() {
 		*l2CacheSizeMBFlag,
 		*l2AdaptivePairRegionLinesFlag,
 	)
-	gpmPreset := lookupGPMPreset(
-		*gpmPresetFlag, *numMemBankFlag, *l2CacheSizeMBFlag)
+	if *l2CacheSizeKBFlag > 0 {
+		fmt.Printf("[Config] L2 capacity=%d KiB per GPM (-l2-cache-size-kb)\n",
+			*l2CacheSizeKBFlag)
+	}
+	gpmPreset := lookupGPMPresetKB(*gpmPresetFlag, *numMemBankFlag,
+		*l2CacheSizeMBFlag, *l2CacheSizeKBFlag)
 	fmt.Printf(
 		"[Config] GPM preset=%s CUs=%d (%d SA x %d) L2 partitions=%d\n",
 		gpmPreset.Name, gpmPreset.NumCU(), gpmPreset.NumSA,
@@ -444,6 +448,7 @@ func (r *Runner) buildTimingPlatform() {
 		WithL1VMSHREntries(*l1vMSHREntriesFlag).
 		WithL1VMaxConcurrentTrans(*l1vMaxConcurrentTransFlag).
 		WithL2CacheSizeMB(*l2CacheSizeMBFlag).
+		WithL2CacheSizeKB(*l2CacheSizeKBFlag).
 		WithForceLocalDataAccess(*forceLocalDataAccessFlag).
 		WithL2ResidentFilter(*l2ResidentFilterEnableFlag).
 		WithL2FilterPrefetch(
