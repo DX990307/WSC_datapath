@@ -1133,6 +1133,9 @@ func (c *Comp) sendRemoteEntryDirect(
 	if c.m1Composed() {
 		c.m1Acquire(now, entry.owner, req.ID)
 	}
+	if m1wBound != nil {
+		c.m1wSendEntry(req.ID, entry, now)
+	}
 	c.RemoteDataPathStats.SingleReadPackets++
 	c.RemoteDataPathStats.BatchSizeHistogram[1]++
 	c.RemoteDataPathStats.WireLines++
@@ -1310,6 +1313,9 @@ func (c *Comp) flushRemoteBatch(
 		if c.m1Composed() {
 			c.m1Acquire(now, batch.dst, req.ID)
 		}
+		if m1wBound != nil {
+			c.m1wSendBatch(req.ID, batch, now)
+		}
 		c.recordRequesterOutstandingPeak()
 		c.RemoteDataPathStats.SingleReadPackets++
 		c.recordRemoteBatchSent(now, batch, req.ID)
@@ -1353,6 +1359,9 @@ func (c *Comp) flushRemoteBatch(
 	c.remoteBitmapInflight[req.ID] = batch
 	if c.m1Composed() {
 		c.m1Acquire(now, batch.dst, req.ID)
+	}
+	if m1wBound != nil {
+		c.m1wSendBatch(req.ID, batch, now)
 	}
 	c.recordRequesterOutstandingPeak()
 	c.RemoteDataPathStats.BitmapPackets++
@@ -1494,6 +1503,9 @@ func (c *Comp) processRemoteSingleRsp(
 	if c.m1Composed() {
 		c.m1Release(now, rsp.GetRspTo())
 	}
+	if m1wBound != nil {
+		c.m1wComplete(rsp.GetRspTo(), now)
+	}
 	delete(c.remoteSingleInflight, rsp.GetRspTo())
 	c.RemoteDataPathStats.NetworkResponseBytes += uint64(rsp.Meta().TrafficBytes)
 	c.ToOutside.Retrieve(now)
@@ -1551,6 +1563,9 @@ func (c *Comp) processBitmapRspFromOutside(
 		delete(c.remoteBitmapInflight, rsp.GetRspTo())
 		if c.m1Composed() {
 			c.m1Release(now, rsp.GetRspTo())
+		}
+		if m1wBound != nil {
+			c.m1wComplete(rsp.GetRspTo(), now)
 		}
 	}
 	c.ToOutside.Retrieve(now)

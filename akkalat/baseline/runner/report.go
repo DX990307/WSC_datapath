@@ -54,6 +54,7 @@ func (r *Runner) reportStats() {
 	r.reportDRAMRowContinuationStats()
 	r.reportRemoteDataPathStats()
 	r.reportT18Stats()
+	r.reportM1W()
 	if err := memtrace.DumpMemoryPathTrace(); err != nil {
 		panic(err)
 	}
