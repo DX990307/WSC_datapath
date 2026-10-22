@@ -76,6 +76,18 @@ func (ep *EndPoint) PlugIn(port sim.Port, srcBufCap int) {
 	ep.msgOutBufSize = srcBufCap
 }
 
+// PlugInSharedSender plugs in a port that sends through this endpoint on
+// behalf of a device that is not on this tile. Unlike PlugIn, it keeps the
+// endpoint's source buffer size. The port is notified, like every device port,
+// when the endpoint can accept messages again.
+func (ep *EndPoint) PlugInSharedSender(port sim.Port) {
+	ep.Lock()
+	defer ep.Unlock()
+
+	port.SetConnection(ep)
+	ep.DevicePorts = append(ep.DevicePorts, port)
+}
+
 // NotifyAvailable triggers the endpoint to continue to tick.
 func (ep *EndPoint) NotifyAvailable(now sim.VTimeInSec, _ sim.Port) {
 	ep.TickLater(now)

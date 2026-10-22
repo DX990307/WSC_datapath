@@ -1,3 +1,8 @@
+//go:build l2tlb_legacy_tests
+
+// This file still tests the old tlb.TLB type (undefined here) and does not
+// compile; it is kept behind a build tag so the package tests can run.
+
 package l2tlb
 
 import (

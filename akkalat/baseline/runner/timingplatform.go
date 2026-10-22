@@ -17,6 +17,7 @@ import (
 	"github.com/sarchlab/akita/v3/mem/vm/mmuTLB"
 	"github.com/sarchlab/akita/v3/monitoring"
 	mesh "github.com/sarchlab/akita/v3/noc/networking/mesh"
+	"github.com/sarchlab/akita/v3/noc/networking/switching"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 	"github.com/sarchlab/mgpusim/v3/driver"
@@ -516,6 +517,7 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 	b.configT18Topology()
 
 	connector.EstablishNetwork()
+	b.connectL2TLBsToIOMMUEndpoint()
 
 	for _, gpu := range b.gpus {
 		gpu.MMUEngine = mmuComponent
@@ -887,6 +889,31 @@ func (b *R9NanoPlatformBuilder) setupPerfermanceTracing() {
 			WithDBFilename(b.perfAnalysisFileName).
 			WithEngine(b.engine).
 			Build()
+	}
+}
+
+// connectL2TLBsToIOMMUEndpoint plugs each L2TLB's own ToIOMMU port into the
+// network endpoint that carries the IOMMU's Top port. Each GPU domain exports
+// IOMMUTLB.Top ("L2TLBToIOMMU"), so the port ends up connected to one GPU
+// tile's endpoint, and translation requests from every L2TLB enter the
+// network there. The L2TLBs used to send through IOMMUTLB.Top itself; when
+// that endpoint was full, the endpoint's NotifyAvailable went to the IOMMU TLB
+// rather than to the L2TLB, which could then stop ticking forever (a lost
+// wake-up). Plugging the L2TLB's own port into the same endpoint keeps the
+// path and the buffer unchanged and lets the endpoint wake the L2TLB.
+func (b *R9NanoPlatformBuilder) connectL2TLBsToIOMMUEndpoint() {
+	top, ok := b.IOMMUTLB.GetPortByName("Top").(*sim.LimitNumMsgPort)
+	if !ok {
+		panic("IOMMUTLB Top port is not a LimitNumMsgPort")
+	}
+
+	ep, ok := top.Connection().(*switching.EndPoint)
+	if !ok {
+		panic("IOMMUTLB Top port is not connected to a network endpoint")
+	}
+
+	for _, gpu := range b.gpus {
+		ep.PlugInSharedSender(gpu.L2TLB.GetPortByName("ToIOMMU"))
 	}
 }
 

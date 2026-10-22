@@ -2,11 +2,13 @@ package runner
 
 import (
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/dram"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
+	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/mgpusim/v3/driver"
 	"github.com/sarchlab/mgpusim/v3/timing/cu"
 )
@@ -1272,6 +1274,40 @@ func (r *Runner) reportIOMMUTLBStats() {
 		"lookup_latency_cycles",
 		float64(r.platform.IOMMUTLB.LookupLatencyCycles()),
 	)
+
+	r.reportL2TLBIOMMUSendStats()
+}
+
+// reportL2TLBIOMMUSendStats prints (to stderr, not to the metrics file, so
+// that metrics stay comparable with older binaries) how often an L2TLB could
+// not send a translation request to the IOMMU because the shared network
+// endpoint was full, and how often the endpoint woke it up afterwards. Runs
+// with failed=0 never took the path whose wake-up was lost before the fix.
+func (r *Runner) reportL2TLBIOMMUSendStats() {
+	var failed, wakeups uint64
+	gpms := 0
+	for _, gpu := range r.platform.GPUs {
+		if gpu.L2TLB == nil {
+			continue
+		}
+		f, w := gpu.L2TLB.IOMMUSendStats()
+		failed += f
+		wakeups += w
+		if f > 0 {
+			gpms++
+		}
+	}
+
+	ep := "?"
+	if top, ok := r.platform.IOMMUTLB.GetPortByName("Top").(*sim.LimitNumMsgPort); ok && top.Connection() != nil {
+		if named, ok := top.Connection().(sim.Named); ok {
+			ep = named.Name()
+		}
+	}
+
+	fmt.Fprintf(os.Stderr,
+		"L2TLB_IOMMU_SEND endpoint=%s failed=%d wakeups=%d gpms_with_failures=%d\n",
+		ep, failed, wakeups, gpms)
 }
 
 func (r *Runner) reportMMUCoalescingStats() {

@@ -25,7 +25,14 @@ type L2TLB struct {
 	bottomPort  sim.Port
 	OutsidePort sim.Port
 	controlPort sim.Port
-	IOMMUPort   sim.Port
+	// IOMMUPort is the destination of translation requests for pages owned by
+	// another device (the IOMMU's Top port). It belongs to the IOMMU, so the
+	// L2TLB never sends through it.
+	IOMMUPort sim.Port
+	// toIOMMUPort is the L2TLB's own port for sending to IOMMUPort. It must be
+	// plugged into the connection that carries the IOMMU traffic, so that the
+	// connection's NotifyAvailable wakes this L2TLB after a failed send.
+	toIOMMUPort sim.Port
 
 	LowModule sim.Port
 
@@ -45,6 +52,12 @@ type L2TLB struct {
 	localReqCount       int
 	iommuReqCount       int
 
+	// iommuSendBlocked is set when a send to the IOMMU failed and cleared when
+	// the connection reports free space (or a later send succeeds).
+	iommuSendBlocked   bool
+	iommuSendFailCount uint64
+	iommuWakeupCount   uint64
+
 	isPaused   bool
 	DeviceID   uint64
 	pageTable  vm.PageTable
@@ -60,6 +73,42 @@ func (tlb *L2TLB) reset() {
 		set := internal.NewSet(tlb.numWays)
 		tlb.Sets[i] = set
 	}
+}
+
+// NotifyPortFree wakes the L2TLB when one of its ports can send again. The
+// connection that carries IOMMU traffic is shared with other devices and
+// notifies every plugged port whenever it drains, so a notification on
+// toIOMMUPort only wakes the L2TLB if a send to the IOMMU actually failed.
+// This keeps the event schedule of runs without failed IOMMU sends unchanged.
+func (tlb *L2TLB) NotifyPortFree(now sim.VTimeInSec, port sim.Port) {
+	if port == tlb.toIOMMUPort {
+		if !tlb.iommuSendBlocked {
+			return
+		}
+
+		tlb.iommuSendBlocked = false
+		tlb.iommuWakeupCount++
+	}
+
+	tlb.TickingComponent.NotifyPortFree(now, port)
+}
+
+// sendToIOMMUPort sends a request to the IOMMU through the L2TLB's own port
+// and remembers a failure so that the connection's notification wakes us up.
+func (tlb *L2TLB) sendToIOMMUPort(req *vm.TranslationReq) bool {
+	if tlb.toIOMMUPort == nil {
+		log.Panicf("L2TLB %s does not have a ToIOMMU port", tlb.Name())
+	}
+
+	err := tlb.toIOMMUPort.Send(req)
+	if err != nil {
+		tlb.iommuSendBlocked = true
+		tlb.iommuSendFailCount++
+		return false
+	}
+
+	tlb.iommuSendBlocked = false
+	return true
 }
 
 // Tick defines how TLB update states at each cycle
@@ -485,8 +534,7 @@ func (tlb *L2TLB) sendToIOMMU(
 		WithOriginPort(req.OriginPort).
 		Build()
 
-	err := tlb.IOMMUPort.Send(newReq)
-	if err != nil {
+	if !tlb.sendToIOMMUPort(newReq) {
 		return nil, false
 	}
 
@@ -520,8 +568,7 @@ func (tlb *L2TLB) sendDownstream(
 			WithDst(tlb.IOMMUPort).
 			Build()
 
-		err := tlb.IOMMUPort.Send(translatedReq)
-		if err != nil {
+		if !tlb.sendToIOMMUPort(translatedReq) {
 			return nil, false
 		}
 
