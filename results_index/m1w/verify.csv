@@ -1,0 +1,78 @@
+run,binary,configs,exit,total_time_s,md5_sorted_metrics_noindex,verify
+diag2-bfs-turn,bce2b0a,v4_complete_hubturn,0,0.000117481000,9374f715dc67,mismatches=0 Passed 
+diag2-tc-q2,bce2b0a,v4_complete_hubq2,0,0.000112628000,f2d65ab747bd,
+diag2-tc-turn,bce2b0a,v4_complete_hubturn,0,0.000121254000,420d639fa7da,
+diag2-tc-turn-relay,bce2b0a,v4_complete_hubturn,0,0.000149315000,6cfb47879f43,
+diag3-bfs-turn,97fdca5,v4_complete_hubturn,0,0.000116779000,0b55ae016954,mismatches=0 Passed 
+diag3-mm-turn,97fdca5,v4_complete_hubturn,0,0.000048571000,89821b535423,Passed 
+diag3-sssp-turn,97fdca5,v4_complete_hubturn,0,0.000124489000,1b776dea93ee,mismatches=0 Passed 
+diag3-tc-q2,97fdca5,v4_complete_hubq2,0,0.000095335000,9a6455b01a8c,
+diag3-tc-turn,97fdca5,v4_complete_hubturn,0,0.000091528000,df75c632056d,
+diag3-tc-turn-relay,97fdca5,v4_complete_hubturn,0,0.000101237000,89523240f764,
+diag4-tc-turn,6edd8fc,v4_complete_hubturn,0,0.000091528000,df75c632056d,
+diag4-tc-turna,6edd8fc,v4_complete_hubturna,0,0.000098840000,48fa9cd4e40a,
+diag-tc-q2,493a59c,v4_complete_hubq2,0,0.000111760000,89ab4256208e,
+diag-tc-turn,493a59c,v4_complete_hubturn,0,0.000123791000,99279b143308,
+diag-tc-turn-relay,493a59c,v4_complete_hubturn,0,0.000152782000,f3173b6a93dc,
+diag-tc-v4,493a59c,v4_complete,0,0.000094272000,9357430ed20f,
+reg2-fir,c26d97e,mi200,0,0.000026314000,571d7e7f620b,
+reg2-fir-base,c08698b,mi200,0,0.000026314000,571d7e7f620b,
+reg2-mm,c26d97e,mi200,0,0.000346375000,81c2f67645b6,
+reg2-mm-base,c08698b,mi200,0,0.000346375000,81c2f67645b6,
+reg2-v4fir,c26d97e,v4_complete,0,0.000026191000,3b87f6fe0bb1,
+reg2-v4fir-base,c08698b,v4_complete,0,0.000026191000,3b87f6fe0bb1,
+reg2-v4fir-bound,c26d97e,v4_complete,0,0.000026191000,3b87f6fe0bb1,
+v2-bfs-hold100,c26d97e,v4_complete_hold100,0,0.000117782000,391db78382b9,mismatches=0 Passed 
+v2-bfs-holdrtt25,c26d97e,v4_complete_holdrtt25,0,0.000118993000,a1e32db885ec,mismatches=0 Passed 
+v2-bfs-hubq2,c26d97e,v4_complete_hubq2,0,0.000122105000,5f471bc72856,mismatches=0 Passed 
+v2-bfs-hubturn,c26d97e,v4_complete_hubturn,0,0.000117465000,17f170c4e4d0,mismatches=0 Passed 
+v2-bfs-hubturn+holdrtt25,c26d97e,v4_complete_holdrtt25+v4_complete_hubturn,0,0.000120680000,7a213514052f,mismatches=0 Passed 
+v2-graphtc-hold100,c26d97e,v4_complete_hold100,0,0.000107208000,00c80351fe80,Passed triangles=479217 
+v2-graphtc-holdrtt25,c26d97e,v4_complete_holdrtt25,0,0.000109219000,65865be85cfc,Passed triangles=479217 
+v2-graphtc-hubq2,c26d97e,v4_complete_hubq2,0,0.000110492000,74b733204426,Passed triangles=479217 
+v2-graphtc-hubturn,c26d97e,v4_complete_hubturn,0,0.000124471000,1fa9b0ee9a53,Passed triangles=479217 
+v2-graphtc-hubturn+holdrtt25,c26d97e,v4_complete_holdrtt25+v4_complete_hubturn,0,0.000119181000,316f34ce06d9,Passed triangles=479217 
+v2-mm-hold100,c26d97e,v4_complete_hold100,0,0.000048168000,2e049b8f0258,Passed 
+v2-mm-holdrtt25,c26d97e,v4_complete_holdrtt25,0,0.000048082000,2e2a2bc5af91,Passed 
+v2-mm-hubq2,c26d97e,v4_complete_hubq2,0,0.000050990000,bb2e293154cc,Passed 
+v2-mm-hubturn,c26d97e,v4_complete_hubturn,0,0.000048586000,5ef7bbb18311,Passed 
+v2-mm-hubturn+holdrtt25,c26d97e,v4_complete_holdrtt25+v4_complete_hubturn,0,0.000048846000,72b3fd4ae522,Passed 
+v2-npbcg-hold100,c26d97e,v4_complete_hold100,0,0.000618681000,b584450d9f87,mismatches=0 Passed 
+v2-npbcg-holdrtt25,c26d97e,v4_complete_holdrtt25,0,0.000619635000,96e74e1800b5,mismatches=0 Passed 
+v2-npbcg-hubq2,c26d97e,v4_complete_hubq2,0,0.000669368000,1492671badf7,mismatches=0 Passed 
+v2-npbcg-hubturn,c26d97e,v4_complete_hubturn,0,0.000618681000,814124c3a8ab,mismatches=0 Passed 
+v2-npbcg-hubturn+holdrtt25,c26d97e,v4_complete_holdrtt25+v4_complete_hubturn,0,0.000619633000,e52b74b848f1,mismatches=0 Passed 
+v2-sssp-hold100,c26d97e,v4_complete_hold100,0,0.000132322000,754857b82f7e,mismatches=0 Passed 
+v2-sssp-holdrtt25,c26d97e,v4_complete_holdrtt25,0,0.000132897000,18affa8998bf,mismatches=0 Passed 
+v2-sssp-hubq2,c26d97e,v4_complete_hubq2,0,0.000137044000,9b639e559b63,mismatches=0 Passed 
+v2-sssp-hubturn,c26d97e,v4_complete_hubturn,0,0.000124085000,0322dc0f9599,mismatches=0 Passed 
+v2-sssp-hubturn+holdrtt25,c26d97e,v4_complete_holdrtt25+v4_complete_hubturn,0,0.000136789000,18d5919a97ec,mismatches=0 Passed 
+v4-bfs-turna,6edd8fc,v4_complete_hubturna,0,0.000118984000,ade280a924db,mismatches=0 Passed 
+v4-graphtc-turna,6edd8fc,v4_complete_hubturna,0,0.000108251000,e47e22000e66,Passed triangles=479217 
+v4-matrixmultiplication-pipeline-smoke-turna,6edd8fc,v4_complete_hubturna,0,0.000047921000,72fc4539192e,Passed 
+v4-npbcg-turna,6edd8fc,v4_complete_hubturna,0,0.000618685000,48b503e9174e,mismatches=0 Passed 
+v4-sssp-turna,6edd8fc,v4_complete_hubturna,0,0.000120645000,88d4959e34cd,mismatches=0 Passed 
+v5-bfs-turnahold,04115a1,v4_complete_hold100o+v4_complete_hubturna,0,0.000115335000,e338b3c711be,mismatches=0 Passed 
+v5-graphtc-turnahold,04115a1,v4_complete_hold100o+v4_complete_hubturna,0,0.000104941000,78d0645b985e,Passed triangles=479217 
+v5-matrixmultiplication-pipeline-smoke-turnahold,04115a1,v4_complete_hold100o+v4_complete_hubturna,0,0.000047955000,e972b0402b91,Passed 
+v5-npbcg-turnahold,04115a1,v4_complete_hold100o+v4_complete_hubturna,0,0.000618681000,ebc9a71e5aa4,mismatches=0 Passed 
+v5-sssp-turnahold,04115a1,v4_complete_hold100o+v4_complete_hubturna,0,0.000118967000,fa9118be1147,mismatches=0 Passed 
+neu-v4-bfs,e714d47,v4_complete,0,0.000115807000,199311631cf5,
+neu-v4-bfs-on,e714d47,v4_complete,0,0.000116782000,87f41207a1b1,
+neu-v4-bfs-r2,e714d47,v4_complete,0,0.000116782000,87f41207a1b1,
+neu-v4-bfs-r3,e714d47,v4_complete,0,0.000117496000,89506cd5b97a,
+neu-v4-fir,e714d47,v4_complete,0,0.000026293000,81ca778e52d4,
+neu-v4-fir-on,e714d47,v4_complete,0,0.000026293000,81ca778e52d4,
+reg-fir,e714d47,mi200,0,0.000026568000,d56a681494ae,
+reg-fir-on,e714d47,mi200,0,0.000026568000,d56a681494ae,
+reg-mm,e714d47,mi200,0,0.000345433000,22a58b272d89,
+v-bfs-hubq2,e04d75a,v4_complete_hubq2,0,0.000120680000,212b1510fba7,mismatches=0 Passed 
+v-bfs-hubturn,e04d75a,v4_complete_hubturn,0,0.000119469000,cffc679a8bd7,mismatches=0 Passed 
+v-graphtc-hubq2,e04d75a,v4_complete_hubq2,0,0.000111469000,6c2f239d0b3d,Passed triangles=479217 
+v-graphtc-hubturn,e04d75a,v4_complete_hubturn,0,0.000123484000,bd03560bb286,Passed triangles=479217 
+v-mm-hubq2,e04d75a,v4_complete_hubq2,0,0.000051264000,3d5699f55713,Passed 
+v-mm-hubturn,e04d75a,v4_complete_hubturn,0,0.000048252000,39cfaa797696,Passed 
+v-npbcg-hubq2,e04d75a,v4_complete_hubq2,0,0.000669368000,f99041cc702e,mismatches=0 Passed 
+v-npbcg-hubturn,e04d75a,v4_complete_hubturn,0,0.000618681000,75263d0ed773,mismatches=0 Passed 
+v-sssp-hubq2,e04d75a,v4_complete_hubq2,0,0.000137044000,209fa4b9babb,mismatches=0 Passed 
+v-sssp-hubturn,e04d75a,v4_complete_hubturn,0,0.000125471000,5606aca1c257,mismatches=0 Passed 

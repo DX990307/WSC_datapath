@@ -1,0 +1,358 @@
+{
+  "exp_id": "1022_abl_m1w-w256b384-sssp-s18e4-r1_mi200+v4hubturn_97fdca5",
+  "task": "M1W",
+  "commit": "97fdca5",
+  "host": "yss2",
+  "go_version": "go version go1.27.3 linux/amd64",
+  "mode": "timing",
+  "verify": false,
+  "config": "v4_complete_hubturn",
+  "gpm_preset": "mi200",
+  "notes": [
+    "GPM 内部按 1/4 MI250X GCD（按公开规格设置，未校准）：28 CU，8 个 256 KB L2 slice（64 B 行，MI200 实际为 128 B），每个 slice 对应一个 HBM2e channel；L2、HBM2e 带宽按 MI250X 在 1.7 GHz 下的每周期等效值设置（每 GPM 241 B/cycle）；访问延迟（tCL、tRCD、tRP、tRAS、tRFC 等）保持纳秒值，限制带宽的间隔（tCCD、tRRD、tFAW、tWTR）保持 1.6 GHz 器件的时钟数。HBM2e channel：2 个 pseudo-channel，各 64-bit、BL4、每次访问 32 B、DRAM 时钟 1.6 GHz / 1.7 = 941 MHz；含 all-bank refresh、tFAW、同请求行保持。"
+  ],
+  "config_deviation": [
+    {
+      "flag": "-cupath-dedup-owner",
+      "change": "added",
+      "paper": null,
+      "value": "m1",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-dram-row-continuation-enable",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-l2-adaptive-pair-enable",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-l2-fill-forwarding-enable",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-l2-filter-prefetch-enable",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-l2-granularity-adaptation-enable",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-l2-granularity-always-expand",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-l2-granularity-predictor-only",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-l2-granularity-without-filter",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-l2-prefetch-predictor-only",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-l2-prefetch-ungated",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-l2-resident-filter-enable",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-m1w-hub-entries",
+      "change": "added",
+      "paper": null,
+      "value": "1024",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-m1w-hub-min-hops",
+      "change": "added",
+      "paper": null,
+      "value": "2",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-m1w-hub-mode",
+      "change": "added",
+      "paper": null,
+      "value": "turn",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-m1w-hub-retain-ns",
+      "change": "added",
+      "paper": null,
+      "value": "0",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-prefetch-predictor-entries",
+      "change": "added",
+      "paper": null,
+      "value": "256",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-remote-data-path-batch-lines",
+      "change": "added",
+      "paper": null,
+      "value": "8",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-remote-data-path-batches",
+      "change": "added",
+      "paper": null,
+      "value": "64",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-remote-data-path-batching-enable",
+      "change": "added",
+      "paper": null,
+      "value": "true",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-remote-data-path-dedup-enable",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-remote-data-path-enable",
+      "change": "added",
+      "paper": null,
+      "value": "true",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-remote-data-path-l2-enable",
+      "change": "added",
+      "paper": null,
+      "value": "true",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-remote-filter-prefetch-enable",
+      "change": "added",
+      "paper": null,
+      "value": "true",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-remote-reuse-kernel-invalidate",
+      "change": "added",
+      "paper": null,
+      "value": "true",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-t18-compose-table-entries",
+      "change": "added",
+      "paper": null,
+      "value": "128",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-t18-credit-policy",
+      "change": "added",
+      "paper": null,
+      "value": "shared",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-t18-owner-merge",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-t18-owner-multicast",
+      "change": "added",
+      "paper": null,
+      "value": "false",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-t18-req-merge",
+      "change": "added",
+      "paper": null,
+      "value": "true",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-t18-window",
+      "change": "added",
+      "paper": null,
+      "value": "64",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-typed-filter-fingerprint-bits",
+      "change": "added",
+      "paper": null,
+      "value": "13",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-typed-filter-lookup-latency",
+      "change": "added",
+      "paper": null,
+      "value": "1",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-typed-filter-lookup-width",
+      "change": "added",
+      "paper": null,
+      "value": "16",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-typed-filter-mode",
+      "change": "added",
+      "paper": null,
+      "value": "cuckoo",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-typed-filter-slots-per-bucket",
+      "change": "added",
+      "paper": null,
+      "value": "4",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-typed-filter-update-latency",
+      "change": "added",
+      "paper": null,
+      "value": "1",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-typed-filter-update-width",
+      "change": "added",
+      "paper": null,
+      "value": "16",
+      "reason": "配置文件 /home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json"
+    },
+    {
+      "flag": "-benchmark sssp",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-sssp-scale 18",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-sssp-edge-factor 4",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-sssp-max-rounds 1",
+      "change": "added",
+      "reason": "benchmark 参数（不算配置修改）"
+    },
+    {
+      "flag": "-bandwidth 24",
+      "change": "added",
+      "reason": "命令行覆盖配置文件"
+    },
+    {
+      "flag": "-switch-buffer-flits 16",
+      "change": "added",
+      "reason": "网络按 CU 比例缩小（有意偏离 mi200.json，用户 10-20 确认）：交换机端口缓冲深度 = max(-bandwidth, N) flit，与链路带宽分开；0 = 原行为"
+    },
+    {
+      "flag": "-rdma-max-outstanding 256",
+      "change": "added",
+      "reason": "命令行覆盖配置文件"
+    },
+    {
+      "flag": "-t18-window 256",
+      "change": "added",
+      "reason": "命令行覆盖配置文件"
+    },
+    {
+      "flag": "-t18-compose-table-entries 512",
+      "change": "added",
+      "reason": "命令行覆盖配置文件"
+    },
+    {
+      "flag": "-report-cupath-v3-stats",
+      "change": "added",
+      "reason": "统计开关（P16）：按距离分组的请求表占用和排队、近区使用、owner 表占用和满的时间、合并 / 多播比例"
+    }
+  ],
+  "deviation_base": "configs/mi200.json",
+  "start": "2026-10-22T06:21:02+00:00",
+  "end": "2026-10-22T07:03:50+00:00",
+  "exit_code": 0,
+  "args": [
+    "-config",
+    "/home/daoxuanxu/akita-exp-test/m1w/src/akkalat/configs/v4_complete_hubturn.json",
+    "-config-out",
+    "/home/daoxuanxu/akita-exp-test/m1w/src/results/1022_abl_m1w-w256b384-sssp-s18e4-r1_mi200+v4hubturn_97fdca5/config_used.json",
+    "-benchmark",
+    "sssp",
+    "-sssp-scale",
+    "18",
+    "-sssp-edge-factor",
+    "4",
+    "-sssp-max-rounds",
+    "1",
+    "-bandwidth=24",
+    "-switch-buffer-flits=16",
+    "-rdma-max-outstanding=256",
+    "-t18-window=256",
+    "-t18-compose-table-entries=512",
+    "-report-cupath-v3-stats",
+    "-metric-file-name",
+    "/home/daoxuanxu/akita-exp-test/m1w/src/results/1022_abl_m1w-w256b384-sssp-s18e4-r1_mi200+v4hubturn_97fdca5/stats/metrics"
+  ]
+}
