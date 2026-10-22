@@ -779,6 +779,9 @@ func (r *Runner) reportRemoteDataPathStats() {
 			b := gpu.RDMAEngine.GetRemoteReuseBoundaryStats()
 			r.metricsCollector.Collect(where, "remote_reuse_kernel_boundaries", float64(b.Boundaries))
 			r.metricsCollector.Collect(where, "remote_reuse_boundary_stale_entries", float64(b.StaleEntries))
+			if *a1ResetUncacheableFlag {
+				r.metricsCollector.Collect(where, "a1_uncacheable_resets", float64(b.UncacheableResets))
+			}
 		}
 
 		for _, component := range gpu.L2Caches {

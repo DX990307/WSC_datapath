@@ -485,6 +485,8 @@ func (r *Runner) buildTimingPlatform() {
 			MaxBatches:               *remoteDataPathBatchesFlag,
 			KernelBoundaryInvalidate: *remoteReuseKernelInvalidateFlag,
 			FirstTouchAdmission:      *a1FirstTouchAdmissionFlag,
+			ResetUncacheableAtBoundary: *a1ResetUncacheableFlag &&
+				*remoteReuseKernelInvalidateFlag,
 		}).
 		WithRemoteRetain(remoteRetainConfigFromFlags()).
 		WithT18(t18ConfigFromFlags()).

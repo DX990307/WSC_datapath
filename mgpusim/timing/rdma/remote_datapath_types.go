@@ -44,6 +44,13 @@ type RemoteDataPathConfig struct {
 	// requester-L2 replicas: 0 = two touches (default), 1 = admit a first
 	// touch only into an invalid way, 2 = admit a first touch like a second.
 	FirstTouchAdmission int
+	// ResetUncacheableAtBoundary (A1, optional): at a kernel boundary forget
+	// which remote lines this GPM wrote (remoteUncacheable). Those lines were
+	// kept out of the requester L2 only because the GPM's own write bypasses
+	// its L2; after the boundary every replica that could predate such a
+	// write has been invalidated (M3: all; A1: the written regions), so the
+	// lines may be cached again. Off by default.
+	ResetUncacheableAtBoundary bool
 }
 
 func normalizeRemoteDataPathConfig(c RemoteDataPathConfig) RemoteDataPathConfig {

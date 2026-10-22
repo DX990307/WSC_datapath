@@ -5,6 +5,9 @@ package rdma
 type RemoteReuseBoundaryStats struct {
 	Boundaries   uint64 // kernel boundaries seen by this GPM network interface
 	StaleEntries uint64 // in-flight remote lines marked stale at a boundary
+	// UncacheableResets counts remote lines whose own-write uncacheable
+	// mark was cleared at a boundary (ResetUncacheableAtBoundary).
+	UncacheableResets uint64
 }
 
 // GetRemoteReuseBoundaryStats returns the kernel-boundary counters.
@@ -40,5 +43,10 @@ func (c *Comp) MarkRemoteReuseKernelBoundary() {
 		entry.m1Open = false
 		c.remoteEpochs[entry.key.remoteLineIdentity]++
 		c.remoteReuseBoundaryStats.StaleEntries++
+	}
+	if c.remoteConfig.ResetUncacheableAtBoundary {
+		c.remoteReuseBoundaryStats.UncacheableResets +=
+			uint64(len(c.remoteUncacheable))
+		clear(c.remoteUncacheable)
 	}
 }

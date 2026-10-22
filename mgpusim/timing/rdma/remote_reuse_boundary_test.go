@@ -51,3 +51,31 @@ func TestKernelBoundaryIgnoredWithoutRequesterL2(t *testing.T) {
 		t.Fatal("boundary changed M2-only state")
 	}
 }
+
+func TestKernelBoundaryResetsOwnWriteUncacheable(t *testing.T) {
+	for _, reset := range []bool{false, true} {
+		c, _, _, _, remoteGPU := newRemoteDataPathTestComp(t,
+			RemoteDataPathConfig{
+				Enabled: true, MaxBatchLines: 8, MaxBatches: 8,
+				KernelBoundaryInvalidate:   true,
+				ResetUncacheableAtBoundary: reset,
+			})
+		identity := remoteLineIdentity{
+			ownerName: remoteGPU.Name(), pid: 1, lineAddr: 0x1400,
+		}
+		c.ensureRemoteDataPathState()
+		c.remoteUncacheable[identity] = true
+		c.MarkRemoteReuseKernelBoundary()
+		if c.remoteUncacheable[identity] == reset {
+			t.Fatalf("reset=%v: uncacheable=%v after the boundary",
+				reset, c.remoteUncacheable[identity])
+		}
+		want := uint64(0)
+		if reset {
+			want = 1
+		}
+		if got := c.GetRemoteReuseBoundaryStats().UncacheableResets; got != want {
+			t.Fatalf("reset=%v: resets=%d", reset, got)
+		}
+	}
+}

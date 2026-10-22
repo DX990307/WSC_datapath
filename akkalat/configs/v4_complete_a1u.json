@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 A1 + reset of the requester's own-write 'uncacheable' marks at kernel boundaries (2026-10-22): v4_complete_a1, and at each kernel launch the GPM forgets which remote lines it wrote, so lines written in an earlier kernel can be kept in its L2 again (safe because the boundary has already invalidated every replica of a written region). See isca27/results_index/a1/DESIGN.md.",
+  "extends": "v4_complete_a1.json",
+  "a1-reset-uncacheable": true
+}

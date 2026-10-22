@@ -206,6 +206,11 @@ var a1FirstTouchAdmissionFlag = flag.Int("a1-first-touch-admission", 0,
 	"A1 (optional) requester-L2 admission: 0 = two touches (default), "+
 		"1 = admit a first touch into an invalid way only, 2 = admit a "+
 		"first touch like a second.")
+var a1ResetUncacheableFlag = flag.Bool("a1-reset-uncacheable", false,
+	"A1 (optional): at a kernel boundary clear the requester's own-write "+
+		"'uncacheable' marks so that lines the GPM wrote in an earlier "+
+		"kernel can be kept in its L2 again. Needs "+
+		"-remote-reuse-kernel-invalidate.")
 var typedFilterAuthoritativeAuditFlag = flag.Bool(
 	"typed-filter-authoritative-audit", false,
 	"Enable timing-neutral exact-state checks for typed-Filter negative decisions.")
