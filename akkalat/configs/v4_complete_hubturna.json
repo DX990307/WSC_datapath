@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 m1w: v4_complete_hubturn + adaptive routing (per-owner 4-bit predictor at the requester; owners whose hub responses carry no merged lines are read directly, every 16th transaction probes the hub). Prototype; see isca27/results_index/m1w/DESIGN.md.",
+  "extends": "v4_complete_hubturn.json",
+  "m1w-hub-adaptive": true
+}

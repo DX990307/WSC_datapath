@@ -581,6 +581,9 @@ func (b *R9NanoGPUBuilder) installRemoteReuseKernelInvalidation() {
 func (b *R9NanoGPUBuilder) populateExternalPorts() {
 	b.gpu.Domain.AddPort("CommandProcessor", b.cp.ToDriver)
 	b.gpu.Domain.AddPort("RDMA", b.rdmaEngine.ToOutside)
+	if b.rdmaEngine.M1WHubPort != nil {
+		b.gpu.Domain.AddPort("M1WHub", b.rdmaEngine.M1WHubPort)
+	}
 	b.gpu.Domain.AddPort("PageMigrationController",
 		b.pageMigrationController.GetPortByName("Remote"))
 	b.gpu.Domain.AddPort("L2TLB", b.l2TLB.OutsidePort)
@@ -1377,6 +1380,9 @@ func (b *R9NanoGPUBuilder) buildRDMAEngine() {
 		WithRemoteDataPath(b.remoteDataPath).
 		WithT18(b.t18).
 		Build(name)
+	if *m1wHubModeFlag != "" {
+		b.rdmaEngine.AddM1WHubPort(1024)
+	}
 	b.gpu.RDMAEngine = b.rdmaEngine
 	if b.monitor != nil {
 		b.monitor.RegisterComponent(b.rdmaEngine)

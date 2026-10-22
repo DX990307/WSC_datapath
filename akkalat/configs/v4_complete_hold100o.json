@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 m1w: v4_complete_hold100 that holds only while at least half of the requester window is in flight (with an idle window a hold only adds latency). Prototype; see isca27/results_index/m1w/DESIGN.md.",
+  "extends": "v4_complete_hold100.json",
+  "m1w-hold-min-occ": 0.5
+}

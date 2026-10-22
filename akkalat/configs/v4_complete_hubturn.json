@@ -1,0 +1,8 @@
+{
+  "_description": "ISCA'27 m1w: v4_complete + turn-point combining hubs (a read to an owner > 2 hops away goes through the GPM at the turn tile (x_requester, y_owner) of its Y-X route, no detour; the hub merges same-line reads while in flight). Prototype; see isca27/results_index/m1w/DESIGN.md.",
+  "extends": "v4_complete.json",
+  "m1w-hub-mode": "turn",
+  "m1w-hub-min-hops": 2,
+  "m1w-hub-retain-ns": 0,
+  "m1w-hub-entries": 1024
+}

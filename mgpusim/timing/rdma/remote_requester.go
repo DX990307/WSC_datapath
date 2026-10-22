@@ -1126,10 +1126,14 @@ func (c *Comp) sendRemoteEntryDirect(
 	}
 	info := memtrace.WithL2RemoteInfo(
 		entry.info, c.Name(), entry.key.ownerName)
+	dst := entry.owner
+	if c.m1wHub != nil {
+		dst = c.m1wRoute(entry.owner, []*remoteLineEntry{entry})
+	}
 	req := mem.ReadReqBuilder{}.
 		WithSendTime(now).
 		WithSrc(c.ToOutside).
-		WithDst(entry.owner).
+		WithDst(dst).
 		WithAddress(entry.key.lineAddr).
 		WithByteSize(remoteLineBytes).
 		WithPID(entry.key.pid).
@@ -1145,6 +1149,9 @@ func (c *Comp) sendRemoteEntryDirect(
 	c.remoteSingleInflight[req.ID] = entry
 	if c.m1Composed() {
 		c.m1Acquire(now, entry.owner, req.ID)
+	}
+	if m1wBound != nil {
+		c.m1wSendEntry(req.ID, entry, now)
 	}
 	c.RemoteDataPathStats.SingleReadPackets++
 	c.RemoteDataPathStats.BatchSizeHistogram[1]++
@@ -1301,10 +1308,14 @@ func (c *Comp) flushRemoteBatch(
 		entry := batch.lines[line]
 		info := memtrace.WithL2RemoteInfo(
 			entry.info, c.Name(), entry.key.ownerName)
+		dst := batch.dst
+		if c.m1wHub != nil {
+			dst = c.m1wRoute(batch.dst, []*remoteLineEntry{entry})
+		}
 		req := mem.ReadReqBuilder{}.
 			WithSendTime(now).
 			WithSrc(c.ToOutside).
-			WithDst(batch.dst).
+			WithDst(dst).
 			WithAddress(entry.key.lineAddr).
 			WithByteSize(remoteLineBytes).
 			WithPID(entry.key.pid).
@@ -1323,6 +1334,9 @@ func (c *Comp) flushRemoteBatch(
 		if c.m1Composed() {
 			c.m1Acquire(now, batch.dst, req.ID)
 		}
+		if m1wBound != nil {
+			c.m1wSendBatch(req.ID, batch, now)
+		}
 		c.recordRequesterOutstandingPeak()
 		c.RemoteDataPathStats.SingleReadPackets++
 		c.recordRemoteBatchSent(now, batch, req.ID)
@@ -1332,11 +1346,15 @@ func (c *Comp) flushRemoteBatch(
 
 	info := memtrace.WithL2RemoteInfo(
 		batch.info, c.Name(), batch.key.ownerName)
+	bdst := batch.dst
+	if c.m1wHub != nil {
+		bdst = c.m1wRoute(batch.dst, c.m1wBatchEntries(batch))
+	}
 	req := &BitmapReadReq{
 		MsgMeta: sim.MsgMeta{
 			ID:           sim.GetIDGenerator().Generate(),
 			Src:          c.ToOutside,
-			Dst:          batch.dst,
+			Dst:          bdst,
 			SendTime:     now,
 			TrafficBytes: bitmapReqTraffic,
 		},
@@ -1366,6 +1384,9 @@ func (c *Comp) flushRemoteBatch(
 	c.remoteBitmapInflight[req.ID] = batch
 	if c.m1Composed() {
 		c.m1Acquire(now, batch.dst, req.ID)
+	}
+	if m1wBound != nil {
+		c.m1wSendBatch(req.ID, batch, now)
 	}
 	c.recordRequesterOutstandingPeak()
 	c.RemoteDataPathStats.BitmapPackets++
@@ -1489,6 +1510,14 @@ func (c *Comp) processRemoteSingleRsp(
 	rsp mem.AccessRsp,
 ) bool {
 	entry := c.remoteSingleInflight[rsp.GetRspTo()]
+	if h, isHub := rsp.(*M1WHubDataRsp); isHub {
+		merged := 0
+		if h.Merged {
+			merged = 1
+		}
+		c.m1wHubFeedback(entry.owner, h.Src, merged)
+		rsp = &h.DataReadyRsp
+	}
 	dataRsp, ok := rsp.(*mem.DataReadyRsp)
 	if !ok || entry == nil {
 		panic("remote single-line read returned an invalid response")
@@ -1507,6 +1536,9 @@ func (c *Comp) processRemoteSingleRsp(
 	if c.m1Composed() {
 		c.m1Release(now, rsp.GetRspTo())
 	}
+	if m1wBound != nil {
+		c.m1wComplete(rsp.GetRspTo(), now)
+	}
 	delete(c.remoteSingleInflight, rsp.GetRspTo())
 	c.RemoteDataPathStats.NetworkResponseBytes += uint64(rsp.Meta().TrafficBytes)
 	c.ToOutside.Retrieve(now)
@@ -1521,6 +1553,9 @@ func (c *Comp) processBitmapRspFromOutside(
 	batch := c.remoteBitmapInflight[rsp.GetRspTo()]
 	if batch == nil {
 		panic("bitmap response has no matching requester batch")
+	}
+	if c.m1wHub != nil {
+		c.m1wHubFeedback(batch.dst, rsp.Src, rsp.HubMerged)
 	}
 	for line := range rsp.LineData {
 		if line >= 64 {
@@ -1564,6 +1599,9 @@ func (c *Comp) processBitmapRspFromOutside(
 		delete(c.remoteBitmapInflight, rsp.GetRspTo())
 		if c.m1Composed() {
 			c.m1Release(now, rsp.GetRspTo())
+		}
+		if m1wBound != nil {
+			c.m1wComplete(rsp.GetRspTo(), now)
 		}
 	}
 	c.ToOutside.Retrieve(now)
@@ -1778,5 +1816,6 @@ func (c *Comp) remoteDataPathHasPendingWork() bool {
 		len(c.remoteOwnerPendingReq) > 0 ||
 		len(c.remoteOwnerSubReqs) > 0 ||
 		len(c.remoteOwnerPendingRsp) > 0 ||
-		len(c.remoteOwnerBatches) > 0
+		len(c.remoteOwnerBatches) > 0 ||
+		c.m1wHubPending()
 }

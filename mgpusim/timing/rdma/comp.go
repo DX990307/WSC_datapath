@@ -25,6 +25,9 @@ type Comp struct {
 	*sim.TickingComponent
 
 	ToOutside sim.Port
+	// M1WHubPort is the m1w combining hub's own network port (nil when
+	// hubs are off).
+	M1WHubPort sim.Port
 
 	ToL1 sim.Port
 	ToL2 sim.Port
@@ -96,6 +99,14 @@ type Comp struct {
 
 	// ISCA'27 P13 occupancy statistic; nil when off (obs_occupancy.go).
 	obsOcc *obsOccState
+
+	// ISCA'27 wafer M1 bound (m1w_bound.go); nil topology when off.
+	m1wTopo *M1WTopology
+	m1wIdx  int
+	// ISCA'27 wafer M1 combining hubs (m1w_hub.go); nil when off.
+	m1wHub *m1wHubState
+	// ISCA'27 wafer M1 distance-aware batch holding (m1w_hold.go).
+	m1wHold *m1wHoldState
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -178,6 +189,11 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 		if c.t18.ownerActive {
 			madeProgress = c.t18OwnerSend(now) || madeProgress
 		}
+	}
+	if c.m1wHub != nil {
+		c.m1wHubSweep(now)
+		madeProgress = c.m1wHubSend(now) || madeProgress
+		madeProgress = c.m1wHubProcess(now) || madeProgress
 	}
 	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
@@ -495,6 +511,12 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 		if !c.pipelineReady(now, req) {
 			return true
 		}
+		if m1wBound != nil {
+			switch req.(type) {
+			case *BitmapReadReq, *mem.ReadReq:
+				c.m1wOwnerArrive(req)
+			}
+		}
 		switch req := req.(type) {
 		case *BitmapReadReq:
 			if !c.processBitmapReqFromOutside(now, req) {
@@ -660,6 +682,9 @@ func (c *Comp) processReqFromL1(
 		c.transactionsFromInside = append(c.transactionsFromInside, trans)
 		if c.m1Composed() {
 			c.m1Acquire(now, dst, cloned.Meta().ID)
+		}
+		if m1wBound != nil {
+			c.m1wSendLegacy(cloned.Meta().ID, req, dst, firstSeen, now)
 		}
 		c.recordRequesterOutstandingPeak()
 		if c.remoteConfig.Enabled {
@@ -880,6 +905,9 @@ func (c *Comp) processRspFromOutside(
 		c.recordRemoteGPMAccess(now, trans, rsp)
 		if c.m1Composed() {
 			c.m1Release(now, rsp.GetRspTo())
+		}
+		if m1wBound != nil {
+			c.m1wComplete(rsp.GetRspTo(), now)
 		}
 
 		//fmt.Printf("%s rsp outside %s -> inside %s\n",
