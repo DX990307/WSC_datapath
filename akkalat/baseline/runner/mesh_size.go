@@ -47,3 +47,24 @@ func l2SourceTileWidth() int {
 	}
 	panic(fmt.Sprintf("-l2-source-tile-width=%d does not match -mesh-size=%d", w, n))
 }
+
+// Problem size reference (ISCA'27 mesh9, user 10-22: strong scaling by
+// default). Benchmarks whose size follows the GPM count (the T16 small
+// wrappers size their grids as WGs-per-CU x total CUs; allreduce keeps one
+// gradient copy per rank) size the problem for this many GPMs, not for the
+// GPMs on the mesh. The default 48 keeps every problem at its 7x7 size on any
+// mesh (strong scaling); weak scaling sets it to the mesh's GPM count.
+var problemGPMsFlag = flag.Int("problem-gpms", 48,
+	"GPM count that GPM-dependent problem sizes are computed for (T16 small "+
+		"grids, allreduce ranks). Default 48 = the 7x7 problem on any mesh "+
+		"(strong scaling); set to N*N-1 for weak scaling.")
+
+// ProblemGPMs returns -problem-gpms (after -config files are applied).
+func ProblemGPMs() int {
+	applyConfigFiles()
+	n := *problemGPMsFlag
+	if n < 1 {
+		panic(fmt.Sprintf("-problem-gpms=%d: must be >= 1", n))
+	}
+	return n
+}

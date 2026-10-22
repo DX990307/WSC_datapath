@@ -63,6 +63,7 @@ ORACLE_FLAGS = {
 # deviations that the user must confirm, not benchmark parameters.
 MESH_FLAGS = {
     "-mesh-size": "规模实验（有意偏离 mi200.json，需要用户确认）：N×N mesh，CPU/IOMMU 在中心，N²−1 个 GPM",
+    "-problem-gpms": "规模实验：按多少个 GPM 计算随 GPM 数变化的问题规模（T16 small 网格、allreduce 份数）；默认 48 = 任何 mesh 上都用 7×7 的问题规模（强扩展）",
     "-switch-buffer-flits": "网络按 CU 比例缩小（有意偏离 mi200.json，用户 10-20 确认）：交换机端口缓冲深度 = max(-bandwidth, N) flit，与链路带宽分开；0 = 原行为",
 }
 

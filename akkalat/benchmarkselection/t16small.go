@@ -58,7 +58,7 @@ const (
 )
 
 func t16TotalCUs() int {
-	return runner.NumGPMs() * runner.CUsPerGPM()
+	return runner.ProblemGPMs() * runner.CUsPerGPM()
 }
 
 func roundUp(v, m int) int { return (v + m - 1) / m * m }
