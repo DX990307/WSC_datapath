@@ -23,6 +23,12 @@ var geoPushBoundFlag = flag.Bool("report-geo-push-bound", false,
 		"would have saved, the push copies used, and the bytes x hops. "+
 		"Writes <metric-file-name>_geo_bound.csv. Does not change timing.")
 
+var coReadMatrixFlag = flag.Bool("report-coread-matrix", false,
+	"Statistics only (ISCA'27 affinity-push): 48 x 48 co-read matrix -- how "+
+		"often two GPMs read the same line from the network within 1 us / "+
+		"10 us (same kernel, no remote write in between). Writes "+
+		"<metric-file-name>_coread.csv. Does not change timing.")
+
 // geoTopology builds the platform's geo topology (GPM order = creation order:
 // row by row, skipping the center tile).
 func (r *Runner) geoTopology() *rdma.GeoTopology {
@@ -52,11 +58,16 @@ func (r *Runner) geoTopology() *rdma.GeoTopology {
 // configureGeo installs the geo-push statistic and mechanism (timing only).
 func (r *Runner) configureGeo() {
 	rdma.DisableGeoBound()
+	rdma.DisableCoRead()
 	push := geoPushConfigFromFlags()
-	if !r.Timing || (!*geoPushBoundFlag && !push.Enabled()) {
+	if !r.Timing || (!*geoPushBoundFlag && !*coReadMatrixFlag && !push.Enabled()) {
 		return
 	}
 	topo := r.geoTopology()
+	if *coReadMatrixFlag {
+		rdma.EnableCoRead(topo)
+		fmt.Printf("[Config] co-read matrix statistic on (windows 1 us / 10 us)\n")
+	}
 	if *geoPushBoundFlag {
 		rdma.EnableGeoBound(topo)
 		fmt.Printf("[Config] geo-push bound statistic on (radius 1/2, " +
@@ -87,6 +98,14 @@ func (r *Runner) reportGeo() {
 		return
 	}
 	r.reportGeoPushStats()
+	if c := rdma.CurrentCoRead(); c != nil {
+		f, err := os.Create(*filenameFlag + "_coread.csv")
+		if err != nil {
+			panic(err)
+		}
+		c.WriteCSV(f)
+		f.Close()
+	}
 	if !*geoPushBoundFlag {
 		return
 	}

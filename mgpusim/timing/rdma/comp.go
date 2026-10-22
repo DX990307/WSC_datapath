@@ -685,7 +685,7 @@ func (c *Comp) processReqFromL1(
 		if c.m1Composed() {
 			c.m1Acquire(now, dst, cloned.Meta().ID)
 		}
-		if geoBound != nil {
+		if geoBound != nil || coRead != nil {
 			switch req.(type) {
 			case *mem.ReadReq:
 				c.geoBoundNetRead(dst, req.GetPID(), req.GetAddress(),

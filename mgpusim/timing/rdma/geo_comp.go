@@ -21,6 +21,9 @@ func (c *Comp) GeoKernelBoundary(now sim.VTimeInSec) {
 	if geoBound != nil {
 		geoBound.KernelBoundary(c.geoIdx, vtNS(now))
 	}
+	if coRead != nil {
+		coRead.KernelBoundary(c.geoIdx, vtNS(now))
+	}
 }
 
 // geoBoundDeliver: this GPM received line (pid, line) from owner.
@@ -38,7 +41,14 @@ func (c *Comp) geoBoundDeliver(
 func (c *Comp) geoBoundNetRead(
 	owner sim.Port, pid vm.PID, line uint64, need, now sim.VTimeInSec,
 ) {
-	if geoBound == nil || c.geoTopo == nil {
+	if c.geoTopo == nil {
+		return
+	}
+	if coRead != nil {
+		coRead.NetRead(c.geoIdx, uint32(pid), remoteLineAddress(line),
+			vtNS(need), vtNS(now))
+	}
+	if geoBound == nil {
 		return
 	}
 	geoBound.NetRead(c.geoIdx, c.geoTopo.Index(owner), uint32(pid),
@@ -49,7 +59,7 @@ func (c *Comp) geoBoundNetRead(
 func (c *Comp) geoBoundEntryNetRead(
 	owner sim.Port, entry *remoteLineEntry, now sim.VTimeInSec,
 ) {
-	if geoBound == nil || entry == nil || entry.speculative {
+	if (geoBound == nil && coRead == nil) || entry == nil || entry.speculative {
 		return
 	}
 	need := now
@@ -61,7 +71,7 @@ func (c *Comp) geoBoundEntryNetRead(
 
 // geoBoundWrite: a remote write left this GPM.
 func (c *Comp) geoBoundWrite(req mem.AccessReq) {
-	if geoBound == nil {
+	if geoBound == nil && coRead == nil {
 		return
 	}
 	first := remoteLineAddress(req.GetAddress())
@@ -70,6 +80,11 @@ func (c *Comp) geoBoundWrite(req mem.AccessReq) {
 		last = remoteLineAddress(req.GetAddress() + req.GetByteSize() - 1)
 	}
 	for line := first; line <= last; line += remoteLineBytes {
-		geoBound.Write(uint32(req.GetPID()), line)
+		if geoBound != nil {
+			geoBound.Write(uint32(req.GetPID()), line)
+		}
+		if coRead != nil {
+			coRead.Write(uint32(req.GetPID()), line)
+		}
 	}
 }

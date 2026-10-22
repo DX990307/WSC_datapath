@@ -214,3 +214,25 @@ func TestGeoShareTable(t *testing.T) {
 		t.Fatal("evicted line still shared")
 	}
 }
+
+func TestCoReadPairs(t *testing.T) {
+	topo := geoTestTopology()
+	c := EnableCoRead(topo)
+	defer DisableCoRead()
+	c.NetRead(1, 1, 0x40, 100, 100)
+	c.NetRead(2, 1, 0x40, 600, 600)   // within 1 us of GPM 1
+	c.NetRead(3, 1, 0x40, 5000, 5000) // within 10 us of both
+	c.NetRead(2, 1, 0x40, 700, 700)   // GPM 2 again: pairs with 1 again
+	c.KernelBoundary(4, 6000)
+	c.NetRead(4, 1, 0x40, 6500, 6500) // after its boundary: no pairs
+	c.Write(1, 0x80)
+	if c.Pairs[0][1][2] != 2 || c.Pairs[0][2][1] != 2 {
+		t.Fatalf("1us pairs (1,2) = %d", c.Pairs[0][1][2])
+	}
+	if c.Pairs[0][3][1] != 0 || c.Pairs[1][3][1] != 1 || c.Pairs[1][3][2] != 2 {
+		t.Fatalf("10us pairs wrong: %d %d", c.Pairs[1][3][1], c.Pairs[1][3][2])
+	}
+	if c.Pairs[1][4][1] != 0 || c.Reads[4] != 1 {
+		t.Fatal("boundary not respected")
+	}
+}
