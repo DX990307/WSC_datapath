@@ -64,6 +64,14 @@ elif phase == "sens9":
         tag, ov, extra = spec.split("|")
         for item, host, args in W:
             rows.append((host, item, args, "mi200", "mi200", tag, ov, extra))
+elif phase == "senssw":
+    # software-latency sensitivity on cfd, ar, npbcg, pr (tag|overlays|extra)
+    pick = {"cfd-c172k-b128", "ar-pc1", "npbcg-W", "pr-g24"}
+    for spec in sys.argv[2:]:
+        tag, ov, extra = spec.split("|")
+        for item, host, args in W:
+            if item in pick:
+                rows.append((host, item, args, "mi200", "mi200", tag, ov, extra))
 elif phase == "sens":
     # sys.argv[2:]: tag overlays extra... given as tag|overlays|extra triples
     for spec in sys.argv[2:]:

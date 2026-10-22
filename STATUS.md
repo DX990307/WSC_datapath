@@ -228,6 +228,13 @@
 
 <!-- 已经跑完的实验，指向 results/ 下的目录，并给出关键数字 -->
 
+### page migration 对比基线（10-21，分支 `isca27/page-migration` @ `c74ef96`，384 GB/s、W = 64；`results_index/pm/`，设计见 `pm/DESIGN.md`）
+- 344 个运行，340 个 exit 0，4 个 hang（L2TLB→IOMMU bug：mg pmf2m、mg pmc4kideal、shocsort pmc2m、npbis pmf2mideal）。observe 与 baseline 逐位一致（bfs 除外，自身 ±10% 不确定）。
+- 25 个 workload GMEAN：counter 4K 1.14、fault 4K 1.10、fault 4K 理想 1.47、每个 workload 事后挑最好 4K 变体 1.28、2 MB 0.45–0.48；Complete 1.73。
+- 迁移胜过 Complete：fft2d、FW、I2C（非理想即胜）；理想时加上 CFD、MoE、PA、npbis。热点 owner 类远不如 Complete（PR 2.89 vs 13.3）。
+- fault 策略对软件延迟决定性（20 µs 时 9 个 workload GMEAN 0.62）；counter 异步不敏感，阈值 64 更好（GMEAN 1.32）。
+- **Complete + counter 4K：GMEAN 1.83（相对 Complete 1.06；FW 1.63、fft2d 1.61、CFD 1.38）**；Complete + fault 4K 0.81；每个 workload 取较好者 1.93。
+
 ### data movement 离线分析（10-21；`results_index/dm/`；只用已有统计，没改代码、没跑新模拟）
 - 热点 owner 全在角落（tile 0、tile 48：小 buffer 放 GPM0、余数页放最后一个 GPM）；角落 2 条出链路 + 先 Y 后 X 路由，PR 87% 出流量走 0→7 一条链路。均匀流量压在中部 56 条链路（41–43% 字节）。
 - Complete 省下的字节×跳数主要来自本地命中（M3 + 预取）；打包按字节只省 3–15%（作用是省窗口位）；M2 ≈ 0–2%。

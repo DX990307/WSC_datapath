@@ -11,7 +11,11 @@ MECH = os.path.join(HERE, "..", "..", "abl3c384", "mechanism_stats.csv")
 REMOTE = "~/akita-exp-test/pm"
 
 rows = []
+hangs = set()
 for host in ("yss2", "yss3"):
+    h = subprocess.run(["ssh", host, f"cat {REMOTE}/hangs.tsv 2>/dev/null"],
+                       capture_output=True, text=True).stdout
+    hangs |= {l.split("\t")[0] for l in h.splitlines() if l.strip()}
     subprocess.run(["ssh", host, f"cat > {REMOTE}/ext_pm.py"],
                    stdin=open(os.path.join(HERE, "ext_pm.py")), check=True)
     out = subprocess.run(
@@ -51,6 +55,8 @@ for o in rows:
              variant=tag, exp=e, host=o.get("host") or o["host_dir"], rc=o.get("exit"),
              commit=commit)
     ok = o.get("exit") == 0 and o.get("total_time")
+    d["status"] = "ok" if ok else ("hang" if e in hangs else
+                                    ("running" if o.get("exit") is None else "fail"))
     d["total_time"] = o.get("total_time") if ok else None
     bt = float(base[item]["total_time"]) if item in base else None
     ct = float(cplt[item]["total_time"]) if item in cplt else None
