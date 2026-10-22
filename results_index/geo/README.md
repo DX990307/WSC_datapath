@@ -76,4 +76,16 @@ Claude Code，2026-10-21 / 22。设计见 `DESIGN.md`，分析和结论见 `anal
 | `coread/coread_summary.csv` | 共读汇总：top-1 / top-2 份额、伙伴类型、跳数 |
 | `scripts/` | `sched.py`、`wl.py`（规模和场景）、`ext_geo.py`（服务器上抽取）、`collect.py`、`analyze.py`、`bound_table.py`、`coread.py`、`lrun.sh`（本地运行） |
 
+## 新基线 W=256（暂停，没有可用结果）
+
+- 代码：`isca27/fix-l2tlb-wakeup` @ `c08698b` 已 merge 进 `isca27/geo-push`，合并 commit 是 `819ed43`（已推送，没有用 force）。
+  - 合并后 go 单测通过：rdma、cp、driver、runner、writeback、noc、l2tlb。
+  - 在 yss2 上用 `baseline_819ed43` 确认新开关关闭时与 c08698b 逐位一致：npbcg S 的 `v4_complete`（W=256，384 GB/s）md5 前 12 位 `87dd0b3a1552`、517.305 µs，和 `~/akita-exp-test/pgcls/verify2/v4base` 相同。
+- 队列：8 个 workload × {v4geo1s, v4aff2s, v4aff1, v4geo1}，384 GB/s、W=256，est 5 GB，cfd / ar 的 aff 运行加 `-report-coread-matrix`，命名 `1022_abl_geo-w256b384-<wl>_mi200+<cfg>_819ed43`。
+  - 对照计划用 pgcls 的 `1022_diag_pgcls-w256b384-<wl>_{mi200,mi200+v4complete}_149dff0`。
+  - 旧队列备份在 `queue.old_106dc0d.tsv`。
+- 2026-10-22 04:28 UTC 开跑，之后用户决定先停（优先其他 5 项结果）。主会话放了 PAUSE 并停掉了在跑的运行（记录在 `KILLED_priority.txt`）。
+- 已结束的 10 个都是 rc = −15，**没有 exit 0 的结果**。
+- 汇总脚本是 `scripts/nb.py`：在两台服务器上收集 819ed43 的运行和 pgcls 对照，写 `nb.csv`，打印加速比、推送用到比例、网络 line、伙伴跳数。恢复后直接用。
+
 没有引用 W = 1024 的旧结果。没有改 STATUS / SYNC。

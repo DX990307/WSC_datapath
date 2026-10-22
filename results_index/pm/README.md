@@ -80,3 +80,33 @@ workload 和参数：
 | `scripts/` | `mkqueue.py`、`sched.py`、`ext_pm.py`（在服务器上逐个运行抽取统计）、`collect.py`（生成 `pm.csv`）、`analyze.py`（生成 markdown 表） |
 
 没有改 STATUS 和 SYNC。
+
+## 6. 新基线（384 GB/s，W=256）重跑：已暂停（10-22）
+
+用户 10-22 决定先停掉这一轮。主会话在两台服务器的 `~/akita-exp-test/pm/` 放了 `PAUSE`，并结束了正在跑的运行（记录在 `KILLED_priority.txt`）。pm 调度器我也已经停掉，没有再排运行。已经完成的部分如下。
+
+1. **合并**：
+   - `origin/isca27/fix-l2tlb-wakeup` @ `c08698b`（L2TLB 丢唤醒修复、IOMMU 放到中心 tile (3,3)、driver drain 同步、bfs 修复、v4_complete 配置）用 `--no-ff` merge 进 `isca27/page-migration`，得到 **`15beab2`**，已推送（c74ef96..15beab2，fast-forward 推送）。
+   - 冲突有两处，都是"保留新基线的写法，再加上迁移那一行"：
+     - `r9nanobuilder.go`：`L2TLBToIOMMU` 改用 L2TLB 自己的 `ToIOMMU` 端口；`PageMigrationDMA` 端口仍然只在迁移模式下加。
+     - `timingplatform.go`：先 `checkIOMMUTopology`，再 `buildPageMigrationManager`。
+   - 单测通过：pagemigration、rdma、driver、addresstranslator、l2tlb（含新的唤醒测试）、mesh、runner。
+   - 二进制：`baseline_15beab2`，用 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64` 编译，md5 `029bca22d82e52b0f105e0a5142af9bb`，两台服务器的 `~/akita-exp-test/pm/bin/` 下各有一份。
+2. **逐位一致检查**（yss2，`~/akita-exp-test/pm/verify4/run.sh`）：
+   - 命令和 `~/akita-exp-test/pgcls/verify2/` 相同：npbcg S，`-timing -bandwidth=24 -switch-buffer-flits=16 -rdma-max-outstanding=256`；v4 另加 `-t18-window=256 -t18-compose-table-entries=512`。
+
+| 运行 | 时间 | md5（全部行） | md5（去掉 PageMigration 行） | 参考（c08698b） |
+|---|---|---|---|---|
+| mi200，`-page-migration none` | 669.364 µs | `8bffefbb720c` | `8bffefbb720c` | 669.364 µs，`8bffefbb720c` |
+| mi200，observe | 669.364 µs | `799b8d71251a` | `8bffefbb720c` | 同上 |
+| v4_complete，none | 517.305 µs | `87dd0b3a1552` | `87dd0b3a1552` | 517.305 µs，`87dd0b3a1552` |
+| v4_complete，observe | 517.305 µs | `2e4ce03dd183` | `87dd0b3a1552` | 同上 |
+
+   结论：none 逐位一致；observe 只多了 PageMigration 那几行统计，时序和其它统计也逐位一致。
+3. **排好的队列**（`scripts/mkqueue_w256.py` 生成，完整命令见 `scripts/commands_w256.tsv`，调度器是 `scripts/sched_w256.py`）：
+   - 25 个 workload × 6 个配置 = 150 个运行：c4k、f4k、f4k-ideal、c4k 阈值 64、v4_complete+c4k、v4_complete+f4k；
+   - 命名 `1022_abl_pm-w256b384-<wl>_<mi200|v4complete>+<tag>_15beab2`；
+   - est：迁移运行 5，v4+迁移 8。
+4. **运行情况**：04:30 UTC 开始，启动了 11 个，都是 c4k：npbcg、sssp、cfd、mm、atax、moe、pr、bfs、ar、tc、mg。**全部在完成前被结束（rc=−15），没有可用的结果**。其余 139 个还没有启动，队列文件仍在服务器上（`queue.tsv`）。
+   - 旧一轮（c74ef96，W=64）的调度文件移到了 `~/akita-exp-test/pm/old_c74ef96/`，结果仍在 `src/results/`。
+5. 恢复的方法：去掉 `PAUSE`，把被结束的 11 个运行的结果目录移走（`isca27_run.sh` 遇到已有的 `meta.json` 会拒绝运行），再从 `done.tsv` 和 `launched.tsv` 里删掉对应的行，然后在两台机器上各启动一个 `python3 sched.py`（`sched.py` 里的 COMMIT 已经是 15beab2）。
