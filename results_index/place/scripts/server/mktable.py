@@ -13,6 +13,8 @@ Weights per (1 KB block, GPM) = L1V line reads (incl. the owner's local reads) +
         2 hops of the centre ("ring 12") if the workload's hot pages are concentrated (the
         busiest owner serves >= HOT_CONC of the hot pages' remote reads), otherwise left at
         their owner; every other page -> 1 KB blocks to their main user
+  med : like cls, but every non-hot 1 KB block -> the read+write weighted Manhattan median
+        tile of its accessors (best_tile, centre tile excluded)
   ctr : like cls, but (concentrated) hot-broadcast pages whole to the read-weighted best tile
 """
 import csv, gzip, json, os, sys, collections
@@ -85,7 +87,7 @@ def main():
         hot_own[o] += sum(v for b in blocks for g, v in b.items() if g != o)
     hot_share = max(hot_own.values()) / sum(hot_own.values()) if sum(hot_own.values()) else 0.0
     move_hot = hot_share >= HOT_CONC
-    tables = {k: [] for k in ("pg", "sb", "cls", "ctr")}
+    tables = {k: [] for k in ("pg", "sb", "cls", "ctr", "med")}
     nhot = 0
     for pg in sorted(w):
         o = owner.get(pg)
@@ -100,17 +102,20 @@ def main():
             continue
         tpg = main_user(page_w, o)
         tsb = [main_user(b, o) for b in blocks]
+        tmed = [best_tile(b) if b else o for b in blocks]
         hot = cls.get(pg) == "热点广播"
+        med = tmed
         if hot and not move_hot:
             nhot += 1
-            ring = ctr = [o] * 4
+            ring = ctr = med = [o] * 4
         elif hot:
             nhot += 1
             ring = [RING[(4 * pg + i) % len(RING)] for i in range(4)]
             ctr = [best_tile(page_w)] * 4
+            med = ring
         else:
             ring = ctr = tsb
-        for name, t in (("pg", [tpg] * 4), ("sb", tsb), ("cls", ring), ("ctr", ctr)):
+        for name, t in (("pg", [tpg] * 4), ("sb", tsb), ("cls", ring), ("ctr", ctr), ("med", med)):
             for i in range(4):
                 if t[i] != o:
                     tables[name].append(f"{(pg << 2) + i} {t[i]}")

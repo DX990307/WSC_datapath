@@ -121,7 +121,7 @@ def load(prefix, clsfile):
 
 
 POLICIES = ["none", "page", "sub1k", "center", "k2", "k4", "ring", "rep4", "cls_k2", "cls_k4",
-            "cls_ctr", "cls_ring", "cls_hotnone", "sub_ring", "sub_hotnone", "page64k", "page2m"]
+            "cls_ctr", "cls_ring", "cls_hotnone", "sub_ring", "sub_hotnone", "v2", "med", "page64k", "page2m"]
 
 
 def run(prefix, clsfile, label):
@@ -133,6 +133,13 @@ def run(prefix, clsfile, label):
              "page2m": collections.defaultdict(collections.Counter)}
     owner_of = {}
     cls_reads = collections.Counter()
+    hot_own = collections.Counter()
+    for pg, R in pages.items():
+        c, o = cls[pg]
+        if c == "热点广播":
+            hot_own[o] += sum(sum(b) for g, (b, _) in R.items() if g != o)
+    conc = (max(hot_own.values()) / sum(hot_own.values()) >= 0.3) if sum(hot_own.values()) else False
+    bycls = {p: collections.defaultdict(Acc) for p in ("none", "v2", "med")}
     for pg, R in pages.items():
         c, o = cls[pg]
         owner_of[pg] = o
@@ -166,6 +173,18 @@ def run(prefix, clsfile, label):
         hotp = c == "热点广播"
         targets["sub_ring"] = ring if hotp else tblk
         targets["sub_hotnone"] = [o] * 4 if hotp else tblk
+        tmed = []
+        for i in range(4):
+            wb = {g: b[i] for g, (b, _) in R.items() if b[i]}
+            tmed.append(best_tile(wb) if wb else o)
+        hot_t = ring if conc else [o] * 4
+        targets["v2"] = hot_t if hotp else tblk
+        targets["med"] = hot_t if hotp else tmed
+        for pol in ("none", "v2", "med"):
+            a = bycls[pol][c]
+            for i in range(4):
+                for g, (b, keep) in R.items():
+                    a.add(targets[pol][i], g, b[i], keep)
         if c in ("私有放错", "流式"):
             cl = tblk
             targets.update(cls_k2=cl, cls_k4=cl, cls_ctr=cl, cls_ring=cl, cls_hotnone=cl)
@@ -202,7 +221,8 @@ def run(prefix, clsfile, label):
                         else:
                             srv = targets[pol][i]
                         a.add(srv, g, b[i], keep)
-    out = dict(label=label, cls_reads=dict(cls_reads))
+    out = dict(label=label, cls_reads=dict(cls_reads), hot_concentrated=conc)
+    out["bycls"] = {p: {c: a.stats() for c, a in d.items()} for p, d in bycls.items()}
     out["all"] = {p: a.stats() for p, a in acc.items()}
     out["hot"] = {p: a.stats() for p, a in hot.items()}
     return out

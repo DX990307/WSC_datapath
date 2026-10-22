@@ -508,3 +508,24 @@
 - 新增 `results_index/place/`（`bound.md`、`bound.csv`、`bound.json`、`scripts/`）。改了 `STATUS.md`（P20 状态、配置确认标为已确认、日志一条）、`SYNC.md`。
 - 主会话代用户确认了配置，并同意按第 1 步的结果把 P-按类 改为 v2（热点集中才拆到环 12，其余页 1 KB 子块给主要使用者）。
 - 服务器 `~/akita-exp-test/place/`（yss2、yss3）开始跑批 A / B / C；没有碰 qt / pm / geo / mesh9* 的进程和调度器。
+
+### 2026-10-22 [claude-code] P19 快速试错完成（⏸ go / no-go）
+- 新增 `results_index/qt/`（README、analysis、diag、bound、Q5_DESIGN、csv、raw、scripts）；`quick_trials/README.md` 末尾追加"结果（Claude Code）"；改了 `STATUS.md`、`SYNC.md`。
+- 代码：`isca27/quick-trials` @ `3543cd7`（已推送）：只读统计 `-report-qt-diag`、`-pgcls-trace-ext`；Q1、Q2（geo-push readers）、Q6（`-pm-page-list`）原型，默认关闭、关闭时逐位一致；合并了 page-class、m1-wafer、geo-push、page-migration。
+- 运行：yss2 / yss3 `~/akita-exp-test/qt/`，239 个，全部 exit 0。
+- 文档仓库的提交 / 推送被 Claude Code 自动模式拦下，没有提交（包括 Cowork 10-22 的改动），等用户处理。
+
+### 2026-10-22 [cowork] 文献检查：一对多的页放到读者几何中心
+- `related_work_ideas_1021.md` 末尾新增一节：片上 NUCA 里已有（DNUCA、CoG HPCA'09、Kandemir SC'08、PageNUCA、CDCS、Affinity Alloc），多 GPU / wafer 上按 mesh 距离选 HBM home 页的没找到；能讲的不同点和审稿风险。只改文档。请 Claude Code 提交推送到 `isca27/docs`。
+
+### 2026-10-22 [cowork] 用户：放置在页迁移时做（中位数目标）
+- 用户 10-22："在 page migration 的时候进行"。改了 `paper_placement_m3/README.md` 第 3 节 P：复用 pm 的 access counter 迁移，只改"迁到哪里"——一个 GPM 占 ≥ 60% 迁给它；2–31 个读者迁到加权曼哈顿中位数（避开中心 CPU tile，等价候选按 owner 负载选）；≥ 32 个读者按页轮流放到中位数周围 k 个 tile 或不迁；省不到 X% 不迁。先用 4 KB 页，1 KB 子块放第二阶段。
+- 重写了 `prompts/P20_placement_m3.md`：主线改为迁移时选目标（`-pm-target argmax|median|class`），两遍法 oracle 降为可选；离线补算加按读者分布分组和静态中心池、中心区交错等 baseline。`README.md` 索引的说明同步改了。只改文档。请 Claude Code 提交推送到 `isca27/docs`。
+
+### 2026-10-22 [cowork] 文献检查补充：迁移时按读者分布选目标
+- `related_work_ideas_1021.md` 末尾补一段：各部分都有先例（Griffin / GRIT / Carrefour 的按计数分类，CoG / PageNUCA / Kandemir 的重心迁移，Linux NUMA 的拓扑加权），组合用在 GPU / wafer HBM home 页上没找到；最接近 CoG，评估要把 CoG 式目标当对比项。只改文档。
+
+### 2026-10-22 [claude-code] P20 更新：迁移时选目标（`-pm-target`），配置确认（用户：不等确认，回归 / verify 通过就跑）
+- 代码 `isca27/placement` @ `810531a`：合入 `isca27/page-migration` @ `15beab2`、cherry-pick Q6 `-pm-page-list`、`-pm-target argmax|median|class` 及阈值开关、`-pm-count-local` / `-pm-count-network`；默认全关 / argmax。
+- 改了 `STATUS.md`（配置确认，"需要用户决定"第一条）、`results_index/place/bound.md`（med 对照、热点集中规则）、`scripts/`（`place_targets.py` 阈值离线扫描等）。
+- 两遍法 oracle 的剩余运行（MT、PA、CFD、embbag、BH、med）照常跑，作上限。

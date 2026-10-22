@@ -33,12 +33,23 @@
 | P12 T18/T19 的测量 | 1–4 完成；5（T17 的 O1/O2b/O3）⏸ 配置确认，等用户 | 10-20 | 两个只加统计的 tracer（WG 足迹、M1 共享），回归逐位一致；7 个测量运行（yss2 3 个、yss3 4 个）全部 rc=0；结果见“结果摘要 → P12 测量”，CSV 在 `results_index/p12/` |
 | T18 新 m2（两端合并） | 实现完成（用户 10-19 决定直接做真实版）；⏸ 评估的配置确认，等用户 | 10-20 | 分支 `isca27/t18-merge` @ `ca8b831`（已推送）；全部开关关闭时 fir、MM、旧 m2 和 `0b85bef` 逐位一致；冒烟见“结果摘要 → T18”；评估计划 121 个运行，见“需要用户决定” |
 | T19 就近 WG 窃取 | **放弃**（用户 10-20：本篇只做通信，留给下一篇） | 10-20 | 代码保留在 `isca27/t19-steal` @ `eaa9c73`；不跑评估 |
-| P19 快速试错（D / Q0 / Q0b / Q1 / Q2 / Q5 / Q6） | 进行中（用户 10-22 已确认配置） | 10-22 | 分支 `isca27/quick-trials`（worktree `wt-qt`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `isca27/m1-wafer`）；W = 128、384 GB/s；配置确认见"需要用户决定"第一条 |
-| P20 放置 + M3+（两遍法放置 oracle） | 进行中：第 1 步完成，第 2 步运行中（主会话 10-22 代用户确认配置） | 10-22 | 分支 `isca27/placement`（worktree `wt-place`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `20f323e` 放置表开关）；W = 128、组合表 128、384 GB/s；配置确认见"需要用户决定"第一条 |
+| P19 快速试错（D / Q0 / Q0b / Q1 / Q2 / Q5 / Q6） | 完成（⏸ go / no-go 和 Q5 等用户） | 10-22 | 分支 `isca27/quick-trials`（worktree `wt-qt`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `isca27/m1-wafer`）；W = 128、384 GB/s；配置确认见"需要用户决定"第一条 |
+| P20 放置 + M3+（迁移时选目标 `-pm-target`；两遍法 oracle 作上限） | 进行中：oracle 第 2 步在跑；`-pm-target` 实现完（`810531a`），回归 / verify 通过后直接开跑（用户：不等确认） | 10-22 | 分支 `isca27/placement`（worktree `wt-place`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `20f323e` 放置表开关）；W = 128、组合表 128、384 GB/s；配置确认见"需要用户决定"第一条 |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
 
+- [x] **(P20 更新版的配置确认，10-22 晚：放置改在页迁移时做，`-pm-target`)** 用户："不用分几批跑，能跑就跑呗"——不等确认，回归逐位一致、`-verify` 通过后直接开跑（服务器上以文件 `GO_PM` 放行）。只列新增 / 改变的部分，场景不变（384 GB/s、W = 128、组合表 128、baseline 原版 RDMA、`-magic-memory-copy`）。
+  1. **二进制 `810531a`**（`isca27/placement`，已推送）= `20f323e` + merge `isca27/page-migration` @ `15beab2`（pm 在新基线上重跑 c4k 用的版本；冲突两处，都是 Platform 结构体字段，两边都保留）+ cherry-pick P19 的 Q6 `-pm-page-list`（`3543cd7`）+ 新代码：
+     - `-pm-target argmax|median|class`（默认 argmax，走原代码路径）。median：所有 GPM tile 里按计数加权曼哈顿跳数最小的（中心 tile 24 不是 GPM，自然排除），并列时选最近被服务远程读最少的 owner（每 10 µs 减半），再并列取设备号小的。class：最大计数 ≥ `-pm-dom-share`（0.6）→ 迁给它；读者数（份额 ≥ `-pm-reader-noise` 0.01）> `-pm-median-max-readers`（31）→ 中位数附近 `-pm-broadcast-k`（4）个 tile 按页号轮流（0 = 不迁）；否则中位数。median / class 在目标 = 当前 owner 或加权跳数省不到 `-pm-min-saving`（0.1）时不迁（计数照样清零）。
+     - `-pm-count-local`：owner 自己的 L1V 缺失也计数（只计不触发；writearound 里一个默认 nil 的钩子）。`-pm-count-network`：M3 副本命中时把计数减回去（RDMA 里一个默认 nil 的钩子）。
+     - 新统计（只在非 argmax 或开了计数开关时输出）：`pm_target_{dominant,median,broadcast}`、`pm_declined_{same_place,small_saving,broadcast}`、`pm_local_counted`、`pm_replica_uncounted`。单元测试 `target_test.go`（中心避让 + 负载选择、加权中位数、不迁条件、class 三条规则和 k 份轮流、负载衰减）通过。
+  2. **配置文件**（`akkalat/configs/`）：`c4k`（counter 4 KB，argmax）、`c4k_med`（median + count-local）、`c4k_cls`（class k = 4 + count-local）、`c4k_clsstay`（class，广播页不迁）、`f4k`（on-fault 4 KB）、`c2m`（counter 2 MB）；`m3p_` 前缀的同名 6 个 = 叠在 M3+ 上（counter 类另加 count-network）。pm 参数全部用默认（阈值 256、batch 256、sw 5 µs、shootdown 1 µs、冷却 5 µs、最多 3 次）。
+  3. **对比的其他机制**：on-fault 4K（`f4k`）、counter 4K（`c4k` = argmax）、counter 2M（`c2m`）、只迁私有放错页（Q6：`c4k` + `-pm-page-list`，页表来自 W = 128 baseline 的 pgcls 分类；MT、MM、atax 没有私有放错页，不跑）、**细粒度交错**（`-place-random-seed=1`：每个 1 KB 块按哈希交错到 48 个 GPM）、**两遍法 oracle**（上限，已在跑：P-整页 ≈ Pal 式离线放置、P-子块、P-按类）。GRIT 式复制、静态中心池这次不做（要新代码）。
+  4. **阈值敏感性**：离线用 W = 128 baseline 的 pgcls 统计按页扫了 dom ∈ {0.5, 0.6, 0.75} × 读者上限 ∈ {7, 15, 31, 47} × k ∈ {0, 2, 4} × X ∈ {0, 0.1, 0.25}（108 组，`results_index/place/scripts/place_targets.py`）：剩余读×跳（含保留）几乎不随 dom、读者上限变（16 个 workload 平均 0.339–0.342，argmax 0.351）；k = 0（广播页不迁）0.355；**最忙链路**差别大：中位数 0.75、class 默认 0.62、X = 0.25 时 0.56（最差 workload 1.28，默认 2.04）。所以时序上只跑：默认（0.6 / 31 / 4 / 0.1）、X = 0.25、读者上限 7、读者上限 47（= 多读者页全走中位数），都叠在 M3+ 上；外加计数语义（M3+ 上不减回副本命中）的 argmax 和 class 各一组。
+  5. **workload（16 个）**：P20 原 14 个 + MG（`npb_mg -mg-class W`）、atax（`w2-atax -atax-nx 2688 -atax-ny 8192 -atax-rows-per-chunk 64`）。
+  6. **运行数**：每个 workload {c4k, c4k_med, c4k_cls, c4k_clsstay, f4k, c2m} × {baseline, M3+} 12 个 + Q6 × 2（13 个 workload）+ 交错 × 2 + 敏感性 5 = 19–21 个；MG、atax 另补 baseline / M3+ / 全部本地 3 个。共 **336 个**（另有回归 10 个、`-verify -pm-check` 32 个：atax、bfs、npbcg、fft2d、lud、MG、sssp、tc 的小规模 × {median, class, class + M3+, class 压力（阈值 16、冷却 0、不限次数）}）。14 个原 workload 的 baseline / M3+ / 全部本地复用 `20f323e` 的结果（`810531a` 在开关全关时和它逐位一致，回归正在验证）；"最好的一组 + 打包 + 合并（v4m3）"等主对比出来后再排 16 个。
+  7. **CPU 小时和并发**：约 0.5 h / 个（迁移另加 10–30%），MoE 约 3 h；共约 **220 CPU 小时**。P19 已结束，按用户的意思尽量并发：`MAXRUN` yss2 20、yss3 20（仍按 MemAvailable 留 30 GB，nice 10）；墙钟约 6–8 小时。
 - [x] **(P20 第 0 步配置确认，10-22) 主会话已代用户确认**（用户外出前授权）：全部同意；MoE 照跑原规模（超过 1 小时的约定在报告里注明）；若回归证明 `20f323e` 和 `9e87ac5` 在 v4m3 上逐位一致，B 批的 v4m3 参照复用 P19 的 `qt-w128c128b384` 结果。第 1 步之后的调整（主会话同意）：P-按类 用 v2（热点页集中时拆到环 12，否则不动；其余页 1 KB 子块给主要使用者），见 `results_index/place/bound.md`。原内容：范围：P20 全部运行（回归、第 2 步两遍法 oracle 的 pass 1 / pass 2）；第 1 步是离线补算，不跑模拟。
   1. **二进制**：分支 `isca27/placement`（worktree `~/Desktop/CuPath/wt-place`，已推送）= `isca27/a1-retain` @ `1335def`（含 `c08698b`，已核对是祖先）+ merge `isca27/page-class` @ `149dff0`（`2735684`，无冲突）+ `20f323e`（本轮新代码）。**没有合并 `isca27/page-migration`**：两遍法 oracle 没有迁移开销，用不到它的计数器和拷贝引擎（第 3 步做在线版时再合）。没有合并 m1-wafer / quick-trials 的统计。交叉编译（linux/amd64）通过；`go test`：`akita/mem/trace`、`TestPlacementFinders` 通过。
   2. **新开关（默认全关）**：
@@ -1361,3 +1372,18 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 - `results_index/place/bound.md`、`bound.csv`、`bound.json`，脚本 `results_index/place/scripts/`（`place_bound.py`、`place_stability.py`、`place_bound_agg.py`；服务器端 `server/mktable.py`、`gen_tables.py`）。数据：P19 的 W = 128 baseline pgcls 聚合；MoE 和 (b) 用 pgcls 的 W = 256 baseline（(b) 用 1/16 采样的原始 trace）。
 - 结论：热点页拆到中心环 12 只在热点原本集中在一个 owner 时有用（最忙链路 0.11–0.20），热点本来分散时往中心放会让最忙链路 ×1.1–7.7 → 规则：最忙 owner 份额 ≥ 0.3 才拆；最优位置按 kernel 几乎不变（MG 例外）；流式的搬运 ≈ 省下的；整页放置随页变大失效（KM 4 KB 0.06 → 2 MB 0.96），1 KB 子块不受影响；P-按类 v2 + M3+ 剩余读×跳 0.15（P20 的 14 个平均；只保留 0.42）。v2 里分类只用来找热点页，论文说法改为"热点识别 + 子块放置"。
 - 服务器 `~/akita-exp-test/place/`：二进制 `baseline_20f323e`（yss2 go 1.27.3 编译，复制到 yss3，md5 `b8ce30e2…`）；调度器 `sched.py`（复制 qt 的，nice 10，`MAXRUN` yss2 6、yss3 10，第 7 列 = 等这个放置表文件出现再启动）；`scripts/gen_tables.py` 在 pass 1 完成后生成放置表。批 A（回归 29 个，yss2）、B（pass 1 + M3+ + 全部本地）、C（pass 2）已排队：yss2 69 行、yss3 75 行；v4m3 参照等回归结果再定是否复用 P19。
+
+### 2026-10-22 傍晚 (P19) c256 主结果；组合表改 128；原型代码
+
+- 用户 10-22 晚：组合表取 128（= v4_complete.json），W 仍 128。已完成的组合表 256 运行（exp_id 里是 `qt-w128b384`）保留作敏感性，未启动的 5 个撤掉；c128 重排 68 个（`qt-w128c128b384`，25 × {v4, v4m3} + Q0 10 + Q0b 8，commit `9e87ac5`）。baseline 不受影响。
+- c256 结果（24/25）：v4 / base 1.456，v4m3 / base 1.549，v4m3 / v4 1.064。
+- 离线上限（c256 trace，网络读 = 延迟 ≥ 100 ns）：Q2 的窗口预测器在 tc、ar、IVF 上满足精确率 ≥ 0.7 且省 ≥ 5%，kernel 预测器无用；Q1 在 npbis、i2c、CFD、MG、PA、IVF、MoE、fft2d 上满足。正式判断用 c128 trace。
+- 用户（主会话转达）：Q1 / Q2 / Q6 的通过 / 砍掉和冒烟不用停下等；Q5 只写设计（`results_index/qt/Q5_DESIGN.md`）。
+- 代码（已推送 `isca27/quick-trials`）：`45cb1e8` Q1（`-q1-depth-near/mid/far`、`-q1-hot-share`）；`2997105` 合并 `isca27/geo-push`；`f81f597` Q2（`-geo-push-mode readers`、`-q2-pages/-q2-window-ns/-q2-min-readers/-q2-max-pages`）；`b8deb18` 合并 `isca27/page-migration`；`3543cd7` Q6（`-pm-page-list`）+ 配置 `v4m3_q1/q2/c4k/q6`。二进制 `3543cd7`（md5 `89ec2eb9…`）回归和 -verify 已排队。
+
+### 2026-10-22 夜 (P19) 全部跑完；go / no-go（⏸ 等用户）
+
+- 主结果（c128，25 个）：v4 / base 1.313，v4m3 / base 1.424，v4m3 / v4 1.085；组合表 256 敏感性 1.468 / 1.557。
+- 诊断 D、离线上限、Q0 / Q0b、Q1 / Q2 / Q6 冒烟、Q5 复核：见 `results_index/qt/analysis.md` 第 0 节的 go / no-go 表。Q0、Q0b、Q1、Q2 no-go；Q6 go（候选）；Q5 只写设计。
+- 运行 239 个，全部 exit 0（`results_index/qt/runs.csv`）；回归和 -verify 见 `verify.csv`。
+- 代码 `isca27/quick-trials` @ `3543cd7` 已推送。文档仓库的提交 / 推送仍被权限拦着，改动都在 `isca27/` 工作区（`STATUS.md`、`SYNC.md`、`quick_trials/README.md`、`results_index/qt/`），等用户放行后提交。
