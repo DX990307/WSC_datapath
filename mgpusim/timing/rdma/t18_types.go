@@ -89,7 +89,7 @@ func (c T18Config) Enabled() bool {
 	return c.RequesterActive() || c.OwnerMerge
 }
 
-const t18MaxHops = 13 // 7x7 mesh: at most 12 hops
+const t18MaxHops = 17 // 9x9 mesh: at most 16 hops (7x7: 12)
 
 // T18Stats are the T18 counters (reported only when T18 is enabled).
 type T18Stats struct {

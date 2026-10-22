@@ -191,7 +191,7 @@ func (h *obsHist) quantile(q float64) float64 {
 // ---------------------------------------------------------------------------
 // state
 
-const obsMaxHops = 16
+const obsMaxHops = 17 // 9x9 mesh: at most 16 hops
 
 const (
 	obsSegWait = iota

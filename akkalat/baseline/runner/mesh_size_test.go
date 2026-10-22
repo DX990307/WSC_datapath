@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
+	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 )
 
 // Building the timing platform on an N x N mesh gives N*N-1 GPMs on distinct
@@ -14,7 +15,10 @@ import (
 // simulation is run.
 func TestTimingPlatformMeshSizes(t *testing.T) {
 	for _, n := range []int{7, 9} {
-		p := MakeR9NanoBuilder().WithMeshSize(n).WithBandwidth(24).Build(4)
+		// T18 requester side on (v4 Complete): the per-hop arrays must hold
+		// the mesh diameter (2*(n-1) hops).
+		p := MakeR9NanoBuilder().WithMeshSize(n).WithBandwidth(24).
+			WithT18(rdma.T18Config{ReqMerge: true, Window: 256}).Build(4)
 		want := n*n - 1
 		if len(p.GPUs) != want {
 			t.Fatalf("n=%d: %d GPUs, want %d", n, len(p.GPUs), want)
@@ -33,6 +37,10 @@ func TestTimingPlatformMeshSizes(t *testing.T) {
 				t.Fatalf("n=%d: %s has ID %d, want %d", n, g.Domain.Name(), g.GPUID, i+1)
 			}
 			i++
+		}
+		far := p.GPUs[0].RDMAEngine.GetT18Stats().HopDests
+		if d := 2 * (n - 1); far[d] != 1 {
+			t.Fatalf("n=%d: GPU[0] has %d destinations %d hops away, want 1", n, far[d], d)
 		}
 		// GPM k (driver ID k) owns physical addresses [k*8GB, (k+1)*8GB).
 		rdmaTable := p.GPUs[0].RDMAEngine.RemoteRDMAAddressTable
