@@ -35,6 +35,8 @@
 
 **用户决定（10-21）`[已定]`**：删掉 owner 合并、原版 M2 网内多播、按距离分配（rtt / near）。新的基线配置 `akkalat/configs/v4_complete.json`（`isca27/cupath-v3`）= M1（请求方合并 + 打包，共享池）+ M3。代码和 flag 保留（geo-push 复用 M2 的交换机复制），只是 v4 配置里关闭。v4 在 25 个 workload 上的结果待跑。
 
+**用户决定（10-21）`[已定]`：主配置改为 384 GB/s、W = 256**（`-bandwidth=24 -switch-buffer-flits=16 -rdma-max-outstanding=256 -t18-window=256 -t18-compose-table-entries=512`）。理由：W = 256 时 baseline 已接近窗口不限的性能（再放大只快 1–7%，CFD 21%；每 GPM 在途读被 L1V 封顶 448），能回答"为什么不加大窗口"，且与 48 GB/s 场景用同一个 W。W = 64 的结果保留作敏感性。25 个 workload 的 baseline / v4_complete 在 `~/akita-exp-test/v3m2w/`（tag `w256b384`）跑。
+
 ### 3. 新 idea（全部 `[提案]`）
 
 **A. 有数据支持、上限较高**

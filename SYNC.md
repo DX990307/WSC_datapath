@@ -460,3 +460,8 @@
 
 ### 2026-10-21 [claude-code] P18 补充：LLM / DLRM 算子的 baseline 对 CuPath（ASTRA E5）
 - 改了 `results_index/astra/`（`compare_E5_llm_ops.csv`、`scripts/mk_runs_llmops.py`、`scripts/compare.py`、`analysis.md` 第 6b 节、`README.md`、`runs.csv`、`hops.csv`）、`STATUS.md`、`SYNC.md`。没有改 MGPUSim，没有新跑 MGPUSim。
+
+### 2026-10-21 [claude-code] 用户：主配置改为 384 GB/s、W = 256；page migration 完成；修 L2TLB bug
+- 主配置改为 W = 256（README 已记）。v3m2w 恢复：去掉 W 扫描剩下的 v3 运行，排上 25 个 workload 的 v4_complete（w256b384）和缺的 baseline；v4_complete.json 复制进服务器的 src（二进制仍是 4235991，ad0dfe3 只加了配置）。已通知 geo 和 m1-wafer 会话以 w256b384 为主场景。
+- page migration 344 个运行完成（4 个 hang）；Complete + 访问计数 4K GMEAN 1.83 > Complete 1.73；全部表格在 `results_index/SUMMARY_1021.md`。
+- 用户要求修 hang：新会话在 `isca27/fix-l2tlb-wakeup` 修 L2TLB→IOMMU 丢唤醒 bug，并重跑 12 个挂住的运行、检查对已有结果的影响和 bfs 的运行间不确定性。
