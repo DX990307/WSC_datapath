@@ -17,7 +17,6 @@ import (
 	"github.com/sarchlab/akita/v3/mem/vm/mmuTLB"
 	"github.com/sarchlab/akita/v3/monitoring"
 	mesh "github.com/sarchlab/akita/v3/noc/networking/mesh"
-	"github.com/sarchlab/akita/v3/noc/networking/switching"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 	"github.com/sarchlab/mgpusim/v3/driver"
@@ -517,7 +516,7 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 	b.configT18Topology()
 
 	connector.EstablishNetwork()
-	b.connectL2TLBsToIOMMUEndpoint()
+	b.checkIOMMUTopology(connector)
 
 	for _, gpu := range b.gpus {
 		gpu.MMUEngine = mmuComponent
@@ -892,29 +891,44 @@ func (b *R9NanoPlatformBuilder) setupPerfermanceTracing() {
 	}
 }
 
-// connectL2TLBsToIOMMUEndpoint plugs each L2TLB's own ToIOMMU port into the
-// network endpoint that carries the IOMMU's Top port. Each GPU domain exports
-// IOMMUTLB.Top ("L2TLBToIOMMU"), so the port ends up connected to one GPU
-// tile's endpoint, and translation requests from every L2TLB enter the
-// network there. The L2TLBs used to send through IOMMUTLB.Top itself; when
-// that endpoint was full, the endpoint's NotifyAvailable went to the IOMMU TLB
-// rather than to the L2TLB, which could then stop ticking forever (a lost
-// wake-up). Plugging the L2TLB's own port into the same endpoint keeps the
-// path and the buffer unchanged and lets the endpoint wake the L2TLB.
-func (b *R9NanoPlatformBuilder) connectL2TLBsToIOMMUEndpoint() {
-	top, ok := b.IOMMUTLB.GetPortByName("Top").(*sim.LimitNumMsgPort)
-	if !ok {
-		panic("IOMMUTLB Top port is not a LimitNumMsgPort")
-	}
+// checkIOMMUTopology verifies, after the network is built, that the IOMMU
+// TLB's Top port is attached once, to the center tile (with the driver), and
+// that every L2TLB sends to it through its own port on its own GPU tile.
+// Before this check existed, every GPU domain exported IOMMUTLB.Top, the port
+// ended up on the last GPU tile's endpoint, and all L2TLB requests entered
+// the network there without crossing the mesh.
+func (b *R9NanoPlatformBuilder) checkIOMMUTopology(connector *mesh.Connector) {
+	center := [3]int{b.tileWidth / 2, b.tileHeight / 2, 0}
 
-	ep, ok := top.Connection().(*switching.EndPoint)
-	if !ok {
-		panic("IOMMUTLB Top port is not connected to a network endpoint")
+	top := b.IOMMUTLB.GetPortByName("Top")
+	if loc, ok := connector.TileOf(top); !ok || loc != center {
+		panic(fmt.Sprintf("IOMMUTLB.Top is on tile %v, want the center tile %v", loc, center))
+	}
+	if ep := connector.EndPointOf(center); portConnection(top) != ep {
+		panic("IOMMUTLB.Top is not connected to the center tile's endpoint")
 	}
 
 	for _, gpu := range b.gpus {
-		ep.PlugInSharedSender(gpu.L2TLB.GetPortByName("ToIOMMU"))
+		cpLoc, _ := connector.TileOf(gpu.Domain.GetPortByName("CommandProcessor"))
+		toIOMMU := gpu.L2TLB.GetPortByName("ToIOMMU")
+		loc, ok := connector.TileOf(toIOMMU)
+		if !ok || loc != cpLoc {
+			panic(fmt.Sprintf("%s is on tile %v, want its GPU tile %v",
+				toIOMMU.Name(), loc, cpLoc))
+		}
+		if portConnection(toIOMMU) != connector.EndPointOf(loc) {
+			panic(toIOMMU.Name() + " is not connected to its GPU tile's endpoint")
+		}
 	}
+}
+
+func portConnection(p sim.Port) sim.Connection {
+	lp, ok := p.(*sim.LimitNumMsgPort)
+	if !ok {
+		return nil
+	}
+
+	return lp.Connection()
 }
 
 func (b *R9NanoPlatformBuilder) createL2TLBTable() *mem.MultiPageFinder {

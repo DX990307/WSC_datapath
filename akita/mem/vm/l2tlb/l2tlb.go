@@ -29,9 +29,10 @@ type L2TLB struct {
 	// another device (the IOMMU's Top port). It belongs to the IOMMU, so the
 	// L2TLB never sends through it.
 	IOMMUPort sim.Port
-	// toIOMMUPort is the L2TLB's own port for sending to IOMMUPort. It must be
-	// plugged into the connection that carries the IOMMU traffic, so that the
-	// connection's NotifyAvailable wakes this L2TLB after a failed send.
+	// toIOMMUPort is the L2TLB's own port for sending to IOMMUPort (requests
+	// keep Src = OutsidePort, so the IOMMU answers to OutsidePort). It is
+	// plugged into the L2TLB's own network endpoint, so that the endpoint's
+	// NotifyAvailable wakes this L2TLB after a failed send.
 	toIOMMUPort sim.Port
 
 	LowModule sim.Port
@@ -76,10 +77,9 @@ func (tlb *L2TLB) reset() {
 }
 
 // NotifyPortFree wakes the L2TLB when one of its ports can send again. The
-// connection that carries IOMMU traffic is shared with other devices and
-// notifies every plugged port whenever it drains, so a notification on
-// toIOMMUPort only wakes the L2TLB if a send to the IOMMU actually failed.
-// This keeps the event schedule of runs without failed IOMMU sends unchanged.
+// network endpoint is shared by all the ports of a GPU tile and notifies every
+// plugged port whenever it drains, so a notification on toIOMMUPort only wakes
+// the L2TLB if a send to the IOMMU actually failed (no extra tick events).
 func (tlb *L2TLB) NotifyPortFree(now sim.VTimeInSec, port sim.Port) {
 	if port == tlb.toIOMMUPort {
 		if !tlb.iommuSendBlocked {

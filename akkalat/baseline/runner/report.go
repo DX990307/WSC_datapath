@@ -1280,9 +1280,9 @@ func (r *Runner) reportIOMMUTLBStats() {
 
 // reportL2TLBIOMMUSendStats prints (to stderr, not to the metrics file, so
 // that metrics stay comparable with older binaries) how often an L2TLB could
-// not send a translation request to the IOMMU because the shared network
-// endpoint was full, and how often the endpoint woke it up afterwards. Runs
-// with failed=0 never took the path whose wake-up was lost before the fix.
+// not send a translation request to the IOMMU because its network endpoint
+// was full, and how often the endpoint woke it up afterwards (before the fix
+// that wake-up was lost). endpoint= is the IOMMU TLB's endpoint (center tile).
 func (r *Runner) reportL2TLBIOMMUSendStats() {
 	var failed, wakeups uint64
 	gpms := 0
