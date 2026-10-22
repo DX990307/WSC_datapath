@@ -2,11 +2,13 @@ package runner
 
 import (
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/dram"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
+	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/mgpusim/v3/driver"
 	"github.com/sarchlab/mgpusim/v3/timing/cu"
 )
@@ -1286,6 +1288,75 @@ func (r *Runner) reportIOMMUTLBStats() {
 		"lookup_latency_cycles",
 		float64(r.platform.IOMMUTLB.LookupLatencyCycles()),
 	)
+
+	r.reportL2TLBIOMMUSendStats()
+	r.reportL2TLBMissLatency()
+}
+
+// reportL2TLBMissLatency writes the L2TLB miss latencies (seconds), summed
+// over all GPMs, split by where the miss was served (local GMMU or IOMMU):
+// rtt = downstream request to its response; req = TopPort arrival to
+// response, for every request that waited on a miss (miss or MSHR hit).
+func (r *Runner) reportL2TLBMissLatency() {
+	var rttSum, reqSum [2]float64
+	var rttN, reqN [2]uint64
+	for _, gpu := range r.platform.GPUs {
+		if gpu.L2TLB == nil {
+			continue
+		}
+		a, b, c, d := gpu.L2TLB.MissLatencyStats()
+		for k := 0; k < 2; k++ {
+			rttSum[k] += a[k]
+			rttN[k] += b[k]
+			reqSum[k] += c[k]
+			reqN[k] += d[k]
+		}
+	}
+
+	for k, kind := range []string{"local", "iommu"} {
+		r.metricsCollector.Collect("L2TLBs", kind+"_miss_count", float64(rttN[k]))
+		r.metricsCollector.Collect("L2TLBs", kind+"_miss_req_count", float64(reqN[k]))
+		if rttN[k] > 0 {
+			r.metricsCollector.Collect("L2TLBs", kind+"_miss_rtt_avg",
+				rttSum[k]/float64(rttN[k]))
+		}
+		if reqN[k] > 0 {
+			r.metricsCollector.Collect("L2TLBs", kind+"_miss_req_latency_avg",
+				reqSum[k]/float64(reqN[k]))
+		}
+	}
+}
+
+// reportL2TLBIOMMUSendStats prints (to stderr, not to the metrics file, so
+// that metrics stay comparable with older binaries) how often an L2TLB could
+// not send a translation request to the IOMMU because its network endpoint
+// was full, and how often the endpoint woke it up afterwards (before the fix
+// that wake-up was lost). endpoint= is the IOMMU TLB's endpoint (center tile).
+func (r *Runner) reportL2TLBIOMMUSendStats() {
+	var failed, wakeups uint64
+	gpms := 0
+	for _, gpu := range r.platform.GPUs {
+		if gpu.L2TLB == nil {
+			continue
+		}
+		f, w := gpu.L2TLB.IOMMUSendStats()
+		failed += f
+		wakeups += w
+		if f > 0 {
+			gpms++
+		}
+	}
+
+	ep := "?"
+	if top, ok := r.platform.IOMMUTLB.GetPortByName("Top").(*sim.LimitNumMsgPort); ok && top.Connection() != nil {
+		if named, ok := top.Connection().(sim.Named); ok {
+			ep = named.Name()
+		}
+	}
+
+	fmt.Fprintf(os.Stderr,
+		"L2TLB_IOMMU_SEND endpoint=%s failed=%d wakeups=%d gpms_with_failures=%d\n",
+		ep, failed, wakeups, gpms)
 }
 
 func (r *Runner) reportMMUCoalescingStats() {

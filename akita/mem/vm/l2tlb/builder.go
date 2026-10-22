@@ -179,4 +179,10 @@ func (b Builder) createPorts(name string, tlb *L2TLB) {
 	tlb.OutsidePort = sim.NewLimitNumMsgPort(tlb, 1280,
 		name+".OutsidePort")
 	tlb.AddPort(".Outside", tlb.OutsidePort)
+
+	// Send-only: requests leave with Src = OutsidePort so that the IOMMU
+	// answers to OutsidePort; nothing is ever delivered to this port.
+	tlb.toIOMMUPort = sim.NewLimitNumMsgPort(tlb, 1,
+		name+".ToIOMMUPort")
+	tlb.AddPort("ToIOMMU", tlb.toIOMMUPort)
 }

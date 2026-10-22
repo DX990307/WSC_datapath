@@ -246,6 +246,8 @@ func (c *Connector) ConnectDeviceWithEPName(
 		epNode, swNode, epNode.endPoint.NetworkPort, swPort,
 		conn)
 
+	epPort = epNode.endPoint.NetworkPort
+
 	return epPort, swPort
 }
 
