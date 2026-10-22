@@ -102,6 +102,8 @@ type Comp struct {
 	m1wIdx  int
 	// ISCA'27 wafer M1 combining hubs (m1w_hub.go); nil when off.
 	m1wHub *m1wHubState
+	// ISCA'27 wafer M1 distance-aware batch holding (m1w_hold.go).
+	m1wHold *m1wHoldState
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.

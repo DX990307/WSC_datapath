@@ -338,6 +338,10 @@ func (c *Comp) m1ProcessRemoteBatches(now sim.VTimeInSec, force bool) bool {
 			i++
 			continue
 		}
+		if c.m1wHold != nil && !force && c.m1wHeld(now, batch) {
+			i++
+			continue
+		}
 		reason := flushReasonIssue
 		if force {
 			reason = flushReasonDrain

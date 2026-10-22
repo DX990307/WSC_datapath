@@ -52,6 +52,7 @@ import (
 const (
 	m1wBytesPerHop  = 112.0 // 1 request flit + 6 response flits, 16 B flits
 	m1wHubProcNS    = 10.0  // relay RDMA pipeline (10 cycles at 1 GHz)
+	m1wHopNS        = 35.7  // one-way per hop (half the T14 round trip)
 	m1wRTTPerHopNS  = 71.4  // T14 round trip per hop
 	m1wSweepEveryNS = 50000.0
 	m1wMaxHop       = 13
@@ -221,7 +222,17 @@ type M1WLine struct {
 	Demand bool
 }
 
+// m1wPending is a cover that is checked when the covering entry's data
+// passes the merge point: the later read must reach the merge point (hub or
+// switch) before the earlier read's response passes it on its way back.
+type m1wPending struct {
+	scheme   int
+	arriveNS float64 // later read reaches the merge point
+	dOut     int     // merge point -> earlier requester hops
+}
+
 type m1wHubEntry struct {
+	pend    []m1wPending
 	startNS float64
 	endNS   float64 // 0 while in flight
 	creator int
@@ -229,6 +240,7 @@ type m1wHubEntry struct {
 }
 
 type m1wHolder struct {
+	pend    []m1wPending
 	key     m1wLineKey
 	r       int
 	startNS float64
@@ -284,6 +296,7 @@ type M1WSchemeStats struct {
 	CoveredSend      uint64 // covered at the time the read left the requester
 	CoveredNeed      uint64 // covered at the time the read was first needed
 	CoveredInflight  uint64 // covered by an in-flight entry (not retention)
+	CoveredVerified  uint64 // covers whose read reached the merge point in time
 	DirectBytesHop   float64
 	SchemeBytesHop   float64
 	DetourHops       float64 // sum over uncovered far demand lines
@@ -311,7 +324,7 @@ type m1wHold struct {
 	fixed float64
 	alpha float64
 	open  map[m1wHoldKey]*m1wVBatch
-	stats M1WHoldStats
+	stats M1WHoldBoundStats
 }
 
 type m1wHoldKey struct {
@@ -325,8 +338,8 @@ type m1wVBatch struct {
 	bitmap  uint64
 }
 
-// M1WHoldStats are the counters of one (b) hold policy.
-type M1WHoldStats struct {
+// M1WHoldBoundStats are the counters of one (b) hold policy.
+type M1WHoldBoundStats struct {
 	Txns          uint64
 	Lines         uint64
 	Absorbed      uint64
@@ -617,6 +630,13 @@ func (b *M1WBound) sendLine(t *m1wTxn, l M1WLine, nowNS float64) {
 				if e.endNS == 0 {
 					s.stats.CoveredInflight++
 				}
+				dOut := topo.Hops(hub, e.creator)
+				arrive := nowNS + m1wHopNS*float64(hr)
+				if e.endNS == 0 {
+					e.pend = append(e.pend, m1wPending{si, arrive, dOut})
+				} else if arrive <= e.endNS-m1wHopNS*float64(dOut)+s.retNS {
+					s.stats.CoveredVerified++
+				}
 				s.stats.HubHopsCovered += float64(hr)
 				s.stats.SchemeBytesHop += float64(hr) * m1wBytesPerHop
 				topo.addRoute(s.stats.Load, topo.tileOf(hub), topo.tileOf(r), true, 1)
@@ -701,6 +721,8 @@ func (b *M1WBound) pathLine(si int, s *m1wScheme, t *m1wTxn, l M1WLine,
 	if best.startNS <= l.NeedNS {
 		s.stats.CoveredNeed++
 	}
+	best.pend = append(best.pend, m1wPending{si,
+		nowNS + m1wHopNS*float64(bestPos), topo.tileHops(path[bestPos], topo.tileOf(best.r))})
 	s.stats.HubHopsCovered += float64(bestPos)
 	s.stats.SchemeBytesHop += float64(bestPos) * m1wBytesPerHop
 	topo.addRoute(s.stats.Load, path[bestPos], topo.tileOf(t.r), false, 1)
@@ -773,9 +795,13 @@ func (b *M1WBound) Complete(id string, nowNS float64) {
 	b.Completed++
 	for _, e := range t.hubRefs {
 		e.endNS = nowNS
+		b.verify(e.pend, nowNS)
+		e.pend = nil
 	}
 	for _, h := range t.holders {
 		h.endNS = nowNS
+		b.verify(h.pend, nowNS)
+		h.pend = nil
 	}
 	b.dropHolders(t)
 	slot := nowNS - t.sendNS
@@ -831,6 +857,14 @@ func (b *M1WBound) Complete(id string, nowNS float64) {
 			}
 		} else if t.far[si] && t.detour[si] > 0 {
 			s.stats.SlotDetourCostNS += m1wRTTPerHopNS*float64(t.detour[si]) + m1wHubProcNS
+		}
+	}
+}
+
+func (b *M1WBound) verify(pend []m1wPending, endNS float64) {
+	for _, p := range pend {
+		if p.arriveNS <= endNS-m1wHopNS*float64(p.dOut) {
+			b.schemes[p.scheme].stats.CoveredVerified++
 		}
 	}
 }
@@ -959,6 +993,7 @@ func (b *M1WBound) Rows() [][2]string {
 		put(p+"covered_send_frac", div(float64(st.CoveredSend), float64(b.DemandLines)))
 		put(p+"covered_need_frac", div(float64(st.CoveredNeed), float64(b.DemandLines)))
 		put(p+"covered_inflight_frac", div(float64(st.CoveredInflight), float64(b.DemandLines)))
+		put(p+"covered_verified_frac", div(float64(st.CoveredVerified), float64(b.DemandLines)))
 		put(p+"covered_of_far", div(float64(st.CoveredSend), float64(st.FarReads)))
 		put(p+"bytes_hop_ratio", div(st.SchemeBytesHop, st.DirectBytesHop))
 		put(p+"detour_hops_per_far", div(st.DetourHops,

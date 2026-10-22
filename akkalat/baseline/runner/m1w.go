@@ -38,6 +38,17 @@ var m1wHubRetainFlag = flag.Float64("m1w-hub-retain-ns", 0,
 var m1wHubEntriesFlag = flag.Int("m1w-hub-entries", 1024,
 	"m1w hubs: line-table capacity of each hub (lines).")
 
+var m1wHoldNSFlag = flag.Float64("m1w-hold-ns", 0,
+	"ISCA'27 wafer M1 batch holding: a page batch to an owner more than "+
+		"-m1w-hold-min-hops away stays open this long (or until full) before "+
+		"it may leave, so later same-page lines join it (0 = off).")
+var m1wHoldAlphaFlag = flag.Float64("m1w-hold-alpha", 0,
+	"m1w batch holding with a distance-scaled hold time: alpha x modeled "+
+		"RTT(hops) (84 + 71.4 ns x hops); overrides -m1w-hold-ns (0 = off).")
+var m1wHoldMinHopsFlag = flag.Int("m1w-hold-min-hops", 2,
+	"m1w batch holding: batches to owners at most this many hops away are "+
+		"never held.")
+
 func m1wHubConfigFromFlags() rdma.M1WHubConfig {
 	c := rdma.M1WHubConfig{
 		Mode:     *m1wHubModeFlag,
@@ -82,7 +93,9 @@ func (r *Runner) m1wTopology() *rdma.M1WTopology {
 func (r *Runner) configureM1W() {
 	rdma.DisableM1WBound()
 	hub := m1wHubConfigFromFlags()
-	if !r.Timing || (!*m1wBoundFlag && !hub.Enabled()) {
+	hold := rdma.M1WHoldConfig{FixedNS: *m1wHoldNSFlag,
+		Alpha: *m1wHoldAlphaFlag, MinHops: *m1wHoldMinHopsFlag}
+	if !r.Timing || (!*m1wBoundFlag && !hub.Enabled() && !hold.Enabled()) {
 		return
 	}
 	topo := r.m1wTopology()
@@ -99,11 +112,18 @@ func (r *Runner) configureM1W() {
 			"retain=%gns entries=%d\n", hub.Mode, hub.Part, hub.MinHops,
 			hub.RetainNS, hub.Entries)
 	}
+	if hold.Enabled() {
+		fmt.Printf("[Config] m1w hold fixed=%gns alpha=%g min-hops=%d\n",
+			hold.FixedNS, hold.Alpha, hold.MinHops)
+	}
 	for _, gpu := range r.platform.GPUs {
 		engine := gpu.RDMAEngine
 		engine.SetM1WTopology(topo)
 		if hub.Enabled() {
 			engine.ConfigureM1WHub(hub)
+		}
+		if hold.Enabled() {
+			engine.ConfigureM1WHold(hold)
 		}
 		proc, ok := gpu.CommandProcessor.(*cp.CommandProcessor)
 		if !ok || proc == nil {
@@ -139,6 +159,18 @@ func (r *Runner) reportM1W() {
 			put("stale_at_boundary", st.HubStaleAtBound)
 			put("peak_entries", st.HubPeakEntries)
 			put("out_peak", st.HubOutPeak)
+		}
+	}
+	if r.Timing && (*m1wHoldNSFlag > 0 || *m1wHoldAlphaFlag > 0) {
+		for _, gpu := range r.platform.GPUs {
+			st := gpu.RDMAEngine.GetM1WHoldStats()
+			if !st.Enabled {
+				continue
+			}
+			where := gpu.RDMAEngine.Name()
+			r.metricsCollector.Collect(where, "m1w_hold_batches", float64(st.HeldBatches))
+			r.metricsCollector.Collect(where, "m1w_hold_skips", float64(st.HeldSkips))
+			r.metricsCollector.Collect(where, "m1w_hold_released_full", float64(st.ReleasedFull))
 		}
 	}
 	b := rdma.CurrentM1WBound()

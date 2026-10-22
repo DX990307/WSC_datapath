@@ -1,0 +1,6 @@
+{
+  "_description": "ISCA'27 m1w: v4_complete + distance-aware batch holding ("m1w-hold-alpha": 0.25; batches to owners more than 2 hops away stay open until that old or full). Prototype; see isca27/results_index/m1w/DESIGN.md.",
+  "extends": "v4_complete.json",
+  "m1w-hold-alpha": 0.25,
+  "m1w-hold-min-hops": 2
+}

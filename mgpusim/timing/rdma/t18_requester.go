@@ -572,6 +572,10 @@ func (c *Comp) t18ReqIssue(now sim.VTimeInSec) bool {
 		e.sent = true
 		e.sentAt = now
 		s.reqByNetID[e.netReq.Meta().ID] = e
+		if m1wBound != nil && len(e.waiters) > 0 {
+			c.m1wSendLegacy(e.netReq.Meta().ID, e.netReq, e.dst,
+				e.waiters[0].arrival, now)
+		}
 		s.stats.ReqSent++
 		if borrowBest {
 			s.stats.ReqSentBorrowed++
@@ -627,6 +631,9 @@ func (c *Comp) t18ReqRsp(
 		e.inTable = false
 	}
 	s.credits.Release(e.dstIdx, e.nearZone)
+	if m1wBound != nil {
+		c.m1wComplete(rsp.GetRspTo(), now)
+	}
 	if h := s.hops[e.dstIdx]; h >= 0 {
 		s.hopInflight[h]--
 		s.stats.HopRTTTotalNS[h] += remoteDurationNS(now - e.sentAt)

@@ -63,7 +63,8 @@ func TestM1WRegionCombining(t *testing.T) {
 	b.Send("d", d, o, m1wLine(0x1000, 1500), 1500, 1500) // after A's response
 	b.Complete("d", 2500)
 	in := b.Scheme("q2_d2_ret0")
-	if in.CoveredSend != 1 || in.CoveredInflight != 1 || in.FarReads != 3 {
+	if in.CoveredSend != 1 || in.CoveredInflight != 1 || in.FarReads != 3 ||
+		in.CoveredVerified != 1 {
 		t.Fatalf("ret0: %+v", *in)
 	}
 	ret := b.Scheme("q2_d2_ret1000")
@@ -111,6 +112,12 @@ func TestM1WPathAndTurn(t *testing.T) {
 	p := b.Scheme("path")
 	if p.CoveredSend != 1 || p.HubHopsCovered != 0 {
 		t.Fatalf("path: %+v", *p)
+	}
+	// near's request is at its own tile at once; far's response passes it
+	// 2 hops before reaching far: verified if far ends after 10 + 71.4.
+	b.Complete("f", 50)
+	if p.CoveredVerified != 0 {
+		t.Fatalf("path: a late merge was verified")
 	}
 	turn := b.Scheme("turn_ret0") // both turn at (0,6)
 	if turn.CoveredSend != 1 || turn.DetourHops != 0 {
