@@ -457,3 +457,6 @@
 - 改了 `results_index/astra/`（新增 `calibration_incast.csv`、`mgpusim_calib/`、`scripts/mk_incast.py`、`scripts/incast_table.py`；更新 `analysis.md`、`README.md`、`runs.csv`、`hops.csv`）、`STATUS.md`、`SYNC.md`。
 - akita 运行用已有二进制 `4235991`，没有改代码；结果目录在 yss3 `~/astrasim-test/mgpusim_hop/`。
 - `isca27/astrasim` 分支没有推送（权限拦下），推送命令写在 STATUS。别的会话未提交的文件没有动。
+
+### 2026-10-21 [claude-code] P18 补充：LLM / DLRM 算子的 baseline 对 CuPath（ASTRA E5）
+- 改了 `results_index/astra/`（`compare_E5_llm_ops.csv`、`scripts/mk_runs_llmops.py`、`scripts/compare.py`、`analysis.md` 第 6b 节、`README.md`、`runs.csv`、`hops.csv`）、`STATUS.md`、`SYNC.md`。没有改 MGPUSim，没有新跑 MGPUSim。

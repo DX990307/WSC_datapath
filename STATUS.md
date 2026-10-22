@@ -221,6 +221,7 @@
 - **第 4 条复现并修正**：瓶颈是 **tile 0 的注入口**（0.97–1.0），0→7 只分走 87%，所以停在 0.87。换路由提高不了热点 owner 的上限。
 - **唯一的不一致**：384 GB/s、W = 64 的 PR / npbcg，akita 往返时间是 ASTRA 的 2.1 倍。差的正好是 akita 的 owner 排队（532 / 372 ns），也就是主配置下这两个 workload 卡在 owner 端的处理能力，不在网络。
 - **选项 A（机制的网络层评估）**：用 akita Complete 的流量（M3 / 合并不进网络、实测打包直方图）闭环，"逻辑远程读吞吐"的提升：PR 20–23×、npbcg 6.8–16×、sssp 2.0–2.7×、cfd 1.2–2.0×、ar 1.05–1.9×、bfs 1.4–1.6×。36 组里 35 组 ≥ akita 端到端加速比，Spearman 0.88。384 GB/s 下非热点 workload 的往返时间不变，收益 ≈ 每个包承载的逻辑读数：在 W × RTT 的上限下，机制让同一个窗口位置做更多事，而不是降低延迟。多播没有建（保守，≤ 7%）。
+- **LLM / DLRM 算子 baseline 对 CuPath**（用户 10-21 要求"Llama-7B 上 baseline 和 CuPath 的对比"；ASTRA 的 Llama 模型是 TP/PP 显式通信，CuPath 作用不到，所以改用已有的 LLM 算子）：ASTRA 网络层提升 @384 W64 对 akita 端到端：paged attention 1.79 / 1.58×，MoE 2.08 / 2.13×，矩阵乘 13.4 / 2.67×（akita 的窗口瓶颈解除后受计算限制），embedding bag 1.66 / 1.01×（akita 的瓶颈不在远程窗口）。48 GB/s 下提升缩小到 1.1–1.3×（链路饱和，只剩字节数减少）。
 - **LLM 试验**：Llama-7B 推理，TP 8 × PP 6，每个配置 5–9 s。相邻放置 148 / 217 ms（384 / 48 GB/s），随机放置 162 / 293 ms。只作趋势参考。
 - **速度**：ASTRA 约 4,000–5,400 次远程读/秒（akita 全 GPU 约 1,300 次/秒），大运行每 100 万次读约 5 GB 内存。
 - **akita 当前配置的平台校准**（10-21 晚，用户同意；二进制 `4235991`，T14 参数不变，只加 `-bandwidth=24/3 -switch-buffer-flits=16`，16 个运行，yss3 `~/astrasim-test/mgpusim_hop/`）：零负载往返每跳 72 ns，48 GB/s 比 384 GB/s 在 12 跳时只多 5 ns（ASTRA 存储转发多 28.6 ns，即约 3% 的偏差）。incast：48 GB/s 下 akita 和 ASTRA 都停在 32 B/ns（注入口上限，差 0.3%）；384 / 768 GB/s 下 akita 的单个 owner 最多 113 B/ns（1.77 line/ns），ASTRA 网络能到 224，所以主配置下热点 owner 的上限是 **owner 的服务能力**。
@@ -1275,4 +1276,8 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 - **运行**：akita 16 个（跳数矩阵 2、incast 12、all-to-all 2），只读使用 `~/akita-exp-test/v3c384/bin/baseline_4235991`（md5 `058680df…`）和同目录的 `mi200.json`，输出在 `~/astrasim-test/mgpusim_hop/`，`nice` 运行，最多 2 个同时，按 MemAvailable 留 30 GB；没有碰别的调度器。ASTRA incast 24 个。全部 exit 0。结果见 `results_index/astra/{calibration_incast.csv, mgpusim_calib/, analysis.md 第 0、3、4 节}`。
 - **推送 `isca27/astrasim` 被 Claude Code 自动模式拦下**（新仓库加 remote 判为远程重定向）。补丁已在 `results_index/astra/patches/`。如果还要单独的分支，请在终端运行：`cd /private/tmp/claude-502/-Users-daoxuan-Desktop-CuPath/c6d28c9e-9c9f-4ab8-88ab-e761a9a1b937/scratchpad/astrasim_snapshot && rm -f .gitmodules && git init -b isca27/astrasim && git add -A && git commit -m "ASTRA-sim 4ce9ecf + CuPath P18 patches" && git remote add origin git@github.com:DX990307/WSC_datapath.git && git push origin isca27/astrasim`（scratch 目录会话结束后可能被清掉，届时用本机 `~/Desktop/CuPath/astrasim` 重做快照）。
 - ASTRA 还有超线性（incast k = 47 的 77 万次读要 12.5 分钟），没 profile。
+
+### 2026-10-21 夜 (P18) LLM / DLRM 算子的 baseline 对 CuPath（E5）
+
+- 用户要求 Llama-7B 上 baseline 和 CuPath 的对比。说明了 ASTRA 的 Llama 模型（TP × PP、显式集合通信）里 CuPath 没有作用对象，改用 paged attention、MoE、矩阵乘、embedding bag 四个算子的 akita 主配置流量，ASTRA 闭环 48 个运行，全部 exit 0。结果见"结果摘要 → P18"和 `results_index/astra/analysis.md` 第 6b 节。
 

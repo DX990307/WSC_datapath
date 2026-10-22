@@ -139,6 +139,28 @@ def main():
                                  akita_base_link_max=kb.get("link_max", ""), akita_cplt_link_max=kc.get("link_max", ""),
                                  akita_base_rtt=kb.get("rtt", ""), akita_cplt_rtt=kc.get("rtt", "")))
     wr(rows, "compare_E3_mechanisms.csv")
+    # E5: LLM / DLRM operators, baseline vs Complete traffic (shapes from w64b384)
+    R = T.runs()
+    rows = []
+    for wl in ("pa-b14s7p32", "moe-t64", "mm-g12", "embbag-b512"):
+        for bw in ("b384", "b48"):
+            for W in (64, 256, 448):
+                b, c = runs.get(f"E5b_{wl}_{bw}_W{W}"), runs.get(f"E5c_{wl}_{bw}_W{W}")
+                if not b or not c or b["rc"] != "0" or c["rc"] != "0":
+                    continue
+                lb, lc = F(b["logical_reads_per_ns"]), F(c["logical_reads_per_ns"])
+                direct = (bw, W) == ("b384", 64)
+                kb, kc = R[("w64b384", wl, "baseline")], R[("w64b384", wl, "Complete")]
+                rows.append(dict(workload=wl, bw=bw, W=W, direct_akita_comparison=direct,
+                                 astra_speedup=lc / lb if lb else 0,
+                                 akita_speedup=F(kb["total_time"]) / F(kc["total_time"]) if direct else "",
+                                 astra_base_logical_per_ns=lb, astra_cplt_logical_per_ns=lc,
+                                 astra_base_rtt=F(b["rtt_mean"]), astra_cplt_rtt=F(c["rtt_mean"]),
+                                 astra_base_link_max=F(b["link_util_max"]), astra_cplt_link_max=F(c["link_util_max"]),
+                                 astra_base_link_mean=F(b["link_util_mean"]), astra_cplt_link_mean=F(c["link_util_mean"]),
+                                 akita_base_rtt=ak[("w64b384", wl)]["rtt"] if direct else "",
+                                 akita_base_link_max=ak[("w64b384", wl)]["link_max"] if direct else ""))
+    wr(rows, "compare_E5_llm_ops.csv")
 
 
 def wr(rows, name):

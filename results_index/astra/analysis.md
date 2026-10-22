@@ -110,6 +110,23 @@ k 个最近的 GPM 同时读 owner tile 25（T14 incast 参数），数据吞吐
 - **收益从哪来**：384 GB/s 下，sssp / bfs / cfd / ar 的 Complete 往返时间和 baseline 差不多（±8%），网络层提升 ≈ 每个包承载的逻辑读数（sssp 2.16，cfd 2.31，ar 1.94）。也就是说，在 W × RTT 的上限下，机制的作用是**让同一个窗口位置承载更多逻辑读**（M3 命中、合并、打包），不是降低延迟。PR 每个包承载 29.6 个逻辑读（几乎全靠 M3），所以提升 20 倍，但 tile 0 的注入口在 Complete 下仍然饱和（0.96–1.0）。
 - 局限：owner 合并 + mesh 内多播没有建，结果偏保守（akita 被合并的 owner 读 ≤ 7%）；合并和打包的比例取自 akita，不是 ASTRA 动态算出来的。**这一节是"同样的流量削减在独立的网络模型里值多少"，不是 CuPath 端到端加速比的独立复现**，端到端以 MGPUSim 为准。
 
+## 6b. LLM / DLRM 算子：baseline 对 CuPath（`compare_E5_llm_ops.csv`）
+
+ASTRA 上的 Llama-7B（第 7 节）是 TP × PP，GPM 之间全是显式的集合通信和 send/recv，CuPath 的机制作用不到。所以对比改用我们 workload 里已有的 LLM / DLRM 算子：paged attention（解码 attention，`pa-b14s7p32`）、MoE（`moe-t64`）、矩阵乘（`mm-g12`，投影层 / MLP 的代表）、embedding bag（`embbag-b512`）。方法同第 6 节：各自用 akita 主配置的 baseline 和 Complete 流量，ASTRA 闭环，比较逻辑远程读吞吐。流量重建的每链路相关系数 0.96–1.00。
+
+| 算子 | ASTRA 网络层提升 @384, W64 | akita 端到端加速比 @384, W64 | ASTRA @384, W448 | ASTRA @48, W64 / W256 |
+|---|---|---|---|---|
+| paged attention | 1.79× | 1.58× | 1.60× | 1.47× / 1.14× |
+| MoE | 2.08× | 2.13× | 1.77× | 1.68× / 1.29× |
+| 矩阵乘 | 13.4× | 2.67× | 13.4× | 13.4× / 13.4× |
+| embedding bag | 1.66× | 1.01× | 1.64× | 1.58× / 1.35× |
+
+- 只有 384 GB/s、W = 64 这一格是直接对照（流量形状都来自 akita 主配置），其余格子是同一流量形状下的敏感性。
+- **paged attention 和 MoE 两边一致**（1.79 对 1.58、2.08 对 2.13）。这两个算子在 akita 里是窗口受限的（`frac_time_full` 0.26–0.40，owner 不排队），Complete 让每个窗口位置承载约 2 个逻辑读，网络层的提升就直接变成了端到端的提升。
+- **矩阵乘的网络层潜力（13×）远大于 akita 的 2.67×**：它是热点 owner 型（B 矩阵放在 tile 0，0→7 = 0.61，和合成热点一样），每个包承载 13.2 个逻辑读（主要来自 M3）。akita 的 Complete 运行里窗口已经完全不满（`frac_time_full` 从 0.68 降到 0），owner 排队从 522 ns 降到 10 ns，剩下的时间花在计算上（Amdahl）。
+- **embedding bag 网络层有 1.66×，akita 端到端只有 1.01×**：Complete 也解除了窗口瓶颈（`frac_time_full` 0.25 → 0.03），但时间没变，说明 akita 里 embbag 的瓶颈不在远程读的窗口，而在别处（随机 gather 的发射或者本地部分）。这是 ASTRA 看不到的。
+- **48 GB/s 下提升缩小**（paged attention 1.14×、MoE 1.29×，W = 256）：这时链路饱和（最忙链路 0.89–0.95），收益只剩字节数的减少。打包把两条 line 装进一个包只省包头，字节数减少有限；M3 命中多的算子（矩阵乘）不受影响。
+
 ## 7. LLM 试验：Llama-7B 推理（`llm/llama7b_tp8pp6.csv`）
 
 6 条序列，各 512 token 的 prefill 加 8 个解码 token；TP 8 × PP 6；每 GPM 24 TFLOPS、240 GB/s，roofline；TP all-reduce 用 ASTRA 的 ring；stage 之间点对点传激活。

@@ -46,11 +46,12 @@ Claude Code，2026-10-21。用户 10-21 决定用 ASTRA-sim（"很多 wafer-scal
 | E2a 同负载开环 | 6 个 workload，按 akita 三个场景（`w64b384`、`w256b48m`、`w2048b48`）的平均速率泊松注入 100 µs | 18 |
 | E2b 开环扫描 | 8 种流量 × 2 种带宽 × 预测最热链路 ρ = 0.1 / 0.3 / 0.5 / 0.7 / 0.9 / 1.1（每个运行最多 100 万次请求） | 96 |
 | E3 机制（选项 A） | 6 个 workload 的 Complete 流量，同 E1 的 6 组 (带宽, W) | 36 |
+| E5 LLM / DLRM 算子 | paged attention、MoE、矩阵乘、embedding bag 的 baseline / Complete 流量（akita 主配置），同 E1 的 6 组 (带宽, W) | 48 |
 | E4 incast | owner tile 25，最近的 k = 1…47 个 GPM，共享 / 不相交，W = 64，384 / 48 GB/s | 24 |
 | akita 校准 | 当前二进制 `4235991`：T14 跳数矩阵 2 个、incast 12 个、all-to-all 2 个（`-bandwidth=24/3 -switch-buffer-flits=16`，只读使用 v3c384 的二进制和 `mi200.json`） | 16 |
 | LLM 试验 | Llama-7B 推理，TP 8 × PP 6，相邻 / 随机放置 × 384 / 48 GB/s | 4 |
 
-ASTRA 222 + 4 个运行、akita 校准 16 个全部 exit 0。其余 akita 对照数据来自已有结果（`dm/raw`、`m2w/m2w.csv`，二进制 `4235991`）。
+ASTRA 270 + 4 个运行、akita 校准 16 个全部 exit 0。其余 akita 对照数据来自已有结果（`dm/raw`、`m2w/m2w.csv`，二进制 `4235991`）。
 
 ## 文件
 
@@ -61,10 +62,10 @@ ASTRA 222 + 4 个运行、akita 校准 16 个全部 exit 0。其余 akita 对照
 | `calibration_incast.csv`、`mgpusim_calib/` | incast 校准（ASTRA E4 对 akita 当前配置 / 768 GB/s 旧数据）；akita 当前二进制 `4235991` 在 384 / 48 GB/s 下重跑的 T14 跳数矩阵、incast、all-to-all（platform.csv 格式；运行目录在 yss3 `~/astrasim-test/mgpusim_hop/`，binary md5 `058680df…`） |
 | `traffic_link_check.csv`、`traffic_link_check_complete.csv` | 流量重建的检查（预测 vs akita 每链路 flit） |
 | `runs.csv`、`hops.csv` | 每个运行的汇总；每个运行 × 跳数的 fwd / ret / RTT |
-| `compare_E1_closed.csv`、`compare_E2a_matched.csv`、`compare_E2b_sweep.csv`、`compare_E3_mechanisms.csv` | 和 akita 的逐项对照 |
+| `compare_E1_closed.csv`、`compare_E2a_matched.csv`、`compare_E2b_sweep.csv`、`compare_E3_mechanisms.csv`、`compare_E5_llm_ops.csv` | 和 akita 的逐项对照 |
 | `llm/llama7b_tp8pp6.csv` | LLM 试验 |
 | `configs/` | 网络 / 系统配置 |
-| `scripts/` | `gen_et.py`（闭环 / 开环 ET）、`traffic.py`、`traffic_complete.py`、`mk_runs.py`、`mk_runs_complete.py`、`run_one.sh`、`run_all.py`（≤ 8 并发，MemAvailable 留 30 GB）、`analyze.py`、`compare.py`、`hop_table.py`、`mk_incast.py`、`incast_table.py`、`gen_llm.py`、`run_llm.sh` |
+| `scripts/` | `gen_et.py`（闭环 / 开环 ET）、`traffic.py`、`traffic_complete.py`、`mk_runs.py`、`mk_runs_complete.py`、`run_one.sh`、`run_all.py`（≤ 8 并发，MemAvailable 留 30 GB）、`analyze.py`、`compare.py`、`hop_table.py`、`mk_incast.py`、`mk_runs_llmops.py`、`incast_table.py`、`gen_llm.py`、`run_llm.sh` |
 | `patches/` | ASTRA-sim 补丁 |
 
 逐条消息日志（`msgs.csv.gz`，共约 1 GB）留在 yss3 的 `~/astrasim-test/p18/runs/*/`，不进仓库。
