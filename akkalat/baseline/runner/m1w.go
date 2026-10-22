@@ -99,6 +99,14 @@ func (r *Runner) configureM1W() {
 		return
 	}
 	topo := r.m1wTopology()
+	if hub.Enabled() {
+		for _, gpu := range r.platform.GPUs {
+			if gpu.RDMAEngine.M1WHubPort == nil {
+				panic("m1w hub: RDMA engine built without its hub port")
+			}
+			topo.HubPorts = append(topo.HubPorts, gpu.RDMAEngine.M1WHubPort)
+		}
+	}
 	if *m1wBoundFlag {
 		rdma.EnableM1WBound(topo, rdma.DefaultM1WBoundConfig())
 		fmt.Printf("[Config] m1w bound statistic on\n")

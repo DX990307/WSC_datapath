@@ -182,7 +182,7 @@ func (c *Comp) ConfigureM1WHub(cfg M1WHubConfig) {
 		if h < 0 || h == r || h == o {
 			continue
 		}
-		s.hubFor[o] = topo.Ports[h]
+		s.hubFor[o] = topo.HubPorts[h]
 	}
 	c.m1wHub = s
 }
@@ -194,6 +194,43 @@ func (c *Comp) GetM1WHubStats() M1WHubStats {
 	}
 	s := c.m1wHub.stats
 	return s
+}
+
+// AddM1WHubPort creates the hub's own network port (a separate endpoint
+// queue, so hub requests and forwarded responses never wait behind the
+// RDMA's owner / requester traffic on ToOutside). Called at build time only
+// when hubs are on.
+func (c *Comp) AddM1WHubPort(bufferSize int) {
+	c.M1WHubPort = sim.NewLimitNumMsgPort(c, bufferSize, c.Name()+".M1WHub")
+	c.AddPort("M1WHub", c.M1WHubPort)
+}
+
+// m1wHubProcess handles the messages arriving on the hub port: requests
+// routed to this hub and the owners' answers to its forwards.
+func (c *Comp) m1wHubProcess(now sim.VTimeInSec) bool {
+	if c.m1wHub == nil {
+		return false
+	}
+	progress := false
+	for i := 0; i < c.effectivePipelineWidth(); i++ {
+		msg := c.M1WHubPort.Peek()
+		if msg == nil {
+			break
+		}
+		if !c.pipelineReady(now, msg) {
+			return true
+		}
+		switch m := msg.(type) {
+		case *BitmapReadReq, *mem.ReadReq:
+			c.m1wHubServe(now, msg)
+		case *BitmapReadRsp:
+			c.m1wHubOwnerRsp(now, m)
+		default:
+			panic(fmt.Sprintf("m1w hub port: unexpected %T", msg))
+		}
+		progress = true
+	}
+	return progress
 }
 
 // m1wRoute returns the port a requester transaction to owner is sent to.
@@ -223,21 +260,6 @@ func (c *Comp) m1wBatchEntries(batch *remoteBatch) []*remoteLineEntry {
 		out = append(out, batch.lines[l])
 	}
 	return out
-}
-
-// m1wHubIsReq reports whether msg is a read this hub must serve (its
-// address is owned by another GPM).
-func (c *Comp) m1wHubIsReq(msg sim.Msg) bool {
-	if c.m1wHub == nil {
-		return false
-	}
-	switch r := msg.(type) {
-	case *BitmapReadReq:
-		return c.RemoteRDMAAddressTable.Find(r.PagePAddr) != c.ToOutside
-	case *mem.ReadReq:
-		return c.RemoteRDMAAddressTable.Find(r.Address) != c.ToOutside
-	}
-	return false
 }
 
 // m1wHubIsRsp reports whether rsp answers a hub forward.
@@ -324,7 +346,7 @@ func (c *Comp) m1wHubServe(now sim.VTimeInSec, msg sim.Msg) bool {
 		f := &BitmapReadReq{
 			MsgMeta: sim.MsgMeta{
 				ID:           sim.GetIDGenerator().Generate(),
-				Src:          c.ToOutside,
+				Src:          c.M1WHubPort,
 				Dst:          owner,
 				TrafficBytes: bitmapReqTraffic,
 			},
@@ -340,7 +362,7 @@ func (c *Comp) m1wHubServe(now sim.VTimeInSec, msg sim.Msg) bool {
 		s.stats.HubForwardLines += uint64(len(fwd.lines))
 	}
 	c.m1wHubFlushTouched(now)
-	c.ToOutside.Retrieve(now)
+	c.M1WHubPort.Retrieve(now)
 	return true
 }
 
@@ -382,7 +404,7 @@ func (c *Comp) m1wHubFlushTouched(now sim.VTimeInSec) {
 				data = d
 			}
 			rsp = mem.DataReadyRspBuilder{}.
-				WithSrc(c.ToOutside).
+				WithSrc(c.M1WHubPort).
 				WithDst(req.src).
 				WithRspTo(req.id).
 				WithData(append([]byte(nil), data...)).
@@ -395,7 +417,7 @@ func (c *Comp) m1wHubFlushTouched(now sim.VTimeInSec) {
 			rsp = &BitmapReadRsp{
 				MsgMeta: sim.MsgMeta{
 					ID:           sim.GetIDGenerator().Generate(),
-					Src:          c.ToOutside,
+					Src:          c.M1WHubPort,
 					Dst:          req.src,
 					TrafficBytes: bitmapRspOverhead + len(lineData)*int(remoteLineBytes),
 				},
@@ -458,7 +480,7 @@ func (c *Comp) m1wHubOwnerRsp(now sim.VTimeInSec, rsp sim.Msg) bool {
 		delete(s.fwd, rspTo)
 	}
 	c.m1wHubFlushTouched(now)
-	c.ToOutside.Retrieve(now)
+	c.M1WHubPort.Retrieve(now)
 	return true
 }
 
@@ -472,7 +494,7 @@ func (c *Comp) m1wHubSend(now sim.VTimeInSec) bool {
 	for i := 0; i < c.effectivePipelineWidth() && len(s.out) > 0; i++ {
 		msg := s.out[0]
 		msg.Meta().SendTime = now
-		if err := c.ToOutside.Send(msg); err != nil {
+		if err := c.M1WHubPort.Send(msg); err != nil {
 			break
 		}
 		if f := s.fwd[msg.Meta().ID]; f != nil {

@@ -168,6 +168,7 @@ func m1wTestTopoPorts() (*M1WTopology, map[[2]int]int) {
 
 func TestM1WHubRouting(t *testing.T) {
 	topo, idx := m1wTestTopoPorts()
+	topo.HubPorts = topo.Ports
 	mk := func(x, y int, cfg M1WHubConfig) *Comp {
 		c := &Comp{}
 		c.m1wTopo = topo

@@ -25,6 +25,9 @@ type Comp struct {
 	*sim.TickingComponent
 
 	ToOutside sim.Port
+	// M1WHubPort is the m1w combining hub's own network port (nil when
+	// hubs are off).
+	M1WHubPort sim.Port
 
 	ToL1 sim.Port
 	ToL2 sim.Port
@@ -190,6 +193,7 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 	if c.m1wHub != nil {
 		c.m1wHubSweep(now)
 		madeProgress = c.m1wHubSend(now) || madeProgress
+		madeProgress = c.m1wHubProcess(now) || madeProgress
 	}
 	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
@@ -511,22 +515,6 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			switch req.(type) {
 			case *BitmapReadReq, *mem.ReadReq:
 				c.m1wOwnerArrive(req)
-			}
-		}
-		if c.m1wHub != nil {
-			if c.m1wHubIsReq(req) {
-				if !c.m1wHubServe(now, req) {
-					return madeProgress
-				}
-				madeProgress = true
-				continue
-			}
-			if rsp, ok := req.(*BitmapReadRsp); ok && c.m1wHubIsRsp(rsp.RespondTo) {
-				if !c.m1wHubOwnerRsp(now, rsp) {
-					return madeProgress
-				}
-				madeProgress = true
-				continue
 			}
 		}
 		switch req := req.(type) {

@@ -85,6 +85,7 @@ type M1WTopology struct {
 	Width, Height int
 	Coords        [][2]int
 	Ports         []sim.Port
+	HubPorts      []sim.Port // m1w hub ports (nil when hubs are off)
 	index         map[sim.Port]int
 	tileGPM       []int // tile -> GPM index or -1
 }
