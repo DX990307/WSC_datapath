@@ -125,6 +125,15 @@ type pgclsPage struct {
 	rdOtherWrK uint64  // ... of which in the same (global) kernel as the write
 	kset       pgclsSet
 	wset       pgclsSet
+	netLines   uint64  // remote read lines sent to the network (incl. prefetch)
+	netHops    uint64  // ... x Manhattan hops requester-owner
+	latSum     float64 // L1V remote read latency, RDMA admission -> reply to L1 (ns)
+	latN       uint64
+}
+
+type pgclsPending struct {
+	page uint64
+	t0   float64
 }
 
 type pgclsState struct {
@@ -136,6 +145,7 @@ type pgclsState struct {
 	globalK  int32
 	kernels  []string
 	totals   map[string]uint64
+	pending  map[string]pgclsPending
 	raw      *csv.Writer
 	rawGz    *gzip.Writer
 	rawFile  *os.File
@@ -156,7 +166,8 @@ func EnablePgcls(cfg PgclsConfig) error {
 		cfg.WindowNS = 10000
 	}
 	s := &pgclsState{cfg: cfg, tile: map[string]int{},
-		pages: map[uint64]*pgclsPage{}, totals: map[string]uint64{}}
+		pages: map[uint64]*pgclsPage{}, totals: map[string]uint64{},
+		pending: map[string]pgclsPending{}}
 	if cfg.SampleEvery > 0 {
 		f, err := os.Create(cfg.Prefix + "_trace.csv.gz")
 		if err != nil {
@@ -221,8 +232,8 @@ func PgclsKernelLaunch(tile int, now sim.VTimeInSec) {
 // port for a remote access or "" for a local one. src is the kind of the L1
 // that issued it ("v", "s", "i"); only L1V accesses enter the page
 // statistics.
-func PgclsAccess(requester, owner string, addr, bytes uint64, isRead bool,
-	src string, now sim.VTimeInSec) {
+func PgclsAccess(requester, owner, id string, addr, bytes uint64,
+	isRead bool, src string, now sim.VTimeInSec) {
 	if !pgclsOn {
 		return
 	}
@@ -320,6 +331,9 @@ func PgclsAccess(requester, owner string, addr, bytes uint64, isRead bool,
 		p.rdLocal++
 	} else {
 		p.rdRemote++
+		if id != "" {
+			s.pending[id] = pgclsPending{page: pageNo, t0: t}
+		}
 	}
 	if p.lastWriter != nil && p.lastWriter[line] >= 0 &&
 		int(p.lastWriter[line]) != g {
@@ -352,6 +366,54 @@ func PgclsAccess(requester, owner string, addr, bytes uint64, isRead bool,
 	r.maskThis |= bit
 	r.lineMask |= bit
 	r.reads[sub]++
+}
+
+// PgclsNetLine records one remote read line leaving the requester RDMA for
+// the network (demand or prefetch).
+func PgclsNetLine(requester, owner string, addr uint64, now sim.VTimeInSec) {
+	if !pgclsOn {
+		return
+	}
+	pgclsMu.Lock()
+	defer pgclsMu.Unlock()
+	s := pgclsS
+	if s == nil {
+		return
+	}
+	g, o := s.tileOf(requester), s.tileOf(owner)
+	s.totals["net_lines"]++
+	p := s.pages[addr>>pgclsLog2Page]
+	if p == nil {
+		s.totals["net_lines_unknown_page"]++
+		return
+	}
+	p.netLines++
+	if h := manhattanHops(g, o, 7); h > 0 {
+		p.netHops += uint64(h)
+	}
+}
+
+// PgclsDone records the reply to the L1 of a remote read admitted by
+// PgclsAccess (latency = reply time - RDMA admission time).
+func PgclsDone(id string, now sim.VTimeInSec) {
+	if !pgclsOn {
+		return
+	}
+	pgclsMu.Lock()
+	defer pgclsMu.Unlock()
+	s := pgclsS
+	if s == nil {
+		return
+	}
+	pd, ok := s.pending[id]
+	if !ok {
+		return
+	}
+	delete(s.pending, id)
+	if p := s.pages[pd.page]; p != nil {
+		p.latSum += float64(now)*1e9 - pd.t0
+		p.latN++
+	}
 }
 
 func pgclsHash(x uint64) uint64 {
@@ -394,7 +456,8 @@ func PgclsWrite(endNS float64) error {
 		"rd_remote", "rd_local", "wr_remote", "wr_local", "writer_mask",
 		"sub_masks", "rd_other_written", "rd_other_written_same_k",
 		"k_n", "k_wsum", "k_rsum", "k_jacc", "k_trans", "k_maxpop",
-		"w_n", "w_wsum", "w_rsum", "w_jacc", "w_trans", "w_maxpop"})
+		"w_n", "w_wsum", "w_rsum", "w_jacc", "w_trans", "w_maxpop",
+		"net_lines", "net_hops", "lat_sum_ns", "lat_n"})
 	_ = rw.Write([]string{"page", "reader", "sub_reads", "reads", "writes",
 		"wbytes", "line_mask", "n_k", "first_k", "last_k", "rep_intra",
 		"rep_cross", "first_ns", "last_ns"})
@@ -416,7 +479,8 @@ func PgclsWrite(endNS float64) error {
 			u(uint64(p.kset.n)), f(p.kset.wsum), u(p.kset.rsum),
 			f(p.kset.jacc), u(uint64(p.kset.trans)), u(uint64(p.kset.maxPop)),
 			u(uint64(p.wset.n)), f(p.wset.wsum), u(p.wset.rsum),
-			f(p.wset.jacc), u(uint64(p.wset.trans)), u(uint64(p.wset.maxPop))})
+			f(p.wset.jacc), u(uint64(p.wset.trans)), u(uint64(p.wset.maxPop)),
+			u(p.netLines), u(p.netHops), f(p.latSum), u(p.latN)})
 		gs := make([]int, 0, len(p.readers))
 		for g := range p.readers {
 			gs = append(gs, g)
@@ -459,6 +523,7 @@ func PgclsWrite(endNS float64) error {
 		return err
 	}
 	s.totals["pages"] = uint64(len(s.pages))
+	s.totals["pending_at_end"] = uint64(len(s.pending))
 	s.totals["raw_records"] = s.rawCount
 	s.totals["raw_sample_every"] = s.cfg.SampleEvery
 	s.totals["window_ns"] = uint64(s.cfg.WindowNS)

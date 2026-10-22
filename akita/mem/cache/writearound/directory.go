@@ -420,5 +420,5 @@ func (d *directory) pgclsLocal(bottom sim.Port, addr, bytes uint64,
 	if bottom == nil || strings.Contains(bottom.Name(), "RDMA") {
 		return
 	}
-	memtrace.PgclsAccess(d.cache.Name(), "", addr, bytes, isRead, "v", now)
+	memtrace.PgclsAccess(d.cache.Name(), "", "", addr, bytes, isRead, "v", now)
 }

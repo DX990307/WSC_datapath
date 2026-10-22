@@ -23,17 +23,17 @@ func TestPgclsReaderStats(t *testing.T) {
 	base := uint64(5<<33) + 0x1000
 	PgclsKernelLaunch(1, pgT(0))
 	PgclsKernelLaunch(2, pgT(0))
-	PgclsAccess("GPU[1].RDMA", own, base, 64, true, "v", pgT(10))          // first
-	PgclsAccess("GPU[1].RDMA", own, base, 64, true, "v", pgT(20))          // intra
-	PgclsAccess("GPU[2].RDMA", own, base+512, 64, true, "v", pgT(30))      // other reader, sub 1
-	PgclsAccess("GPU[5].L1VCache[0]", "", base+64, 64, true, "v", pgT(40)) // owner local
-	PgclsKernelLaunch(1, pgT(100))                                         // new global kernel
+	PgclsAccess("GPU[1].RDMA", own, "", base, 64, true, "v", pgT(10))          // first
+	PgclsAccess("GPU[1].RDMA", own, "", base, 64, true, "v", pgT(20))          // intra
+	PgclsAccess("GPU[2].RDMA", own, "", base+512, 64, true, "v", pgT(30))      // other reader, sub 1
+	PgclsAccess("GPU[5].L1VCache[0]", "", "", base+64, 64, true, "v", pgT(40)) // owner local
+	PgclsKernelLaunch(1, pgT(100))                                             // new global kernel
 	PgclsKernelLaunch(2, pgT(100))
-	PgclsAccess("GPU[1].RDMA", own, base, 64, true, "v", pgT(110)) // cross
-	PgclsAccess("GPU[2].RDMA", own, base+512, 4, false, "v", pgT(120))
-	PgclsAccess("GPU[1].RDMA", own, base+512, 64, true, "v", pgT(130)) // other written same k
+	PgclsAccess("GPU[1].RDMA", own, "", base, 64, true, "v", pgT(110)) // cross
+	PgclsAccess("GPU[2].RDMA", own, "", base+512, 4, false, "v", pgT(120))
+	PgclsAccess("GPU[1].RDMA", own, "", base+512, 64, true, "v", pgT(130)) // other written same k
 	PgclsKernelLaunch(1, pgT(200))
-	PgclsAccess("GPU[1].RDMA", own, base+512, 64, true, "v", pgT(210)) // cross (line 8 read in the previous kernel after the write)
+	PgclsAccess("GPU[1].RDMA", own, "", base+512, 64, true, "v", pgT(210)) // cross (line 8 read in the previous kernel after the write)
 	if err := PgclsWrite(300); err != nil {
 		t.Fatal(err)
 	}

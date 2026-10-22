@@ -839,6 +839,9 @@ func (c *Comp) processRspFromOutside(
 			}
 			memtrace.ObsL1Done(trans.fromInside.Meta().ID, now)
 		}
+		if memtrace.PgclsEnabled() {
+			memtrace.PgclsDone(trans.fromInside.Meta().ID, now)
+		}
 		memtrace.CompleteRemoteRequest(
 			memtrace.ObservationRemoteRequestCompletion{
 				LogicalRequestID:   trans.fromInside.Meta().ID,

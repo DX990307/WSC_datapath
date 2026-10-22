@@ -260,6 +260,9 @@ func (c *Comp) obsAdmit(req mem.AccessReq, dst sim.Port) {
 // obsNetSend: t1 of one line of a read packet.
 func (c *Comp) obsNetSend(dst sim.Port, netID string, addr uint64,
 	lines int, now sim.VTimeInSec) {
+	if memtrace.PgclsEnabled() {
+		memtrace.PgclsNetLine(c.Name(), obsPortName(dst), addr, now)
+	}
 	if !memtrace.ObsEnabled() {
 		return
 	}
@@ -293,6 +296,7 @@ func (c *Comp) pgclsAdmit(req mem.AccessReq, dst sim.Port) {
 	if w, ok := req.(*mem.WriteReq); ok {
 		bytes = uint64(len(w.Data))
 	}
-	memtrace.PgclsAccess(c.Name(), obsPortName(dst), req.GetAddress(), bytes,
+	memtrace.PgclsAccess(c.Name(), obsPortName(dst), req.Meta().ID,
+		req.GetAddress(), bytes,
 		obsIsRead(req), src, req.Meta().RecvTime)
 }
