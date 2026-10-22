@@ -45,10 +45,17 @@ type Driver struct {
 
 	driverStopped      chan bool
 	enqueueSignal      chan bool
+	enqueueAck         chan bool
 	engineMutex        sync.Mutex
 	engineRunning      bool
+	engineKicked       bool
 	engineRunningMutex sync.Mutex
-	simulationID       string
+	engineIdle         *sync.Cond
+
+	hostSyncWarnMu    sync.Mutex
+	hostSyncWarnSites map[string]bool
+	HostSyncWarnings  uint64
+	simulationID      string
 
 	Log2PageSize      uint64
 	allocationStatsMu sync.RWMutex
@@ -109,13 +116,19 @@ func (d *Driver) runAsync() {
 
 			d.engineRunningMutex.Lock()
 			if d.engineRunning {
-				d.engineRunningMutex.Unlock()
-				continue
+				// The engine may be about to return from Run (no events
+				// left) before it sees the tick scheduled above; make
+				// runEngine run it again instead of going idle.
+				d.engineKicked = true
+			} else {
+				d.engineRunning = true
+				go d.runEngine()
 			}
-
-			d.engineRunning = true
-			go d.runEngine()
 			d.engineRunningMutex.Unlock()
+
+			// DrainCommandQueue waits for this: from here on the engine is
+			// marked running, so waiting for it to become idle is safe.
+			d.enqueueAck <- true
 		}
 	}
 }
@@ -131,13 +144,34 @@ func (d *Driver) runEngine() {
 
 	d.engineMutex.Lock()
 	defer d.engineMutex.Unlock()
-	err := d.Engine.Run()
-	if err != nil {
-		panic(err)
-	}
 
+	for {
+		err := d.Engine.Run()
+		if err != nil {
+			panic(err)
+		}
+
+		d.engineRunningMutex.Lock()
+		if d.engineKicked {
+			d.engineKicked = false
+			d.engineRunningMutex.Unlock()
+			continue
+		}
+
+		d.engineRunning = false
+		d.engineIdle.Broadcast()
+		d.engineRunningMutex.Unlock()
+
+		return
+	}
+}
+
+// waitEngineIdle blocks until the engine has no events left.
+func (d *Driver) waitEngineIdle() {
 	d.engineRunningMutex.Lock()
-	d.engineRunning = false
+	for d.engineRunning {
+		d.engineIdle.Wait()
+	}
 	d.engineRunningMutex.Unlock()
 }
 

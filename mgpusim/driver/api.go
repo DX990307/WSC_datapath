@@ -118,13 +118,17 @@ func (d *Driver) DrainCommandQueue(q *CommandQueue) {
 	defer q.Unsubscribe(listener)
 
 	d.enqueueSignal <- true
+	<-d.enqueueAck
 
-	for {
-		if q.NumCommand() == 0 {
-			return
-		}
+	for q.NumCommand() != 0 {
 		listener.Wait()
 	}
+
+	// Return only when the engine has run out of events. Otherwise the host
+	// thread's next call (an enqueue, a copy, a read-back) races with events
+	// still being simulated, and the simulated time at which the driver sees
+	// it depends on wall-clock thread scheduling.
+	d.waitEngineIdle()
 }
 
 // AllocateMemory allocates a chunk of memory of size byteSize in storage.
@@ -278,6 +282,7 @@ func (d *Driver) EnqueueMemCopyD2D(
 
 // MemCopyH2D copies a memory from the host to a GPU device.
 func (d *Driver) MemCopyH2D(ctx *Context, dst Ptr, src interface{}) {
+	d.checkNoPendingCommands(ctx, "MemCopyH2D")
 	queue := d.CreateCommandQueue(ctx)
 	d.EnqueueMemCopyH2D(queue, dst, src)
 	d.DrainCommandQueue(queue)
@@ -285,6 +290,7 @@ func (d *Driver) MemCopyH2D(ctx *Context, dst Ptr, src interface{}) {
 
 // MemCopyD2H copies a memory from a GPU device to the host
 func (d *Driver) MemCopyD2H(ctx *Context, dst interface{}, src Ptr) {
+	d.checkNoPendingCommands(ctx, "MemCopyD2H")
 	queue := d.CreateCommandQueue(ctx)
 	d.EnqueueMemCopyD2H(queue, dst, src)
 	d.DrainCommandQueue(queue)
@@ -293,6 +299,7 @@ func (d *Driver) MemCopyD2H(ctx *Context, dst interface{}, src Ptr) {
 // MemCopyD2D copies a memory from a GPU device to another GPU device. num is
 // the total number of bytes.
 func (d *Driver) MemCopyD2D(ctx *Context, dst Ptr, src Ptr, num int) {
+	d.checkNoPendingCommands(ctx, "MemCopyD2D")
 	queue := d.CreateCommandQueue(ctx)
 	d.EnqueueMemCopyD2D(queue, dst, src, num)
 	d.DrainCommandQueue(queue)
