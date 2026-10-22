@@ -34,6 +34,14 @@ type Comp struct {
 
 	CtrlPort sim.Port
 
+	// RemoteAccessHook, when set (page migration with access counters), is
+	// called once for every request the engine accepts from L1, i.e. every
+	// access of this GPM that leaves the L1 for remote memory. With the remote
+	// data path (M3) this includes requests later served by a replica in the
+	// requester's own L2, i.e. it counts L1 misses to remote memory, not
+	// packets sent on the network.
+	RemoteAccessHook func(now sim.VTimeInSec, req mem.AccessReq)
+
 	isDraining              bool
 	pauseIncomingReqsFromL1 bool
 	currentDrainReq         *DrainReq
@@ -445,6 +453,9 @@ func (c *Comp) processFromL1(now sim.VTimeInSec) bool {
 			ret := c.processReqFromL1(now, req)
 			if !ret {
 				return madeProgress
+			}
+			if c.RemoteAccessHook != nil && c.ToL1.Peek() != req {
+				c.RemoteAccessHook(now, req)
 			}
 
 			madeProgress = true

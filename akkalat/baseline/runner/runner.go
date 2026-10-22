@@ -426,6 +426,8 @@ func (r *Runner) buildTimingPlatform() {
 	if features := gpmPreset.DRAM.modelFeatures(); len(features) > 0 {
 		fmt.Printf("[Config] DRAM model: %s\n", strings.Join(features, " "))
 	}
+	pmConfig := pageMigrationConfigFromFlags()
+	printPageMigrationConfig(pmConfig)
 	b := MakeR9NanoBuilder().
 		WithGPMPreset(gpmPreset).
 		WithLog2PageSize(configuredLog2PageSize()).
@@ -493,6 +495,7 @@ func (r *Runner) buildTimingPlatform() {
 		}).
 		WithRemoteRetain(remoteRetainConfigFromFlags()).
 		WithT18(t18ConfigFromFlags()).
+		WithPageMigration(pmConfig).
 		WithLegacyNoKernelL1Invalidate(*legacyNoKernelL1InvalidateFlag)
 
 	if *sharingTracing {

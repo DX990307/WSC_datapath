@@ -57,6 +57,7 @@ func (r *Runner) reportStats() {
 	r.reportT18Stats()
 	r.reportM1W()
 	r.reportGeo()
+	r.reportPageMigrationStats()
 	if err := memtrace.DumpMemoryPathTrace(); err != nil {
 		panic(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 	"github.com/sarchlab/mgpusim/v3/driver"
+	"github.com/sarchlab/mgpusim/v3/timing/pagemigration"
 	"github.com/sarchlab/mgpusim/v3/timing/pagemigrationcontroller"
 	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 )
@@ -27,6 +28,9 @@ type Platform struct {
 	IOMMUTLB *mmuTLB.TLB
 	// RemoteRetain is the A1 home write tracker (nil when A1 is off).
 	RemoteRetain *writeback.RemoteRetainTracker
+
+	// PageMigration is nil unless -page-migration is set.
+	PageMigration *pagemigration.Manager
 }
 
 // A GPU is a collection of GPU internal Components
@@ -52,6 +56,9 @@ type GPU struct {
 	L1ITLBs        []TraceableComponent
 	L2TLBs         []TraceableComponent
 	MemControllers []TraceableComponent
+
+	// pm holds what page migration needs; nil when it is off.
+	pm *gpmPageMigrationParts
 	// L2TLB      []TraceableComponent
 	// MMUEngine      []TraceableComponent
 	// GMMUEngine     []TraceableComponent
