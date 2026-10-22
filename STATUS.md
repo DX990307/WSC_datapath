@@ -33,10 +33,61 @@
 | P12 T18/T19 的测量 | 1–4 完成；5（T17 的 O1/O2b/O3）⏸ 配置确认，等用户 | 10-20 | 两个只加统计的 tracer（WG 足迹、M1 共享），回归逐位一致；7 个测量运行（yss2 3 个、yss3 4 个）全部 rc=0；结果见“结果摘要 → P12 测量”，CSV 在 `results_index/p12/` |
 | T18 新 m2（两端合并） | 实现完成（用户 10-19 决定直接做真实版）；⏸ 评估的配置确认，等用户 | 10-20 | 分支 `isca27/t18-merge` @ `ca8b831`（已推送）；全部开关关闭时 fir、MM、旧 m2 和 `0b85bef` 逐位一致；冒烟见“结果摘要 → T18”；评估计划 121 个运行，见“需要用户决定” |
 | T19 就近 WG 窃取 | **放弃**（用户 10-20：本篇只做通信，留给下一篇） | 10-20 | 代码保留在 `isca27/t19-steal` @ `eaa9c73`；不跑评估 |
+| P19 快速试错（D / Q0 / Q0b / Q1 / Q2 / Q5 / Q6） | 进行中（用户 10-22 已确认配置） | 10-22 | 分支 `isca27/quick-trials`（worktree `wt-qt`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `isca27/m1-wafer`）；W = 128、384 GB/s；配置确认见"需要用户决定"第一条 |
+| P20 放置 + M3+（两遍法放置 oracle） | ⏸ 配置确认，等用户（主会话代审） | 10-22 | 分支 `isca27/placement`（worktree `wt-place`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `20f323e` 放置表开关）；W = 128、组合表 128、384 GB/s；配置确认见"需要用户决定"第一条 |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
 
+- [ ] **(P20 第 0 步配置确认，10-22) ⏸ 等确认**（用户外出期间由主会话审核）。范围：P20 全部运行（回归、第 2 步两遍法 oracle 的 pass 1 / pass 2）；第 1 步是离线补算，不跑模拟。
+  1. **二进制**：分支 `isca27/placement`（worktree `~/Desktop/CuPath/wt-place`，已推送）= `isca27/a1-retain` @ `1335def`（含 `c08698b`，已核对是祖先）+ merge `isca27/page-class` @ `149dff0`（`2735684`，无冲突）+ `20f323e`（本轮新代码）。**没有合并 `isca27/page-migration`**：两遍法 oracle 没有迁移开销，用不到它的计数器和拷贝引擎（第 3 步做在线版时再合）。没有合并 m1-wafer / quick-trials 的统计。交叉编译（linux/amd64）通过；`go test`：`akita/mem/trace`、`TestPlacementFinders` 通过。
+  2. **新开关（默认全关）**：
+     - `-place-table <文件>`：每行 `<1 KB 块号 = 物理地址 >> 10> <tile>`，列出的块整个运行都由该 tile 的 GPM 当 home（没有迁移开销，相当于分配时就放好）。实现：L1V / L1S 的下级查找（块在本 GPM → 本地 L2，任何地址；在别的 GPM → 本 GPM 的 RDMA）、共享的"地址 → owner RDMA"表（请求方：打包、合并、M3 保留、统计都看到新 owner）、RDMA owner 端的本地查找（放到这里的块 → 本地 L2）。每个块只有一个 home，**一致性和 baseline 相同**（不像 `-pgcls-oracle-pages` / `-force-local-data-access` 那样会有旧副本）。L1I 不改（指令块不会被写）。结束时打印 / 写 `<metric>_place_stats.csv`（L1 走本地 / 走远程次数、owner 端次数、misrouted，应为 0）。
+     - `-place-random-seed N`（只用于自测）：每个 1 KB 块按哈希随机放到一个 GPM，用来跑 `-verify`。
+     - `-pgcls-place-ext`（只读统计，配合 `-report-pgcls`）：另写 `_place.csv.gz`（每页、每个 GPM、每个 1 KB 子块的 L1V 写次数；读次数已在 `_readers.csv.gz` 按 512 B 记）。pass 1 用。
+     - 其他文件：`rdma.Comp.LocalModuleFinder()`（只加 getter）。
+  3. **配置文件**（`akkalat/configs/`）：`v4m3.json`（从 `isca27/quick-trials` 原样复制：v4_complete_a1u + `a1-first-touch-admission: 1`）；**`m3p.json`（M3+）** = extends v4m3 + `remote-data-path-batching-enable: false`、`remote-filter-prefetch-enable: false`、`t18-req-merge: false`。其余配置文件和 `c08698b` 相同（`flag.go`、`r9nanobuilder.go` 等只多了默认关闭的 A1 / pgcls 开关，P19 已核对）。
+  4. **场景参数（所有运行）**：`-bandwidth=24 -switch-buffer-flits=16 -rdma-max-outstanding=128`；T18 配置（M3+、v4m3 及叠在上面的 P）另加 `-t18-window=128 -t18-compose-table-entries=128`（**用户 10-22 下午定的 128**，不是 2W）。**baseline 只加 `-rdma-max-outstanding=128`，不加 `-t18-window`（原版 RDMA，沿用用户在 P19 的决定）**；P-整页 / P-子块 / P-按类（不带 M3+）也是 baseline + 放置表，同样走原版 RDMA。所有运行保留 `-magic-memory-copy`（mi200.json 里已有）。
+  5. **workload（14 个，参数和 pgcls / P19 完全相同）**：私有放错 KM（`kmeans-t16small -t16-wg-per-cu 1`）、fft2d（`w2-fft2d -fft2d-n 1024`）、FW（`floydwarshall-p12small -p12-fw-nodes=2048 -p12-fw-passes=4`）、MoE（`moe -moe-tokens=64 -moe-hidden=1024 -moe-ffn=704 -moe-topk=6 -moe-skew=1.75`）；流式 MT（`matrixtranspose-t16small`）、PA（`pagedattn -pa-batch=14 -pa-seed=7 -pa-part-tokens=32`）；热点广播 PR（`pagerank-t16small -t16-wg-per-cu 24`）、tc（`graphtc -tc-scale 12 -tc-edge-factor 16`）、MM（`matrixmultiplication-t16small`）、sssp（`sssp -sssp-scale 18 -sssp-edge-factor 4 -sssp-max-rounds 1`）、IVF（`ivfflat -ivf-n 8192 -ivf-queries 328`）；混合 / 对照 CFD（`altis_cfd -cfd-cells 172032 -cfd-block 128`）、embbag（`embbag -eb-batch 512`）、BH（`lonestar_bh -bh-bodies 86016`）。
+     - **⚠️ MoE 超过"每个运行 ≤ 1 小时"**：P19 的 W = 128 baseline 跑了 2 小时还没完（W = 256 约 2.5–3 h）。建议照跑原规模（和 pgcls 一致），只是最后出结果；或者你说换小规模 / 去掉。
+  6. **放置表怎么算（pass 1 → pass 2）**：pass 1 = 本轮的 baseline 运行（`-report-pgcls -pgcls-place-ext`），权重 = 每个 (1 KB 块, GPM) 的 L1V 读（含 owner 本地读）+ 写。
+     - P-整页：每页 → 这页访问最多的 GPM（主要使用者；并列时不动）；
+     - P-子块：每个 1 KB 块 → 它的主要使用者；
+     - P-按类：页类别按 pgcls 的规则（`pgcls_page.py`，在 pass 1 数据上重新分类）：私有放错、流式 → 1 KB 子块给主要使用者；热点广播 → 拆成 k 份放到中心周围（k 和 tile 由第 1 步 (a) 定，候选 k = 4：17 / 23 / 25 / 31 各 1 KB；k = 2：每 2 KB 一份）；其余类不动；
+     - P-按类-中心（只用于"砍热点拆分"的判断）：同 P-按类，但热点页整页放到按读者加权的最优 tile（不拆）。
+     - 放置表只按物理页号算，同一 binary、同一参数下物理地址确定（pgcls oracle 已经这样用过）；每个 pass 2 运行检查 `misrouted = 0`、WG 数和指令数和 baseline 差 ≤ 1%。
+  7. **运行和 CPU 小时**（按 P19 同规模 W = 128 的实测墙钟 0.3–0.8 h / 个，MoE 约 3 h；pgcls 统计约 +20%）：
+     | 批 | 内容 | 运行数 | 估计 CPU 小时 |
+     |---|---|---|---|
+     | A 回归 + 正确性 | (i) fir、MM（`-max-wg=4096`）× {mi200, v4m3} × {`20f323e`, `1335def`}：metrics.csv 排序后 md5 一致；(ii) npbcg S × {mi200, v4m3} × {`-report-pgcls`, `+ -pgcls-place-ext`, 空放置表}：一致；(iii) `-verify -place-random-seed=1`：fir、MM、FW（p12small 默认）、bfs s12 × {mi200, m3p, v4m3} | 8 + 6 + 12 = 26 | ≈ 3 |
+     | B pass 1 + 参照 | 14 × {baseline（+ `-report-pgcls -pgcls-place-ext`）, M3+, v4m3, 全部本地（mi200 + `-force-local-data-access`）} | 56 | ≈ 40 |
+     | C pass 2 | 14 × {P-整页, P-子块, P-按类, P-按类 + M3+, P-按类 + v4m3}（都加 `-report-pgcls` 量剩下的远程读）+ P-按类-中心 × 5（PR、tc、MM、sssp、IVF） | 75 | ≈ 55 |
+     | 合计 | | 157 | ≈ 100 |
+     - exp_id：`1022_abl_place-w128b384-<wl>[-<变体>]_<config>_20f323e`（变体：`pg`、`sb`、`cls`、`ctr`）；结果 `~/akita-exp-test/place/src/results/`。
+  8. **服务器和并发**：yss2 / yss3 新目录 `~/akita-exp-test/place/`，自己的调度器（复制 P19 的 sched.py：30 GB MemAvailable 余量、PAUSE、挂住看门狗；nice 10）。**并发上限 yss2 6、yss3 10**（两台各 128 核，P19 上限 9 / 20，现在负载 10–17，MemAvailable 215 / 189 GB；每个运行 4–8 GB）。不碰 qt / pm / geo / mesh9* 的进程、调度器和 PAUSE 文件。墙钟估计：A 约 0.5 h，B 约 2.5 h（MoE 3 h），C 在每个 workload 的 pass 1 完成后自动排，约 3.5 h；共约 7–8 h。
+  9. **第 1 步（离线）用的数据**：不重跑。(a)(c)(d)(e) 用 P19 的 W = 128 baseline（`9e87ac5`，`-report-pgcls` 的精确聚合：每页每个读者按 512 B 的读数、重读数）；(b) 要时间信息，用 pgcls 的 W = 256 baseline 原始 trace（`149dff0`，按页哈希采 1/16 的页，每页的全部访问），注明。MoE 的 W = 128 baseline 还没跑完，没完之前用 W = 256。
+- [x] **(P19 第 0 步配置确认，10-22) 用户已确认**：W = 128（`-rdma-max-outstanding=128`，CuPath 加 `-t18-window=128`），组合表 256；baseline 不加 `-t18-window`（原版 RDMA）；Q6 的 MoE 照跑原规模；文档仓库的提交等用户处理权限，先留在工作区。原内容：范围：P19 全部运行（第 1 步主结果 + 诊断、Q0、Q0b、回归；第 4 步原型冒烟的配置先列出，代码写完后再报 commit）。
+  1. **二进制**：分支 `isca27/quick-trials`（worktree `~/Desktop/CuPath/wt-qt`）= `isca27/a1-retain` @ `1335def`（含 `c08698b`，已核对）+ merge `isca27/page-class` @ `149dff0`（`-report-pgcls`）+ merge `isca27/m1-wafer` @ `04115a1`（Q0b 的拐点合并 / 条件延迟、`-report-m1w-bound`），两次合并无冲突、交叉编译通过（本地 merge 提交 `b906d5c`）。接下来只加**只读统计**（默认关）：`-report-qt-diag`（每 CU L1V MSHR 满的时间比例；每个 owner 的远程读数、owner 排队 + 服务时间、最忙 owner 份额）和 `-pgcls-trace-ext`（pgcls 原始 trace 增加"上网的 line"和"回复 L1 的延迟"两类行，给 Q1 / Q2 离线用）。主运行前先在服务器做回归：fir、MM（`-max-wg=4096`）× {mi200, v4m3} 新 commit 对 `1335def` 逐位一致；npbcg S × {mi200, v4m3} 统计开 / 关逐位一致。
+  2. **配置文件 blob 核对**：`runall2_constants.py`、`runall2_config.py`、`shaderarray.go`、`gpm_preset.go`、`config_file.go`、`hpca.json`、`mi300x_eighth.json`、`mi200.json`（`40fd5fec422f` = 标签 `isca27-mi200-v1`）与 `c08698b` 相同；`flag.go`、`r9nanobuilder.go`、`timingplatform.go`、`runner.go` 相对 `c08698b` 只增加了默认关闭的 A1 / pgcls / m1w 开关和接线，没有改任何配置数值。
+  3. **配置文件**（新增，`akkalat/configs/`）：
+     - `v4m3.json` = extends `v4_complete_a1u.json` + `a1-first-touch-admission: 1`（和 a1/ 里 "v4+A1+reset+ft1" 的参数完全相同；原来没有单独的文件）。
+     - `v4m3_ownmc.json`（Q0）= extends v4m3 + `t18-owner-merge: true`、`t18-owner-multicast: true`。
+     - `v4m3_m1w.json`（Q0b）= extends v4m3 + `m1w-hub-mode: turn`、`m1w-hub-min-hops: 2`、`m1w-hub-retain-ns: 0`、`m1w-hub-entries: 1024`、`m1w-hub-adaptive: true`、`m1w-hold-ns: 100`、`m1w-hold-min-hops: 2`、`m1w-hold-min-occ: 0.5`（= m1w 的 hubturna + hold100o）。
+     - 第 4 步（只做第 2 步通过的）：`v4m3_q2.json`（读者位图推送，oracle 页类别；之后在线版）、`v4m3_q1.json`（按跳数调预取深度）、`v4m3_q6.json`（按类过滤的访问计数迁移，pm 的 c4k 开关 + 类过滤）。开关名和 commit 等代码写完后报告。
+  4. **场景参数**（命令行，所有运行）：`-bandwidth=24 -switch-buffer-flits=16 -rdma-max-outstanding=128`；CuPath 配置另加 `-t18-window=128 -t18-compose-table-entries=256`。**⚠️ 请核对：组合表按 2W 取 256**（W = 64 → 128、W = 256 → 512 的同一规则；v4_complete.json 里写的是 128，用命令行覆盖成 256）。
+  5. **⚠️ 请决定：baseline 加不加 `-t18-window=128`**。`-t18-window` 一设就会让 baseline 改走 T18 的请求方引擎（不合并，只是另一套窗口实现），和原版 RDMA 不是同一个 baseline：W = 256 时 pgcls 的 baseline（不加）和 m1w 的 baseline（加了）差 0.2–3.7%（sssp 416.0 vs 431.6 µs，MM 251.8 vs 256.0，npbcg 2745.6 vs 2768.5，PR 866.7 vs 868.1）。**建议 baseline 只加 `-rdma-max-outstanding=128`（原版 RDMA，和 SUMMARY_1022_morning / pgcls / a1 的 1.315 表一致，偏保守）**；两种窗口都是 128，只是实现不同。
+  6. **workload 和规模**：25 个，参数和 pgcls 完全相同：pr-g24、npbcg-W、tc-s12e16、mm-g12、atax-2688x8192-r64、fw-n2048-p4、sssp-s18e4-r1、cfd-c172k-b128、mg-W、ivf-n8k-q328、bh-n86k、npbis-n1m-i1、moe-t64、i2c-g64、fft2d-n1024、pa-b14s7p32、shocsort-n688k、ar-pc1、gups-L18m8、lud-n1024、spmv-g32、mt-g4、embbag-b512、km-g1、bfs-s18e2。所有运行保留 `-magic-memory-copy`（mi200.json 里已有）。
+  7. **统计开关**（只读）：所有主运行 `-report-obs-latency -report-obs-occupancy -report-qt-diag`；T18 配置加 `-report-cupath-v3-stats`；baseline 加 `-report-pgcls`（W = 128 下重新分类）；v4m3 加 `-report-pgcls -pgcls-trace-ext`，7 个热点广播 workload（PR、tc、MM、sssp、IVF、npbcg、ar）`-pgcls-sample 1`，其余 `-pgcls-sample 4`；m1w 的 8 个 workload 的 baseline / v4m3 加 `-report-m1w-bound`（和 W = 256 的 `bound_c26d97e.csv` 直接对比）。
+  8. **运行数和 CPU 小时**（按 pgcls 同规模的实测墙钟 0.3–2.5 h / 个，W = 128 和统计再加约 30%）：
+     | 批 | 内容 | 运行数 | 估计 CPU 小时 |
+     |---|---|---|---|
+     | A 回归 | fir、MM × {mi200, v4m3} × {新 commit, 1335def}；npbcg S × {mi200, v4m3} × 统计开 / 关 | 12 | ≈ 1 |
+     | B 主结果 + D | 25 × {baseline, v4_complete, v4m3}，tag `w128b384`，exp_id `1022_diag_qt-w128b384-<wl>_<cfg>_<commit>` | 75 | ≈ 70 |
+     | C Q0 / Q0b | v4m3_ownmc × 10（PR、tc、MM、sssp、IVF、npbcg、ar；KM、CFD、BH）+ v4m3_m1w × 8（PR、npbcg、tc、MM、sssp、CFD、ar、bfs）；v4m3 对照来自 B | 18 | ≈ 13 |
+     | D 冒烟（只做通过的） | 每个原型 ≤ 16 个（热点广播 7 + 私有放错 3 + 延迟受限 3 + 对照 3）；Q6 6 个；外加每个原型的回归 / -verify | ≤ 60 | ≤ 45 |
+     | 合计 | | ≤ 165 | ≈ 85（A–C）+ ≤ 45（D） |
+     墙钟：yss3 MemAvailable 约 125 GB、yss2 约 58 GB，按 30 GB 余量约同时 14 + 4 个，A–C 约 6–7 小时（moe 一个约 3 小时）。目录 `~/akita-exp-test/qt/`，自己的调度器（复制 pgcls 的 sched.py，30 GB 余量、PAUSE、挂住看门狗），nice 运行，不动 mesh9s / mesh9 / mesh9b / hoplat 等。
+  9. **其他需要知道的**：moe-t64 一个运行约 2.5 h，超过冒烟"≤ 1 小时"，Q6 冒烟里的 MoE 照跑（或者你说换小规模）；第 2 步离线分析只用 B 的 trace，不另跑；Q5 只写设计。
 - [x] (P18 网络结论的交叉验证) **用户 10-21 决定：坚持用 ASTRA-sim（很多 wafer 论文用它）；之后又要求试 Llama-7B，以及把 CuPath 机制移植到 ASTRA（选项 A：网络层评估）。全部完成，结果见"结果摘要 → P18"。** 原问题：第 1 步调研完成，⏸ 等你确认方案再安装和运行。 只读了源码和文档，没有编译、没有运行，服务器没动。
   - **ASTRA-sim 不适合直接用**（master `4ce9ecf`，2026-09-19；最新 tag `2.2.0`，2023-11；源码在本机 scratch，已核对关键两处）：
     1. 拓扑：analytical 后端只有 Ring（带回绕）/ FullyConnected / Switch 三种按维叠加，**没有 2D mesh**（只能 2D torus）；congestion-aware 在 master 上**只支持 1 维**（`congestion_aware/topology/Helper.cpp:27` 直接报错退出），多维的分支 `will/congestion-multidim` 没合并，且固定先 X 后 Y；congestion-unaware 的多维点对点只计第一个不同的维度。ns-3 后端能建任意拓扑，但路由是最短路 + ECMP（不是维序路由），每条消息是一个 RDMA 流（ACK、拥塞控制）。Garnet 后端在 master 上已经没有了（submodule 目录不存在）。
@@ -1288,3 +1339,19 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 
 - 用户要求 Llama-7B 上 baseline 和 CuPath 的对比。说明了 ASTRA 的 Llama 模型（TP × PP、显式集合通信）里 CuPath 没有作用对象，改用 paged attention、MoE、矩阵乘、embedding bag 四个算子的 akita 主配置流量，ASTRA 闭环 48 个运行，全部 exit 0。结果见"结果摘要 → P18"和 `results_index/astra/analysis.md` 第 6b 节。
 
+### 2026-10-22 (P19) 快速试错：同步、开分支、配置确认（⏸ 等用户确认）
+
+- **同步**：读了 SYNC 10-22 的三条 `[cowork]`（P19 + quick_trials README；主配置改 W = 128；5 类文献检查）和未提交的 `README.md`、`SYNC.md`、`related_work_ideas_1021.md`、`prompts/P19_quick_trials.md`、`quick_trials/`。理解到的变化：主场景从 W = 256 改为 W = 128（baseline 和所有配置同一个 W），W = 256 的新基线结果降为敏感性；编号 M1 = 打包、M2 = 合并、M3 = 保留。**`cowork:` 提交被 Claude Code 自动模式拦下（"Unrequested Commit"），文档改动还没提交、没推送**；`results_index/{fix_l2tlb,hoplat,mesh9,pm/fig}` 等是别的会话的文件，没有动。
+- **分支**：worktree `~/Desktop/CuPath/wt-qt`，分支 `isca27/quick-trials` 从 `isca27/a1-retain` @ `1335def`（含 `c08698b`）开出，合并 `isca27/page-class`、`isca27/m1-wafer`（无冲突，`b906d5c`，本地，未推送）。新增配置 `v4m3.json`、`v4m3_ownmc.json`、`v4m3_m1w.json`（`4d7c08d`，本地，未推送）。`GOOS=linux` 交叉编译通过（本机链接器坏了：SDK 27 的 tbd 不认 arm64e.x1，和代码无关）。
+- **配置确认**：见"需要用户决定"第一条。两项请核对：组合表 256；baseline 加不加 `-t18-window`。
+- 没有在本机或服务器跑任何模拟。
+
+### 2026-10-22 16:35 (P19) 用户确认配置；加统计；服务器回归开始
+
+- 用户确认（见"需要用户决定"第一条）。
+- 统计 `9e87ac5`（已推送 `isca27/quick-trials`）：`-report-qt-diag`（writearound L1V 的 MSHR 按时间加权占用 / 满的时间 / 满时被拒的 miss 数 → `metrics_qt_l1v.csv`；obs 延迟分段再按 owner 拆 → `metrics_obs_latency_owner.csv`）、`-pgcls-trace-ext`（原始 trace 加 N / D 行和 `lat_ns` 列）。`isca27_config.py` 把这些开关登记为统计开关。单元测试（writearound、trace、runner，`CGO_ENABLED=0`）通过。
+- 服务器：`~/akita-exp-test/qt/`（yss2、yss3），`src` 是 `wt-qt` 的副本，二进制在 yss2 用 go 1.27.3 编译后复制到 yss3（md5 `0b96e1d1…`），`baseline_1335def` 复制自 `a1/bin`。调度器 `sched.py`（复制 a1 的，nice 5，`MAXRUN` 上限：yss2 4、yss3 14，30 GB 余量）。批 A（回归 14 个）已启动。
+
+### 2026-10-22 15:20 (P20) 第 0 步：同步、开分支、配置确认（⏸）
+
+- 同步；开 worktree `wt-place` / 分支 `isca27/placement`（`1335def` + merge `149dff0` = `2735684`；`20f323e` 放置表开关 `-place-table`、`-place-random-seed`、`-pgcls-place-ext`，配置 `v4m3.json`、`m3p.json`），已推送。没有运行任何模拟。配置确认写在"需要用户决定"第一条，⏸ 等确认。用户 10-22 下午：组合表取 128。

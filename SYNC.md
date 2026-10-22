@@ -477,3 +477,29 @@
 - 汇总在 `results_index/SUMMARY_1022_morning.md`：v4/baseline GMEAN 1.315（25）；全部本地上限再 1.56×；按类 oracle：热点广播 1.25×、私有放错 1.39× 值得做，其余不值得；A1 + M3 规则修正（reset 不可缓存 + 首次触碰准入）对 v4 1.049；M1 wafer 改进（拐点合并 + 条件延迟）1.023；新基线不挂、确定。
 - 结果目录：`results_index/{pgcls,a1,m1w}/`；分支 `isca27/{page-class,a1-retain,m1-wafer}` 已推送。
 - 用户要求：只跑 384 GB/s W=256、不在本地跑实验；page migration / geo-push 的新基线重跑降为低优先级（只留 c4k 和 geo1s/aff2s）。
+
+### 2026-10-22 [cowork] 快速试错的 README 和 P19
+- 新增 `quick_trials/README.md`、`prompts/P19_quick_trials.md`；`README.md` 文件索引加两行。只改文档，没有改代码和配置。
+- 按 10-22 早上的新基线结果（W = 256 窗口大多不满、瓶颈在角落 owner 和延迟）调整了 Cowork 之前提的 Q1–Q4：区域 home（m1w 0.846）、hold 批（1.017）、跳数加权 M3 不再做；Q2 改为只针对热点广播页；新增诊断 D、Q0（新基线上复测 owner 合并 + 多播）、Q5（热点页 4 份副本，只写设计）、Q6（按类开关的迁移）。
+- 用户 10-22 的编号：M1 = 打包，M2 = 合并，M3 = 保留（和 10-20 晚的编号不同）。
+- 请 Claude Code 提交推送到 `isca27/docs`。
+
+### 2026-10-22 [cowork] 用户：主配置改为 W = 128
+- 用户 10-22："baseline 调节成 W=128 吧"。按 baseline 和所有 CuPath 配置用同一个 W 处理：`-rdma-max-outstanding=128 -t18-window=128`，组合表按 2W 取 `-t18-compose-table-entries=256`（待配置确认时用户核对）。
+- 改了 `README.md`（10-22 的决定写在 10-21 的 W = 256 决定前面，旧决定标为已被取代）、`quick_trials/README.md`（场景改 W = 128，注明第 1、2 节是 W = 256 的数字；新增 Q0b：W = 128 下复测 m1w 的拐点合并 + 条件延迟发批）、`prompts/P19_quick_trials.md`（场景参数；第 1 步先跑 25 × {baseline, v4, v4m3} 的 W = 128 主结果；Q0b）。只改文档。
+- 新基线上 W = 256 的结果保留作敏感性，正式数字在 W = 128 下重跑。请 Claude Code 提交推送到 `isca27/docs`。
+
+### 2026-10-22 [claude-code] P19 第 0 步：同步、开分支 `isca27/quick-trials`、配置确认（⏸）
+- 改了 `STATUS.md`（任务总览加 P19；"需要用户决定"第一条是 P19 的配置确认；日志一条）、`SYNC.md`。
+- 代码：worktree `wt-qt`，`isca27/quick-trials` = `isca27/a1-retain` @ `1335def` + merge `page-class`、`m1-wafer`（`b906d5c`，本地）；新配置 `v4m3.json`、`v4m3_ownmc.json`、`v4m3_m1w.json`（`4d7c08d`，本地）。没有运行任何模拟。
+- Cowork 的 10-22 改动和本条的提交 / 推送被 Claude Code 自动模式拦下，待用户放行。
+
+### 2026-10-22 [cowork] 论文方案（试做）：放置 + M3 保留；P20
+- 新增 `paper_placement_m3/README.md`（一句话论点、O1–O6、机制 P 和 M3+、评估计划、风险、待决定）和 `prompts/P20_placement_m3.md`（离线补算 + 两遍法放置 oracle，⏸ 两处）；`README.md` 文件索引加两行。只改文档。
+- 依据：pgcls 的按类 oracle 和子块放置上限、a1 的保留规则修正、pm 的迁移结果、dm 的热点 whatif。主配置按用户 10-22 的 W = 128。
+- 请 Claude Code 提交推送到 `isca27/docs`。
+
+### 2026-10-22 [claude-code] P20 第 0 步：同步、开分支 `isca27/placement`、配置确认（⏸）
+- 改了 `STATUS.md`（任务总览加 P20；"需要用户决定"第一条是 P20 的配置确认；日志一条）、`SYNC.md`。
+- 代码：worktree `wt-place`，`isca27/placement` = `isca27/a1-retain` @ `1335def` + merge `isca27/page-class` @ `149dff0` + `20f323e`（两遍法放置 oracle：`-place-table`、`-place-random-seed`；pass 1 统计 `-pgcls-place-ext`；配置 `v4m3.json`、`m3p.json`），已推送。默认全关。没有运行任何模拟。
+- 场景：384 GB/s、W = 128、组合表 128（用户 10-22 下午）；baseline 只加 `-rdma-max-outstanding=128`。
