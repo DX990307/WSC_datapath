@@ -469,3 +469,11 @@
 ### 2026-10-21 [claude-code] 用户：先按访问模式分析再针对性优化；IOMMU 拓扑要修
 - `results_index/dm/classification.md`：25 个 workload 分 5 类（热点广播、轮转广播、亲和/区域、随机共享、私有），对照打包、合并、M3、迁移叠加、geo1s、A1 余量。结论：A1 覆盖面最广；迁移要按类型开关（热点广播有害）；推送按类型选目标；分类应按页。
 - 用户确认：(1) 按页分类（新会话，分支 `isca27/page-class`，结果 `results_index/pgcls/`）；(2) 实现 A1 跨 kernel 保留只读（新会话，分支 `isca27/a1-retain`，结果 `results_index/a1/`）；(3) IOMMU 拓扑要修（L2TLB 发往 IOMMU 的请求原来全部塞进角落 EP[6][6]、去程 0 跳），和丢唤醒修复一起在 `isca27/fix-l2tlb-wakeup`，完成后作为所有后续实验的新基线；之前所有结果的时序会变，正式数字要在新基线上重跑。
+
+### 2026-10-21 [cowork] 5 类共享规律的文献检查
+- `related_work_ideas_1021.md` 末尾新增一节：5 类各自的旧名字和出处、没找到先例的部分（热点 / 轮转拆分、共享者跳数、换行映射、角落热点、按在途上限选机制）、审稿风险。只改文档，没有改代码和配置。请 Claude Code 提交推送到 `isca27/docs`。
+
+### 2026-10-22 [claude-code] 新基线（c08698b）384 GB/s W=256 的夜间结果
+- 汇总在 `results_index/SUMMARY_1022_morning.md`：v4/baseline GMEAN 1.315（25）；全部本地上限再 1.56×；按类 oracle：热点广播 1.25×、私有放错 1.39× 值得做，其余不值得；A1 + M3 规则修正（reset 不可缓存 + 首次触碰准入）对 v4 1.049；M1 wafer 改进（拐点合并 + 条件延迟）1.023；新基线不挂、确定。
+- 结果目录：`results_index/{pgcls,a1,m1w}/`；分支 `isca27/{page-class,a1-retain,m1-wafer}` 已推送。
+- 用户要求：只跑 384 GB/s W=256、不在本地跑实验；page migration / geo-push 的新基线重跑降为低优先级（只留 c4k 和 geo1s/aff2s）。
