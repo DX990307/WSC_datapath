@@ -465,3 +465,7 @@
 - 主配置改为 W = 256（README 已记）。v3m2w 恢复：去掉 W 扫描剩下的 v3 运行，排上 25 个 workload 的 v4_complete（w256b384）和缺的 baseline；v4_complete.json 复制进服务器的 src（二进制仍是 4235991，ad0dfe3 只加了配置）。已通知 geo 和 m1-wafer 会话以 w256b384 为主场景。
 - page migration 344 个运行完成（4 个 hang）；Complete + 访问计数 4K GMEAN 1.83 > Complete 1.73；全部表格在 `results_index/SUMMARY_1021.md`。
 - 用户要求修 hang：新会话在 `isca27/fix-l2tlb-wakeup` 修 L2TLB→IOMMU 丢唤醒 bug，并重跑 12 个挂住的运行、检查对已有结果的影响和 bfs 的运行间不确定性。
+
+### 2026-10-21 [claude-code] 用户：先按访问模式分析再针对性优化；IOMMU 拓扑要修
+- `results_index/dm/classification.md`：25 个 workload 分 5 类（热点广播、轮转广播、亲和/区域、随机共享、私有），对照打包、合并、M3、迁移叠加、geo1s、A1 余量。结论：A1 覆盖面最广；迁移要按类型开关（热点广播有害）；推送按类型选目标；分类应按页。
+- 用户确认：(1) 按页分类（新会话，分支 `isca27/page-class`，结果 `results_index/pgcls/`）；(2) 实现 A1 跨 kernel 保留只读（新会话，分支 `isca27/a1-retain`，结果 `results_index/a1/`）；(3) IOMMU 拓扑要修（L2TLB 发往 IOMMU 的请求原来全部塞进角落 EP[6][6]、去程 0 跳），和丢唤醒修复一起在 `isca27/fix-l2tlb-wakeup`，完成后作为所有后续实验的新基线；之前所有结果的时序会变，正式数字要在新基线上重跑。
