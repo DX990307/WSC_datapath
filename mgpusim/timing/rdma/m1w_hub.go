@@ -2,6 +2,7 @@ package rdma
 
 import (
 	"fmt"
+	"math/bits"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
@@ -223,7 +224,7 @@ func (c *Comp) m1wHubProcess(now sim.VTimeInSec) bool {
 		switch m := msg.(type) {
 		case *BitmapReadReq, *mem.ReadReq:
 			c.m1wHubServe(now, msg)
-		case *BitmapReadRsp:
+		case *BitmapReadRsp, *mem.DataReadyRsp:
 			c.m1wHubOwnerRsp(now, m)
 		default:
 			panic(fmt.Sprintf("m1w hub port: unexpected %T", msg))
@@ -343,19 +344,35 @@ func (c *Comp) m1wHubServe(now sim.VTimeInSec, msg sim.Msg) bool {
 		s.stats.HubPeakEntries = uint64(len(s.lines))
 	}
 	if missing != 0 {
-		f := &BitmapReadReq{
-			MsgMeta: sim.MsgMeta{
-				ID:           sim.GetIDGenerator().Generate(),
-				Src:          c.M1WHubPort,
-				Dst:          owner,
-				TrafficBytes: bitmapReqTraffic,
-			},
-			PID:        msgPID(msg),
-			PagePAddr:  req.page,
-			LineBitmap: missing,
-			Info:       info,
+		var f sim.Msg
+		if bits.OnesCount64(missing) == 1 {
+			// A single line goes as an ordinary line read, like the
+			// requester's own single-line batches (the owner serves it on
+			// its line-read path, not the bitmap unpacker).
+			off := uint64(bits.TrailingZeros64(missing))
+			f = mem.ReadReqBuilder{}.
+				WithSrc(c.M1WHubPort).
+				WithDst(owner).
+				WithAddress(req.page + off*remoteLineBytes).
+				WithByteSize(remoteLineBytes).
+				WithPID(msgPID(msg)).
+				WithInfo(info).
+				Build()
+		} else {
+			f = &BitmapReadReq{
+				MsgMeta: sim.MsgMeta{
+					ID:           sim.GetIDGenerator().Generate(),
+					Src:          c.M1WHubPort,
+					Dst:          owner,
+					TrafficBytes: bitmapReqTraffic,
+				},
+				PID:        msgPID(msg),
+				PagePAddr:  req.page,
+				LineBitmap: missing,
+				Info:       info,
+			}
 		}
-		s.fwd[f.ID] = fwd
+		s.fwd[f.Meta().ID] = fwd
 		s.out = append(s.out, f)
 		s.outAt = append(s.outAt, now)
 		s.stats.HubForwardTxns++
@@ -445,6 +462,11 @@ func (c *Comp) m1wHubOwnerRsp(now sim.VTimeInSec, rsp sim.Msg) bool {
 	case *BitmapReadRsp:
 		rspTo = r.RespondTo
 		lineData = r.LineData
+	case *mem.DataReadyRsp:
+		rspTo = r.RespondTo
+		for off := range s.fwd[rspTo].lines {
+			lineData = map[uint64][]byte{off: r.Data}
+		}
 	default:
 		panic("m1w hub: unexpected owner response")
 	}
