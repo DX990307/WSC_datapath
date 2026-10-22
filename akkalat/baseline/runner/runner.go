@@ -66,6 +66,7 @@ type Runner struct {
 	simdBusyTimeTracers []simdBusyTimeTracer
 	cuCPITraces         []cuCPIStackTracer
 	sharingTraceWriter  *pageSharingTraceWriter
+	pgcls               *pgclsRunner
 	observationDRAM     *windowedPhysicalDRAMObserver
 	gpmTracer           *gpmTracer
 	p12                 *p12Tracer
@@ -651,6 +652,7 @@ func (r *Runner) flushMetrics() {
 		r.writeGPMTrace()
 		r.writeP12Traces()
 		r.writeObsStats()
+		r.writePgcls()
 		r.closeSharingTrace()
 	})
 }

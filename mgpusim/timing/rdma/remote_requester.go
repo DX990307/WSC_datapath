@@ -1599,6 +1599,9 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 		if memtrace.ObsEnabled() {
 			memtrace.ObsL1Done(waiter.req.ID, now)
 		}
+		if memtrace.PgclsEnabled() {
+			memtrace.PgclsDone(waiter.req.ID, now)
+		}
 		latencyNS := remoteDurationNS(now - waiter.req.SendTime)
 		c.RemoteDataPathStats.LogicalReadLatencyTotalNS += latencyNS
 		if latencyNS > c.RemoteDataPathStats.LogicalReadLatencyMaxNS {

@@ -51,6 +51,11 @@ func (c *Cache) SetLowModuleFinder(lmf mem.LowModuleFinder) {
 	c.lowModuleFinder = lmf
 }
 
+// LowModuleFinder returns the finder set by SetLowModuleFinder.
+func (c *Cache) LowModuleFinder() mem.LowModuleFinder {
+	return c.lowModuleFinder
+}
+
 func (c *Cache) canSendToBottomModule(module sim.Port) bool {
 	if !c.isRemoteBottomModule(module) || c.maxRemoteBottomTrans <= 0 {
 		return true
