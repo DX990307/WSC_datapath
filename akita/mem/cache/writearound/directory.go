@@ -1,6 +1,8 @@
 package writearound
 
 import (
+	"strings"
+
 	"github.com/sarchlab/akita/v3/mem/cache"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
@@ -238,6 +240,9 @@ func (d *directory) writeBottom(now sim.VTimeInSec, trans *transaction) bool {
 	}
 
 	trans.writeToBottom = writeToBottom
+	if memtrace.PgclsEnabled() {
+		d.pgclsLocal(bottomModule, addr, uint64(len(write.Data)), false, now)
+	}
 	memtrace.LinkObservationRequest(
 		trans.id, writeToBottom.Meta().ID, "l1_bottom_write")
 	d.cache.trackBottomTransaction(trans, bottomModule)
@@ -323,6 +328,9 @@ func (d *directory) fetchFromBottom(
 
 	tracing.TraceReqInitiate(readToBottom, d.cache, trans.id)
 	trans.readToBottom = readToBottom
+	if memtrace.PgclsEnabled() {
+		d.pgclsLocal(bottomModule, cacheLineID, blockSize, true, now)
+	}
 	memtrace.LinkObservationRequest(
 		trans.id, readToBottom.Meta().ID, "l1_bottom_read")
 	trans.block = victim
@@ -403,4 +411,14 @@ func (d *directory) recordMemoryPathCacheResult(
 		memtrace.ObservationTransition(
 			trans.id, "l1_lookup_result", "l1_downstream", now)
 	}
+}
+
+// pgclsLocal records an L1V miss / write sent to a local L2 slice for the
+// page classification statistics (remote ones are recorded by the RDMA).
+func (d *directory) pgclsLocal(bottom sim.Port, addr, bytes uint64,
+	isRead bool, now sim.VTimeInSec) {
+	if bottom == nil || strings.Contains(bottom.Name(), "RDMA") {
+		return
+	}
+	memtrace.PgclsAccess(d.cache.Name(), "", "", addr, bytes, isRead, "v", now)
 }

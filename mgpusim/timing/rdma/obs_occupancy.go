@@ -3,6 +3,7 @@ package rdma
 import (
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
@@ -259,6 +260,9 @@ func (c *Comp) obsAdmit(req mem.AccessReq, dst sim.Port) {
 // obsNetSend: t1 of one line of a read packet.
 func (c *Comp) obsNetSend(dst sim.Port, netID string, addr uint64,
 	lines int, now sim.VTimeInSec) {
+	if memtrace.PgclsEnabled() {
+		memtrace.PgclsNetLine(c.Name(), obsPortName(dst), addr, now)
+	}
 	if !memtrace.ObsEnabled() {
 		return
 	}
@@ -271,4 +275,28 @@ func obsRspTo(msg sim.Msg) string {
 		return r.GetRspTo()
 	}
 	return ""
+}
+
+// pgclsAdmit records a remote access from an L1 for the page classification
+// statistics (-report-pgcls). Read-only.
+func (c *Comp) pgclsAdmit(req mem.AccessReq, dst sim.Port) {
+	src := "v"
+	if s := req.Meta().Src; s != nil {
+		n := s.Name()
+		switch {
+		case strings.Contains(n, "L1VCache"):
+			src = "v"
+		case strings.Contains(n, "L1S"):
+			src = "s"
+		default:
+			src = "i"
+		}
+	}
+	bytes := req.GetByteSize()
+	if w, ok := req.(*mem.WriteReq); ok {
+		bytes = uint64(len(w.Data))
+	}
+	memtrace.PgclsAccess(c.Name(), obsPortName(dst), req.Meta().ID,
+		req.GetAddress(), bytes,
+		obsIsRead(req), src, req.Meta().RecvTime)
 }

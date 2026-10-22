@@ -678,6 +678,9 @@ func (c *Comp) t18Fanout(now sim.VTimeInSec) bool {
 		if memtrace.ObsEnabled() {
 			memtrace.ObsL1Done(obsRspTo(r.msg), now)
 		}
+		if memtrace.PgclsEnabled() {
+			memtrace.PgclsDone(obsRspTo(r.msg), now)
+		}
 		s.fanout[0] = t18L1Rsp{}
 		s.fanout = s.fanout[1:]
 		s.waiters--
