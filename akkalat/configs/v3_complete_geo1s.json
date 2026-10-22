@@ -1,0 +1,7 @@
+{
+  "_description": "ISCA'27 geo-push, radius 1, shared filter: like v3_complete_geo1.json, but the owner pushes only lines its sharing table (1024 entries, 4-way LRU) has seen read by >= 2 distinct GPMs. Extends v3_complete.json (unchanged).",
+  "extends": "v3_complete.json",
+  "geo-push-radius": 1,
+  "geo-push-filter": "shared",
+  "geo-push-filter-entries": 1024
+}

@@ -264,6 +264,9 @@ type remoteLineEntry struct {
 	// invalidation, so its data may predate the boundary; it never fills the
 	// requester L2 and takes no new merges.
 	boundaryStale bool
+	// geoEarly: geo-push delivered the line to the waiters before the
+	// entry's own response arrived (geo_push.go).
+	geoEarly bool
 }
 
 type remotePrefetchCandidate struct {
@@ -321,6 +324,16 @@ type remoteOwnerBatch struct {
 	remaining   int
 	readyData   map[uint64][]byte
 	readyQueued bool
+	// geo-push: the oldest owner-L2 read issue time of readyData's lines.
+	readyOrigin    sim.VTimeInSec
+	readyOriginSet bool
+}
+
+func (b *remoteOwnerBatch) noteReadyOrigin(t sim.VTimeInSec) {
+	if !b.readyOriginSet || t < b.readyOrigin {
+		b.readyOrigin = t
+		b.readyOriginSet = true
+	}
 }
 
 type remoteOwnerSubReq struct {

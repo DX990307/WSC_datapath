@@ -422,8 +422,11 @@ func (c *Comp) t18OwnerChildRead(
 
 // t18DeliverChild hands a line to its M2 bitmap batch for the normal bitmap
 // response (no packet of its own).
-func (c *Comp) t18DeliverChild(sub *remoteOwnerSubReq, data []byte) {
+func (c *Comp) t18DeliverChild(
+	sub *remoteOwnerSubReq, data []byte, origin sim.VTimeInSec,
+) {
 	sub.batch.readyData[sub.line] = append([]byte(nil), data...)
+	sub.batch.noteReadyOrigin(origin)
 	sub.batch.remaining--
 	delete(c.remoteOwnerSubReqs, sub.read.ID)
 	if !sub.batch.readyQueued {

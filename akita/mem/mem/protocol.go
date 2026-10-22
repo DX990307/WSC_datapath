@@ -579,6 +579,13 @@ type RemoteDataFill struct {
 	PatternOwner         uint64
 	PatternAddress       uint64
 	RequireInvalidVictim bool
+	// Push (ISCA'27 geo-push): the line was pushed by its owner to a GPM
+	// that did not request it. There is no preceding lookup, so Generation is
+	// not checked; instead the fill is dropped when its data was read at the
+	// owner (OriginTime) at or before the last flush or kernel boundary of
+	// this cache. Push fills never replace a valid line.
+	Push       bool
+	OriginTime sim.VTimeInSec
 }
 
 // Meta returns the metadata attached to the fill.
@@ -599,6 +606,16 @@ type RemoteDataFillBuilder struct {
 	patternOwner         uint64
 	patternAddress       uint64
 	requireInvalidVictim bool
+	push                 bool
+	originTime           sim.VTimeInSec
+}
+
+// WithPush marks a geo-push fill whose data was read at the owner at origin.
+func (b RemoteDataFillBuilder) WithPush(origin sim.VTimeInSec) RemoteDataFillBuilder {
+	b.push = true
+	b.originTime = origin
+	b.requireInvalidVictim = true
+	return b
 }
 
 // WithSendTime sets the send time.
@@ -687,6 +704,8 @@ func (b RemoteDataFillBuilder) Build() *RemoteDataFill {
 	r.Info = b.info
 	r.Generation = b.generation
 	r.HasPattern = b.hasPattern
+	r.Push = b.push
+	r.OriginTime = b.originTime
 	r.PatternOwner = b.patternOwner
 	r.PatternAddress = b.patternAddress
 	r.RequireInvalidVictim = b.requireInvalidVictim

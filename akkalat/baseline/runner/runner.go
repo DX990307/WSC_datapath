@@ -146,6 +146,7 @@ func (r *Runner) Init() *Runner {
 	r.attachObservationDRAMObserver()
 	r.configureAllocationProfile()
 	r.configureM1W()
+	r.configureGeo()
 
 	sampledrunner.ClearGPUSampledEngines()
 	for _, gpu := range r.platform.GPUs {

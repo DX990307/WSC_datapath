@@ -1154,6 +1154,10 @@ func (c *Comp) sendRemoteEntryDirect(
 	}
 
 	c.obsNetSend(entry.owner, req.ID, entry.key.lineAddr, 1, now)
+	c.geoBoundEntryNetRead(entry.owner, entry, now)
+	if c.geo != nil {
+		c.affTagRequest(req.ID)
+	}
 	entry.state = remoteLineInflight
 	entry.fromRemote = true
 	c.remoteSingleInflight[req.ID] = entry
@@ -1335,6 +1339,10 @@ func (c *Comp) flushRemoteBatch(
 			return false
 		}
 		c.obsNetSend(batch.dst, req.ID, entry.key.lineAddr, 1, now)
+		c.geoBoundEntryNetRead(batch.dst, entry, now)
+		if c.geo != nil {
+			c.affTagRequest(req.ID)
+		}
 		c.recordRemoteBatchMetrics(now, batch, req.Meta().TrafficBytes)
 		c.removeRemoteBatch(batch)
 		entry.state = remoteLineInflight
@@ -1376,6 +1384,9 @@ func (c *Comp) flushRemoteBatch(
 	if err := c.ToOutside.Send(req); err != nil {
 		return false
 	}
+	if c.geo != nil {
+		c.affTagRequest(req.ID)
+	}
 	if memtrace.ObsEnabled() {
 		memtrace.ObsNetPacket(batch.lineCount())
 		for _, line := range batch.lineOrder {
@@ -1387,6 +1398,7 @@ func (c *Comp) flushRemoteBatch(
 	c.removeRemoteBatch(batch)
 	for _, line := range batch.lineOrder {
 		entry := batch.lines[line]
+		c.geoBoundEntryNetRead(batch.dst, entry, now)
 		entry.state = remoteLineInflight
 		entry.batch = nil
 		entry.fromRemote = true
@@ -1542,6 +1554,11 @@ func (c *Comp) processRemoteSingleRsp(
 		memtrace.ObsReqArrive(c.Name(), rsp.GetRspTo(), entry.key.lineAddr,
 			rsp.Meta().RecvTime)
 	}
+	c.geoBoundDeliver(entry.owner, entry.key.pid, entry.key.lineAddr,
+		rsp.Meta().SendTime, now)
+	if c.geo != nil {
+		c.affLearn(rsp)
+	}
 	c.m1UnindexLine(entry)
 	if c.m1Composed() {
 		c.m1Release(now, rsp.GetRspTo())
@@ -1597,12 +1614,17 @@ func (c *Comp) processBitmapRspFromOutside(
 			memtrace.ObsReqArrive(c.Name(), rsp.GetRspTo(),
 				entry.key.lineAddr, rsp.Meta().RecvTime)
 		}
+		c.geoBoundDeliver(entry.owner, entry.key.pid, entry.key.lineAddr,
+			rsp.Meta().SendTime, now)
 		c.m1UnindexLine(entry)
 		c.queueRemoteReady(entry)
 		batch.responseBitmap |= lineBit
 	}
 	if len(rsp.LineData) == 0 {
 		panic("bitmap response contains no cache lines")
+	}
+	if c.geo != nil {
+		c.affLearn(rsp)
 	}
 	c.RemoteDataPathStats.NetworkResponseBytes += uint64(rsp.Meta().TrafficBytes)
 	if batch.responseBitmap == batch.lineBitmap {
@@ -1668,6 +1690,13 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 		return true
 	}
 
+	if entry.geoEarly && entry.state != remoteLineReady {
+		// geo-push served the waiters; the entry's own response is still
+		// outstanding and completes the entry when it arrives.
+		c.remoteReady = c.remoteReady[1:]
+		entry.queuedReady = false
+		return true
+	}
 	shouldFill := entry.fromRemote &&
 		!c.remoteConfig.DisableRequesterL2 &&
 		entry.admit && !entry.boundaryStale &&

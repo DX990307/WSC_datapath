@@ -114,6 +114,7 @@ func (f *flusher) startProcessingFlush(
 	req *cache.FlushReq,
 ) bool {
 	f.cache.remoteReplicaGeneration++
+	f.cache.remoteReplicaGenTime = now
 	f.processingFlush = req
 	if req.DiscardInflight {
 		f.cache.discardInflightTransactions(now)

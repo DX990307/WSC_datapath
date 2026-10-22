@@ -108,6 +108,13 @@ type Comp struct {
 	m1wHub *m1wHubState
 	// ISCA'27 wafer M1 distance-aware batch holding (m1w_hold.go).
 	m1wHold *m1wHoldState
+	// ISCA'27 geo-push (geo_*.go). geoTopo is nil unless geo-push or its
+	// upper-bound statistic is on; geo is nil unless geo-push is on.
+	geoTopo         *GeoTopology
+	geoIdx          int
+	geoLastBoundary sim.VTimeInSec
+	geoBoundarySet  bool
+	geo             *geoPushState
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -195,6 +202,9 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 		c.m1wHubSweep(now)
 		madeProgress = c.m1wHubSend(now) || madeProgress
 		madeProgress = c.m1wHubProcess(now) || madeProgress
+	}
+	if c.geo != nil && len(c.geo.fillQ) > 0 {
+		madeProgress = c.geoSendFills(now) || madeProgress
 	}
 	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
@@ -381,6 +391,7 @@ func (c *Comp) fullyDrained() bool {
 	return len(c.transactionsFromOutside) == 0 &&
 		len(c.transactionsFromInside) == 0 &&
 		!c.remoteDataPathHasPendingWork() &&
+		!c.geoHasPendingWork() &&
 		!c.t18HasPendingWork()
 }
 
@@ -464,6 +475,13 @@ func (c *Comp) processFromL2(now sim.VTimeInSec) bool {
 				madeProgress = true
 				continue
 			}
+			if c.geo != nil && c.isGeoFillRsp(req) {
+				if !c.processGeoFillRsp(now, req) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			if c.isRemoteFillRsp(req) {
 				if !c.processRemoteFillRsp(now, req) {
 					return madeProgress
@@ -517,6 +535,14 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			case *BitmapReadReq, *mem.ReadReq:
 				c.m1wOwnerArrive(req)
 			}
+		}
+		if c.geo != nil {
+			if push, ok := req.(*GeoPushMsg); ok {
+				c.geoReceive(now, push)
+				madeProgress = true
+				continue
+			}
+			c.geoOwnerRecordRead(req)
 		}
 		switch req := req.(type) {
 		case *BitmapReadReq:
@@ -687,6 +713,20 @@ func (c *Comp) processReqFromL1(
 		if m1wBound != nil {
 			c.m1wSendLegacy(cloned.Meta().ID, req, dst, firstSeen, now)
 		}
+		if c.geo != nil {
+			if _, isRead := req.(*mem.ReadReq); isRead {
+				c.affTagRequest(cloned.Meta().ID)
+			}
+		}
+		if geoBound != nil || coRead != nil {
+			switch req.(type) {
+			case *mem.ReadReq:
+				c.geoBoundNetRead(dst, req.GetPID(), req.GetAddress(),
+					firstSeen, now)
+			case *mem.WriteReq:
+				c.geoBoundWrite(req)
+			}
+		}
 		c.recordRequesterOutstandingPeak()
 		if c.remoteConfig.Enabled {
 			c.noteLegacyRemoteReqSent(req, dst)
@@ -777,7 +817,17 @@ func (c *Comp) processRspFromL2(
 	rspToOutside.Meta().Src = c.ToOutside
 	rspToOutside.Meta().Dst = trans.fromOutside.Meta().Src
 
-	err := c.ToOutside.Send(rspToOutside)
+	var err *sim.SendError
+	if read, isRead := trans.fromOutside.(*mem.ReadReq); c.geo != nil && isRead &&
+		remoteReadBatchable(read) {
+		data := rspToOutside.(*mem.DataReadyRsp).Data
+		err = c.geoSend(now, rspToOutside,
+			[]sim.Port{trans.fromOutside.Meta().Src}, read.PID,
+			[]geoPushLine{{addr: read.Address, data: data}},
+			trans.toInside.Meta().SendTime)
+	} else {
+		err = c.ToOutside.Send(rspToOutside)
+	}
 	if err == nil {
 		if _, isData := rsp.(*mem.DataReadyRsp); isData && memtrace.ObsEnabled() {
 			memtrace.ObsOwnerL2Rsp(rsp.GetRspTo(), rsp.Meta().RecvTime)
@@ -904,6 +954,17 @@ func (c *Comp) processRspFromOutside(
 
 		c.traceInsideOutEnd(trans)
 		c.recordRemoteGPMAccess(now, trans, rsp)
+		if c.geo != nil {
+			c.affLearnAccess(rsp)
+		}
+		if geoBound != nil {
+			if read, ok := trans.fromInside.(*mem.ReadReq); ok {
+				if _, isData := rsp.(*mem.DataReadyRsp); isData {
+					c.geoBoundDeliver(trans.toOutside.Meta().Dst, read.PID,
+						read.Address, rsp.Meta().SendTime, now)
+				}
+			}
+		}
 		if c.m1Composed() {
 			c.m1Release(now, rsp.GetRspTo())
 		}

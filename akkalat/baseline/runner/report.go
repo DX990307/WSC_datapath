@@ -56,6 +56,7 @@ func (r *Runner) reportStats() {
 	r.reportRemoteRetainStats()
 	r.reportT18Stats()
 	r.reportM1W()
+	r.reportGeo()
 	if err := memtrace.DumpMemoryPathTrace(); err != nil {
 		panic(err)
 	}
