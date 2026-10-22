@@ -25,7 +25,15 @@ type L2TLB struct {
 	bottomPort  sim.Port
 	OutsidePort sim.Port
 	controlPort sim.Port
-	IOMMUPort   sim.Port
+	// IOMMUPort is the destination of translation requests for pages owned by
+	// another device (the IOMMU's Top port). It belongs to the IOMMU, so the
+	// L2TLB never sends through it.
+	IOMMUPort sim.Port
+	// toIOMMUPort is the L2TLB's own port for sending to IOMMUPort (requests
+	// keep Src = OutsidePort, so the IOMMU answers to OutsidePort). It is
+	// plugged into the L2TLB's own network endpoint, so that the endpoint's
+	// NotifyAvailable wakes this L2TLB after a failed send.
+	toIOMMUPort sim.Port
 
 	LowModule sim.Port
 
@@ -45,6 +53,20 @@ type L2TLB struct {
 	localReqCount       int
 	iommuReqCount       int
 
+	// iommuSendBlocked is set when a send to the IOMMU failed and cleared when
+	// the connection reports free space (or a later send succeeds).
+	iommuSendBlocked   bool
+	iommuSendFailCount uint64
+	iommuWakeupCount   uint64
+
+	// Miss latency statistics (observation only), index 0 = local GMMU,
+	// 1 = IOMMU: round trip of the downstream request, and per request from
+	// its arrival in the TopPort to the response leaving the L2TLB.
+	missRTTSum   [2]float64
+	missRTTCount [2]uint64
+	missReqSum   [2]float64
+	missReqCount [2]uint64
+
 	isPaused   bool
 	DeviceID   uint64
 	pageTable  vm.PageTable
@@ -60,6 +82,50 @@ func (tlb *L2TLB) reset() {
 		set := internal.NewSet(tlb.numWays)
 		tlb.Sets[i] = set
 	}
+}
+
+// NotifyPortFree wakes the L2TLB when one of its ports can send again. The
+// network endpoint is shared by all the ports of a GPU tile and notifies every
+// plugged port whenever it drains, so a notification on toIOMMUPort only wakes
+// the L2TLB if a send to the IOMMU actually failed (no extra tick events).
+func (tlb *L2TLB) NotifyPortFree(now sim.VTimeInSec, port sim.Port) {
+	if port == tlb.toIOMMUPort {
+		if !tlb.iommuSendBlocked {
+			return
+		}
+
+		tlb.iommuSendBlocked = false
+		tlb.iommuWakeupCount++
+	}
+
+	tlb.TickingComponent.NotifyPortFree(now, port)
+}
+
+// sendToIOMMUPort sends a request to the IOMMU through the L2TLB's own port
+// and remembers a failure so that the connection's notification wakes us up.
+func (tlb *L2TLB) sendToIOMMUPort(req *vm.TranslationReq) bool {
+	if tlb.toIOMMUPort == nil {
+		log.Panicf("L2TLB %s does not have a ToIOMMU port", tlb.Name())
+	}
+
+	err := tlb.toIOMMUPort.Send(req)
+	if err != nil {
+		tlb.iommuSendBlocked = true
+		tlb.iommuSendFailCount++
+		return false
+	}
+
+	tlb.iommuSendBlocked = false
+	return true
+}
+
+func (tlb *L2TLB) missKind(e *mshrEntry) int {
+	if e.reqToBottom != nil && tlb.IOMMUPort != nil &&
+		e.reqToBottom.Dst == tlb.IOMMUPort {
+		return 1
+	}
+
+	return 0
 }
 
 // Tick defines how TLB update states at each cycle
@@ -107,6 +173,10 @@ func (tlb *L2TLB) respondMSHREntry(now sim.VTimeInSec) bool {
 	if err != nil {
 		return false
 	}
+
+	k := tlb.missKind(mshrEntry)
+	tlb.missReqSum[k] += float64(now - req.RecvTime)
+	tlb.missReqCount[k]++
 
 	mshrEntry.Requests = mshrEntry.Requests[1:]
 	if len(mshrEntry.Requests) == 0 {
@@ -455,6 +525,12 @@ func (tlb *L2TLB) processRsp(now sim.VTimeInSec, rsp *vm.TranslationRsp, bottom 
 		return true
 	}
 
+	if mshrEntry.reqToBottom != nil {
+		k := tlb.missKind(mshrEntry)
+		tlb.missRTTSum[k] += float64(now - mshrEntry.reqToBottom.SendTime)
+		tlb.missRTTCount[k]++
+	}
+
 	tlb.respondingMSHREntry = append(tlb.respondingMSHREntry, mshrEntry)
 	tlb.mshr.Remove(page.PID, page.VAddr)
 	if bottom {
@@ -485,8 +561,7 @@ func (tlb *L2TLB) sendToIOMMU(
 		WithOriginPort(req.OriginPort).
 		Build()
 
-	err := tlb.IOMMUPort.Send(newReq)
-	if err != nil {
+	if !tlb.sendToIOMMUPort(newReq) {
 		return nil, false
 	}
 
@@ -520,8 +595,7 @@ func (tlb *L2TLB) sendDownstream(
 			WithDst(tlb.IOMMUPort).
 			Build()
 
-		err := tlb.IOMMUPort.Send(translatedReq)
-		if err != nil {
+		if !tlb.sendToIOMMUPort(translatedReq) {
 			return nil, false
 		}
 

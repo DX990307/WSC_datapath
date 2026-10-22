@@ -516,6 +516,7 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 	b.configT18Topology()
 
 	connector.EstablishNetwork()
+	b.checkIOMMUTopology(connector)
 
 	for _, gpu := range b.gpus {
 		gpu.MMUEngine = mmuComponent
@@ -888,6 +889,46 @@ func (b *R9NanoPlatformBuilder) setupPerfermanceTracing() {
 			WithEngine(b.engine).
 			Build()
 	}
+}
+
+// checkIOMMUTopology verifies, after the network is built, that the IOMMU
+// TLB's Top port is attached once, to the center tile (with the driver), and
+// that every L2TLB sends to it through its own port on its own GPU tile.
+// Before this check existed, every GPU domain exported IOMMUTLB.Top, the port
+// ended up on the last GPU tile's endpoint, and all L2TLB requests entered
+// the network there without crossing the mesh.
+func (b *R9NanoPlatformBuilder) checkIOMMUTopology(connector *mesh.Connector) {
+	center := [3]int{b.tileWidth / 2, b.tileHeight / 2, 0}
+
+	top := b.IOMMUTLB.GetPortByName("Top")
+	if loc, ok := connector.TileOf(top); !ok || loc != center {
+		panic(fmt.Sprintf("IOMMUTLB.Top is on tile %v, want the center tile %v", loc, center))
+	}
+	if ep := connector.EndPointOf(center); portConnection(top) != ep {
+		panic("IOMMUTLB.Top is not connected to the center tile's endpoint")
+	}
+
+	for _, gpu := range b.gpus {
+		cpLoc, _ := connector.TileOf(gpu.Domain.GetPortByName("CommandProcessor"))
+		toIOMMU := gpu.L2TLB.GetPortByName("ToIOMMU")
+		loc, ok := connector.TileOf(toIOMMU)
+		if !ok || loc != cpLoc {
+			panic(fmt.Sprintf("%s is on tile %v, want its GPU tile %v",
+				toIOMMU.Name(), loc, cpLoc))
+		}
+		if portConnection(toIOMMU) != connector.EndPointOf(loc) {
+			panic(toIOMMU.Name() + " is not connected to its GPU tile's endpoint")
+		}
+	}
+}
+
+func portConnection(p sim.Port) sim.Connection {
+	lp, ok := p.(*sim.LimitNumMsgPort)
+	if !ok {
+		return nil
+	}
+
+	return lp.Connection()
 }
 
 func (b *R9NanoPlatformBuilder) createL2TLBTable() *mem.MultiPageFinder {

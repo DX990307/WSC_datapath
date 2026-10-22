@@ -53,6 +53,12 @@ func (p *LimitNumMsgPort) SetConnection(conn Connection) {
 	p.conn = conn
 }
 
+// Connection returns the connection that the port is plugged into (nil if the
+// port is not connected).
+func (p *LimitNumMsgPort) Connection() Connection {
+	return p.conn
+}
+
 // Component returns the owner component of the port.
 func (p *LimitNumMsgPort) Component() Component {
 	return p.comp
