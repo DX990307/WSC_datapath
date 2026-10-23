@@ -1,6 +1,7 @@
 package pagemigration
 
 import (
+	"container/list"
 	"fmt"
 	"sort"
 
@@ -224,6 +225,12 @@ type Manager struct {
 	toRetire     []uint64
 	replBytes    []uint64  // replica bytes per device (P21)
 	drainEMA     []float64 // recent drain time (ns) of migrations per home (P21)
+	bhCount      []int     // run-time block-home entries per frame owner (P21)
+	trackLRU     []*list.List
+	deferred     []deferredAct
+	drvEnd       sim.VTimeInSec
+	drvN         int
+	lookupPass   map[Waker]sim.VTimeInSec
 	replOrder    []*unit
 	AStats       AdaptStats
 	// Storage is the global storage (only for the oracle replica list).
@@ -826,6 +833,9 @@ func (m *Manager) remap(now sim.VTimeInSec, u *unit) {
 			m.checkNoCachedLines(u.newPAddrs[i], "remap")
 		}
 		m.frameInfo(p).state = frameRetired
+		if u.a != nil && u.a.act != actStay {
+			m.adaptRetireFrameHomes(p.PAddr)
+		}
 		prevOwners |= 1 << p.DeviceID
 		p.PAddr = u.newPAddrs[i]
 		p.DeviceID = u.dst

@@ -57,6 +57,7 @@ package pagemigration
 // copies between kernels write the master frame).
 
 import (
+	"container/list"
 	"fmt"
 	"io"
 	"math"
@@ -149,6 +150,25 @@ type AdaptConfig struct {
 	// arriving during the switch wait half of it on average); hold is the
 	// shootdown plus the recent drain time at the page's home.
 	HoldCost bool
+
+	// Realism switches (all off = ideal bookkeeping; see the round-2 notes).
+	// TrackCap: tracking entries (counters + first-read signals) per GPM,
+	// for the pages homed there; LRU, an evicted page forgets its counts.
+	TrackCap int
+	// DecideNS: from a decision (counts gathered at the driver) to its
+	// action; every evaluation and signal is counted as one message.
+	DecideNS uint64
+	// BatchSW: pre-placements and replica creations go through driver
+	// batches (BatchSize per batch) that pay SoftwareLatencyNS each.
+	BatchSW bool
+	// LookupNS: an access to a page with run-time block homes or replicas
+	// waits this long at translation (redirect table lookup).
+	LookupNS uint64
+	// BlockHomeCap: run-time 1 KB block-home entries per GPM (for the frames
+	// homed there); 0 = unlimited. When set, uniform pre-placements remap
+	// the page to a fresh frame instead of using entries, block falls back
+	// to move and spread is skipped when the table is full.
+	BlockHomeCap int
 
 	// ReplicaList (oracle region replication): original physical page ->
 	// replica devices. A listed page gets zero-cost read-only copies (fresh
@@ -270,6 +290,16 @@ type AdaptStats struct {
 	PreHomeOK    uint64 // predicted pages already at the predicted home
 	EarlyObs     uint64 // observations from the early signal
 	CountHotN    uint64 // pages found hot by the counters
+	// realism
+	TrackEvict   uint64 // tracking entries evicted (TrackCap)
+	DecisionMsgs uint64 // evaluations and signals reported to the driver
+	Deferred     uint64 // actions delayed by DecideNS / BatchSW
+	DrvBatches   uint64 // driver batches for pre-placement / replicas
+	PreLate      uint64 // pre-placements dropped: touched before the batch ran
+	PreRemaps    uint64 // pre-placements done as page remaps
+	LookupHolds  uint64 // accesses held for the redirect lookup
+	BhFull       uint64 // actions refused because the block-home table was full
+	BhPeak       uint64 // largest block-home table on one GPM
 }
 
 type adaptState struct {
@@ -308,6 +338,7 @@ type adaptState struct {
 	preCopy  bool           // pre-placement copy running
 	counted  bool           // counted in buf.touched
 	t0       sim.VTimeInSec // first counted access since the last reset
+	trackEl  *list.Element  // TrackCap LRU entry (nil = not tracked)
 	preHeld  bool
 	origPA   uint64 // physical address of the frame at tracking start
 }
@@ -362,11 +393,29 @@ func (m *Manager) BlockHomeTile(blk uint64) (int, bool) {
 func (m *Manager) UsesBlockHomes() bool { return m.blockHome != nil }
 
 func (m *Manager) setBlockHome(blk, dev uint64) {
-	if dev == blk<<log2Block>>33 {
-		delete(m.blockHome, blk)
+	owner := blk << log2Block >> 33
+	_, had := m.blockHome[blk]
+	if dev == owner {
+		if had {
+			delete(m.blockHome, blk)
+			m.bhAdd(owner, -1)
+		}
 		return
 	}
 	m.blockHome[blk] = dev
+	if !had {
+		m.bhAdd(owner, 1)
+	}
+}
+
+func (m *Manager) bhAdd(owner uint64, d int) {
+	if m.bhCount == nil || owner >= uint64(len(m.bhCount)) {
+		return
+	}
+	m.bhCount[owner] += d
+	if uint64(m.bhCount[owner]) > m.AStats.BhPeak {
+		m.AStats.BhPeak = uint64(m.bhCount[owner])
+	}
 }
 
 func (m *Manager) initAdapt() {
@@ -382,6 +431,11 @@ func (m *Manager) initAdapt() {
 	m.tileDev = make(map[int]uint64)
 	m.replBytes = make([]uint64, len(m.gpms))
 	m.drainEMA = make([]float64, len(m.gpms))
+	m.bhCount = make([]int, len(m.gpms))
+	m.trackLRU = make([]*list.List, len(m.gpms))
+	for i := range m.trackLRU {
+		m.trackLRU[i] = list.New()
+	}
 	for d, g := range m.gpms {
 		if g != nil {
 			m.tileDev[g.Tile] = uint64(d)
@@ -523,6 +577,7 @@ func (m *Manager) adaptCount(now sim.VTimeInSec, u *unit, dev, pAddr uint64, rem
 	if a.fixed || len(a.replicas) > 0 {
 		return
 	}
+	m.track(u, a)
 	if a.n == 0 {
 		a.t0 = now
 	}
@@ -587,6 +642,7 @@ func (m *Manager) adaptIssued(now sim.VTimeInSec, dev uint64, pid vm.PID,
 	if !vector || a.readMask&(1<<dev) != 0 {
 		return
 	}
+	m.track(u, a)
 	a.readMask |= 1 << dev
 	t := float64(now)
 	a.readT = append(a.readT, t)
@@ -657,6 +713,7 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 		u.phase != phaseIdle || !m.eligible(u, now) {
 		return
 	}
+	m.AStats.DecisionMsgs++
 	p, ok := m.pageTable.Find(u.key.pid, u.key.idx<<m.unitLog2)
 	if !ok {
 		return
@@ -764,7 +821,11 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 			}
 		}
 		if ch.moved > 0 && len(distinct) > 1 {
-			consider(ch, benefit, cost+c.FixedNS+hold)
+			if m.bhRoom(majority(ch.dst), ch.dst) {
+				consider(ch, benefit, cost+c.FixedNS+hold)
+			} else {
+				m.AStats.BhFull++
+			}
 		}
 	}
 	// hot actions, decided at the first-read signal
@@ -798,7 +859,11 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 					}
 				}
 				if ch.moved > 0 {
-					consider(ch, benefit, cost+c.FixedNS+hold)
+					if m.bhRoom(majority(ch.dst), ch.dst) {
+						consider(ch, benefit, cost+c.FixedNS+hold)
+					} else {
+						m.AStats.BhFull++
+					}
 				}
 			}
 		}
@@ -977,7 +1042,132 @@ func (m *Manager) adaptExecute(now sim.VTimeInSec, u *unit, a *adaptState,
 	a.n = 0
 	m.Stats.CounterTriggers++
 	u.faulters = u.faulters[:0]
-	m.trigger(now, u, majority(ch.dst))
+	m.adaptTrigger(now, u, majority(ch.dst))
+}
+
+// adaptTrigger queues an adaptive migration after the decision delay.
+func (m *Manager) adaptTrigger(now sim.VTimeInSec, u *unit, dst uint64) {
+	d := m.cfg.Adapt.DecideNS
+	if d == 0 {
+		m.trigger(now, u, dst)
+		return
+	}
+	u.dst = dst
+	u.phase = phaseQueued
+	u.triggerTime = now
+	m.AStats.Deferred++
+	m.later(now+ns(d), func(now sim.VTimeInSec) {
+		h := m.handlers[dst]
+		h.queue = append(h.queue, u)
+		m.TickLater(now)
+	})
+}
+
+type deferredAct struct {
+	at sim.VTimeInSec
+	f  func(now sim.VTimeInSec)
+}
+
+// later runs f at time at (adaptTick).
+func (m *Manager) later(at sim.VTimeInSec, f func(now sim.VTimeInSec)) {
+	m.deferred = append(m.deferred, deferredAct{at, f})
+	m.TickLater(at)
+}
+
+// driverAt is when a pre-placement or replica creation decided now runs:
+// after the decision delay and, with BatchSW, at the end of the driver batch
+// it joins.
+func (m *Manager) driverAt(now sim.VTimeInSec) sim.VTimeInSec {
+	c := &m.cfg.Adapt
+	t := now + ns(c.DecideNS)
+	if !c.BatchSW {
+		return t
+	}
+	if m.drvN > 0 && m.drvN < m.cfg.BatchSize && t <= m.drvEnd {
+		m.drvN++
+		return m.drvEnd
+	}
+	start := t
+	if m.drvEnd > start {
+		start = m.drvEnd // the driver serves one batch at a time
+	}
+	m.drvEnd = start + ns(m.cfg.SoftwareLatencyNS)
+	m.drvN = 1
+	m.AStats.DrvBatches++
+	return m.drvEnd
+}
+
+// deferAct runs f now (ideal) or at driverAt.
+func (m *Manager) deferAct(now sim.VTimeInSec, f func(now sim.VTimeInSec)) {
+	c := &m.cfg.Adapt
+	if c.DecideNS == 0 && !c.BatchSW {
+		f(now)
+		return
+	}
+	m.AStats.Deferred++
+	m.later(m.driverAt(now), f)
+}
+
+// track refreshes (or creates) the page's tracking entry (TrackCap).
+func (m *Manager) track(u *unit, a *adaptState) {
+	cp := m.cfg.Adapt.TrackCap
+	if cp <= 0 {
+		return
+	}
+	dev := m.ownerOf(a.origPA)
+	if int(dev) >= len(m.trackLRU) {
+		return
+	}
+	l := m.trackLRU[dev]
+	if a.trackEl != nil {
+		l.MoveToFront(a.trackEl)
+		return
+	}
+	for l.Len() >= cp {
+		e := l.Back()
+		v := e.Value.(*unit)
+		l.Remove(e)
+		v.a.trackEl = nil
+		m.forget(v)
+		m.AStats.TrackEvict++
+	}
+	a.trackEl = l.PushFront(u)
+}
+
+// forget drops what an evicted tracking entry knew about a page.
+func (m *Manager) forget(u *unit) {
+	a := u.a
+	for i := range u.counts {
+		u.counts[i] = 0
+	}
+	for b := range a.bc {
+		for i := range a.bc[b] {
+			a.bc[b][i] = 0
+		}
+	}
+	a.n = 0
+	a.t0 = 0
+	a.readMask = 0
+	a.readT = nil
+	if !a.hotHandled && !a.fixed {
+		a.hot = false
+	}
+}
+
+// bhRoom reports whether the block-home table of frame owner dev has room
+// for the entries of a fresh frame there with these block destinations.
+func (m *Manager) bhRoom(dev uint64, dst [blocksPerPage]uint64) bool {
+	cp := m.cfg.Adapt.BlockHomeCap
+	if cp <= 0 {
+		return true
+	}
+	need := 0
+	for _, d := range dst {
+		if d != dev {
+			need++
+		}
+	}
+	return m.bhCount[dev]+need <= cp
 }
 
 func majority(d [blocksPerPage]uint64) uint64 {
@@ -1039,6 +1229,13 @@ func (m *Manager) adaptStartCopy(now sim.VTimeInSec, u *unit, freeze bool) {
 }
 
 // adaptRemapFrame installs the block homes of a fresh frame.
+// adaptRetireFrameHomes drops the block-home entries of a retired frame.
+func (m *Manager) adaptRetireFrameHomes(frame uint64) {
+	for b := uint64(0); b < blocksPerPage; b++ {
+		m.setBlockHome(frame>>log2Block+b, frame>>33)
+	}
+}
+
 func (m *Manager) adaptRemapFrame(u *unit, frame uint64) {
 	for b := 0; b < blocksPerPage; b++ {
 		m.setBlockHome(frame>>log2Block+uint64(b), u.a.blockDst[b])
@@ -1057,17 +1254,68 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 	if !ok || m.ppns[p.PAddr>>m.log2PageSize] != nil {
 		return false
 	}
-	home, _ := m.pageHomes(p)
+	home, uniHome := m.pageHomes(p)
 	pending := 0
+	uniDst := true
 	for b := 0; b < blocksPerPage; b++ {
 		if home[b] != dst[b] {
 			pending++
+		}
+		if dst[b] != dst[0] {
+			uniDst = false
 		}
 	}
 	if pending == 0 {
 		return false
 	}
+	cp := m.cfg.Adapt.BlockHomeCap
+	remap := cp > 0 && uniDst && uniHome
+	if cp > 0 && !remap {
+		owner := p.PAddr >> 33
+		need := 0
+		for b := 0; b < blocksPerPage; b++ {
+			if dst[b] != owner {
+				need++
+			}
+		}
+		if m.bhCount[owner]+need > cp {
+			m.AStats.BhFull++
+			return false
+		}
+	}
 	a.preplacing = true
+	m.deferAct(now, func(now sim.VTimeInSec) {
+		if m.ppns[p.PAddr>>m.log2PageSize] != nil || u.phase != phaseIdle {
+			a.preplacing = false
+			m.AStats.PreLate++
+			return
+		}
+		if remap {
+			m.prePlaceRemap(now, u, a, p, dst[0], act, byPredict)
+		} else {
+			m.prePlaceInPlace(now, u, a, p, home, dst, pending, act, byPredict)
+		}
+	})
+	return true
+}
+
+func (m *Manager) prePlaceDone(u *unit, a *adaptState, act int, byPredict bool) {
+	m.AStats.PrePlaced++
+	if byPredict {
+		m.AStats.PreByPredict++
+	} else {
+		m.AStats.PreByHot++
+	}
+	a.preplaced = true
+	if act == actSpread {
+		a.fixed = true
+	}
+}
+
+// prePlaceInPlace copies the blocks of an untouched page to their new homes
+// and installs block-home entries (same physical address).
+func (m *Manager) prePlaceInPlace(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Page,
+	home, dst [blocksPerPage]uint64, pending int, act int, byPredict bool) {
 	a.preCopy = true
 	ppn := p.PAddr >> m.log2PageSize
 	done := func(now sim.VTimeInSec) {
@@ -1089,16 +1337,7 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 				m.AStats.BlocksMoved[act]++
 			}
 		}
-		m.AStats.PrePlaced++
-		if byPredict {
-			m.AStats.PreByPredict++
-		} else {
-			m.AStats.PreByHot++
-		}
-		a.preplaced = true
-		if act == actSpread {
-			a.fixed = true
-		}
+		m.prePlaceDone(u, a, act, byPredict)
 	}
 	for b := 0; b < blocksPerPage; b++ {
 		if home[b] == dst[b] {
@@ -1115,7 +1354,48 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 		})
 		m.AStats.CopyBytes += 1 << log2Block
 	}
-	return true
+}
+
+// prePlaceRemap (BlockHomeCap set) moves an untouched page to a fresh frame
+// on dst: copy, then update the page table (nobody accessed the old frame,
+// so no shootdown wait; any TLB entry is dropped and later translations of
+// the page consult the page table).
+func (m *Manager) prePlaceRemap(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Page,
+	dst uint64, act int, byPredict bool) {
+	a.preCopy = true
+	frame := m.allocFrame(dst)
+	src := m.homeOf(p.PAddr)
+	ppn := p.PAddr >> m.log2PageSize
+	done := func(now sim.VTimeInSec) {
+		a.preplacing = false
+		a.preCopy = false
+		m.wake(now, u)
+		if m.ppns[ppn] != nil {
+			m.AStats.PreRaced++
+			m.retireFrame(frame)
+			return
+		}
+		m.frameInfo(p).state = frameRetired
+		m.invalidate(p)
+		p.PAddr = frame
+		p.DeviceID = dst
+		m.pageTable.Update(p)
+		u.everMigrated = true
+		u.lastEnd = now
+		m.AStats.PreRemaps++
+		m.AStats.PreBlocks += blocksPerPage
+		m.AStats.BlocksMoved[act] += blocksPerPage
+		m.prePlaceDone(u, a, act, byPredict)
+	}
+	m.gpms[dst].Engine.enqueue(now, &chunk{
+		src:      m.gpms[src].Engine,
+		srcPAddr: p.PAddr,
+		dstPAddr: frame,
+		size:     uint64(1) << m.log2PageSize,
+		done:     done,
+		pre:      a,
+	})
+	m.AStats.CopyBytes += uint64(1) << m.log2PageSize
 }
 
 // propagateHot applies a hot decision to the rest of the page's buffer:
@@ -1172,8 +1452,6 @@ func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 	a.fixed = true
 	a.preplacing = true
 	seq, kern := a.writeSeq, m.kernel
-	var frames []replica
-	pending := 0
 	ps := uint64(1) << m.log2PageSize
 	if b := m.cfg.Adapt.ReplicaBudget; b > 0 {
 		keep := reps[:0:0]
@@ -1191,6 +1469,8 @@ func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 		return
 	}
 	a.replHome = home
+	var frames []replica
+	pending := 0
 	done := func(now sim.VTimeInSec) {
 		pending--
 		if pending > 0 {
@@ -1212,22 +1492,33 @@ func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 		m.replOrder = append(m.replOrder, u)
 	}
 	for _, r := range reps {
-		f := m.allocFrame(r)
-		frames = append(frames, replica{dev: r, frame: f})
-		m.gpms[r].Engine.enqueue(now, &chunk{
-			src:      m.gpms[home].Engine,
-			srcPAddr: p.PAddr,
-			dstPAddr: f,
-			size:     uint64(1) << m.log2PageSize,
-			done:     done,
-		})
-		pending++
-		m.AStats.CopyBytes += ps
-		m.AStats.ReplCopy += ps
 		m.replBytes[r] += ps
 		if m.replBytes[r] > m.AStats.ReplPeak {
 			m.AStats.ReplPeak = m.replBytes[r]
 		}
+	}
+	m.deferAct(now, func(now sim.VTimeInSec) {
+		m.replicaCopies(now, a, p, home, reps, &frames, &pending, done)
+	})
+}
+
+// replicaCopies starts the copies of a replica creation.
+func (m *Manager) replicaCopies(now sim.VTimeInSec, a *adaptState, p vm.Page, home uint64,
+	reps []uint64, frames *[]replica, pending *int, done func(sim.VTimeInSec)) {
+	ps := uint64(1) << m.log2PageSize
+	*pending += len(reps)
+	for _, r := range reps {
+		f := m.allocFrame(r)
+		*frames = append(*frames, replica{dev: r, frame: f})
+		m.gpms[r].Engine.enqueue(now, &chunk{
+			src:      m.gpms[home].Engine,
+			srcPAddr: p.PAddr,
+			dstPAddr: f,
+			size:     ps,
+			done:     done,
+		})
+		m.AStats.CopyBytes += ps
+		m.AStats.ReplCopy += ps
 	}
 }
 
@@ -1356,7 +1647,36 @@ func (m *Manager) adaptResolve(now sim.VTimeInSec, at Waker, dev uint64,
 		m.holdPrePlace(now, at, u)
 		return page, false
 	}
+	if l := m.cfg.Adapt.LookupNS; l > 0 && (len(u.a.replicas) > 0 || m.hasBlockHomes(page.PAddr)) {
+		// redirect table lookup: the access waits l, once per access
+		if t, ok := m.lookupPass[at]; ok && now >= t {
+			delete(m.lookupPass, at)
+		} else {
+			if !ok {
+				if m.lookupPass == nil {
+					m.lookupPass = map[Waker]sim.VTimeInSec{}
+				}
+				m.lookupPass[at] = now + ns(l)
+				m.AStats.LookupHolds++
+				at.TickLater(now + ns(l))
+			}
+			return page, false
+		}
+	}
 	return m.replicaResolve(now, at, dev, u, vector, isWrite, page)
+}
+
+func (m *Manager) hasBlockHomes(pAddr uint64) bool {
+	if len(m.blockHome) == 0 {
+		return false
+	}
+	b := pAddr >> m.log2PageSize << (m.log2PageSize - log2Block)
+	for i := uint64(0); i < blocksPerPage; i++ {
+		if _, ok := m.blockHome[b+i]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // holdPrePlace makes an access wait for the running pre-placement of its
@@ -1487,6 +1807,22 @@ func (m *Manager) replicaResolve(now sim.VTimeInSec, at Waker, dev uint64,
 // adaptTick wakes held accesses and retires drained replica frames.
 func (m *Manager) adaptTick(now sim.VTimeInSec) bool {
 	progress := false
+	if len(m.deferred) > 0 {
+		var due []deferredAct
+		keep := m.deferred[:0]
+		for _, d := range m.deferred {
+			if d.at <= now {
+				due = append(due, d)
+			} else {
+				keep = append(keep, d)
+			}
+		}
+		m.deferred = keep
+		for _, d := range due {
+			d.f(now)
+		}
+		progress = progress || len(m.deferred) > 0
+	}
 	if len(m.holds) > 0 {
 		keep := m.holds[:0]
 		for _, u := range m.holds {

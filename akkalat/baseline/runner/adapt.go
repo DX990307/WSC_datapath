@@ -84,6 +84,16 @@ var pmAdaptObsReadersFlag = flag.Bool("pm-adapt-observed-readers", true,
 	"P21: replication of hot pages of non-concentrated buffers expects 2x the readers seen so far, each reading the lines readers so far read on average.")
 var pmAdaptHoldCostFlag = flag.Bool("pm-adapt-hold-cost", true,
 	"P21: move / block / spread also pay rate x hold^2 / 2 (hold = shootdown + recent drain at the home).")
+var pmAdaptTrackCapFlag = flag.Int("pm-adapt-track-cap", 0,
+	"P21 realism: tracking entries (counters, first-read signals) per GPM for the pages homed there, LRU; 0 = unlimited.")
+var pmAdaptDecideNSFlag = flag.Int("pm-adapt-decide-ns", 0,
+	"P21 realism: delay from a decision to its action (counts gathered at the driver).")
+var pmAdaptBatchSWFlag = flag.Bool("pm-adapt-batch-sw", false,
+	"P21 realism: pre-placements and replica creations go through driver batches that pay -pm-sw-latency-ns each.")
+var pmAdaptLookupNSFlag = flag.Int("pm-adapt-lookup-ns", 0,
+	"P21 realism: accesses to pages with run-time block homes or replicas wait this long at translation.")
+var pmAdaptBlockHomeCapFlag = flag.Int("pm-adapt-blockhome-cap", 0,
+	"P21 realism: 1 KB block-home entries per GPM; 0 = unlimited. When set, uniform pre-placements remap the page to a fresh frame; block falls back to move and spread is skipped when full.")
 var pmAdaptDumpFlag = flag.String("pm-adapt-dump", "",
 	"P21 diagnostics: write one line per tracked page to this file at the end.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
@@ -146,6 +156,11 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.PredictConstWindow = *pmAdaptConstWinFlag
 	a.ObservedReaders = *pmAdaptObsReadersFlag
 	a.HoldCost = *pmAdaptHoldCostFlag
+	a.TrackCap = *pmAdaptTrackCapFlag
+	a.DecideNS = uint64(*pmAdaptDecideNSFlag)
+	a.BatchSW = *pmAdaptBatchSWFlag
+	a.LookupNS = uint64(*pmAdaptLookupNSFlag)
+	a.BlockHomeCap = *pmAdaptBlockHomeCapFlag
 	if a.BatchAmort <= 0 {
 		panic("-pm-adapt-batch-amort must be positive")
 	}
@@ -171,13 +186,13 @@ func printAdaptConfig(c pagemigration.Config) {
 		"spread-other=%s prop-pages=%d prop-gate=%g predict-m=%d predict-window=%d "+
 		"base=%gns hop=%gns dom-share=%g max-migrations=%d hot-future=%d "+
 		"replica-budget=%dMB batch-amort=%g predict-touched=%v copy-first=%v "+
-		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v\n",
+		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v track-cap=%d decide=%dns batch-sw=%v lookup=%dns blockhome-cap=%d\n",
 		*pmAdaptActionsFlag, a.CostModel, a.Alpha, a.FixedNS, a.CopyWeight,
 		a.QueueNS, a.EvalEvery, a.HotK, a.HotWindowNS, a.ConcShare,
 		a.SpreadOther, a.PropSmallPages, a.PropGate, a.PredictM, a.PredictWindow,
 		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations, a.HotFutureReaders,
 		a.ReplicaBudget>>20, a.BatchAmort, a.PredictTouched, a.CopyFirst,
-		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot, a.PreCopyWeight, a.PredictConstWindow, a.ObservedReaders, a.HoldCost)
+		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot, a.PreCopyWeight, a.PredictConstWindow, a.ObservedReaders, a.HoldCost, a.TrackCap, a.DecideNS, a.BatchSW, a.LookupNS, a.BlockHomeCap)
 }
 
 // wireAdaptive installs what the adaptive placement needs beyond the page
@@ -285,6 +300,15 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 	col("pa_pre_home_ok", float64(s.PreHomeOK))
 	col("pa_early_obs", float64(s.EarlyObs))
 	col("pa_count_hot", float64(s.CountHotN))
+	col("pa_track_evict", float64(s.TrackEvict))
+	col("pa_decision_msgs", float64(s.DecisionMsgs))
+	col("pa_deferred", float64(s.Deferred))
+	col("pa_drv_batches", float64(s.DrvBatches))
+	col("pa_pre_late", float64(s.PreLate))
+	col("pa_pre_remaps", float64(s.PreRemaps))
+	col("pa_lookup_holds", float64(s.LookupHolds))
+	col("pa_bh_full", float64(s.BhFull))
+	col("pa_bh_peak", float64(s.BhPeak))
 	if *pmAdaptDumpFlag != "" && a.Enabled {
 		f, err := os.Create(*pmAdaptDumpFlag)
 		if err != nil {
