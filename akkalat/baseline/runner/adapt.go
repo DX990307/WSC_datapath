@@ -6,6 +6,8 @@ package runner
 import (
 	"flag"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
@@ -46,6 +48,12 @@ var pmAdaptPropGateFlag = flag.Float64("pm-adapt-prop-gate", 0.5,
 var pmAdaptPredictMFlag = flag.Int("pm-adapt-predict-m", 2, "P21: consecutive hits to trust a rule.")
 var pmAdaptPredictWinFlag = flag.Int("pm-adapt-predict-window", 512,
 	"P21: pages pre-placed on each side of a confirmed observation.")
+var pmReplicaListFlag = flag.String("pm-replica-list", "",
+	"P21 candidate 1 (oracle region replication): file with lines "+
+		"'<original physical page number> <tile> [<tile> ...]'; each listed "+
+		"page gets zero-cost read-only copies on those tiles at its first "+
+		"access, vector reads use the nearest copy, a write collapses them. "+
+		"Use with -page-migration=observe.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
 	"P21 baseline: the first vector access to a page nobody touched makes the "+
 		"accessing GPM the home of the page (zero cost; host copies are not "+
@@ -93,6 +101,9 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.PropGate = *pmAdaptPropGateFlag
 	a.PredictM = *pmAdaptPredictMFlag
 	a.PredictWindow = *pmAdaptPredictWinFlag
+	if *pmReplicaListFlag != "" {
+		a.ReplicaList = loadReplicaTiles(*pmReplicaListFlag)
+	}
 	if a.EvalEvery == 0 {
 		panic("-pm-adapt-eval must be positive")
 	}
@@ -122,11 +133,30 @@ func printAdaptConfig(c pagemigration.Config) {
 // (blocks homed away from their address range), and the kernel-boundary
 // notification (replica collapse).
 func (b *R9NanoPlatformBuilder) wireAdaptive(m *pagemigration.Manager) {
-	if !b.pageMigration.Adapt.Enabled {
+	a := b.pageMigration.Adapt
+	if a.ReplicaList != nil {
+		m.Storage = b.globalStorage
+		tileDev := map[uint64]uint64{}
+		for _, gpu := range b.gpus {
+			tileDev[uint64(pgclsTile(gpu.pm.rdma.Name()))] = gpu.GPUID
+		}
+		for ppn, tiles := range a.ReplicaList {
+			for i, t := range tiles {
+				d, ok := tileDev[t]
+				if !ok {
+					panic(fmt.Sprintf("-pm-replica-list: tile %d is not a GPM", t))
+				}
+				tiles[i] = d
+			}
+			a.ReplicaList[ppn] = tiles
+		}
+		fmt.Printf("[Config] P21 replica list: %d pages\n", len(a.ReplicaList))
+	}
+	if !a.Enabled && a.ReplicaList == nil {
 		return
 	}
 	for _, gpu := range b.gpus {
-		if e := gpu.pm.engine; e != nil {
+		if e := gpu.pm.engine; e != nil && a.Enabled {
 			f, ok := e.L2Finder.(*mem.InterleavedLowModuleFinder)
 			if !ok {
 				panic("P21: unexpected copy engine L2 finder")
@@ -189,4 +219,32 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 	col("pa_copy_bytes", float64(s.CopyBytes))
 	col("pa_kernels", float64(s.Kernels))
 	col("pa_block_homes", float64(m.BlockHomes()))
+}
+
+// loadReplicaTiles reads the replica list (tiles; converted to device IDs
+// in wireAdaptive).
+func loadReplicaTiles(path string) map[uint64][]uint64 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+	out := map[uint64][]uint64{}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 || strings.HasPrefix(f[0], "#") {
+			continue
+		}
+		ppn, err := strconv.ParseUint(f[0], 10, 64)
+		if err != nil {
+			panic(fmt.Sprintf("-pm-replica-list: bad line %q", line))
+		}
+		for _, x := range f[1:] {
+			t, err := strconv.ParseUint(x, 10, 64)
+			if err != nil {
+				panic(fmt.Sprintf("-pm-replica-list: bad line %q", line))
+			}
+			out[ppn] = append(out[ppn], t)
+		}
+	}
+	return out
 }

@@ -213,6 +213,8 @@ type Manager struct {
 	holds        []*unit
 	toRetire     []uint64
 	AStats       AdaptStats
+	// Storage is the global storage (only for the oracle replica list).
+	Storage *mem.Storage
 
 	Stats Stats
 }
@@ -329,7 +331,8 @@ func (h *atHook) ResolveRW(
 	h.lastWrite = isWrite
 	m := h.m
 	page, ok := h.Resolve(now, at, pid, vAddr, page)
-	if !ok || (!m.cfg.Adapt.Enabled && !m.cfg.Adapt.FirstTouch) {
+	if !ok || (!m.cfg.Adapt.Enabled && !m.cfg.Adapt.FirstTouch &&
+		m.cfg.Adapt.ReplicaList == nil) {
 		return page, ok
 	}
 	return m.adaptResolve(now, at, h.dev, m.units[m.unitOf(pid, vAddr)],
@@ -555,7 +558,7 @@ func (m *Manager) Tick(now sim.VTimeInSec) bool {
 		}
 	}
 
-	if m.cfg.Adapt.Enabled && m.adaptTick(now) {
+	if (m.cfg.Adapt.Enabled || m.cfg.Adapt.ReplicaList != nil) && m.adaptTick(now) {
 		progress = true
 	}
 

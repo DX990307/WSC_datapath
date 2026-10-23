@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 P21 candidate 1 (oracle region replication): mi200 + page-migration hooks only (observe, never migrates); the replica list is given with -pm-replica-list on the command line.",
+  "extends": "mi200.json",
+  "page-migration": "observe"
+}

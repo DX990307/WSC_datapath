@@ -103,6 +103,14 @@ type AdaptConfig struct {
 	PredictWindow int // pages pre-placed around each confirmed observation
 
 	ReplicaTiles []int
+
+	// ReplicaList (oracle region replication): original physical page ->
+	// replica devices. A listed page gets zero-cost read-only copies (fresh
+	// frames filled functionally from the master, as if the host copy had
+	// written several copies) on its first access in a kernel; vector reads
+	// go to the nearest copy; a write collapses them (no new copies in that
+	// kernel); every kernel boundary collapses them.
+	ReplicaList map[uint64][]uint64
 }
 
 // DefaultAdaptConfig returns the defaults (the global parameters chosen
@@ -207,6 +215,7 @@ type adaptState struct {
 
 	replicas  []replica
 	holdUntil sim.VTimeInSec
+	orig      uint64
 
 	act      int
 	blockDst [blocksPerPage]uint64
@@ -352,8 +361,10 @@ func (m *Manager) adaptUnit(u *unit) *adaptState {
 	}
 	a := &adaptState{writeKernel: -1}
 	va := u.key.idx << m.unitLog2
-	if b, idx := m.bufferOf(u.key.pid, va); b != nil {
-		a.buf, a.idx = b, idx
+	if m.buffers != nil {
+		if b, idx := m.bufferOf(u.key.pid, va); b != nil {
+			a.buf, a.idx = b, idx
+		}
 	}
 	u.a = a
 	if m.cfg.Adapt.Block {
@@ -1044,7 +1055,7 @@ func (m *Manager) collapse(now sim.VTimeInSec, u *unit, hold bool) {
 // KernelBoundary is called by every GPM's command processor when it accepts
 // a kernel launch; launches less than 1 us apart count as one boundary.
 func (m *Manager) KernelBoundary(now sim.VTimeInSec) {
-	if !m.cfg.Adapt.Enabled {
+	if !m.cfg.Adapt.Enabled && m.cfg.Adapt.ReplicaList == nil {
 		return
 	}
 	if m.AStats.Kernels > 0 && float64(now-m.lastBoundary) < 1e-6 {
@@ -1060,6 +1071,9 @@ func (m *Manager) KernelBoundary(now sim.VTimeInSec) {
 	}
 	sort.Slice(us, func(i, j int) bool { return us[i].key.idx < us[j].key.idx })
 	for _, u := range us {
+		if m.cfg.Adapt.ReplicaList != nil && m.replicasCurrent(u) {
+			continue // master unchanged (no host copy): the copies stay valid
+		}
 		m.collapse(now, u, false)
 		u.a.hotHandled = false
 		m.AStats.ReplicaKern++
@@ -1073,6 +1087,22 @@ func (m *Manager) KernelBoundary(now sim.VTimeInSec) {
 // a collapse is in progress. It also implements the first-touch baseline.
 func (m *Manager) adaptResolve(now sim.VTimeInSec, at Waker, dev uint64,
 	u *unit, vector, isWrite bool, page vm.Page) (vm.Page, bool) {
+	if m.cfg.Adapt.ReplicaList != nil {
+		if u == nil {
+			u = m.getUnit(m.unitOf(page.PID, page.VAddr))
+		}
+		a := m.adaptUnit(u)
+		if isWrite {
+			a.writeKernel = m.kernel
+		} else if len(a.replicas) == 0 && a.writeKernel < 0 && now >= a.holdUntil {
+			if devs, ok := m.cfg.Adapt.ReplicaList[a.origPPN(page)]; ok {
+				m.oracleReplicate(u, a, page, devs)
+			}
+		}
+		if len(a.replicas) > 0 || now < a.holdUntil {
+			return m.replicaResolve(now, at, dev, u, vector, isWrite, page)
+		}
+	}
 	if m.cfg.Adapt.FirstTouch {
 		if vector && m.ppns[page.PAddr>>m.log2PageSize] == nil {
 			if _, placed := m.blockHome[page.PAddr>>log2Block]; !placed &&
@@ -1088,6 +1118,11 @@ func (m *Manager) adaptResolve(now sim.VTimeInSec, at Waker, dev uint64,
 	if u == nil || u.a == nil {
 		return page, true
 	}
+	return m.replicaResolve(now, at, dev, u, vector, isWrite, page)
+}
+
+func (m *Manager) replicaResolve(now sim.VTimeInSec, at Waker, dev uint64,
+	u *unit, vector, isWrite bool, page vm.Page) (vm.Page, bool) {
 	a := u.a
 	if now < a.holdUntil {
 		u.addWaiter(at)
@@ -1215,3 +1250,63 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 
 // BlockHomes is the number of 1 KB blocks with a run-time home.
 func (m *Manager) BlockHomes() int { return len(m.blockHome) }
+
+// origPPN is the page's original physical page number (the frame it had
+// before any replica; the oracle list is keyed by it).
+func (a *adaptState) origPPN(p vm.Page) uint64 {
+	if a.orig == 0 {
+		a.orig = p.PAddr >> 12
+	}
+	return a.orig
+}
+
+// oracleReplicate creates zero-cost replicas of a listed page.
+func (m *Manager) oracleReplicate(u *unit, a *adaptState, p vm.Page, devs []uint64) {
+	if m.Storage == nil {
+		panic("replica list needs the global storage")
+	}
+	ps := uint64(1) << m.log2PageSize
+	data, err := m.Storage.Read(p.PAddr, ps)
+	if err != nil {
+		panic(err)
+	}
+	home := m.homeOf(p.PAddr)
+	for _, d := range devs {
+		if d == home || m.gpms[d] == nil {
+			continue
+		}
+		f := m.allocFrame(d)
+		if err := m.Storage.Write(f, data); err != nil {
+			panic(err)
+		}
+		a.replicas = append(a.replicas, replica{dev: d, frame: f})
+		m.AStats.CopyBytes += ps
+	}
+	if len(a.replicas) > 0 {
+		m.AStats.ReplicaOn++
+		m.replicated[u] = true
+	}
+}
+
+// replicasCurrent reports whether every replica frame still holds the
+// master's bytes (the oracle list mode keeps them across a kernel boundary
+// then; GPM writes collapse replicas immediately and stop replication of the
+// page, so the master's storage is current for listed pages).
+func (m *Manager) replicasCurrent(u *unit) bool {
+	p, ok := m.pageTable.Find(u.key.pid, u.key.idx<<m.unitLog2)
+	if !ok || u.a.writeKernel >= 0 {
+		return false
+	}
+	ps := uint64(1) << m.log2PageSize
+	master, err := m.Storage.Read(p.PAddr, ps)
+	if err != nil {
+		return false
+	}
+	for _, r := range u.a.replicas {
+		d, err := m.Storage.Read(r.frame, ps)
+		if err != nil || string(d) != string(master) {
+			return false
+		}
+	}
+	return true
+}
