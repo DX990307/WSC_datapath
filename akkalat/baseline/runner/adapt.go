@@ -115,6 +115,7 @@ var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
 		"accesses). Use with -page-migration=observe.")
 
 func adaptConfigFromFlags() pagemigration.AdaptConfig {
+	pagemigration.SetMeshWidth(MeshSize())
 	a := pagemigration.DefaultAdaptConfig()
 	a.Enabled = *pmAdaptFlag
 	a.FirstTouch = *pmFirstTouchFlag

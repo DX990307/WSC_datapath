@@ -119,6 +119,9 @@ var l1vMaxConcurrentTransFlag = flag.Int("l1v-max-concurrent-trans", 16,
 	"Maximum concurrent L1V cache transactions per L1V cache.")
 var l2CacheSizeMBFlag = flag.Int("l2-cache-size-mb", 4,
 	"Total L2 cache capacity per GPM in MiB.")
+var l2CacheSizeKBFlag = flag.Int("l2-cache-size-kb", 0,
+	"Total L2 cache capacity per GPM in KiB; 0 (default) uses -l2-cache-size-mb. "+
+		"For capacities that are not whole MiB (mi200s: 5 slices x 256 KiB).")
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")

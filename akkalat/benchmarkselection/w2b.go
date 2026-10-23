@@ -61,6 +61,12 @@ func newGUPS(d *driver.Driver) *gups.Benchmark {
 
 func newAllReduce(d *driver.Driver) *allreduce.Benchmark {
 	b := allreduce.NewBenchmark(d)
-	b.Params = allreduce.Params{Ranks: 48, CUs: runner.CUsPerGPM(), PerCU: *arPerCUFlag}
+	b.Params = allreduceParams()
 	return b
+}
+
+// allreduceParams: one gradient copy per GPM of the problem size
+// (-problem-gpms, 48 by default on any mesh).
+func allreduceParams() allreduce.Params {
+	return allreduce.Params{Ranks: runner.ProblemGPMs(), CUs: runner.ProblemCUsPerGPM(), PerCU: *arPerCUFlag}
 }

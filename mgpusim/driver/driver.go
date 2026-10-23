@@ -29,6 +29,8 @@ type Driver struct {
 	// Coherent magic D2H copies (see magiccopycoherent.go).
 	magicCopyPeekers  []MagicCopyPeeker
 	magicCopyCoherent bool
+	balancedWGDist    bool
+	reportWGDist      bool
 
 	// A1: hooks told about driver-side physical memory writes.
 	physicalWriteHooks []PhysicalWriteHook
@@ -506,8 +508,36 @@ func (d *Driver) distributeWGToGPUs(
 		wgAllocated = nextWG
 	}
 
+	if d.balancedWGDist {
+		cuCounts := make([]int, len(actualGPUs))
+		for i, devID := range actualGPUs {
+			cuCounts[i] = d.devices[devID].Properties.CUCount
+		}
+		wgDist = balancedWGDist(totalWGCount, cuCounts)
+		wgAllocated = wgDist[len(actualGPUs)]
+	}
+
 	if wgAllocated < totalWGCount {
 		panic("not all wg allocated")
+	}
+
+	if d.reportWGDist {
+		used, lo, hi := 0, totalWGCount, 0
+		counts := make([]int, len(actualGPUs))
+		for i := range actualGPUs {
+			counts[i] = wgDist[i+1] - wgDist[i]
+			if counts[i] > 0 {
+				used++
+			}
+			if counts[i] < lo {
+				lo = counts[i]
+			}
+			if counts[i] > hi {
+				hi = counts[i]
+			}
+		}
+		fmt.Printf("WGDIST,total_wg=%d,gpms=%d,used_gpms=%d,min=%d,max=%d,balanced=%v,per_gpm=%v\n",
+			totalWGCount, len(actualGPUs), used, lo, hi, d.balancedWGDist, counts)
 	}
 
 	fmt.Printf("total WG: %d WG Per CU %d\n", totalWGCount, wgPerCU)

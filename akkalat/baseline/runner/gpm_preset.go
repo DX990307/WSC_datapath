@@ -45,6 +45,10 @@ type gpmPreset struct {
 	// requires (total L2 capacity per GPM).
 	L2CacheSizeMB int
 
+	// L2CacheSizeKB, when non-zero, is the -l2-cache-size-kb value the
+	// preset requires (capacities that are not whole MiB).
+	L2CacheSizeKB int
+
 	DRAM dramPreset
 }
 
@@ -323,10 +327,29 @@ var mi200QuarterGPMPreset = gpmPreset{
 	},
 }
 
+// mi200ScaledGPMPreset (mesh9, user 10-22) is the mi200 GPM scaled by about
+// 0.6 = 48/80, so that 80 GPMs on a 9x9 mesh have about the resources of 48
+// mi200 GPMs on 7x7: 16 CUs (8 SA x 2; x0.571, total 1280 = 95% of 1344),
+// 5 L2 slices of 256 KiB (1.25 MiB, x0.625; one slice per memory controller
+// as in mi200) and 5 HBM2e channels (5/8 of the stack bandwidth, x0.625).
+// Everything per CU, per slice and per channel is the mi200 value. The GPM
+// still maps 8 GB (5 controllers x 2 pseudo channels x 2 stack IDs hold
+// 10 GB); slice and channel interleaving is modulo 5.
+var mi200ScaledGPMPreset = func() gpmPreset {
+	p := mi200QuarterGPMPreset
+	p.Name = "mi200s"
+	p.NumSA = 8
+	p.NumMemoryBanks = 5
+	p.L2CacheSizeMB = 0
+	p.L2CacheSizeKB = 5 * 256
+	return p
+}()
+
 var gpmPresets = map[string]gpmPreset{
 	hpcaGPMPreset.Name:         hpcaGPMPreset,
 	mi300xEighthGPMPreset.Name: mi300xEighthGPMPreset,
 	mi200QuarterGPMPreset.Name: mi200QuarterGPMPreset,
+	mi200ScaledGPMPreset.Name:  mi200ScaledGPMPreset,
 }
 
 func gpmPresetNames() string {
@@ -341,6 +364,11 @@ func gpmPresetNames() string {
 // lookupGPMPreset returns the named preset and checks it against the
 // -num-memory-banks and -l2-cache-size-mb values in use.
 func lookupGPMPreset(name string, numMemoryBanks, l2CacheSizeMB int) gpmPreset {
+	return lookupGPMPresetKB(name, numMemoryBanks, l2CacheSizeMB, 0)
+}
+
+// lookupGPMPresetKB is lookupGPMPreset with the -l2-cache-size-kb value.
+func lookupGPMPresetKB(name string, numMemoryBanks, l2CacheSizeMB, l2CacheSizeKB int) gpmPreset {
 	p, ok := gpmPresets[name]
 	if !ok {
 		panic(fmt.Sprintf("unknown -gpm-preset %q (choose from %s)", name, gpmPresetNames()))
@@ -348,6 +376,14 @@ func lookupGPMPreset(name string, numMemoryBanks, l2CacheSizeMB int) gpmPreset {
 	if p.NumMemoryBanks != 0 && p.NumMemoryBanks != numMemoryBanks {
 		panic(fmt.Sprintf("-gpm-preset=%s requires -num-memory-banks=%d, got %d",
 			name, p.NumMemoryBanks, numMemoryBanks))
+	}
+	if p.L2CacheSizeKB != 0 && p.L2CacheSizeKB != l2CacheSizeKB {
+		panic(fmt.Sprintf("-gpm-preset=%s requires -l2-cache-size-kb=%d, got %d",
+			name, p.L2CacheSizeKB, l2CacheSizeKB))
+	}
+	if p.L2CacheSizeKB == 0 && l2CacheSizeKB != 0 && p.L2CacheSizeMB != 0 {
+		panic(fmt.Sprintf("-gpm-preset=%s requires -l2-cache-size-mb=%d and no -l2-cache-size-kb",
+			name, p.L2CacheSizeMB))
 	}
 	if p.L2CacheSizeMB != 0 && p.L2CacheSizeMB != l2CacheSizeMB {
 		panic(fmt.Sprintf("-gpm-preset=%s requires -l2-cache-size-mb=%d, got %d",

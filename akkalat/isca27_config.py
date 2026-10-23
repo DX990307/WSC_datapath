@@ -36,9 +36,13 @@ PRESET_REASON = {
     "mi200": ("T13 预设 mi200：GPM 内部改为 1/4 MI250X GCD（28 CU、8 个 L2 slice/HBM2e channel，"
               "每个 channel 2 个 pseudo-channel）；带宽按 1.7 GHz 每周期等效，延迟保持纳秒值、"
               "不做每周期等效缩放"),
+    "mi200s": ("mesh9 缩放预设 mi200s（用户 10-22）：mi200 的 GPM 按约 0.6 = 48/80 缩小，"
+               "16 CU（8 SA × 2）、5 个 L2 slice × 256 KB = 1.25 MB、5 个 HBM2e channel；"
+               "每个 CU / slice / channel 的参数与 mi200 相同；用于 9×9 上 80 个 GPM 与 7×7 的 48 个 GPM 总资源相当"),
 }
 UNKNOWN_REASON = "未知，需要检查"
 STAT_FLAGS = {
+    "-report-wg-dist": "统计开关：打印每个 kernel 每个 GPM 的 WG 数（WGDIST 行）",
     "-report-l2-source": "统计开关：L2 数据来源（本地/远程 × L2/DRAM）",
     "-l2-source-tile-width": "统计开关的参数：7×7 mesh 宽度，用来算跳数",
     "-heartbeat-file": "运行监控：心跳文件",
@@ -63,6 +67,9 @@ ORACLE_FLAGS = {
 # deviations that the user must confirm, not benchmark parameters.
 MESH_FLAGS = {
     "-mesh-size": "规模实验（有意偏离 mi200.json，需要用户确认）：N×N mesh，CPU/IOMMU 在中心，N²−1 个 GPM",
+    "-problem-gpms": "规模实验：按多少个 GPM 计算随 GPM 数变化的问题规模（T16 small 网格、allreduce 份数）；默认 48 = 任何 mesh 上都用 7×7 的问题规模（强扩展）",
+    "-problem-cus-per-gpm": "规模实验：按每 GPM 多少个 CU 计算随 CU 数变化的问题规模；0 = 预设的 CU 数；mi200s（16 CU）设 28 保持 7×7 的问题规模",
+    "-wg-distribution": "规模实验：kernel 的 WG 怎样切到各 GPM（ceil = 原行为；balanced = 按 CU 数等分，WG 数 ≥ GPM 数时每个 GPM 都有 WG），kernel、问题规模和数据放置不变",
     "-switch-buffer-flits": "网络按 CU 比例缩小（有意偏离 mi200.json，用户 10-20 确认）：交换机端口缓冲深度 = max(-bandwidth, N) flit，与链路带宽分开；0 = 原行为",
 }
 

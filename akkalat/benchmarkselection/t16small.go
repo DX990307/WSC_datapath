@@ -51,7 +51,6 @@ var t16SmallDefaultWGPerCU = map[string]float64{
 }
 
 const (
-	t16NumGPM = 48
 	// Default pagerank: 132,644,864 connections over 2^20 nodes.
 	t16PagerankDegree = 132644864.0 / (1 << 20)
 	// Default spmv: Dim = 85 * 2^20, sparsity 1e-9 -> 0.0891 non-zeros per row.
@@ -59,7 +58,7 @@ const (
 )
 
 func t16TotalCUs() int {
-	return t16NumGPM * runner.CUsPerGPM()
+	return runner.ProblemGPMs() * runner.ProblemCUsPerGPM()
 }
 
 func roundUp(v, m int) int { return (v + m - 1) / m * m }

@@ -88,7 +88,7 @@ func (r *Runner) addObsStats() {
 		ReqAgg:          all || *obsReqAggFlag,
 		Reuse:           all || *obsReuseFlag,
 		Links:           all || *obsLinksFlag,
-		TileWidth:       gpmTraceMeshWidth,
+		TileWidth:       gpmTraceMeshWidth(),
 		CycleNS:         cycleNS,
 		AggWindowCycles: *obsAggWindowFlag,
 		WindowNS:        *obsSampleNSFlag,
