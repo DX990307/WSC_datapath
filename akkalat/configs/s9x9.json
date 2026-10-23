@@ -1,0 +1,15 @@
+{
+  "_description": "ISCA'27 P21 round 3 overlay: the 9x9 scaled settings of v4_complete_9x9s.json / mi200_9x9s.json without 'extends', to be listed after any 7x7 config (e.g. m3p,s9x9 or m3p_r3real,s9x9). See mi200_9x9s.json _scaling.",
+  "gpm-preset": "mi200s",
+  "num-memory-banks": 5,
+  "l2-cache-size-kb": 1280,
+  "mesh-size": 9,
+  "wg-distribution": "balanced",
+  "problem-gpms": 48,
+  "problem-cus-per-gpm": 28,
+  "bandwidth": 14,
+  "switch-buffer-flits": 16,
+  "rdma-max-outstanding": 154,
+  "t18-window": 154,
+  "t18-compose-table-entries": 308
+}
