@@ -128,6 +128,13 @@ type AdaptConfig struct {
 	// waits for it (its blocks go to the front of the copy queue) instead of
 	// cancelling the pre-placement.
 	HoldPrePlace bool
+	// ReplicateAny: hot read-only pages of buffers spread over many owners
+	// may be replicated too (not only concentrated buffers).
+	ReplicateAny bool
+	// CountHot: a page whose counted accesses have no dominant GPM and come
+	// from at least HotK GPMs is hot (written shared pages, which the
+	// first-read signal does not see).
+	CountHot bool
 
 	// ReplicaList (oracle region replication): original physical page ->
 	// replica devices. A listed page gets zero-cost read-only copies (fresh
@@ -168,6 +175,8 @@ func DefaultAdaptConfig() AdaptConfig {
 		CopyFirst:        true,
 		EarlyObserve:     true,
 		HoldPrePlace:     true,
+		ReplicateAny:     true,
+		CountHot:         true,
 	}
 }
 
@@ -242,6 +251,7 @@ type AdaptStats struct {
 	PreTouched   uint64 // predicted pages skipped because already touched
 	PreHomeOK    uint64 // predicted pages already at the predicted home
 	EarlyObs     uint64 // observations from the early signal
+	CountHotN    uint64 // pages found hot by the counters
 }
 
 type adaptState struct {
@@ -648,8 +658,26 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 		readers = r
 	}
 	hasDom := tot > 0 && float64(dc) >= m.cfg.DomShare*float64(tot)
+	if c.CountHot && !a.hot && !hasDom && tot >= c.EvalEvery {
+		n := 0
+		for _, x := range u.counts {
+			if x > 0 {
+				n++
+			}
+		}
+		if n >= c.HotK {
+			a.hot = true
+			m.AStats.CountHotN++
+			m.AStats.HotDetected++
+			if a.buf != nil {
+				a.buf.hot++
+			}
+		}
+	}
+	// early observation: only pages that look private so far (a broadcast
+	// page's first accesses are dominated by whoever came first)
 	if c.Predict && c.EarlyObserve && a.buf != nil && !a.observed && hasDom &&
-		tot >= c.EvalEvery && uniform {
+		tot >= c.EvalEvery && uniform && !a.hot && bits.OnesCount64(a.readMask) <= 2 {
 		a.observed = true
 		m.AStats.EarlyObs++
 		m.observe(now, a.buf, a.idx, dom, home[0], false)
@@ -745,7 +773,7 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 				}
 			}
 		}
-		if c.Replicate && uniform && a.buf != nil && a.buf.conc &&
+		if c.Replicate && uniform && a.buf != nil && (a.buf.conc || c.ReplicateAny) &&
 			a.writeKernel != m.kernel {
 			ch := choice{act: actReplicate}
 			var cost float64
@@ -876,14 +904,15 @@ func (m *Manager) adaptExecute(now sim.VTimeInSec, u *unit, a *adaptState,
 		m.AStats.PreFallback++
 	}
 	// learn: a page-level dominant target is an observation of its buffer
-	if m.cfg.Adapt.Predict && a.buf != nil && !a.observed &&
-		(ch.act == actMove || ch.act == actBlock) {
+	if m.cfg.Adapt.Predict && a.buf != nil && (ch.act == actMove || ch.act == actBlock) {
 		dom, dc, tot := dominant(u.counts)
 		if tot > 0 && float64(dc) >= m.cfg.DomShare*float64(tot) {
-			a.observed = true
 			a.buf.sumReads += float64(tot)
 			a.buf.nReads++
-			m.observe(now, a.buf, a.idx, dom, home[0], ch.act == actMove)
+			if !a.observed {
+				a.observed = true
+				m.observe(now, a.buf, a.idx, dom, home[0], ch.act == actMove)
+			}
 		}
 	}
 	a.act = ch.act
@@ -1478,6 +1507,11 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 	mean := 0.0
 	if b.touched > 0 {
 		mean = b.accesses / float64(b.touched)
+	}
+	// pages of this buffer that were moved had this many counted accesses
+	// at the decision (ski rental: as many again are expected)
+	if b.nReads > 0 && b.sumReads/float64(b.nReads) > mean {
+		mean = b.sumReads / float64(b.nReads)
 	}
 	for i := lo; i <= hi; i++ {
 		if i == idx {

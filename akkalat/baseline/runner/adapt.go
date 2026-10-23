@@ -71,6 +71,11 @@ var pmAdaptEarlyObsFlag = flag.Bool("pm-adapt-early-observe", true,
 var pmAdaptHoldPreFlag = flag.Bool("pm-adapt-hold-preplace", true,
 	"P21: an access to a page being pre-placed waits for the copy (moved to the "+
 		"front of the copy queue) instead of cancelling the pre-placement.")
+var pmAdaptReplAnyFlag = flag.Bool("pm-adapt-replicate-any", true,
+	"P21: hot read-only pages of buffers spread over many owners may be replicated too.")
+var pmAdaptCountHotFlag = flag.Bool("pm-adapt-count-hot", true,
+	"P21: a page whose counted accesses have no dominant GPM and come from at "+
+		"least -pm-adapt-hot-k GPMs is hot (written shared pages).")
 var pmAdaptDumpFlag = flag.String("pm-adapt-dump", "",
 	"P21 diagnostics: write one line per tracked page to this file at the end.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
@@ -127,6 +132,8 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.CopyFirst = *pmAdaptCopyFirstFlag
 	a.EarlyObserve = *pmAdaptEarlyObsFlag
 	a.HoldPrePlace = *pmAdaptHoldPreFlag
+	a.ReplicateAny = *pmAdaptReplAnyFlag
+	a.CountHot = *pmAdaptCountHotFlag
 	if a.BatchAmort <= 0 {
 		panic("-pm-adapt-batch-amort must be positive")
 	}
@@ -152,13 +159,13 @@ func printAdaptConfig(c pagemigration.Config) {
 		"spread-other=%s prop-pages=%d prop-gate=%g predict-m=%d predict-window=%d "+
 		"base=%gns hop=%gns dom-share=%g max-migrations=%d hot-future=%d "+
 		"replica-budget=%dMB batch-amort=%g predict-touched=%v copy-first=%v "+
-		"early-observe=%v hold-preplace=%v\n",
+		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v\n",
 		*pmAdaptActionsFlag, a.CostModel, a.Alpha, a.FixedNS, a.CopyWeight,
 		a.QueueNS, a.EvalEvery, a.HotK, a.HotWindowNS, a.ConcShare,
 		a.SpreadOther, a.PropSmallPages, a.PropGate, a.PredictM, a.PredictWindow,
 		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations, a.HotFutureReaders,
 		a.ReplicaBudget>>20, a.BatchAmort, a.PredictTouched, a.CopyFirst,
-		a.EarlyObserve, a.HoldPrePlace)
+		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot)
 }
 
 // wireAdaptive installs what the adaptive placement needs beyond the page
@@ -265,6 +272,7 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 	col("pa_pre_touched", float64(s.PreTouched))
 	col("pa_pre_home_ok", float64(s.PreHomeOK))
 	col("pa_early_obs", float64(s.EarlyObs))
+	col("pa_count_hot", float64(s.CountHotN))
 	if *pmAdaptDumpFlag != "" && a.Enabled {
 		f, err := os.Create(*pmAdaptDumpFlag)
 		if err != nil {
