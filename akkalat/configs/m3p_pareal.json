@@ -1,9 +1,10 @@
 {
-  "_description": "ISCA'27 P21 round 2: m3p_pa.json with every realism switch on: tracking table 1024 pages per GPM (LRU, evicted pages forget their counts), 1 us from decision to action, pre-placements and replica creations in per-GPM driver batches of 256 paying the 5 us software latency, 2 ns redirect lookup at translation (separate table model; the access is held at the address translator) for pages with block homes or replicas, 1024 block-home entries per GPM (uniform pre-placements remap to fresh frames, block falls back to move, spread skipped when full).",
+  "_description": "ISCA'27 P21 round 2: m3p_pa.json with every realism switch on: tracking table 1024 pages per GPM (LRU, evicted pages forget their counts), 1 us from decision to action, pre-placements and replica creations in per-GPM driver batches of 256 paying the 5 us software latency, 2 ns redirect lookup at translation (separate table model; the access is held at the address translator) for pages with block homes or replicas, 1024 block-home entries per GPM (uniform pre-placements remap to fresh frames, block falls back to move, spread skipped when full); counters are the hardware summary (Misra-Gries: 2 GPM counters per page, 1 per 1 KB block).",
   "extends": "m3p_pa.json",
   "pm-adapt-track-cap": 1024,
   "pm-adapt-decide-ns": 1000,
   "pm-adapt-batch-sw": true,
   "pm-adapt-lookup-ns": 2,
-  "pm-adapt-blockhome-cap": 1024
+  "pm-adapt-blockhome-cap": 1024,
+  "pm-adapt-approx-count": true
 }

@@ -1,7 +1,8 @@
 {
-  "_description": "ISCA'27 P21 round 2: m3p_pa.json with the realism switches of the PTE/TLB model: tracking table 1024 pages per GPM (LRU), 1 us from decision to action, pre-placements and replica creations in per-GPM driver batches of 256 paying the 5 us software latency; 1 KB block homes and replica masks live in the PTE/TLB entry (no extra lookup, no separate table; their bits are charged in the area estimate).",
+  "_description": "ISCA'27 P21 round 2: m3p_pa.json with the realism switches of the PTE/TLB model: tracking table 1024 pages per GPM (LRU), 1 us from decision to action, pre-placements and replica creations in per-GPM driver batches of 256 paying the 5 us software latency; 1 KB block homes and replica masks live in the PTE/TLB entry (no extra lookup, no separate table; their bits are charged in the area estimate); counters are the hardware summary (Misra-Gries: 2 GPM counters per page, 1 per 1 KB block).",
   "extends": "m3p_pa.json",
   "pm-adapt-track-cap": 1024,
   "pm-adapt-decide-ns": 1000,
-  "pm-adapt-batch-sw": true
+  "pm-adapt-batch-sw": true,
+  "pm-adapt-approx-count": true
 }

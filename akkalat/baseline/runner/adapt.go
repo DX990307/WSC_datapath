@@ -98,6 +98,8 @@ var pmAdaptWinPerHitFlag = flag.Int("pm-adapt-predict-win-per-hit", 8,
 	"P21: pre-placement window (each side) in pages per consecutive hit of the trusted rule, up to -pm-adapt-predict-window (0 = always the full window).")
 var pmAdaptPreMinPrecFlag = flag.Float64("pm-adapt-pre-min-precision", 0.5,
 	"P21: a buffer whose pre-placement precision (hits+1)/(checks+2) is below this stops pre-placing; pre-placement benefit is scaled by it (0 = off).")
+var pmAdaptApproxCountFlag = flag.Bool("pm-adapt-approx-count", false,
+	"P21 realism: hardware counter summary (Misra-Gries: 2 GPM counters per page, 1 per 1 KB block) instead of one counter per GPM.")
 var pmAdaptDumpFlag = flag.String("pm-adapt-dump", "",
 	"P21 diagnostics: write one line per tracked page to this file at the end.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
@@ -167,6 +169,7 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.BatchSW = *pmAdaptBatchSWFlag
 	a.LookupNS = uint64(*pmAdaptLookupNSFlag)
 	a.BlockHomeCap = *pmAdaptBlockHomeCapFlag
+	a.ApproxCount = *pmAdaptApproxCountFlag
 	if a.BatchAmort <= 0 {
 		panic("-pm-adapt-batch-amort must be positive")
 	}
@@ -192,13 +195,13 @@ func printAdaptConfig(c pagemigration.Config) {
 		"spread-other=%s prop-pages=%d prop-gate=%g predict-m=%d predict-window=%d "+
 		"base=%gns hop=%gns dom-share=%g max-migrations=%d hot-future=%d "+
 		"replica-budget=%dMB batch-amort=%g predict-touched=%v copy-first=%v "+
-		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v win-per-hit=%d pre-min-precision=%g track-cap=%d decide=%dns batch-sw=%v lookup=%dns blockhome-cap=%d\n",
+		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v win-per-hit=%d pre-min-precision=%g track-cap=%d decide=%dns batch-sw=%v lookup=%dns blockhome-cap=%d approx-count=%v\n",
 		*pmAdaptActionsFlag, a.CostModel, a.Alpha, a.FixedNS, a.CopyWeight,
 		a.QueueNS, a.EvalEvery, a.HotK, a.HotWindowNS, a.ConcShare,
 		a.SpreadOther, a.PropSmallPages, a.PropGate, a.PredictM, a.PredictWindow,
 		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations, a.HotFutureReaders,
 		a.ReplicaBudget>>20, a.BatchAmort, a.PredictTouched, a.CopyFirst,
-		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot, a.PreCopyWeight, a.PredictConstWindow, a.ObservedReaders, a.HoldCost, a.PredictWinPerHit, a.PreMinPrecision, a.TrackCap, a.DecideNS, a.BatchSW, a.LookupNS, a.BlockHomeCap)
+		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot, a.PreCopyWeight, a.PredictConstWindow, a.ObservedReaders, a.HoldCost, a.PredictWinPerHit, a.PreMinPrecision, a.TrackCap, a.DecideNS, a.BatchSW, a.LookupNS, a.BlockHomeCap, a.ApproxCount)
 }
 
 // wireAdaptive installs what the adaptive placement needs beyond the page

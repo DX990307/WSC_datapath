@@ -177,6 +177,10 @@ type AdaptConfig struct {
 	// the page to a fresh frame instead of using entries, block falls back
 	// to move and spread is skipped when the table is full.
 	BlockHomeCap int
+	// ApproxCount: the counters are the hardware summary (Misra-Gries):
+	// two GPM counters per page, one per 1 KB block, instead of one counter
+	// per GPM.
+	ApproxCount bool
 
 	// ReplicaList (oracle region replication): original physical page ->
 	// replica devices. A listed page gets zero-cost read-only copies (fresh
@@ -598,9 +602,17 @@ func (m *Manager) adaptCount(now sim.VTimeInSec, u *unit, dev, pAddr uint64, rem
 	if a.n == 0 {
 		a.t0 = now
 	}
-	u.counts[dev]++
-	if a.bc[0] != nil {
-		a.bc[(pAddr>>log2Block)&3][dev]++
+	if m.cfg.Adapt.ApproxCount {
+		// hardware summary: top-2 GPMs per page, dominant GPM per block
+		mgInc(u.counts, dev, 2)
+		if a.bc[0] != nil {
+			mgInc(a.bc[(pAddr>>log2Block)&3], dev, 1)
+		}
+	} else {
+		u.counts[dev]++
+		if a.bc[0] != nil {
+			a.bc[(pAddr>>log2Block)&3][dev]++
+		}
 	}
 	a.n++
 	if a.buf != nil {
@@ -772,12 +784,16 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 	}
 	hasDom := tot > 0 && float64(dc) >= m.cfg.DomShare*float64(tot)
 	hold := m.holdCost(now, a, home[0])
-	if c.CountHot && !a.hot && !hasDom && tot >= c.EvalEvery {
+	if c.CountHot && !a.hot && !hasDom && a.n >= c.EvalEvery {
 		n := 0
 		for _, x := range u.counts {
 			if x > 0 {
 				n++
 			}
+		}
+		if c.ApproxCount {
+			// the summary keeps two GPMs; use the reader bitmap
+			n = bits.OnesCount64(a.readMask)
 		}
 		if n >= c.HotK {
 			a.hot = true
@@ -2166,4 +2182,27 @@ func (m *Manager) noteDrain(home uint64, ns float64) {
 		return
 	}
 	m.drainEMA[home] = 0.75*m.drainEMA[home] + 0.25*ns
+}
+
+// mgInc is a Misra-Gries update with k counters over the per-GPM slots of c.
+func mgInc(c []uint32, d uint64, k int) {
+	if c[d] > 0 {
+		c[d]++
+		return
+	}
+	nz := 0
+	for _, x := range c {
+		if x > 0 {
+			nz++
+		}
+	}
+	if nz < k {
+		c[d] = 1
+		return
+	}
+	for i := range c {
+		if c[i] > 0 {
+			c[i]--
+		}
+	}
 }
