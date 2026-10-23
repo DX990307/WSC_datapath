@@ -230,7 +230,7 @@ func DefaultAdaptConfig() AdaptConfig {
 		PredictWinPerHit:   8,
 		PreMinPrecision:    0.5,
 		PreProbe:           16,
-		PreProbePerHit:     8,
+		PreProbePerHit:     32,
 		ObservedReaders:    true,
 		HoldCost:           true,
 	}

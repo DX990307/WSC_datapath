@@ -102,7 +102,7 @@ var pmAdaptApproxCountFlag = flag.Bool("pm-adapt-approx-count", false,
 	"P21 realism: hardware counter summary (Misra-Gries: 2 GPM counters per page, 1 per 1 KB block) instead of one counter per GPM.")
 var pmAdaptPreProbeFlag = flag.Int("pm-adapt-pre-probe", 16,
 	"P21: a buffer keeps at most this many + -pm-adapt-pre-probe-per-hit x (checked hits) pre-placements unchecked (0 = no limit).")
-var pmAdaptPreProbePerHitFlag = flag.Int("pm-adapt-pre-probe-per-hit", 8, "P21: see -pm-adapt-pre-probe.")
+var pmAdaptPreProbePerHitFlag = flag.Int("pm-adapt-pre-probe-per-hit", 32, "P21: see -pm-adapt-pre-probe.")
 var pmAdaptDumpFlag = flag.String("pm-adapt-dump", "",
 	"P21 diagnostics: write one line per tracked page to this file at the end.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
