@@ -33,6 +33,9 @@ type Driver struct {
 	// A1: hooks told about driver-side physical memory writes.
 	physicalWriteHooks []PhysicalWriteHook
 
+	// ISCA27 wg-to-data (see wgmap.go).
+	wgMap wgMapState
+
 	GPUs        []sim.Port
 	devices     []*internal.Device
 	pageTable   vm.PageTable
@@ -424,8 +427,16 @@ func (d *Driver) processUnifiedMultiGPULaunchKernelCommand(
 	wgDist := d.distributeWGToGPUs(queue, cmd)
 
 	dev := d.devices[queue.GPUID]
+	wgMap := d.nextUnifiedLaunch(cmd, len(dev.UnifiedGPUIDs), wgDist)
+	mapCount := make([]int, len(dev.UnifiedGPUIDs))
+	for _, g := range wgMap {
+		mapCount[g]++
+	}
 	for i, gpuID := range dev.UnifiedGPUIDs {
-		if wgDist[i+1]-wgDist[i] == 0 {
+		if wgMap == nil && wgDist[i+1]-wgDist[i] == 0 {
+			continue
+		}
+		if wgMap != nil && mapCount[i] == 0 {
 			continue
 		}
 
@@ -447,6 +458,10 @@ func (d *Driver) processUnifiedMultiGPULaunchKernelCommand(
 				wg.IDZ*int(numWGX)*int(numWGY) +
 					wg.IDY*int(numWGX) +
 					wg.IDX
+
+			if wgMap != nil {
+				return int(wgMap[flattenedID]) == currentGPUIndex
+			}
 
 			if flattenedID >= wgDist[currentGPUIndex] &&
 				flattenedID < wgDist[currentGPUIndex+1] {

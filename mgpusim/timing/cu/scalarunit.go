@@ -198,6 +198,7 @@ func attachWGOriginToScalarRequest(
 	if !ok || req == nil {
 		return
 	}
+	origin.Kernel = -1 // wg-to-data counts vector accesses only
 	req.Info = memtrace.WithWGOriginInfo(req.Info, origin)
 }
 

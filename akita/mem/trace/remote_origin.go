@@ -22,6 +22,9 @@ type WGOriginInfo struct {
 	WGX           int
 	WGY           int
 	WGZ           int
+	// Kernel is the unified launch number (wg-to-data), -1 if unknown or
+	// not a vector access.
+	Kernel int
 }
 
 type remoteOriginObject struct {

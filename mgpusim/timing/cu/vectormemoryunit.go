@@ -8,6 +8,7 @@ import (
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 	"github.com/sarchlab/mgpusim/v3/insts"
+	"github.com/sarchlab/mgpusim/v3/kernels"
 	"github.com/sarchlab/mgpusim/v3/timing/wavefront"
 )
 
@@ -257,7 +258,8 @@ func wgOriginForWave(
 	wave *wavefront.Wavefront,
 	requesterGPU int,
 ) (memtrace.WGOriginInfo, bool) {
-	if !memtrace.RemoteOriginTraceEnabled() || wave == nil || wave.WG == nil ||
+	if (!memtrace.RemoteOriginTraceEnabled() &&
+		!memtrace.WGAffinityEnabled()) || wave == nil || wave.WG == nil ||
 		wave.WG.WorkGroup == nil {
 		return memtrace.WGOriginInfo{}, false
 	}
@@ -277,6 +279,7 @@ func wgOriginForWave(
 		WGX:           wg.IDX,
 		WGY:           wg.IDY,
 		WGZ:           wg.IDZ,
+		Kernel:        kernels.LaunchIndex(wg.Packet),
 	}, true
 }
 

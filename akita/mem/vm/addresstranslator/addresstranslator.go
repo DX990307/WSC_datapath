@@ -569,6 +569,14 @@ func recordRemoteOrigin(
 	requester string,
 	ownerGPU int,
 ) {
+	if memtrace.WGAffinityEnabled() {
+		if ai, ok := memtrace.GetL2AccessInfo(info); ok && ai.HasWGOrigin {
+			_, isWrite := req.(*mem.WriteReq)
+			memtrace.RecordWGAffinity(ai.WGOrigin.Kernel,
+				ai.WGOrigin.FlattenedWGID, ownerGPU, isWrite,
+				req.GetByteSize())
+		}
+	}
 	if !memtrace.RemoteOriginTraceEnabled() {
 		return
 	}
