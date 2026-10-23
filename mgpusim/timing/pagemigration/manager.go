@@ -219,7 +219,8 @@ type Manager struct {
 	replicated   map[*unit]bool
 	holds        []*unit
 	toRetire     []uint64
-	replBytes    []uint64 // replica bytes per device (P21)
+	replBytes    []uint64  // replica bytes per device (P21)
+	drainEMA     []float64 // recent drain time (ns) of migrations per home (P21)
 	replOrder    []*unit
 	AStats       AdaptStats
 	// Storage is the global storage (only for the oracle replica list).
@@ -585,6 +586,9 @@ func (m *Manager) Tick(now sim.VTimeInSec) bool {
 		}
 		if u.phase == phaseDrain && m.drained(u) {
 			m.Stats.DrainWaitSum += float64(now - m.drainStart[u])
+			if u.a != nil && len(u.pages) > 0 {
+				m.noteDrain(m.homeOf(u.pages[0].PAddr), float64(now-m.drainStart[u])*1e9)
+			}
 			delete(m.drainStart, u)
 			if u.a != nil && u.a.copied {
 				m.adaptSwitch(now, u)

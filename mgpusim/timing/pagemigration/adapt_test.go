@@ -279,3 +279,21 @@ func TestHotConcentratedPageSpreads(t *testing.T) {
 		t.Fatalf("propagation to the untouched pages of the buffer: %+v", m.AStats)
 	}
 }
+
+// A linear split with 3.5 pages per device (cfd) is learned from
+// consecutive observations and extrapolated far away.
+func TestLearnerHalfPageSlope(t *testing.T) {
+	l := newLearner(2)
+	for i := 3; i < 20; i++ {
+		l.add(i, int(float64(i-3)/3.5)+1, 0)
+	}
+	if l.conf < 0 {
+		t.Fatal("no trusted rule")
+	}
+	for _, i := range []int{60, 200, 400} {
+		want := (int(float64(i-3)/3.5) + 1) % numDev
+		if got := l.predict(i, 0); got != want {
+			t.Fatalf("rule %d predicts %d for page %d, want %d", l.conf, got, i, want)
+		}
+	}
+}

@@ -13,11 +13,12 @@ package pagemigration
 //	       buffer)
 //
 // Each rule predicts every new observation before it is added; a hit extends
-// the rule's streak, a miss resets it and refits. The buffer trusts the first
-// rule (owner, const, step, lin) with a streak of at least m; a miss of the
-// trusted rule withdraws the trust until a rule reaches m hits again.
-// (Same algorithm as results_index/adapt/scripts/offline_pattern.py, online
-// variant with fallback.)
+// the rule's streak, a miss resets it and refits. The buffer trusts the rule
+// with the longest streak of at least m (ties: owner, step, lin, const); a
+// miss of the trusted rule withdraws the trust until a rule reaches m hits
+// again. (Derived from results_index/adapt/scripts/offline_pattern.py, online
+// variant with fallback; P21 round 2: longest streak instead of first rule,
+// slope candidates from pairs up to 8 apart.)
 
 import (
 	"math"
@@ -138,13 +139,16 @@ func (l *learner) add(i, t, o int) bool {
 	if l.conf >= 0 && !hitTrusted {
 		l.conf = -1
 	}
-	if l.conf < 0 {
-		for _, r := range []int{ruleOwner, ruleConst, ruleStep, ruleLin} {
-			if l.streak[r] >= l.m {
-				l.conf = r
-				break
-			}
+	// trust the rule with the longest streak (at least m); on ties the
+	// rules that extrapolate come before "adjacent same"
+	best := -1
+	for _, r := range []int{ruleOwner, ruleStep, ruleLin, ruleConst} {
+		if l.streak[r] >= l.m && (best < 0 || l.streak[r] > l.streak[best]) {
+			best = r
 		}
+	}
+	if best >= 0 {
+		l.conf = best
 	}
 	if l.conf >= 0 {
 		return hitTrusted || anyHit
@@ -197,7 +201,7 @@ func argmax48(c []int) int {
 	return b
 }
 
-// fitLin: candidate slopes from observation pairs 1-3 apart in index order
+// fitLin: candidate slopes from observation pairs 1-8 apart in index order
 // (device difference wrapped to (-24, 24], +-48 alternatives for adjacent
 // pairs more than one index apart), each also snapped to n = p/q pages per
 // device (q <= 4); phase in 16 steps; offset by the most common residue.
@@ -220,7 +224,7 @@ func fitLin(h []obs) (linParams, bool) {
 			}
 		}
 	}
-	for gap := 1; gap <= 3; gap++ {
+	for gap := 1; gap <= 8; gap++ {
 		for k := 0; k+gap < len(s); k++ {
 			di := s[k+gap].i - s[k].i
 			if di <= 0 {

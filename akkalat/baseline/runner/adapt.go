@@ -76,6 +76,14 @@ var pmAdaptReplAnyFlag = flag.Bool("pm-adapt-replicate-any", true,
 var pmAdaptCountHotFlag = flag.Bool("pm-adapt-count-hot", true,
 	"P21: a page whose counted accesses have no dominant GPM and come from at "+
 		"least -pm-adapt-hot-k GPMs is hot (written shared pages).")
+var pmAdaptPreCopyWFlag = flag.Float64("pm-adapt-pre-copy-weight", 0.25,
+	"P21: copy cost of a pre-placement (background bulk copy) relative to -pm-adapt-copy-weight.")
+var pmAdaptConstWinFlag = flag.Int("pm-adapt-predict-const-window", 2,
+	"P21: pages pre-placed around an observation when the trusted rule is adjacent-same.")
+var pmAdaptObsReadersFlag = flag.Bool("pm-adapt-observed-readers", true,
+	"P21: replication of hot pages of non-concentrated buffers expects 2x the readers seen so far.")
+var pmAdaptHoldCostFlag = flag.Bool("pm-adapt-hold-cost", true,
+	"P21: move / block / spread also pay rate x hold^2 / 2 (hold = shootdown + recent drain at the home).")
 var pmAdaptDumpFlag = flag.String("pm-adapt-dump", "",
 	"P21 diagnostics: write one line per tracked page to this file at the end.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
@@ -134,6 +142,10 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.HoldPrePlace = *pmAdaptHoldPreFlag
 	a.ReplicateAny = *pmAdaptReplAnyFlag
 	a.CountHot = *pmAdaptCountHotFlag
+	a.PreCopyWeight = *pmAdaptPreCopyWFlag
+	a.PredictConstWindow = *pmAdaptConstWinFlag
+	a.ObservedReaders = *pmAdaptObsReadersFlag
+	a.HoldCost = *pmAdaptHoldCostFlag
 	if a.BatchAmort <= 0 {
 		panic("-pm-adapt-batch-amort must be positive")
 	}
@@ -159,13 +171,13 @@ func printAdaptConfig(c pagemigration.Config) {
 		"spread-other=%s prop-pages=%d prop-gate=%g predict-m=%d predict-window=%d "+
 		"base=%gns hop=%gns dom-share=%g max-migrations=%d hot-future=%d "+
 		"replica-budget=%dMB batch-amort=%g predict-touched=%v copy-first=%v "+
-		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v\n",
+		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v\n",
 		*pmAdaptActionsFlag, a.CostModel, a.Alpha, a.FixedNS, a.CopyWeight,
 		a.QueueNS, a.EvalEvery, a.HotK, a.HotWindowNS, a.ConcShare,
 		a.SpreadOther, a.PropSmallPages, a.PropGate, a.PredictM, a.PredictWindow,
 		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations, a.HotFutureReaders,
 		a.ReplicaBudget>>20, a.BatchAmort, a.PredictTouched, a.CopyFirst,
-		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot)
+		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot, a.PreCopyWeight, a.PredictConstWindow, a.ObservedReaders, a.HoldCost)
 }
 
 // wireAdaptive installs what the adaptive placement needs beyond the page

@@ -135,6 +135,19 @@ type AdaptConfig struct {
 	// from at least HotK GPMs is hot (written shared pages, which the
 	// first-read signal does not see).
 	CountHot bool
+	// PreCopyWeight scales the copy cost of a pre-placement (a background
+	// bulk copy, off the critical path) relative to CopyWeight.
+	PreCopyWeight float64
+	// PredictConstWindow: pages pre-placed on each side of an observation
+	// when the trusted rule is "adjacent same" (it says nothing far away).
+	PredictConstWindow int
+	// ObservedReaders: replication of hot pages of non-concentrated buffers
+	// expects 2x the readers seen so far (capped at HotFutureReaders).
+	ObservedReaders bool
+	// HoldCost: move / block / spread also pay rate x hold^2 / 2 (accesses
+	// arriving during the switch wait half of it on average); hold is the
+	// shootdown plus the recent drain time at the page's home.
+	HoldCost bool
 
 	// ReplicaList (oracle region replication): original physical page ->
 	// replica devices. A listed page gets zero-cost read-only copies (fresh
@@ -150,33 +163,37 @@ type AdaptConfig struct {
 func DefaultAdaptConfig() AdaptConfig {
 	return AdaptConfig{
 		Move: true, Block: true, Spread: true, Predict: true,
-		CostModel:        true,
-		Alpha:            2,
-		BaseNS:           198,
-		HopNS:            72,
-		QueueNS:          0,
-		FixedNS:          2000,
-		CopyWeight:       1,
-		EvalEvery:        8,
-		MinBlockSamples:  4,
-		HotK:             4,
-		HotWindowNS:      2000,
-		ConcShare:        0.3,
-		SpreadOther:      "stay",
-		PropSmallPages:   256,
-		PropGate:         0.5,
-		PredictM:         2,
-		PredictWindow:    512,
-		ReplicaTiles:     []int{8, 12, 36, 40},
-		HotFutureReaders: 48,
-		ReplicaBudget:    64 << 20,
-		BatchAmort:       16,
-		PredictTouched:   false,
-		CopyFirst:        true,
-		EarlyObserve:     true,
-		HoldPrePlace:     true,
-		ReplicateAny:     true,
-		CountHot:         true,
+		CostModel:          true,
+		Alpha:              2,
+		BaseNS:             198,
+		HopNS:              72,
+		QueueNS:            0,
+		FixedNS:            2000,
+		CopyWeight:         1,
+		EvalEvery:          8,
+		MinBlockSamples:    4,
+		HotK:               4,
+		HotWindowNS:        2000,
+		ConcShare:          0.3,
+		SpreadOther:        "stay",
+		PropSmallPages:     256,
+		PropGate:           0.5,
+		PredictM:           2,
+		PredictWindow:      512,
+		ReplicaTiles:       []int{8, 12, 36, 40},
+		HotFutureReaders:   48,
+		ReplicaBudget:      64 << 20,
+		BatchAmort:         16,
+		PredictTouched:     false,
+		CopyFirst:          true,
+		EarlyObserve:       true,
+		HoldPrePlace:       true,
+		ReplicateAny:       true,
+		CountHot:           true,
+		PreCopyWeight:      0.25,
+		PredictConstWindow: 2,
+		ObservedReaders:    true,
+		HoldCost:           true,
 	}
 }
 
@@ -286,8 +303,10 @@ type adaptState struct {
 	copied   bool
 	dirty    [blocksPerPage]bool
 	lastW    [blocksPerPage]sim.VTimeInSec
-	observed bool // fed to the buffer's learner
-	preCopy  bool // pre-placement copy running
+	observed bool           // fed to the buffer's learner
+	preCopy  bool           // pre-placement copy running
+	counted  bool           // counted in buf.touched
+	t0       sim.VTimeInSec // first counted access since the last reset
 	preHeld  bool
 	origPA   uint64 // physical address of the frame at tracking start
 }
@@ -361,6 +380,7 @@ func (m *Manager) initAdapt() {
 	m.buffers = make(map[bufKey]*buffer)
 	m.tileDev = make(map[int]uint64)
 	m.replBytes = make([]uint64, len(m.gpms))
+	m.drainEMA = make([]float64, len(m.gpms))
 	for d, g := range m.gpms {
 		if g != nil {
 			m.tileDev[g.Tile] = uint64(d)
@@ -502,6 +522,9 @@ func (m *Manager) adaptCount(now sim.VTimeInSec, u *unit, dev, pAddr uint64, rem
 	if a.fixed || len(a.replicas) > 0 {
 		return
 	}
+	if a.n == 0 {
+		a.t0 = now
+	}
 	u.counts[dev]++
 	if a.bc[0] != nil {
 		a.bc[(pAddr>>log2Block)&3][dev]++
@@ -546,7 +569,8 @@ func (m *Manager) adaptIssued(now sim.VTimeInSec, dev uint64, pid vm.PID,
 	vAddr uint64, isWrite, vector, newFrame bool) {
 	u := m.getUnit(m.unitOf(pid, vAddr))
 	a := m.adaptUnit(u)
-	if newFrame && a.buf != nil && !a.preplaced {
+	if newFrame && a.buf != nil && !a.preplaced && !a.counted {
+		a.counted = true
 		a.buf.touched++
 	}
 	if isWrite {
@@ -566,6 +590,9 @@ func (m *Manager) adaptIssued(now sim.VTimeInSec, dev uint64, pid vm.PID,
 	t := float64(now)
 	a.readT = append(a.readT, t)
 	if a.hot {
+		if !a.hotHandled && m.cfg.Adapt.ObservedReaders {
+			m.adaptEvaluate(now, u)
+		}
 		return
 	}
 	w := float64(m.cfg.Adapt.HotWindowNS) * 1e-9
@@ -658,6 +685,7 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 		readers = r
 	}
 	hasDom := tot > 0 && float64(dc) >= m.cfg.DomShare*float64(tot)
+	hold := m.holdCost(now, a, home[0])
 	if c.CountHot && !a.hot && !hasDom && tot >= c.EvalEvery {
 		n := 0
 		for _, x := range u.counts {
@@ -708,7 +736,7 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 			}
 		}
 		if ch.moved > 0 {
-			consider(ch, benefit, cost+c.FixedNS)
+			consider(ch, benefit, cost+c.FixedNS+hold)
 		}
 	}
 	// block: each 1 KB block to its own dominant reader
@@ -735,7 +763,7 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 			}
 		}
 		if ch.moved > 0 && len(distinct) > 1 {
-			consider(ch, benefit, cost+c.FixedNS)
+			consider(ch, benefit, cost+c.FixedNS+hold)
 		}
 	}
 	// hot actions, decided at the first-read signal
@@ -769,12 +797,23 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 					}
 				}
 				if ch.moved > 0 {
-					consider(ch, benefit, cost+c.FixedNS)
+					consider(ch, benefit, cost+c.FixedNS+hold)
 				}
 			}
 		}
 		if c.Replicate && uniform && a.buf != nil && (a.buf.conc || c.ReplicateAny) &&
 			a.writeKernel != m.kernel {
+			// a page of a buffer spread over many owners is not assumed to
+			// reach HotFutureReaders: it expects as many readers again as
+			// it has seen (re-evaluated at every new reader)
+			rfuture := future
+			if !a.buf.conc && c.ObservedReaders {
+				r := 2 * bits.OnesCount64(a.readMask)
+				if r > c.HotFutureReaders {
+					r = c.HotFutureReaders
+				}
+				rfuture = float64(pageLines * r)
+			}
 			ch := choice{act: actReplicate}
 			var cost float64
 			for _, t := range c.ReplicaTiles {
@@ -795,7 +834,7 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 				for _, r := range ch.reps {
 					near = math.Min(near, m.lat(uint64(g), r))
 				}
-				benefit += future * s * (m.lat(uint64(g), home[0]) - near)
+				benefit += rfuture * s * (m.lat(uint64(g), home[0]) - near)
 			}
 			if len(ch.reps) > 0 {
 				consider(ch, benefit, cost+c.FixedNS)
@@ -1495,7 +1534,11 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 	}
 	c := &m.cfg.Adapt
 	ps := uint64(1) << m.log2PageSize
-	lo, hi := idx-c.PredictWindow, idx+c.PredictWindow
+	win := c.PredictWindow
+	if l.conf == ruleConst && c.PredictConstWindow < win {
+		win = c.PredictConstWindow
+	}
+	lo, hi := idx-win, idx+win
 	if lo < 0 {
 		lo = 0
 	}
@@ -1544,7 +1587,8 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 		}
 		dsts := [blocksPerPage]uint64{d, d, d, d}
 		if m.ppns[p.PAddr>>m.log2PageSize] == nil {
-			if c.CostModel && mean*m.lat(d, home[0]) <= c.Alpha*m.copyCost(home[0], d, pageLines) {
+			if c.CostModel && mean*m.lat(d, home[0]) <=
+				c.Alpha*c.PreCopyWeight*m.copyCost(home[0], d, pageLines) {
 				m.AStats.PreCostSkip++
 				continue
 			}
@@ -1706,4 +1750,30 @@ func (m *Manager) DumpAdapt(w io.Writer) {
 			a.n, u.migrations, b2i(a.observed), b2i(a.preHeld), conc, bhot, btouch,
 			bprop, bconf)
 	}
+}
+
+// holdCost is the expected waiting of the accesses that arrive while a
+// migration of the page holds them (Config.Adapt.HoldCost).
+func (m *Manager) holdCost(now sim.VTimeInSec, a *adaptState, home uint64) float64 {
+	if !m.cfg.Adapt.HoldCost || a.n == 0 {
+		return 0
+	}
+	age := float64(now-a.t0) * 1e9
+	if age < 100 {
+		age = 100
+	}
+	rate := float64(a.n) / age
+	h := float64(m.cfg.ShootdownLatencyNS)
+	if m.drainEMA != nil {
+		h += m.drainEMA[home]
+	}
+	return rate * h * h / 2
+}
+
+// noteDrain records the drain time of a migration away from home.
+func (m *Manager) noteDrain(home uint64, ns float64) {
+	if m.drainEMA == nil {
+		return
+	}
+	m.drainEMA[home] = 0.75*m.drainEMA[home] + 0.25*ns
 }
