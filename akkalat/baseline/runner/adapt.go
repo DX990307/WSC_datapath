@@ -54,6 +54,14 @@ var pmReplicaListFlag = flag.String("pm-replica-list", "",
 		"page gets zero-cost read-only copies on those tiles at its first "+
 		"access, vector reads use the nearest copy, a write collapses them. "+
 		"Use with -page-migration=observe.")
+var pmAdaptHotFutureFlag = flag.Int("pm-adapt-hot-future-readers", 48,
+	"P21: readers a hot page is expected to have (spread / replicate benefit).")
+var pmAdaptReplBudgetFlag = flag.Int("pm-adapt-replica-budget-mb", 64,
+	"P21: replica bytes per GPM in MB (0 = no limit); the oldest replicated page with a copy there is dropped.")
+var pmAdaptBatchAmortFlag = flag.Float64("pm-adapt-batch-amort", 16,
+	"P21: a migration that joins a predicted batch pays fixed-ns / this.")
+var pmAdaptPredictTouchedFlag = flag.Bool("pm-adapt-predict-touched", true,
+	"P21: confident buffer rules also migrate touched neighbours in the same batch.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
 	"P21 baseline: the first vector access to a page nobody touched makes the "+
 		"accessing GPM the home of the page (zero cost; host copies are not "+
@@ -101,6 +109,13 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.PropGate = *pmAdaptPropGateFlag
 	a.PredictM = *pmAdaptPredictMFlag
 	a.PredictWindow = *pmAdaptPredictWinFlag
+	a.HotFutureReaders = *pmAdaptHotFutureFlag
+	a.ReplicaBudget = uint64(*pmAdaptReplBudgetFlag) << 20
+	a.BatchAmort = *pmAdaptBatchAmortFlag
+	a.PredictTouched = *pmAdaptPredictTouchedFlag
+	if a.BatchAmort <= 0 {
+		panic("-pm-adapt-batch-amort must be positive")
+	}
 	if *pmReplicaListFlag != "" {
 		a.ReplicaList = loadReplicaTiles(*pmReplicaListFlag)
 	}
@@ -121,11 +136,13 @@ func printAdaptConfig(c pagemigration.Config) {
 	fmt.Printf("[Config] P21 adapt actions=%s costmodel=%v alpha=%g fixed=%gns "+
 		"copy-weight=%g queue=%gns eval=%d hot-k=%d hot-window=%dns conc=%g "+
 		"spread-other=%s prop-pages=%d prop-gate=%g predict-m=%d predict-window=%d "+
-		"base=%gns hop=%gns dom-share=%g max-migrations=%d\n",
+		"base=%gns hop=%gns dom-share=%g max-migrations=%d hot-future=%d "+
+		"replica-budget=%dMB batch-amort=%g predict-touched=%v\n",
 		*pmAdaptActionsFlag, a.CostModel, a.Alpha, a.FixedNS, a.CopyWeight,
 		a.QueueNS, a.EvalEvery, a.HotK, a.HotWindowNS, a.ConcShare,
 		a.SpreadOther, a.PropSmallPages, a.PropGate, a.PredictM, a.PredictWindow,
-		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations)
+		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations, a.HotFutureReaders,
+		a.ReplicaBudget>>20, a.BatchAmort, a.PredictTouched)
 }
 
 // wireAdaptive installs what the adaptive placement needs beyond the page
@@ -177,7 +194,7 @@ func (b *R9NanoPlatformBuilder) wireAdaptive(m *pagemigration.Manager) {
 
 func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 	a := m.Config().Adapt
-	if !a.Enabled && !a.FirstTouch {
+	if !a.Enabled && !a.FirstTouch && a.ReplicaList == nil {
 		return
 	}
 	s := m.AStats
@@ -217,6 +234,11 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 	col("pa_replica_reads", float64(s.ReplicaReads))
 	col("pa_first_touch_pages", float64(s.FirstTouch))
 	col("pa_copy_bytes", float64(s.CopyBytes))
+	col("pa_replica_copy_bytes", float64(s.ReplCopy))
+	col("pa_replica_inval_msgs", float64(s.ReplInvals))
+	col("pa_replica_evictions", float64(s.ReplEvict))
+	col("pa_replica_peak_bytes", float64(s.ReplPeak))
+	col("pa_batch_triggered", float64(s.BatchTrig))
 	col("pa_kernels", float64(s.Kernels))
 	col("pa_block_homes", float64(m.BlockHomes()))
 }

@@ -2,6 +2,7 @@ package pagemigration
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/sarchlab/akita/v3/mem/vm"
@@ -238,4 +239,43 @@ func TestFirstTouchHomesPage(t *testing.T) {
 		t.Fatal("first touch")
 	}
 	_ = vm.Page{}
+}
+
+// TestHotConcentratedPageSpreads: the MM case (P21 round 1) - a small buffer
+// on one GPM whose page is read by 4 GPMs within the window must be spread
+// (it used to be judged with only the 4 readers seen so far and never acted).
+func TestHotConcentratedPageSpreads(t *testing.T) {
+	cfg := testConfig(PolicyAccessCounter)
+	cfg.Adapt = DefaultAdaptConfig()
+	cfg.Adapt.Enabled = true
+	cfg.Adapt.Replicate = false
+	pt := vm.NewPageTable(12)
+	gpms := make([]*GPM, 49)
+	eng := sim.NewSerialEngine()
+	d := uint64(1)
+	for tile := 0; tile < 49; tile++ {
+		if tile == 24 {
+			continue
+		}
+		gpms[d] = &GPM{DeviceID: d, MemBase: d * 8 * gb, Tile: tile,
+			Engine: NewCopyEngine(fmt.Sprintf("E%d", d), eng, cfg)}
+		d++
+	}
+	m := NewManager("PM", eng, cfg, pt, 12, gpms, nil)
+	for i := uint64(0); i < 16; i++ {
+		pt.Insert(vm.Page{PID: 1, VAddr: 0x100000 + i*4096, PAddr: 8*gb + i*4096,
+			PageSize: 4096, Valid: true, DeviceID: 1, PageBlock: 7})
+	}
+	for k, dev := range []uint64{10, 20, 30, 40} {
+		h := m.ATHook(dev, true).(*atHook)
+		now := sim.VTimeInSec(float64(k) * 1e-7)
+		h.ResolveRW(now, &fakeWaker{}, 1, 0x100000, false, vm.Page{})
+		h.Issued(now, 1, 0x100000, 8*gb)
+	}
+	if m.AStats.HotDetected == 0 || m.AStats.Decided[actSpread][2] != 16 {
+		t.Fatalf("hot page not spread: %+v", m.AStats)
+	}
+	if m.AStats.Propagated != 15 {
+		t.Fatalf("propagation to the untouched pages of the buffer: %+v", m.AStats)
+	}
 }

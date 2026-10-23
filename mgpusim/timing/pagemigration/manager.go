@@ -212,6 +212,8 @@ type Manager struct {
 	replicated   map[*unit]bool
 	holds        []*unit
 	toRetire     []uint64
+	replBytes    []uint64 // replica bytes per device (P21)
+	replOrder    []*unit
 	AStats       AdaptStats
 	// Storage is the global storage (only for the oracle replica list).
 	Storage *mem.Storage

@@ -103,6 +103,17 @@ type AdaptConfig struct {
 	PredictWindow int // pages pre-placed around each confirmed observation
 
 	ReplicaTiles []int
+	// HotFutureReaders: readers a hot page is expected to have (spread /
+	// replicate benefit); ReplicaBudget: replica bytes per GPM (0 = no
+	// limit; the oldest replicated page holding a copy there is dropped);
+	// BatchAmort: a migration triggered together with a predicted batch pays
+	// FixedNS / BatchAmort.
+	HotFutureReaders int
+	ReplicaBudget    uint64
+	BatchAmort       float64
+	// PredictTouched: confident buffer rules also trigger (batched)
+	// migrations of touched neighbours, not only pre-place untouched ones.
+	PredictTouched bool
 
 	// ReplicaList (oracle region replication): original physical page ->
 	// replica devices. A listed page gets zero-cost read-only copies (fresh
@@ -118,24 +129,28 @@ type AdaptConfig struct {
 func DefaultAdaptConfig() AdaptConfig {
 	return AdaptConfig{
 		Move: true, Block: true, Spread: true, Predict: true,
-		CostModel:       true,
-		Alpha:           2,
-		BaseNS:          198,
-		HopNS:           72,
-		QueueNS:         0,
-		FixedNS:         2000,
-		CopyWeight:      1,
-		EvalEvery:       8,
-		MinBlockSamples: 4,
-		HotK:            4,
-		HotWindowNS:     2000,
-		ConcShare:       0.3,
-		SpreadOther:     "stay",
-		PropSmallPages:  256,
-		PropGate:        0.5,
-		PredictM:        2,
-		PredictWindow:   512,
-		ReplicaTiles:    []int{8, 12, 36, 40},
+		CostModel:        true,
+		Alpha:            2,
+		BaseNS:           198,
+		HopNS:            72,
+		QueueNS:          0,
+		FixedNS:          2000,
+		CopyWeight:       1,
+		EvalEvery:        8,
+		MinBlockSamples:  4,
+		HotK:             4,
+		HotWindowNS:      2000,
+		ConcShare:        0.3,
+		SpreadOther:      "stay",
+		PropSmallPages:   256,
+		PropGate:         0.5,
+		PredictM:         2,
+		PredictWindow:    512,
+		ReplicaTiles:     []int{8, 12, 36, 40},
+		HotFutureReaders: 48,
+		ReplicaBudget:    64 << 20,
+		BatchAmort:       16,
+		PredictTouched:   true,
 	}
 }
 
@@ -193,6 +208,11 @@ type AdaptStats struct {
 	ReplicaReads uint64 // reads redirected to a replica
 	FirstTouch   uint64 // pages homed by first touch
 	CopyBytes    uint64 // bytes copied by adaptive actions
+	ReplCopy     uint64 // of which for replicas
+	ReplInvals   uint64 // invalidation messages sent to replica holders
+	ReplEvict    uint64 // replicated pages dropped for the capacity budget
+	ReplPeak     uint64 // largest replica bytes on one GPM
+	BatchTrig    uint64 // touched pages migrated together with a predicted batch
 	Kernels      uint64
 }
 
@@ -214,6 +234,7 @@ type adaptState struct {
 	writeSeq        uint64
 
 	replicas  []replica
+	replHome  uint64
 	holdUntil sim.VTimeInSec
 	orig      uint64
 
@@ -289,6 +310,7 @@ func (m *Manager) initAdapt() {
 	}
 	m.buffers = make(map[bufKey]*buffer)
 	m.tileDev = make(map[int]uint64)
+	m.replBytes = make([]uint64, len(m.gpms))
 	for d, g := range m.gpms {
 		if g != nil {
 			m.tileDev[g.Tile] = uint64(d)
@@ -634,7 +656,13 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 	// hot actions, decided at the first-read signal
 	if a.hot && !a.hotHandled {
 		shares := m.readerShares(u, a)
-		future := float64(pageLines * readers)
+		// a hot page is expected to be read by HotFutureReaders GPMs, each
+		// fetching each line about once (M3 keeps it afterwards)
+		fr := readers
+		if c.HotFutureReaders > fr {
+			fr = c.HotFutureReaders
+		}
+		future := float64(pageLines * fr)
 		if (c.Spread) && uniform {
 			if dst, ok := m.spreadTargets(a, p); ok {
 				ch := choice{act: actSpread, dst: dst}
@@ -669,6 +697,8 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 				if d != home[0] {
 					ch.reps = append(ch.reps, d)
 					cost += m.copyCost(home[0], d, pageLines)
+					// one invalidation message per copy when it is dropped
+					cost += c.BaseNS + c.HopNS*float64(m.hops(home[0], d))
 				}
 			}
 			var benefit float64
@@ -686,10 +716,12 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 				consider(ch, benefit, cost+c.FixedNS)
 			}
 		}
-		a.hotHandled = true
 	}
 	if best.act == actStay {
 		return
+	}
+	if best.act == actSpread || best.act == actReplicate {
+		a.hotHandled = true
 	}
 	a.bucket = readerBucket(readers)
 	m.adaptExecute(now, u, a, p, home, best)
@@ -712,13 +744,15 @@ func (m *Manager) readerShares(u *unit, a *adaptState) []float64 {
 		}
 		return s
 	}
-	n := bits.OnesCount64(a.readMask)
-	if n == 0 {
-		return s
+	n := 0
+	for _, g := range m.gpms {
+		if g != nil {
+			n++
+		}
 	}
-	for g := range s {
-		if a.readMask&(1<<uint(g)) != 0 {
-			s[g] = 1 / float64(n)
+	for d, g := range m.gpms {
+		if g != nil {
+			s[d] = 1 / float64(n)
 		}
 	}
 	return s
@@ -999,6 +1033,23 @@ func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 	seq, kern := a.writeSeq, m.kernel
 	var frames []replica
 	pending := 0
+	ps := uint64(1) << m.log2PageSize
+	if b := m.cfg.Adapt.ReplicaBudget; b > 0 {
+		keep := reps[:0:0]
+		for _, r := range reps {
+			for m.replBytes[r]+ps > b && m.evictOldestOn(now, r) {
+			}
+			if m.replBytes[r]+ps <= b {
+				keep = append(keep, r)
+			}
+		}
+		reps = keep
+	}
+	if len(reps) == 0 {
+		a.fixed, a.preplacing = false, false
+		return
+	}
+	a.replHome = home
 	done := func(now sim.VTimeInSec) {
 		pending--
 		if pending > 0 {
@@ -1009,6 +1060,7 @@ func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 			m.AStats.ReplicaAbort++
 			for _, r := range frames {
 				m.retireFrame(r.frame)
+				m.replBytes[r.dev] -= ps
 			}
 			a.fixed = false
 			return
@@ -1016,6 +1068,7 @@ func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 		a.replicas = frames
 		m.AStats.ReplicaOn++
 		m.replicated[u] = true
+		m.replOrder = append(m.replOrder, u)
 	}
 	for _, r := range reps {
 		f := m.allocFrame(r)
@@ -1028,8 +1081,31 @@ func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 			done:     done,
 		})
 		pending++
-		m.AStats.CopyBytes += uint64(1) << m.log2PageSize
+		m.AStats.CopyBytes += ps
+		m.AStats.ReplCopy += ps
+		m.replBytes[r] += ps
+		if m.replBytes[r] > m.AStats.ReplPeak {
+			m.AStats.ReplPeak = m.replBytes[r]
+		}
 	}
+}
+
+// evictOldestOn drops the oldest replicated page that has a copy on dev.
+func (m *Manager) evictOldestOn(now sim.VTimeInSec, dev uint64) bool {
+	for i, u := range m.replOrder {
+		if !m.replicated[u] {
+			continue
+		}
+		for _, r := range u.a.replicas {
+			if r.dev == dev {
+				m.replOrder = append(m.replOrder[:i:i], m.replOrder[i+1:]...)
+				m.collapse(now, u, false)
+				m.AStats.ReplEvict++
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // retireFrame marks a frame retired once nothing is in flight to it.
@@ -1039,11 +1115,21 @@ func (m *Manager) retireFrame(f uint64) {
 
 func (m *Manager) collapse(now sim.VTimeInSec, u *unit, hold bool) {
 	a := u.a
+	ps := uint64(1) << m.log2PageSize
 	for _, r := range a.replicas {
 		m.retireFrame(r.frame)
+		if m.replBytes != nil {
+			m.replBytes[r.dev] -= ps
+		}
+		if src := m.gpms[a.replHome]; src != nil && src.Engine != nil &&
+			m.gpms[r.dev].Engine != nil {
+			src.Engine.sendInval(now, m.gpms[r.dev].Engine)
+			m.AStats.ReplInvals++
+		}
 	}
 	a.replicas = nil
 	a.fixed = false
+	a.hotHandled = false
 	delete(m.replicated, u)
 	if hold && m.cfg.ShootdownLatencyNS > 0 {
 		a.holdUntil = now + ns(m.cfg.ShootdownLatencyNS)
@@ -1222,9 +1308,12 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 	}
 	mean := b.sumReads / float64(b.nReads)
 	for i := lo; i <= hi; i++ {
+		if i == idx {
+			continue
+		}
 		va := b.start + uint64(i)*ps
 		p, ok := m.pageTable.Find(b.pid, va)
-		if !ok || m.ppns[p.PAddr>>m.log2PageSize] != nil {
+		if !ok {
 			continue
 		}
 		t := l.predict(i, int(p.DeviceID)-1)
@@ -1232,19 +1321,57 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 			continue
 		}
 		d := uint64(t + 1)
-		if m.gpms[d] == nil || d == p.DeviceID {
+		if m.gpms[d] == nil {
+			continue
+		}
+		home, uniform := m.pageHomes(p)
+		if !uniform || home[0] == d {
 			continue
 		}
 		v := m.getUnit(m.unitOf(b.pid, va))
 		va2 := m.adaptUnit(v)
-		if va2.preplaced || va2.preplacing || va2.fixed {
-			continue
-		}
-		if c.CostModel && mean*m.lat(d, p.DeviceID) <= c.Alpha*m.copyCost(p.DeviceID, d, pageLines) {
+		if va2.preplaced || va2.preplacing || va2.fixed || len(va2.replicas) > 0 {
 			continue
 		}
 		dsts := [blocksPerPage]uint64{d, d, d, d}
-		m.prePlace(now, v, dsts, actMove, true)
+		if m.ppns[p.PAddr>>m.log2PageSize] == nil {
+			if c.CostModel && mean*m.lat(d, home[0]) <= c.Alpha*m.copyCost(home[0], d, pageLines) {
+				continue
+			}
+			m.prePlace(now, v, dsts, actMove, true)
+			continue
+		}
+		// touched neighbour: join the batch (one software service and one
+		// shootdown round for the predicted pages), unless its own counter
+		// already points elsewhere
+		if !c.PredictTouched || v.phase != phaseIdle || !m.eligible(v, now) {
+			continue
+		}
+		if dom, dc, tot := dominant(v.counts); tot >= c.EvalEvery &&
+			float64(dc) >= m.cfg.DomShare*float64(tot) && dom != d {
+			continue
+		}
+		if c.CostModel && mean*m.lat(d, home[0]) <=
+			c.Alpha*(m.copyCost(home[0], d, pageLines)+c.FixedNS/c.BatchAmort) {
+			continue
+		}
+		va2.act = actMove
+		va2.blockDst = dsts
+		for k := range v.counts {
+			v.counts[k] = 0
+		}
+		va2.n = 0
+		if va2.bc[0] != nil {
+			for bb := range va2.bc {
+				for k := range va2.bc[bb] {
+					va2.bc[bb][k] = 0
+				}
+			}
+		}
+		v.faulters = v.faulters[:0]
+		m.AStats.BatchTrig++
+		m.Stats.CounterTriggers++
+		m.trigger(now, v, d)
 	}
 }
 

@@ -69,6 +69,7 @@ type CopyEngine struct {
 	reads      []*mem.ReadReq
 	readOwners map[string]lineRead // by ReadReq ID
 	rsps       []*PullRsp
+	invals     []*InvalMsg
 
 	l2Inflight   int
 	dramInflight int
@@ -110,7 +111,7 @@ func (e *CopyEngine) L2Port() sim.Port { return e.l2Port }
 func (e *CopyEngine) Busy() bool {
 	return len(e.pending) > 0 || len(e.pulling) > 0 || len(e.writes) > 0 ||
 		len(e.writeChunks) > 0 || len(e.reads) > 0 ||
-		len(e.readOwners) > 0 || len(e.rsps) > 0
+		len(e.readOwners) > 0 || len(e.rsps) > 0 || len(e.invals) > 0
 }
 
 func (e *CopyEngine) enqueue(now sim.VTimeInSec, c *chunk) {
@@ -130,8 +131,23 @@ func (e *CopyEngine) Tick(now sim.VTimeInSec) bool {
 	return progress
 }
 
+// sendInval queues an invalidation message to another engine (P21).
+func (e *CopyEngine) sendInval(now sim.VTimeInSec, dst *CopyEngine) {
+	e.invals = append(e.invals, newInvalMsg(now, e.remotePort, dst.remotePort))
+	e.TickLater(now)
+}
+
 func (e *CopyEngine) sendRsps(now sim.VTimeInSec) bool {
 	progress := false
+	for len(e.invals) > 0 {
+		m := e.invals[0]
+		m.SendTime = now
+		if e.remotePort.Send(m) != nil {
+			return progress
+		}
+		e.invals = e.invals[1:]
+		progress = true
+	}
 	for len(e.rsps) > 0 {
 		r := e.rsps[0]
 		r.SendTime = now
@@ -207,6 +223,7 @@ func (e *CopyEngine) recvRemote(now sim.VTimeInSec) bool {
 			e.serve(now, msg)
 		case *PullRsp:
 			e.land(now, msg)
+		case *InvalMsg:
 		default:
 			log.Panicf("copy engine cannot handle %s", reflect.TypeOf(msg))
 		}

@@ -27,6 +27,23 @@ type PullRsp struct {
 // Meta returns the message meta data.
 func (r *PullRsp) Meta() *sim.MsgMeta { return &r.MsgMeta }
 
+// InvalMsg (P21) tells a replica holder that its copy of a page is dropped
+// (only its network traffic matters; the receiver discards it).
+type InvalMsg struct {
+	sim.MsgMeta
+}
+
+// Meta returns the message meta data.
+func (r *InvalMsg) Meta() *sim.MsgMeta { return &r.MsgMeta }
+
+func newInvalMsg(now sim.VTimeInSec, src, dst sim.Port) *InvalMsg {
+	r := &InvalMsg{}
+	r.ID = sim.GetIDGenerator().Generate()
+	r.Src, r.Dst, r.SendTime = src, dst, now
+	r.TrafficBytes = pullReqBytes
+	return r
+}
+
 func newPullReq(now sim.VTimeInSec, src, dst sim.Port, pAddr, size uint64) *PullReq {
 	r := &PullReq{PAddr: pAddr, Size: size}
 	r.ID = sim.GetIDGenerator().Generate()
