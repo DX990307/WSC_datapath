@@ -1,0 +1,3 @@
+kernel,total_wg,cap,bytes,local_default,local_map,byte_hops_ratio,max_over_avg_default,max_over_avg_map,active_gpm_default,active_gpm_map
+0,3992,92,2176866304,0.0248,0.5939,0.2514,1.01,1.106,48,48
+1,448,11,8404992,0.0731,0.9613,0.025,3.0,1.071,16,48
