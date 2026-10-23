@@ -1,0 +1,487 @@
+package pagemigration
+
+// ISCA27 P21 round 3: one break-even (ski-rental) rule for every action,
+// with every constant taken from the platform (AdaptConfig.Rule == "r3").
+//
+// Latency model (zero load, measured on the 7x7 mesh at 32-cycle switches):
+// a round trip from GPM g to data homed at h costs
+//
+//	RTT(g, h) = 0                                 g == h
+//	          = R3BaseNS + R3HopNS * hops(g, h)   otherwise
+//
+// with R3HopNS = 2 * (switch latency + 4.1 ns) (both directions through
+// each hop) and R3BaseNS = 65.7 ns (requester and owner RDMA pipelines);
+// on a flat network hops(g, h) is the average hop count for every pair.
+//
+// Accumulated regret. Every counted access of GPM g to block b of a page
+// adds to the per-block per-GPM counters (local L1V misses included). For a
+// candidate home c the regret is
+//
+//	R(c) = sum_b sum_g count[b][g] * (RTT(g, home_b) - RTT(g, c)),
+//
+// the extra latency the accesses paid because the data was not at c. An
+// action is taken as soon as its regret reaches its one-time cost (the
+// classic break-even rule of rent-or-buy, which is 2-competitive against an
+// offline placement that knows the future accesses: before buying, the
+// online rule paid at most the buy price in rent, then the buy price). The
+// accumulator restarts after an action, so moving back pays the cost again
+// (no migration limit, no cooldown).
+//
+// Actions and their one-time cost (ns):
+//
+//	move c      page to c:          SW + shootdown + hold + copy(home_b -> c)
+//	block       each 1 KB block to its own best c_b: same, copying the moved blocks
+//	replicate   read-only page, copies at one reader-weighted site per mesh
+//	            quadrant: copy(home -> s) per site + P(write) * invalidation
+//	            messages; regret = sum_g count_g * (RTT(g, home) - RTT(g, nearest copy))
+//
+// SW is -pm-sw-latency-ns, shootdown -pm-shootdown-ns, hold the waiting of
+// the accesses arriving during the switch (rate x hold^2 / 2, hold =
+// shootdown + recent drain at the home), copy(a, b, bytes) = RTT(a, b) +
+// bytes x hops / link bandwidth. P(write) is the Laplace estimate over the
+// kernels the page lived in. The best action is the one with the largest
+// regret - cost among those with regret >= cost; candidates for c are the
+// GPMs that accessed the page and the reader-weighted median tile.
+// Evaluations happen when the accumulated remote latency (an upper bound of
+// every regret) doubles, starting at SW + shootdown.
+//
+// Pre-placement: the buffer's rule (learner.go) predicts the home of a page
+// nobody touched; the page is pre-placed iff p x E > copy, where p =
+// (hits + 1) / (checks + 2) over the buffer's pre-placed pages checked at
+// their first evaluation (the best candidate is the predicted home), and E
+// is the mean regret the buffer's migrated pages had accumulated when they
+// were moved. Observations for the rule: a page's best candidate at its
+// first evaluation.
+
+import (
+	"math"
+	"math/bits"
+	"sort"
+
+	"github.com/sarchlab/akita/v3/sim"
+)
+
+func (c *AdaptConfig) r3() bool { return c.Rule == "r3" }
+
+// r3Hops is the hop count between two GPMs (the average on a flat network).
+func (m *Manager) r3Hops(g, h uint64) float64 {
+	if g == h {
+		return 0
+	}
+	if f := m.cfg.Adapt.FlatHops; f > 0 {
+		return f
+	}
+	return float64(m.hops(g, h))
+}
+
+// r3RTT is the zero-load round trip of GPM g to data homed at h.
+func (m *Manager) r3RTT(g, h uint64) float64 {
+	if g == h {
+		return 0
+	}
+	c := &m.cfg.Adapt
+	return c.R3BaseNS + c.R3HopNS*m.r3Hops(g, h)
+}
+
+// r3Copy is the cost of copying bytes from a to b.
+func (m *Manager) r3Copy(a, b uint64, bytes float64) float64 {
+	if a == b {
+		return 0
+	}
+	h := m.r3Hops(a, b)
+	if h < 1 {
+		h = 1
+	}
+	return m.r3RTT(a, b) + bytes*h/m.cfg.Adapt.R3LinkBytesPerNS
+}
+
+// r3Fixed is the fixed part of one migration (software and shootdown).
+func (m *Manager) r3Fixed() float64 {
+	return float64(m.cfg.SoftwareLatencyNS + m.cfg.ShootdownLatencyNS)
+}
+
+// r3Kernel updates the per-page kernel write history.
+func (m *Manager) r3Kernel(a *adaptState) {
+	if a.lastKern == m.kernel {
+		return
+	}
+	if a.lastKern >= 0 {
+		a.kernSeen++
+		if a.writeKernel == a.lastKern {
+			a.kernWritten++
+		}
+	}
+	a.lastKern = m.kernel
+}
+
+// r3Count is the R3 part of a counted access (after the counters).
+func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr uint64, remote bool) {
+	m.r3Kernel(a)
+	if !remote {
+		return
+	}
+	a.acc += m.r3RTT(dev, m.homeOf(pAddr))
+	if a.nextEval == 0 {
+		a.nextEval = m.r3Fixed()
+	}
+	if a.acc >= a.nextEval {
+		m.r3Evaluate(now, u)
+	}
+}
+
+// r3Uncount takes back an access served by an M3 replica.
+func (m *Manager) r3Uncount(a *adaptState, dev, pAddr uint64) {
+	a.acc -= m.r3RTT(dev, m.homeOf(pAddr))
+	if a.acc < 0 {
+		a.acc = 0
+	}
+}
+
+// r3Weights returns the per-block per-GPM counts.
+func (m *Manager) r3Weights(u *unit, a *adaptState) [blocksPerPage][]float64 {
+	var w [blocksPerPage][]float64
+	for b := 0; b < blocksPerPage; b++ {
+		w[b] = make([]float64, len(m.gpms))
+		for g := range m.gpms {
+			if a.bc[0] != nil {
+				w[b][g] = float64(a.bc[b][g])
+			} else {
+				w[b][g] = float64(u.counts[g]) / blocksPerPage
+			}
+		}
+	}
+	return w
+}
+
+// r3Median is the GPM nearest to the reader-weighted median tile of the
+// readers in quadrant q (q < 0: all readers).
+func (m *Manager) r3Median(tot []float64, q int) (uint64, bool) {
+	type pt struct {
+		v int
+		w float64
+	}
+	var xs, ys []pt
+	sum := 0.0
+	for g, w := range tot {
+		if w <= 0 || m.gpms[g] == nil {
+			continue
+		}
+		t := m.gpms[g].Tile
+		if q >= 0 && m.quadrant(t) != q {
+			continue
+		}
+		xs = append(xs, pt{t % meshWidth, w})
+		ys = append(ys, pt{t / meshWidth, w})
+		sum += w
+	}
+	if sum == 0 {
+		return 0, false
+	}
+	med := func(p []pt) int {
+		sort.Slice(p, func(i, j int) bool { return p[i].v < p[j].v })
+		acc := 0.0
+		for _, x := range p {
+			acc += x.w
+			if acc >= sum/2 {
+				return x.v
+			}
+		}
+		return p[len(p)-1].v
+	}
+	t := med(xs) + meshWidth*med(ys)
+	if d, ok := m.tileDev[t]; ok {
+		return d, true
+	}
+	best, bh := uint64(0), math.MaxInt32
+	for d, g := range m.gpms {
+		if g == nil || (q >= 0 && m.quadrant(g.Tile) != q) {
+			continue
+		}
+		if h := tileHops(g.Tile, t); h < bh {
+			best, bh = uint64(d), h
+		}
+	}
+	return best, bh < math.MaxInt32
+}
+
+// quadrant of a tile around the mesh centre.
+func (m *Manager) quadrant(t int) int {
+	c := (meshWidth - 1) / 2
+	q := 0
+	if t%meshWidth > c {
+		q |= 1
+	}
+	if t/meshWidth > c {
+		q |= 2
+	}
+	return q
+}
+
+// r3Sites are the replica sites: one reader-weighted point per quadrant
+// (Blind: four pseudo-random GPMs).
+func (m *Manager) r3Sites(tot []float64, home uint64, seed uint64) []uint64 {
+	var out []uint64
+	seen := map[uint64]bool{home: true}
+	if m.cfg.Adapt.R3Blind {
+		var devs []uint64
+		for d, g := range m.gpms {
+			if g != nil {
+				devs = append(devs, uint64(d))
+			}
+		}
+		for i := uint64(0); len(out) < 4 && i < 64; i++ {
+			d := devs[mix64(seed*131+i)%uint64(len(devs))]
+			if !seen[d] {
+				seen[d] = true
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+	for q := 0; q < 4; q++ {
+		if d, ok := m.r3Median(tot, q); ok && !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// r3Evaluate takes the break-even decision for one page.
+func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
+	a := u.a
+	c := &m.cfg.Adapt
+	if a == nil || a.fixed || a.preplacing || len(a.replicas) > 0 ||
+		u.phase != phaseIdle || !m.eligible(u, now) {
+		return
+	}
+	p, ok := m.pageTable.Find(u.key.pid, u.key.idx<<m.unitLog2)
+	if !ok {
+		return
+	}
+	m.AStats.Evaluations++
+	m.AStats.DecisionMsgs++
+	home, uniform := m.pageHomes(p)
+	w := m.r3Weights(u, a)
+	tot := make([]float64, len(m.gpms))
+	readers := 0
+	for g := range m.gpms {
+		for b := 0; b < blocksPerPage; b++ {
+			tot[g] += w[b][g]
+		}
+		if tot[g] > 0 {
+			readers++
+		}
+	}
+	// candidates: accessing GPMs, the weighted median, the current homes
+	cands := map[uint64]bool{}
+	for g, x := range tot {
+		if x > 0 && m.gpms[g] != nil {
+			cands[uint64(g)] = true
+		}
+	}
+	if d, ok := m.r3Median(tot, -1); ok {
+		cands[d] = true
+	}
+	for b := 0; b < blocksPerPage; b++ {
+		cands[home[b]] = true
+	}
+	keys := make([]uint64, 0, len(cands))
+	for d := range cands {
+		keys = append(keys, d)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	regret := func(b int, cnd uint64) float64 {
+		r := 0.0
+		for g, x := range w[b] {
+			if x > 0 {
+				r += x * (m.r3RTT(uint64(g), home[b]) - m.r3RTT(uint64(g), cnd))
+			}
+		}
+		return r
+	}
+	// best page-level candidate (Blind: the GPM with the most accesses)
+	var best uint64
+	bestR := math.Inf(-1)
+	for _, cnd := range keys {
+		r := 0.0
+		for b := 0; b < blocksPerPage; b++ {
+			r += regret(b, cnd)
+		}
+		if r > bestR {
+			best, bestR = cnd, r
+		}
+	}
+	if c.R3Blind {
+		d, _, _ := dominantF(tot)
+		best = d
+		bestR = 0
+		for b := 0; b < blocksPerPage; b++ {
+			bestR += regret(b, best)
+		}
+	}
+	// observation and pre-placement check at the first evaluation
+	if a.buf != nil && c.Predict && !a.observed {
+		a.observed = true
+		m.AStats.EarlyObs++
+		m.observe(now, a.buf, a.idx, best, home[0], false)
+	}
+	if a.preplaced && !a.preCheck && a.buf != nil {
+		a.preCheck = true
+		a.buf.preChecks++
+		m.AStats.PreChecks++
+		if best == home[0] {
+			a.buf.preHits++
+			m.AStats.PreCheckHits++
+		}
+	}
+	hold := m.holdCost(now, a, home[0])
+	fixed := m.r3Fixed() + hold
+	type opt struct {
+		act    int
+		dst    [blocksPerPage]uint64
+		reps   []uint64
+		regret float64
+		cost   float64
+	}
+	var chosen *opt
+	pick := func(o opt) {
+		if o.regret < o.cost {
+			return
+		}
+		if chosen == nil || o.regret-o.cost > chosen.regret-chosen.cost {
+			oo := o
+			chosen = &oo
+		}
+	}
+	if c.Move {
+		o := opt{act: actMove, regret: bestR, cost: fixed}
+		moved := 0
+		for b := 0; b < blocksPerPage; b++ {
+			o.dst[b] = best
+			if home[b] != best {
+				o.cost += m.r3Copy(home[b], best, 1<<log2Block)
+				moved++
+			}
+		}
+		if moved > 0 {
+			pick(o)
+		}
+	}
+	if c.Block {
+		o := opt{act: actBlock, cost: fixed}
+		distinct := map[uint64]bool{}
+		moved := 0
+		for b := 0; b < blocksPerPage; b++ {
+			bd, br := home[b], 0.0
+			if c.R3Blind {
+				d, _, _ := dominantF(w[b])
+				if r := regret(b, d); r > 0 {
+					bd, br = d, r
+				}
+			} else {
+				for _, cnd := range keys {
+					if r := regret(b, cnd); r > br {
+						bd, br = cnd, r
+					}
+				}
+			}
+			o.dst[b] = bd
+			o.regret += br
+			distinct[bd] = true
+			if bd != home[b] {
+				o.cost += m.r3Copy(home[b], bd, 1<<log2Block)
+				moved++
+			}
+		}
+		if moved > 0 && len(distinct) > 1 && m.bhRoom(majority(o.dst), o.dst) {
+			pick(o)
+		}
+	}
+	if c.Replicate && uniform && a.writeKernel != m.kernel {
+		sites := m.r3Sites(tot, home[0], p.PAddr>>m.log2PageSize)
+		if len(sites) > 0 {
+			o := opt{act: actReplicate, reps: sites}
+			for g, x := range tot {
+				if x <= 0 {
+					continue
+				}
+				near := m.r3RTT(uint64(g), home[0])
+				for _, s := range sites {
+					near = math.Min(near, m.r3RTT(uint64(g), s))
+				}
+				o.regret += x * (m.r3RTT(uint64(g), home[0]) - near)
+			}
+			pw := float64(a.kernWritten+1) / float64(a.kernSeen+2)
+			for _, s := range sites {
+				o.cost += m.r3Copy(home[0], s, float64(uint64(1)<<m.log2PageSize)) +
+					pw*m.r3RTT(home[0], s)
+			}
+			pick(o)
+		}
+	}
+	if chosen == nil {
+		a.nextEval = 2 * a.acc
+		return
+	}
+	a.bucket = readerBucket(readers)
+	m.AStats.Decided[chosen.act][a.bucket]++
+	if chosen.act == actReplicate {
+		a.acc, a.nextEval = 0, 0
+		m.startReplicate(now, u, a, p, home[0], chosen.reps)
+		return
+	}
+	if a.preplaced {
+		m.AStats.PreFallback++
+	}
+	if a.buf != nil {
+		a.buf.sumRegret += chosen.regret
+		a.buf.nMig++
+	}
+	a.act = chosen.act
+	a.blockDst = chosen.dst
+	for i := range u.counts {
+		u.counts[i] = 0
+	}
+	if a.bc[0] != nil {
+		for b := range a.bc {
+			for i := range a.bc[b] {
+				a.bc[b][i] = 0
+			}
+		}
+	}
+	a.n = 0
+	a.acc, a.nextEval = 0, 0
+	m.Stats.CounterTriggers++
+	u.faulters = u.faulters[:0]
+	m.adaptTrigger(now, u, majority(chosen.dst))
+}
+
+func dominantF(c []float64) (uint64, float64, float64) {
+	var best uint64
+	var tot float64
+	for d, x := range c {
+		tot += x
+		if x > c[best] {
+			best = uint64(d)
+		}
+	}
+	return best, c[best], tot
+}
+
+// r3PrePlaceOK is the pre-placement test of an untouched page of buffer b
+// predicted at d (home h).
+func (m *Manager) r3PrePlaceOK(b *buffer, h, d uint64) bool {
+	if b.nMig == 0 {
+		return false
+	}
+	p := float64(b.preHits+1) / float64(b.preChecks+2)
+	e := b.sumRegret / float64(b.nMig)
+	return p*e > m.r3Copy(h, d, float64(uint64(1)<<m.log2PageSize))
+}
+
+// SetMeshWidth sets the mesh width used for tile coordinates (7 by default).
+func SetMeshWidth(w int) { meshWidth = w }
+
+// r3Readers is the number of distinct first readers (diagnostics).
+func r3Readers(a *adaptState) int { return bits.OnesCount64(a.readMask) }

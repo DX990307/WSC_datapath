@@ -1,0 +1,7 @@
+{
+  "_description": "ISCA'27 P21 round 3, realistic: m3p_r3.json with a 1024-page tracking table per GPM (LRU), 1 us from decision to action, pre-placements and replica creations in per-GPM driver batches of 256 paying the 5 us software latency; block homes and replica bits in the PTE/TLB entry (no extra lookup).",
+  "extends": "m3p_r3.json",
+  "pm-adapt-track-cap": 1024,
+  "pm-adapt-decide-ns": 1000,
+  "pm-adapt-batch-sw": true
+}

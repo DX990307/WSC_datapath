@@ -666,7 +666,8 @@ func (b R9NanoPlatformBuilder) createConnection(
 		WithSwitchLatency(b.switchLatency).
 		WithEndpointTransferPerCycle(b.endpointChannels).
 		WithEndpointBufferSize(b.endpointBufferSize).
-		WithSwitchBufferFlits(b.switchBufferFlits)
+		WithSwitchBufferFlits(b.switchBufferFlits).
+		WithFlatNetwork(*flatNetworkFlag)
 
 	if b.traceVis {
 		connector = connector.WithVisTracer(b.visTracer)

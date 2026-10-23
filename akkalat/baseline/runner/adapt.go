@@ -103,6 +103,10 @@ var pmAdaptApproxCountFlag = flag.Bool("pm-adapt-approx-count", false,
 var pmAdaptPreProbeFlag = flag.Int("pm-adapt-pre-probe", 16,
 	"P21: a buffer keeps at most this many + -pm-adapt-pre-probe-per-hit x (checked hits) pre-placements unchecked (0 = no limit).")
 var pmAdaptPreProbePerHitFlag = flag.Int("pm-adapt-pre-probe-per-hit", 32, "P21: see -pm-adapt-pre-probe.")
+var pmAdaptRuleFlag = flag.String("pm-adapt-rule", "",
+	"P21 round 3: \"r3\" = one break-even (ski-rental) rule for move / block / replicate / pre-placement with constants from the platform (see pagemigration/r3.go).")
+var pmAdaptR3BlindFlag = flag.Bool("pm-adapt-r3-blind", false,
+	"P21 round 3 experiment: targets and replica sites ignore distance (GPM with most accesses, random sites).")
 var pmAdaptDumpFlag = flag.String("pm-adapt-dump", "",
 	"P21 diagnostics: write one line per tracked page to this file at the end.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
@@ -175,6 +179,19 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.LookupNS = uint64(*pmAdaptLookupNSFlag)
 	a.BlockHomeCap = *pmAdaptBlockHomeCapFlag
 	a.ApproxCount = *pmAdaptApproxCountFlag
+	a.Rule = *pmAdaptRuleFlag
+	if a.Rule != "" && a.Rule != "r3" {
+		panic("-pm-adapt-rule must be empty or r3")
+	}
+	a.R3Blind = *pmAdaptR3BlindFlag
+	// zero-load round trip: 65.7 ns of RDMA pipelines plus, per hop, the
+	// switch latency and 4.1 ns of link and router pipeline in each direction
+	a.R3HopNS = 2 * (float64(*switchLatencyFlag) + 4.1)
+	a.R3BaseNS = 65.7
+	a.R3LinkBytesPerNS = float64(*bandwidthFlag * *networkFlitSizeFlag)
+	if *flatNetworkFlag {
+		a.FlatHops = -1 // the manager computes the average pair distance
+	}
 	if a.BatchAmort <= 0 {
 		panic("-pm-adapt-batch-amort must be positive")
 	}
@@ -200,13 +217,14 @@ func printAdaptConfig(c pagemigration.Config) {
 		"spread-other=%s prop-pages=%d prop-gate=%g predict-m=%d predict-window=%d "+
 		"base=%gns hop=%gns dom-share=%g max-migrations=%d hot-future=%d "+
 		"replica-budget=%dMB batch-amort=%g predict-touched=%v copy-first=%v "+
-		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v win-per-hit=%d pre-min-precision=%g pre-probe=%d+%d/hit track-cap=%d decide=%dns batch-sw=%v lookup=%dns blockhome-cap=%d approx-count=%v\n",
+		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v win-per-hit=%d pre-min-precision=%g pre-probe=%d+%d/hit track-cap=%d decide=%dns batch-sw=%v lookup=%dns blockhome-cap=%d approx-count=%v rule=%q r3-base=%gns r3-hop=%gns r3-link=%gB/ns flat=%v r3-blind=%v\n",
 		*pmAdaptActionsFlag, a.CostModel, a.Alpha, a.FixedNS, a.CopyWeight,
 		a.QueueNS, a.EvalEvery, a.HotK, a.HotWindowNS, a.ConcShare,
 		a.SpreadOther, a.PropSmallPages, a.PropGate, a.PredictM, a.PredictWindow,
 		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations, a.HotFutureReaders,
 		a.ReplicaBudget>>20, a.BatchAmort, a.PredictTouched, a.CopyFirst,
-		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot, a.PreCopyWeight, a.PredictConstWindow, a.ObservedReaders, a.HoldCost, a.PredictWinPerHit, a.PreMinPrecision, a.PreProbe, a.PreProbePerHit, a.TrackCap, a.DecideNS, a.BatchSW, a.LookupNS, a.BlockHomeCap, a.ApproxCount)
+		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot, a.PreCopyWeight, a.PredictConstWindow, a.ObservedReaders, a.HoldCost, a.PredictWinPerHit, a.PreMinPrecision, a.PreProbe, a.PreProbePerHit, a.TrackCap, a.DecideNS, a.BatchSW, a.LookupNS, a.BlockHomeCap, a.ApproxCount, a.Rule, a.R3BaseNS, a.R3HopNS,
+		a.R3LinkBytesPerNS, a.FlatHops != 0, a.R3Blind)
 }
 
 // wireAdaptive installs what the adaptive placement needs beyond the page

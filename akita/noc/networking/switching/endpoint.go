@@ -40,6 +40,11 @@ type EndPoint struct {
 	flitReadyTime      map[string]sim.VTimeInSec
 	msgFirstFlitTime   map[string]sim.VTimeInSec
 	msgAssembledTime   map[string]sim.VTimeInSec
+
+	// DeliverDelay (optional) holds an assembled message for an extra time
+	// that depends on its source (flat-network emulation); nil = none.
+	DeliverDelay func(src sim.Port) sim.VTimeInSec
+	deliverAt    map[string]sim.VTimeInSec
 }
 
 // CanSend returns whether the endpoint can send a message.
@@ -294,6 +299,13 @@ func (ep *EndPoint) assemble(now sim.VTimeInSec) bool {
 		)
 		delete(ep.msgFirstFlitTime, assemblingMsg.msg.Meta().ID)
 		ep.msgAssembledTime[assemblingMsg.msg.Meta().ID] = now
+		if ep.DeliverDelay != nil {
+			if ep.deliverAt == nil {
+				ep.deliverAt = make(map[string]sim.VTimeInSec)
+			}
+			ep.deliverAt[assemblingMsg.msg.Meta().ID] =
+				now + ep.DeliverDelay(assemblingMsg.msg.Meta().Src)
+		}
 		ep.assemblingMsgs.Remove(e)
 		delete(ep.assemblingMsgTable, assemblingMsg.msg.Meta().ID)
 
@@ -306,6 +318,9 @@ func (ep *EndPoint) assemble(now sim.VTimeInSec) bool {
 }
 
 func (ep *EndPoint) tryDeliver(now sim.VTimeInSec) bool {
+	if ep.DeliverDelay != nil {
+		return ep.tryDeliverDelayed(now)
+	}
 	madeProgress := false
 
 	for len(ep.assembledMsgs) > 0 {
@@ -565,4 +580,45 @@ func (b EndPointBuilder) flitByteSizeMustBeGiven() {
 	if b.flitByteSize == 0 {
 		panic("flit byte size must be given")
 	}
+}
+
+// tryDeliverDelayed delivers, in order, the assembled messages whose
+// delivery delay has passed (messages from different sources may overtake
+// each other); it keeps the endpoint ticking while any message waits.
+func (ep *EndPoint) tryDeliverDelayed(now sim.VTimeInSec) bool {
+	madeProgress := false
+	keep := ep.assembledMsgs[:0]
+	blocked := false
+	for _, msg := range ep.assembledMsgs {
+		id := msg.Meta().ID
+		if blocked || ep.deliverAt[id] > now {
+			keep = append(keep, msg)
+			continue
+		}
+		msg.Meta().RecvTime = now
+		if err := msg.Meta().Dst.Recv(msg); err != nil {
+			blocked = true
+			keep = append(keep, msg)
+			continue
+		}
+		delete(ep.msgAssembledTime, id)
+		delete(ep.deliverAt, id)
+		ep.logMsgE2ETask(msg, true)
+		madeProgress = true
+	}
+	for i := len(keep); i < len(ep.assembledMsgs); i++ {
+		ep.assembledMsgs[i] = nil
+	}
+	ep.assembledMsgs = keep
+	if len(ep.assembledMsgs) > 0 && !blocked {
+		madeProgress = true
+	}
+	return madeProgress
+}
+
+// SetDeliverDelay installs the source-dependent delivery delay.
+func (ep *EndPoint) SetDeliverDelay(f func(src sim.Port) sim.VTimeInSec) {
+	ep.Lock()
+	defer ep.Unlock()
+	ep.DeliverDelay = f
 }

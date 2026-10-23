@@ -36,6 +36,13 @@ type Connector struct {
 	grid     [][][]tile
 	dstTable map[string]*tile
 	portLoc  map[string][3]int
+
+	// flat (P21 flat-network experiment): links between switches take one
+	// cycle and every message is held at its destination endpoint so that
+	// all tile pairs see the same latency, the mesh-average latency
+	// (average hop count over the tiles with devices x switch latency).
+	flat       bool
+	flatCycles int
 }
 
 // NewConnector creates a new mesh Connector.
@@ -67,6 +74,16 @@ func (c *Connector) WithFreq(freq sim.Freq) *Connector {
 	c.connector = c.connector.WithDefaultFreq(freq)
 	return c
 }
+
+// WithFlatNetwork makes every tile pair see the same (mesh-average)
+// latency; bandwidth still flows over the mesh links.
+func (c *Connector) WithFlatNetwork(flat bool) *Connector {
+	c.flat = flat
+	return c
+}
+
+// FlatCycles is the one-way latency target of the flat network (cycles).
+func (c *Connector) FlatCycles() int { return c.flatCycles }
 
 // WithSwitchLatency sets the latency on each switch.
 func (c *Connector) WithSwitchLatency(numCycles int) *Connector {
@@ -293,6 +310,9 @@ func (c *Connector) initializeGrid(cap [3]int) [][][]tile {
 // EstablishNetwork creates the switches, links, and the routing tables for the
 // network to built.
 func (c *Connector) EstablishNetwork() {
+	if c.flat {
+		c.computeFlatCycles()
+	}
 	c.createSwitches()
 	c.createLinks()
 
@@ -362,6 +382,9 @@ func (c *Connector) createSwitches() {
 
 				rt.local = swPort
 				c.grid[x][y][z].epPort = epPort
+				if c.flat {
+					c.setFlatDelay(epPort, [3]int{x, y, z})
+				}
 			}
 		}
 	}
@@ -422,7 +445,7 @@ func (c *Connector) createLink(
 			LeftEndParam: networkconnector.LinkEndSwitchParameter{
 				IncomingBufSize:  c.switchBufSize(transferPerCycle),
 				OutgoingBufSize:  c.switchBufSize(transferPerCycle),
-				Latency:          c.switchLatency,
+				Latency:          c.interSwitchLatency(),
 				NumInputChannel:  transferPerCycle,
 				NumOutputChannel: transferPerCycle,
 				PortName:         DirectionA,
@@ -431,7 +454,7 @@ func (c *Connector) createLink(
 			RightEndParam: networkconnector.LinkEndSwitchParameter{
 				IncomingBufSize:  c.switchBufSize(transferPerCycle),
 				OutgoingBufSize:  c.switchBufSize(transferPerCycle),
-				Latency:          c.switchLatency,
+				Latency:          c.interSwitchLatency(),
 				NumInputChannel:  transferPerCycle,
 				NumOutputChannel: transferPerCycle,
 				PortName:         DirectionB,
@@ -459,4 +482,72 @@ func (c *Connector) endpointBufferSizeOrDefault(defaultValue int) int {
 		return c.endpointBufferSize
 	}
 	return defaultValue
+}
+
+func (c *Connector) interSwitchLatency() int {
+	if c.flat {
+		return 1
+	}
+	return c.switchLatency
+}
+
+func meshHops(a, b [3]int) int {
+	h := 0
+	for i := 0; i < 3; i++ {
+		d := a[i] - b[i]
+		if d < 0 {
+			d = -d
+		}
+		h += d
+	}
+	return h
+}
+
+// computeFlatCycles: average hop count over ordered pairs of distinct tiles
+// that hold devices, times the switch latency.
+func (c *Connector) computeFlatCycles() {
+	var locs [][3]int
+	seen := map[[3]int]bool{}
+	for _, l := range c.portLoc {
+		if !seen[l] {
+			seen[l] = true
+			locs = append(locs, l)
+		}
+	}
+	sum, n := 0, 0
+	for _, a := range locs {
+		for _, b := range locs {
+			if a != b {
+				sum += meshHops(a, b)
+				n++
+			}
+		}
+	}
+	if n == 0 {
+		return
+	}
+	c.flatCycles = int(math.Round(float64(sum) / float64(n) * float64(c.switchLatency)))
+	fmt.Printf("[Config] flat network: %d tiles, average %.3f hops, one-way target %d cycles\n",
+		len(locs), float64(sum)/float64(n), c.flatCycles)
+}
+
+func (c *Connector) setFlatDelay(epPort sim.Port, self [3]int) {
+	ep, ok := epPort.Component().(interface {
+		SetDeliverDelay(func(src sim.Port) sim.VTimeInSec)
+	})
+	if !ok {
+		panic("flat network: endpoint cannot delay delivery")
+	}
+	period := 1.0 / float64(c.freq)
+	ep.SetDeliverDelay(func(src sim.Port) sim.VTimeInSec {
+		loc, ok := c.portLoc[src.Name()]
+		if !ok {
+			return 0
+		}
+		extra := c.flatCycles - meshHops(loc, self)
+		if extra <= 0 {
+			return 0
+		}
+		return sim.VTimeInSec(float64(extra) * period)
+	})
 }

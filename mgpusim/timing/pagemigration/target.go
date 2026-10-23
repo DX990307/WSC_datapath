@@ -50,7 +50,8 @@ func (t Target) String() string {
 	return "argmax"
 }
 
-const meshWidth = 7
+// meshWidth is the mesh width in tiles (tile = x + meshWidth * y).
+var meshWidth = 7
 
 func tileHops(a, b int) int {
 	dx := a%meshWidth - b%meshWidth

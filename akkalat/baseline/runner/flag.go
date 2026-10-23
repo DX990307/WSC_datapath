@@ -97,6 +97,8 @@ var bandwidthFlag = flag.Int("bandwidth", 1,
 	"The bandwidth of the network as a multiple of 16GB/s.")
 var endpointChannelsFlag = flag.Int("endpoint-channels", 0,
 	"Override local device endpoint input/output flit channels per cycle; 0 uses network bandwidth.")
+var flatNetworkFlag = flag.Bool("flat-network", false,
+	"P21 experiment: every GPM pair sees the same latency (mesh average: inter-switch links take one cycle and each message waits at its destination until the average one-way latency); bandwidth still flows over the mesh links.")
 var switchBufferFlitsFlag = flag.Int("switch-buffer-flits", 0,
 	"Depth (flits) of every mesh switch port buffer, independent of -bandwidth: max(bandwidth, N); 0 keeps buffers = bandwidth.")
 var endpointBufferSizeFlag = flag.Int("endpoint-buffer-size", 0,

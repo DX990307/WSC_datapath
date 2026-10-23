@@ -184,6 +184,16 @@ type AdaptConfig struct {
 	// per GPM.
 	ApproxCount bool
 
+	// Round 3 (r3.go): Rule "r3" replaces the evaluation by the break-even
+	// rule; R3BaseNS / R3HopNS / R3LinkBytesPerNS come from the network
+	// (-switch-latency, -bandwidth x -network-flit-size); FlatHops > 0 makes
+	// every pair that many hops (flat network); R3Blind picks targets and
+	// replica sites without distance (most accesses / random sites).
+	Rule                                string
+	R3BaseNS, R3HopNS, R3LinkBytesPerNS float64
+	FlatHops                            float64
+	R3Blind                             bool
+
 	// ReplicaList (oracle region replication): original physical page ->
 	// replica devices. A listed page gets zero-cost read-only copies (fresh
 	// frames filled functionally from the master, as if the host copy had
@@ -231,6 +241,9 @@ func DefaultAdaptConfig() AdaptConfig {
 		PreMinPrecision:    0.5,
 		PreProbe:           16,
 		PreProbePerHit:     32,
+		R3BaseNS:           65.7,
+		R3HopNS:            72.2,
+		R3LinkBytesPerNS:   384,
 		ObservedReaders:    true,
 		HoldCost:           true,
 	}
@@ -362,9 +375,13 @@ type adaptState struct {
 	preCopy    bool           // pre-placement copy running
 	counted    bool           // counted in buf.touched
 	t0         sim.VTimeInSec // first counted access since the last reset
-	trackEl    *list.Element  // TrackCap LRU entry (nil = not tracked)
-	preHeld    bool
-	origPA     uint64 // physical address of the frame at tracking start
+	// r3: accumulated remote latency since the last action, next
+	// evaluation point, kernel write history
+	acc, nextEval                   float64
+	lastKern, kernSeen, kernWritten int
+	trackEl                         *list.Element // TrackCap LRU entry (nil = not tracked)
+	preHeld                         bool
+	origPA                          uint64 // physical address of the frame at tracking start
 }
 
 type replica struct {
@@ -392,7 +409,9 @@ type buffer struct {
 	// pre-placement precision: pre-placed pages checked against their
 	// dominant GPM, and how many were right
 	preChecks, preHits int
-	prePending         int // pre-placements not yet checked
+	prePending         int     // pre-placements not yet checked
+	sumRegret          float64 // r3: regret of the migrated pages at their move
+	nMig               int
 }
 
 func (a *AdaptConfig) on() bool { return a.Enabled }
@@ -459,6 +478,19 @@ func (m *Manager) initAdapt() {
 	m.tileDev = make(map[int]uint64)
 	m.replBytes = make([]uint64, len(m.gpms))
 	m.drainEMA = make([]float64, len(m.gpms))
+	if a.FlatHops < 0 {
+		// flat network: every pair is the average GPM pair distance
+		sum, n := 0, 0
+		for i, gi := range m.gpms {
+			for j, gj := range m.gpms {
+				if gi != nil && gj != nil && i != j {
+					sum += tileHops(gi.Tile, gj.Tile)
+					n++
+				}
+			}
+		}
+		a.FlatHops = float64(sum) / float64(n)
+	}
 	m.bhCount = make([]int, len(m.gpms))
 	m.trackLRU = make([]*list.List, len(m.gpms))
 	for i := range m.trackLRU {
@@ -476,7 +508,7 @@ func (m *Manager) initAdapt() {
 	if a.Spread {
 		need = append(need, RingTiles...)
 	}
-	if a.Replicate {
+	if a.Replicate && !a.r3() {
 		need = append(need, a.ReplicaTiles...)
 	}
 	for _, t := range need {
@@ -534,7 +566,7 @@ func (m *Manager) adaptUnit(u *unit) *adaptState {
 	if u.a != nil {
 		return u.a
 	}
-	a := &adaptState{writeKernel: -1}
+	a := &adaptState{writeKernel: -1, lastKern: -1}
 	va := u.key.idx << m.unitLog2
 	if p, ok := m.pageTable.Find(u.key.pid, va); ok {
 		a.origPA = p.PAddr
@@ -622,6 +654,13 @@ func (m *Manager) adaptCount(now sim.VTimeInSec, u *unit, dev, pAddr uint64, rem
 		}
 	}
 	a.n++
+	if m.cfg.Adapt.r3() {
+		if a.buf != nil {
+			a.buf.accesses++
+		}
+		m.r3Count(now, u, a, dev, pAddr, remote)
+		return
+	}
 	if a.buf != nil {
 		a.buf.accesses++
 		if a.preplaced && !a.preCheck && a.n >= m.cfg.Adapt.EvalEvery {
@@ -666,6 +705,9 @@ func (m *Manager) adaptUncount(u *unit, dev, pAddr uint64) {
 	if a.n > 0 {
 		a.n--
 	}
+	if m.cfg.Adapt.r3() {
+		m.r3Uncount(a, dev, pAddr)
+	}
 }
 
 // adaptIssued is called for every access an address translator issued.
@@ -676,6 +718,9 @@ func (m *Manager) adaptIssued(now sim.VTimeInSec, dev uint64, pid vm.PID,
 	if newFrame && a.buf != nil && !a.preplaced && !a.counted {
 		a.counted = true
 		a.buf.touched++
+	}
+	if m.cfg.Adapt.r3() {
+		m.r3Kernel(a)
 	}
 	if isWrite {
 		a.writeSeq++
@@ -692,6 +737,9 @@ func (m *Manager) adaptIssued(now sim.VTimeInSec, dev uint64, pid vm.PID,
 	}
 	m.track(u, a)
 	a.readMask |= 1 << dev
+	if m.cfg.Adapt.r3() {
+		return // no hot detection: replication follows the regret rule
+	}
 	t := float64(now)
 	a.readT = append(a.readT, t)
 	if a.hot {
@@ -1940,7 +1988,7 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 	c := &m.cfg.Adapt
 	ps := uint64(1) << m.log2PageSize
 	win := c.PredictWindow
-	if c.PredictWinPerHit > 0 && c.PredictWinPerHit*l.streak[l.conf] < win {
+	if c.PredictWinPerHit > 0 && !c.r3() && c.PredictWinPerHit*l.streak[l.conf] < win {
 		// the window grows with the rule's streak
 		win = c.PredictWinPerHit * l.streak[l.conf]
 	}
@@ -1966,7 +2014,7 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 		mean = b.sumReads / float64(b.nReads)
 	}
 	prec := float64(b.preHits+1) / float64(b.preChecks+2)
-	if c.PreMinPrecision > 0 {
+	if c.PreMinPrecision > 0 && !c.r3() {
 		if prec < c.PreMinPrecision {
 			m.AStats.PrePrecSkip++
 			return
@@ -2002,6 +2050,14 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 			continue
 		}
 		dsts := [blocksPerPage]uint64{d, d, d, d}
+		if m.ppns[p.PAddr>>m.log2PageSize] == nil && c.r3() {
+			if m.r3PrePlaceOK(b, home[0], d) {
+				m.prePlace(now, v, dsts, actMove, true)
+			} else {
+				m.AStats.PreCostSkip++
+			}
+			continue
+		}
 		if m.ppns[p.PAddr>>m.log2PageSize] == nil {
 			if c.CostModel && mean*m.lat(d, home[0]) <=
 				c.Alpha*c.PreCopyWeight*m.copyCost(home[0], d, pageLines) {
