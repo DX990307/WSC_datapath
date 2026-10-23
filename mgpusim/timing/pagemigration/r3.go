@@ -32,8 +32,10 @@ package pagemigration
 //	move c      page to c:          SW + shootdown + hold + copy(home_b -> c)
 //	block       each 1 KB block to its own best c_b: same, copying the moved blocks
 //	replicate   read-only page, copies at one reader-weighted site per mesh
-//	            quadrant: copy(home -> s) per site + P(write) * invalidation
-//	            messages; regret = sum_g count_g * (RTT(g, home) - RTT(g, nearest copy))
+//	            quadrant: SW + shootdown (driver work and TLB update to make
+//	            the copies visible) + copy(home -> s) per site + P(write) *
+//	            invalidation messages; regret = sum_g count_g * (RTT(g, home)
+//	            - RTT(g, nearest copy))
 //
 // SW is -pm-sw-latency-ns, shootdown -pm-shootdown-ns, hold the waiting of
 // the accesses arriving during the switch (rate x hold^2 / 2, hold =
@@ -416,6 +418,9 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 				}
 				o.regret += x * (m.r3RTT(uint64(g), home[0]) - near)
 			}
+			// making copies visible needs the driver (frames, PTE replica
+			// bits) and a TLB shootdown, like a migration
+			o.cost = m.r3Fixed()
 			pw := float64(a.kernWritten+1) / float64(a.kernSeen+2)
 			for _, s := range sites {
 				o.cost += m.r3Copy(home[0], s, float64(uint64(1)<<m.log2PageSize)) +
@@ -564,7 +569,7 @@ func (m *Manager) r3PropagateReplicate(now sim.VTimeInSec, b *buffer, idx int, s
 			continue
 		}
 		var rs []uint64
-		cost := 0.0
+		cost := m.r3Fixed()
 		pw := float64(a.kernWritten+1) / float64(a.kernSeen+2)
 		for _, s := range sites {
 			if s == home[0] {
