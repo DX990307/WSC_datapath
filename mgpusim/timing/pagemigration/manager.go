@@ -228,8 +228,8 @@ type Manager struct {
 	bhCount      []int     // run-time block-home entries per frame owner (P21)
 	trackLRU     []*list.List
 	deferred     []deferredAct
-	drvEnd       sim.VTimeInSec
-	drvN         int
+	drvEnd       []sim.VTimeInSec // per GPM driver queue (P21 BatchSW)
+	drvN         []int
 	lookupPass   map[Waker]sim.VTimeInSec
 	replOrder    []*unit
 	AStats       AdaptStats

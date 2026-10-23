@@ -1082,35 +1082,41 @@ func (m *Manager) later(at sim.VTimeInSec, f func(now sim.VTimeInSec)) {
 // driverAt is when a pre-placement or replica creation decided now runs:
 // after the decision delay and, with BatchSW, at the end of the driver batch
 // it joins.
-func (m *Manager) driverAt(now sim.VTimeInSec) sim.VTimeInSec {
+// it joins (one driver queue per destination GPM, like the migration
+// handlers).
+func (m *Manager) driverAt(now sim.VTimeInSec, dev uint64) sim.VTimeInSec {
 	c := &m.cfg.Adapt
 	t := now + ns(c.DecideNS)
 	if !c.BatchSW {
 		return t
 	}
-	if m.drvN > 0 && m.drvN < m.cfg.BatchSize && t <= m.drvEnd {
-		m.drvN++
-		return m.drvEnd
+	if m.drvEnd == nil {
+		m.drvEnd = make([]sim.VTimeInSec, len(m.gpms))
+		m.drvN = make([]int, len(m.gpms))
+	}
+	if m.drvN[dev] > 0 && m.drvN[dev] < m.cfg.BatchSize && t <= m.drvEnd[dev] {
+		m.drvN[dev]++
+		return m.drvEnd[dev]
 	}
 	start := t
-	if m.drvEnd > start {
-		start = m.drvEnd // the driver serves one batch at a time
+	if m.drvEnd[dev] > start {
+		start = m.drvEnd[dev] // a driver queue serves one batch at a time
 	}
-	m.drvEnd = start + ns(m.cfg.SoftwareLatencyNS)
-	m.drvN = 1
+	m.drvEnd[dev] = start + ns(m.cfg.SoftwareLatencyNS)
+	m.drvN[dev] = 1
 	m.AStats.DrvBatches++
-	return m.drvEnd
+	return m.drvEnd[dev]
 }
 
-// deferAct runs f now (ideal) or at driverAt.
-func (m *Manager) deferAct(now sim.VTimeInSec, f func(now sim.VTimeInSec)) {
+// deferAct runs f now (ideal) or at driverAt (queue of GPM dev).
+func (m *Manager) deferAct(now sim.VTimeInSec, dev uint64, f func(now sim.VTimeInSec)) {
 	c := &m.cfg.Adapt
 	if c.DecideNS == 0 && !c.BatchSW {
 		f(now)
 		return
 	}
 	m.AStats.Deferred++
-	m.later(m.driverAt(now), f)
+	m.later(m.driverAt(now, dev), f)
 }
 
 // track refreshes (or creates) the page's tracking entry (TrackCap).
@@ -1289,7 +1295,7 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 		}
 	}
 	a.preplacing = true
-	m.deferAct(now, func(now sim.VTimeInSec) {
+	m.deferAct(now, majority(dst), func(now sim.VTimeInSec) {
 		if m.ppns[p.PAddr>>m.log2PageSize] != nil || u.phase != phaseIdle {
 			a.preplacing = false
 			m.AStats.PreLate++
@@ -1502,7 +1508,7 @@ func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 			m.AStats.ReplPeak = m.replBytes[r]
 		}
 	}
-	m.deferAct(now, func(now sim.VTimeInSec) {
+	m.deferAct(now, home, func(now sim.VTimeInSec) {
 		m.replicaCopies(now, a, p, home, reps, &frames, &pending, done)
 	})
 }
