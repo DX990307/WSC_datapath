@@ -931,3 +931,26 @@ func (m *Manager) Busy() bool {
 	}
 	return false
 }
+
+// FrameUsage reports the migration frame region use: the most bytes taken
+// on one GPM (frames are never reused), the total, and the bytes of frames
+// retired by the end (what frame recycling could give back).
+func (m *Manager) FrameUsage() (maxPerGPM, total, retired uint64) {
+	ps := uint64(1) << m.log2PageSize
+	for d, g := range m.gpms {
+		if g == nil {
+			continue
+		}
+		used := m.nextFrame[d] - (g.MemBase + m.cfg.FrameRegionOffset)
+		total += used
+		if used > maxPerGPM {
+			maxPerGPM = used
+		}
+	}
+	for _, info := range m.ppns {
+		if info.state == frameRetired {
+			retired += ps
+		}
+	}
+	return
+}

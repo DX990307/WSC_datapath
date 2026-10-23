@@ -342,6 +342,11 @@ func (r *Runner) reportPageMigrationStats() {
 	col("pm_cooldown_ns", float64(c.CooldownNS))
 	col("pm_max_migrations", float64(c.MaxMigrations))
 	col("pm_faults", float64(s.Faults))
+	if fmax, ftot, fret := m.FrameUsage(); ftot > 0 {
+		col("pm_frames_max_gpm_bytes", float64(fmax))
+		col("pm_frames_total_bytes", float64(ftot))
+		col("pm_frames_retired_bytes", float64(fret))
+	}
 	if c.FirstTouchMigrate {
 		col("pm_first_touches", float64(s.FirstTouches))
 	}

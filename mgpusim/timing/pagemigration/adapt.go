@@ -146,6 +146,10 @@ type AdaptConfig struct {
 	// pages per consecutive hit of the trusted rule, up to PredictWindow
 	// (0 = always PredictWindow).
 	PredictWinPerHit int
+	// PreMinPrecision: a buffer whose pre-placement precision (hits+1) /
+	// (checks+2) is below this stops pre-placing; the benefit of a
+	// pre-placement is scaled by the precision.
+	PreMinPrecision float64
 	// ObservedReaders: replication of hot pages of non-concentrated buffers
 	// expects 2x the readers seen so far (capped at HotFutureReaders), each
 	// fetching as many lines as the readers so far did on average.
@@ -218,6 +222,7 @@ func DefaultAdaptConfig() AdaptConfig {
 		PreCopyWeight:      0.25,
 		PredictConstWindow: 2,
 		PredictWinPerHit:   8,
+		PreMinPrecision:    0.5,
 		ObservedReaders:    true,
 		HoldCost:           true,
 	}
@@ -295,6 +300,9 @@ type AdaptStats struct {
 	PreHomeOK    uint64 // predicted pages already at the predicted home
 	EarlyObs     uint64 // observations from the early signal
 	CountHotN    uint64 // pages found hot by the counters
+	PreChecks    uint64 // pre-placed pages checked against their dominant GPM
+	PreCheckHits uint64
+	PrePrecSkip  uint64 // observations whose window was skipped for low precision
 	// realism
 	TrackEvict   uint64 // tracking entries evicted (TrackCap)
 	DecisionMsgs uint64 // evaluations and signals reported to the driver
@@ -340,6 +348,7 @@ type adaptState struct {
 	dirty    [blocksPerPage]bool
 	lastW    [blocksPerPage]sim.VTimeInSec
 	observed bool           // fed to the buffer's learner
+	preCheck bool           // pre-placement checked against the dominant GPM
 	preCopy  bool           // pre-placement copy running
 	counted  bool           // counted in buf.touched
 	t0       sim.VTimeInSec // first counted access since the last reset
@@ -370,6 +379,9 @@ type buffer struct {
 	sumReads   float64
 	nReads     int
 	accesses   float64 // counted accesses to the buffer's pages
+	// pre-placement precision: pre-placed pages checked against their
+	// dominant GPM, and how many were right
+	preChecks, preHits int
 }
 
 func (a *AdaptConfig) on() bool { return a.Enabled }
@@ -593,6 +605,17 @@ func (m *Manager) adaptCount(now sim.VTimeInSec, u *unit, dev, pAddr uint64, rem
 	a.n++
 	if a.buf != nil {
 		a.buf.accesses++
+		if a.preplaced && !a.preCheck && a.n >= m.cfg.Adapt.EvalEvery {
+			// local and remote accesses alike: was the prediction right?
+			a.preCheck = true
+			a.buf.preChecks++
+			m.AStats.PreChecks++
+			dom, dc, tot := dominant(u.counts)
+			if float64(dc) >= m.cfg.DomShare*float64(tot) && dom == m.homeOf(pAddr) {
+				a.buf.preHits++
+				m.AStats.PreCheckHits++
+			}
+		}
 	}
 	if !remote {
 		return
@@ -1914,6 +1937,14 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 	// at the decision (ski rental: as many again are expected)
 	if b.nReads > 0 && b.sumReads/float64(b.nReads) > mean {
 		mean = b.sumReads / float64(b.nReads)
+	}
+	prec := float64(b.preHits+1) / float64(b.preChecks+2)
+	if c.PreMinPrecision > 0 {
+		if prec < c.PreMinPrecision {
+			m.AStats.PrePrecSkip++
+			return
+		}
+		mean *= prec
 	}
 	for i := lo; i <= hi; i++ {
 		if i == idx {
