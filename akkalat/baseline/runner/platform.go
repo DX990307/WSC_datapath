@@ -2,6 +2,7 @@ package runner
 
 import (
 	"github.com/sarchlab/akita/v3/mem/cache/writeback"
+	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/mem/vm/gmmu"
 	"github.com/sarchlab/akita/v3/mem/vm/l2tlb"
 	"github.com/sarchlab/akita/v3/mem/vm/mmu"
@@ -31,6 +32,9 @@ type Platform struct {
 
 	// PageMigration is nil unless -page-migration is set.
 	PageMigration *pagemigration.Manager
+
+	// PageTable is the global page table (P21 -dump-alloc-map).
+	PageTable vm.PageTable
 }
 
 // A GPU is a collection of GPU internal Components

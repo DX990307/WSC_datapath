@@ -581,6 +581,7 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 		IOMMUTLB:      b.IOMMUTLB,
 		RemoteRetain:  remoteRetain,
 		PageMigration: pm,
+		PageTable:     pageTable,
 	}
 }
 

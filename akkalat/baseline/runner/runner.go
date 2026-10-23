@@ -190,6 +190,10 @@ func (r *Runner) configureMagicCopyCoherence() {
 }
 
 func (r *Runner) configureAllocationProfile() {
+	if *dumpAllocMapFlag != "" {
+		r.configureAllocMapDump()
+		return
+	}
 	if !*allocationProfile {
 		return
 	}
