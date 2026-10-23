@@ -24,9 +24,16 @@ import (
 // the next switch then uses the normal pipeline and the run restarts.
 // Endpoint ports (latency 1) are never affected. Off (0) keeps the original
 // behavior.
+//
+// BypassRelaxed changes the input-side condition: the flit may bypass while
+// older flits are still inside the normal (latency-only) pipeline, as long as
+// nothing is stalled in the route / forward buffers and no earlier flit of the
+// same message is still in the normal pipeline of this port (flits of a
+// message stay in order; different messages may overtake each other).
 var (
 	BypassLatency int
 	BypassMaxHops int
+	BypassRelaxed bool
 )
 
 // BypassCounters counts flit arrivals at bypass-capable switch ports.
@@ -54,10 +61,12 @@ func GetBypassCounters() BypassCounters {
 type bypassState struct {
 	pipeline       pipelining.Pipeline
 	normalInFlight int // flits in normal pipeline or route buffer
+	normalByMsg    map[string]int
 }
 
 func newBypassState(name string, width int, routeBuf sim.Buffer) *bypassState {
 	return &bypassState{
+		normalByMsg: make(map[string]int),
 		pipeline: pipelining.MakeBuilder().
 			WithNumStage(BypassLatency).
 			WithCyclePerStage(1).
@@ -78,8 +87,14 @@ const (
 // chooseBypass decides whether flit takes the short pipeline of pc.
 func (s *Switch) chooseBypass(pc portComplex, flit *messaging.Flit) int {
 	bp := pc.bypass
-	if bp.normalInFlight > 0 || pc.routeBuffer.Size() > 0 ||
-		pc.forwardBuffer.Size() > 0 {
+	if pc.routeBuffer.Size() > 0 || pc.forwardBuffer.Size() > 0 {
+		return bypassBusyInput
+	}
+	if BypassRelaxed {
+		if bp.normalByMsg[flit.Msg.Meta().ID] > 0 {
+			return bypassBusyInput
+		}
+	} else if bp.normalInFlight > 0 {
 		return bypassBusyInput
 	}
 	if BypassMaxHops > 0 && flit.BypassRun >= BypassMaxHops {
@@ -112,5 +127,19 @@ func countBypass(reason int) {
 		atomic.AddInt64(&bypassCounters.HopCap, 1)
 	case bypassPipelineFull:
 		atomic.AddInt64(&bypassCounters.PipelineFull, 1)
+	}
+}
+
+func (bp *bypassState) normalIn(flit *messaging.Flit) {
+	bp.normalInFlight++
+	bp.normalByMsg[flit.Msg.Meta().ID]++
+}
+
+func (bp *bypassState) normalOut(id string) {
+	bp.normalInFlight--
+	if bp.normalByMsg[id] <= 1 {
+		delete(bp.normalByMsg, id)
+	} else {
+		bp.normalByMsg[id]--
 	}
 }

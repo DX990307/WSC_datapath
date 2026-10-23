@@ -153,7 +153,7 @@ func (s *Switch) startProcessing(now sim.VTimeInSec) (madeProgress bool) {
 			case reason >= 0:
 				flit.BypassRun = 0
 				pipelineItem.normal = true
-				pc.bypass.normalInFlight++
+				pc.bypass.normalIn(flit)
 				pc.pipeline.Accept(now, pipelineItem)
 			default:
 				pc.pipeline.Accept(now, pipelineItem)
@@ -211,12 +211,13 @@ func (s *Switch) route(now sim.VTimeInSec) (madeProgress bool) {
 			pipelineItem := item.(flitPipelineItem)
 			flit := pipelineItem.flit
 			if mc, ok := flit.Msg.(messaging.MulticastMsg); ok {
+				msgID := mc.Meta().ID
 				if !s.routeMulticastFlit(now, flit, mc, forwardBuf) {
 					break
 				}
 				routeBuf.Pop()
 				if pipelineItem.normal {
-					pc.bypass.normalInFlight--
+					pc.bypass.normalOut(msgID)
 				}
 				madeProgress = true
 				continue
@@ -240,7 +241,7 @@ func (s *Switch) route(now sim.VTimeInSec) (madeProgress bool) {
 			s.assignFlitOutputBuf(flit)
 			routeBuf.Pop()
 			if pipelineItem.normal {
-				pc.bypass.normalInFlight--
+				pc.bypass.normalOut(flit.Msg.Meta().ID)
 			}
 			forwardBuf.Push(flit)
 			s.flitRouteStart[flit.Meta().ID] = now

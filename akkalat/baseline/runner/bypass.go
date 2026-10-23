@@ -15,12 +15,18 @@ var switchBypassMaxHopsFlag = flag.Int("switch-bypass-max-hops", 0,
 	"With -switch-bypass-latency, a flit bypasses at most this many "+
 		"consecutive switches before taking one normal pipeline. 0 = no limit.")
 
+var switchBypassRelaxedFlag = flag.Bool("switch-bypass-relaxed", false,
+	"With -switch-bypass-latency, allow bypass while older flits are still "+
+		"in the normal switch pipeline (only stalled route/forward buffers and "+
+		"earlier flits of the same message block it).")
+
 func applySwitchBypassFlags() {
+	switching.BypassRelaxed = *switchBypassRelaxedFlag
 	switching.BypassLatency = *switchBypassLatencyFlag
 	switching.BypassMaxHops = *switchBypassMaxHopsFlag
 	if switching.BypassLatency > 0 {
-		fmt.Printf("[Config] switch bypass latency=%d max-hops=%d\n",
-			switching.BypassLatency, switching.BypassMaxHops)
+		fmt.Printf("[Config] switch bypass latency=%d max-hops=%d relaxed=%v\n",
+			switching.BypassLatency, switching.BypassMaxHops, switching.BypassRelaxed)
 	}
 }
 
@@ -34,6 +40,9 @@ func (r *Runner) reportSwitchBypass() {
 	}
 	put("latency", int64(switching.BypassLatency))
 	put("max_hops", int64(switching.BypassMaxHops))
+	if switching.BypassRelaxed {
+		put("relaxed", 1)
+	}
 	put("bypassed", c.Bypassed)
 	put("busy_input", c.BusyInput)
 	put("busy_output", c.BusyOutput)
