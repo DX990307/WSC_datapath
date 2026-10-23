@@ -341,7 +341,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 			m.AStats.PreCheckHits++
 		}
 	}
-	hold := m.r3Hold(now, p.PAddr, home[0])
+	hold := m.r3Hold(now, a, p.PAddr, home[0])
 	fixed := m.r3Fixed() + hold
 	type opt struct {
 		act    int
@@ -442,9 +442,6 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 			a.buf.sumRepRegret += chosen.regret
 		}
 		m.startReplicate(now, u, a, p, home[0], chosen.reps)
-		if a.buf != nil {
-			m.r3PropagateReplicate(now, a.buf, a.idx, chosen.reps)
-		}
 		return
 	}
 	if a.preplaced {
@@ -502,22 +499,28 @@ func SetMeshWidth(w int) { meshWidth = w }
 // r3Readers is the number of distinct first readers (diagnostics).
 func r3Readers(a *adaptState) int { return bits.OnesCount64(a.readMask) }
 
-// r3Hold is the expected waiting of the accesses that arrive while the
-// page is switched: rate x hold^2 / 2 with the frame's measured issue rate
-// and hold = shootdown + drain (+ the copy without copy-first); the drain is
-// the larger of the recent drains at the home and the frame's Little's-law
-// residence time (in-flight accesses / issue rate).
-func (m *Manager) r3Hold(now sim.VTimeInSec, pAddr, home uint64) float64 {
-	info := m.ppns[pAddr>>m.log2PageSize]
-	if info == nil || info.issued == 0 {
+// r3Hold is the expected waiting of the page's counted accesses (the same
+// accesses the regret counts) that arrive while the page is switched: rate
+// x hold^2 / 2, hold = shootdown + drain (+ the copy without copy-first);
+// the drain is the larger of the recent drains at the home and the frame's
+// Little's-law residence time (in-flight accesses / issue rate).
+func (m *Manager) r3Hold(now sim.VTimeInSec, a *adaptState, pAddr, home uint64) float64 {
+	if a.n == 0 {
 		return 0
 	}
-	age := float64(now-info.firstIssue) * 1e9
+	age := float64(now-a.t0) * 1e9
 	if age < 1 {
 		age = 1
 	}
-	rate := float64(info.issued) / age
-	drain := float64(info.inflight) / rate
+	rate := float64(a.n) / age
+	drain := 0.0
+	if info := m.ppns[pAddr>>m.log2PageSize]; info != nil && info.issued > 0 {
+		fage := float64(now-info.firstIssue) * 1e9
+		if fage < 1 {
+			fage = 1
+		}
+		drain = float64(info.inflight) / (float64(info.issued) / fage)
+	}
 	if m.drainEMA != nil && m.drainEMA[home] > drain {
 		drain = m.drainEMA[home]
 	}
