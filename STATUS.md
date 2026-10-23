@@ -34,7 +34,7 @@
 | T18 新 m2（两端合并） | 实现完成（用户 10-19 决定直接做真实版）；⏸ 评估的配置确认，等用户 | 10-20 | 分支 `isca27/t18-merge` @ `ca8b831`（已推送）；全部开关关闭时 fir、MM、旧 m2 和 `0b85bef` 逐位一致；冒烟见“结果摘要 → T18”；评估计划 121 个运行，见“需要用户决定” |
 | T19 就近 WG 窃取 | **放弃**（用户 10-20：本篇只做通信，留给下一篇） | 10-20 | 代码保留在 `isca27/t19-steal` @ `eaa9c73`；不跑评估 |
 | P19 快速试错（D / Q0 / Q0b / Q1 / Q2 / Q5 / Q6） | 完成（⏸ go / no-go 和 Q5 等用户） | 10-22 | 分支 `isca27/quick-trials`（worktree `wt-qt`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `isca27/m1-wafer`）；W = 128、384 GB/s；配置确认见"需要用户决定"第一条 |
-| P20 放置 + M3+（迁移时选目标 `-pm-target`；两遍法 oracle 作上限） | 进行中：oracle 第 2 步在跑；`-pm-target` 实现完（`810531a`），回归 / verify 通过后直接开跑（用户：不等确认） | 10-22 | 分支 `isca27/placement`（worktree `wt-place`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `20f323e` 放置表开关）；W = 128、组合表 128、384 GB/s；配置确认见"需要用户决定"第一条 |
+| P20 放置 + M3+（迁移时选目标 `-pm-target`；两遍法 oracle 作上限） | **结束**（用户 10-23：不做了，转 P21）；oracle 全部完成，`-pm-target` 完成 209 / 352 | 10-23 | 分支 `isca27/placement`（worktree `wt-place`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `20f323e` 放置表开关）；W = 128、组合表 128、384 GB/s；配置确认见"需要用户决定"第一条 |
 | P21 自适应放置（统一收益-代价决策：不动/迁主读者/按块/热点拆散/只读复制/规律预放置；first-touch 对照） | 代码完成并推送（默认关）；离线分析完成；**主实验暂停**（主会话 10-23：用户"换一个想法"），回归 / verify 在跑；first-touch 离线检查和"只读数据剩余远程读"在做 | 10-23 | 分支 `isca27/adaptive-pm`（worktree `wt-adapt`）@ `c99ccdf`；服务器 `~/akita-exp-test/adapt/`；离线结果 `results_index/adapt/offline.md` |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
@@ -1394,3 +1394,11 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 - 诊断 D、离线上限、Q0 / Q0b、Q1 / Q2 / Q6 冒烟、Q5 复核：见 `results_index/qt/analysis.md` 第 0 节的 go / no-go 表。Q0、Q0b、Q1、Q2 no-go；Q6 go（候选）；Q5 只写设计。
 - 运行 239 个，全部 exit 0（`results_index/qt/runs.csv`）；回归和 -verify 见 `verify.csv`。
 - 代码 `isca27/quick-trials` @ `3543cd7` 已推送。文档仓库的提交 / 推送仍被权限拦着，改动都在 `isca27/` 工作区（`STATUS.md`、`SYNC.md`、`quick_trials/README.md`、`results_index/qt/`），等用户放行后提交。
+
+### 2026-10-23 (P20) 按用户决定结束，用已有结果收尾
+
+- 用户 10-23："P20 就不要了吧，直接跑 P21"。主会话在两台 `~/akita-exp-test/place/` 放了 PAUSE；正在跑的 40 个跑完后收尾，没有再排运行，PAUSE 保留。
+- 结果：`results_index/place/{README.md, analysis.md, runs.csv, speedup.csv, runs_pm.csv, speedup_pm.csv, tables.md, tables_pm.md}`。
+  - 两遍法 oracle（14 个 workload 全部完成）：P-按类 v2 + M3+ GMEAN **2.25**，对 M3+（1.55）1.45×，离全部本地（2.86）1.22×；三条砍掉门槛都过。
+  - 迁移时选目标（209 / 352 个完成，全部 exit 0）：同一组 11 个 workload 上 M3+ 1.62、M3+ c4k 1.67、M3+ median 1.69、**M3+ class 1.70**、class-stay 1.72，oracle 2.56、全部本地 3.13。全部有结果的 workload 上 M3+ class / M3+ = 1.048（12 个，**低于 1.05 门槛**），c4k-median / c4k（多读者）= 0.975（**低于 1.03**）。class 主要价值是少来回（FW 来回 205 → 3）。其他机制：on-fault 4K、2M 变差；1 KB 交错只在热点 workload 好；Q6 和 class 持平。在线和 oracle 的差距来自触发晚和 4 KB 粒度，不是迁移目标。
+  - 没跑：MG 全部、IVF / BH 的迁移、MM 大部分迁移变体、阈值敏感性的其余 13 个 workload、最好一组 + v4m3。

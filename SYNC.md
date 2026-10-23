@@ -534,3 +534,7 @@
 - 新增 `results_index/adapt/`（`offline.md`、`offline_{A,B,C,D}.csv`、`raw/`、`scripts/`）；改了 `STATUS.md`、`SYNC.md`。
 - 代码 `isca27/adaptive-pm` @ `c99ccdf`（已推送）：`-pm-adapt`（统一收益-代价决策）、`-pm-first-touch`、`-dump-alloc-map`；全部默认关。
 - 服务器 `~/akita-exp-test/adapt/`（yss2）：分配表导出 16 个、回归 / verify 13 个；没有碰 place/ qt/ 的进程和文件。
+
+### 2026-10-23 [claude-code] P20 结束（用户决定转 P21），结果收尾
+- 新增 / 更新 `results_index/place/{README.md, analysis.md, runs.csv, speedup.csv, runs_pm.csv, speedup_pm.csv, tables.md, tables_pm.md}`、`scripts/analyze_pm.py`、`scripts/server/collect.py`；改了 `STATUS.md`（P20 结束，日志一条）。
+- 代码 `isca27/placement` @ `53955c8`（已推送）。服务器 `~/akita-exp-test/place/` 的 PAUSE 保留，队列里没跑的运行留着。没有碰 P21 的 `adapt/`、`wt-adapt`。
