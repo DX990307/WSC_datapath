@@ -1,0 +1,10 @@
+{
+  "_description": "ISCA'27 P21: mi200 (no M3+) + adaptive placement, actions move, block, spread, predict (no replicate); same parameters as m3p_pa.json.",
+  "extends": "mi200.json",
+  "page-migration": "counter",
+  "pm-unit-kb": 4,
+  "pm-count-local": true,
+  "pm-max-migrations": 2,
+  "pm-adapt": true,
+  "pm-adapt-actions": "move,block,spread,predict"
+}

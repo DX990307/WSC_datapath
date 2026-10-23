@@ -1,0 +1,6 @@
+{
+  "_description": "ISCA'27 P21 baseline first-touch on top of m3p (M3+); see ft.json.",
+  "extends": "m3p.json",
+  "page-migration": "observe",
+  "pm-first-touch": true
+}

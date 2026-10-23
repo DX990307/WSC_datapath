@@ -101,6 +101,9 @@ type Config struct {
 	CountLocal       bool    // count the owner's own L1V misses (no trigger)
 	CountNetwork     bool    // take back accesses served by an M3 replica
 
+	// P21 adaptive placement (adapt.go); off by default.
+	Adapt AdaptConfig
+
 	// Check enables the expensive invariant checks (every L2 of every GPM is
 	// searched for lines of each new frame at allocation and at remap).
 	Check bool
@@ -159,6 +162,9 @@ func (c Config) Validate(log2PageSize uint64) error {
 	}
 	if c.BatchSize <= 0 || c.PullWindow <= 0 || c.L2Window <= 0 {
 		return fmt.Errorf("batch size and windows must be positive")
+	}
+	if c.Adapt.Enabled && (c.Policy != PolicyAccessCounter || c.Log2Unit != 12) {
+		return fmt.Errorf("adaptive placement needs the counter policy and 4 KB units")
 	}
 	if c.Policy == PolicyAccessCounter && c.Threshold == 0 {
 		return fmt.Errorf("access-counter threshold must be positive")

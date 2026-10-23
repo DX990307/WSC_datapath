@@ -47,12 +47,20 @@ type placeTable struct {
 	blocks map[uint64]int // block -> tile
 	seed   uint64
 	tiles  []int // GPM tiles, for the random mode
+	// dyn (P21) are the 1 KB block homes changed at run time by the page
+	// migration manager (adaptive placement, first touch); checked first.
+	dyn func(blk uint64) (int, bool)
 	// statistics
 	l1Local, l1Remote, ownerLocal, misrouted uint64
 }
 
 func (t *placeTable) lookup(addr uint64) (int, bool) {
 	blk := addr >> placeLog2Block
+	if t.dyn != nil {
+		if tile, ok := t.dyn(blk); ok {
+			return tile, true
+		}
+	}
 	if t.seed != 0 {
 		return t.tiles[placeMix(blk^t.seed)%uint64(len(t.tiles))], true
 	}
@@ -161,7 +169,12 @@ func loadPlaceTable(path string) map[uint64]int {
 }
 
 func (r *Runner) addPlacement() {
-	if (*placeTableFlag == "" && *placeRandomFlag == 0) || !r.Timing {
+	if !r.Timing {
+		return
+	}
+	pm := r.platform.PageMigration
+	dyn := pm != nil && pm.UsesBlockHomes()
+	if *placeTableFlag == "" && *placeRandomFlag == 0 && !dyn {
 		return
 	}
 	if *placeTableFlag != "" && *placeRandomFlag != 0 {
@@ -172,6 +185,9 @@ func (r *Runner) addPlacement() {
 			"-force-local-data-access")
 	}
 	t := &placeTable{seed: *placeRandomFlag}
+	if dyn {
+		t.dyn = pm.BlockHomeTile
+	}
 	if *placeTableFlag != "" {
 		t.blocks = loadPlaceTable(*placeTableFlag)
 	}

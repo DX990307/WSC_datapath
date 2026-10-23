@@ -1,0 +1,11 @@
+{
+  "_description": "ISCA'27 P21 main: m3p (M3+) + adaptive placement over the counter migration (4 KB tracking, 1 KB blocks): one benefit/cost decision per page over the action set move, block, spread (hot: ring 12 if the buffer is concentrated, else stay), replicate (hot read-only concentrated pages, 4 copies on tiles 8/12/36/40, collapsed by any write or kernel boundary), predict (per-buffer rule pre-places untouched pages). Global parameters from results_index/adapt/offline.md: alpha 2, fixed 2 us, hot = 4 GPMs first-read within 2 us, conc 0.3, predict m 2. pm defaults otherwise (sw 5 us, shootdown 1 us, batch 256), max 2 migrations per page. Ablations override -pm-adapt-actions / -pm-adapt-costmodel on the command line. See isca27/prompts/P21_adaptive_migration.md.",
+  "extends": "m3p.json",
+  "page-migration": "counter",
+  "pm-unit-kb": 4,
+  "pm-count-local": true,
+  "pm-count-network": true,
+  "pm-max-migrations": 2,
+  "pm-adapt": true,
+  "pm-adapt-actions": "move,block,spread,replicate,predict"
+}

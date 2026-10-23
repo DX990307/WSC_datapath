@@ -1,0 +1,6 @@
+{
+  "_description": "ISCA'27 P21 baseline first-touch: mi200 + the first vector access to a page nobody touched before makes the accessing GPM its home (all four 1 KB blocks; zero cost, as if the allocator had placed it there; host copies and CP accesses are not accesses; pages first touched by a scalar or instruction access stay). Hooks only, no migration (-page-migration observe).",
+  "extends": "mi200.json",
+  "page-migration": "observe",
+  "pm-first-touch": true
+}

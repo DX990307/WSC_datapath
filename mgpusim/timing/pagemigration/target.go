@@ -229,8 +229,12 @@ func (m *Manager) LocalAccess(dev uint64, pAddr uint64) {
 	if u.phase != phaseIdle {
 		return
 	}
-	u.counts[dev]++
 	m.Stats.LocalCounted++
+	if m.cfg.Adapt.Enabled {
+		m.adaptCount(0, u, dev, pAddr, false)
+		return
+	}
+	u.counts[dev]++
 }
 
 // ReplicaHit (CountNetwork) takes back the count of a remote access that was
@@ -246,6 +250,11 @@ func (m *Manager) ReplicaHit(dev uint64, pAddr uint64) {
 	}
 	u := m.units[m.unitOf(info.pid, info.vAddr)]
 	if u == nil || u.phase != phaseIdle || u.counts[dev] == 0 {
+		return
+	}
+	if u.a != nil {
+		m.adaptUncount(u, dev, pAddr)
+		m.Stats.ReplicaUncounted++
 		return
 	}
 	u.counts[dev]--

@@ -75,6 +75,8 @@ type unit struct {
 
 	counts []uint32 // access counter per device ID
 
+	a *adaptState // P21 tracking entry (nil unless adaptive placement)
+
 	pages         []vm.Page
 	newPAddrs     []uint64
 	pendingChunks int
@@ -201,6 +203,17 @@ type Manager struct {
 	load  []float64
 	loadT float64
 
+	// P21 adaptive placement (adapt.go)
+	blockHome    map[uint64]uint64 // 1 KB block -> serving device
+	buffers      map[bufKey]*buffer
+	tileDev      map[int]uint64
+	kernel       int
+	lastBoundary sim.VTimeInSec
+	replicated   map[*unit]bool
+	holds        []*unit
+	toRetire     []uint64
+	AStats       AdaptStats
+
 	Stats Stats
 }
 
@@ -247,6 +260,8 @@ func NewManager(
 	if cfg.Target != TargetArgmax {
 		m.load = make([]float64, len(gpms))
 	}
+	m.replicated = make(map[*unit]bool)
+	m.initAdapt()
 	return m
 }
 
@@ -295,9 +310,30 @@ func (m *Manager) ATHook(dev uint64, canFault bool) addresstranslator.MigrationH
 }
 
 type atHook struct {
-	m        *Manager
-	dev      uint64
-	canFault bool
+	m         *Manager
+	dev       uint64
+	canFault  bool
+	lastWrite bool
+}
+
+// ResolveRW (addresstranslator.MigrationHookRW) is Resolve plus the access
+// type, for the P21 replicas and first-touch placement.
+func (h *atHook) ResolveRW(
+	now sim.VTimeInSec,
+	at Waker,
+	pid vm.PID,
+	vAddr uint64,
+	isWrite bool,
+	page vm.Page,
+) (vm.Page, bool) {
+	h.lastWrite = isWrite
+	m := h.m
+	page, ok := h.Resolve(now, at, pid, vAddr, page)
+	if !ok || (!m.cfg.Adapt.Enabled && !m.cfg.Adapt.FirstTouch) {
+		return page, ok
+	}
+	return m.adaptResolve(now, at, h.dev, m.units[m.unitOf(pid, vAddr)],
+		h.canFault, isWrite, page)
 }
 
 func (h *atHook) Resolve(
@@ -342,6 +378,7 @@ func (h *atHook) Issued(now sim.VTimeInSec, pid vm.PID, vAddr, pAddr uint64) {
 	m := h.m
 	ppn := pAddr >> m.log2PageSize
 	info := m.ppns[ppn]
+	newFrame := info == nil
 	if info == nil {
 		info = &ppnInfo{pid: pid, vAddr: vAddr >> m.log2PageSize << m.log2PageSize}
 		m.ppns[ppn] = info
@@ -352,6 +389,9 @@ func (h *atHook) Issued(now sim.VTimeInSec, pid vm.PID, vAddr, pAddr uint64) {
 	}
 	info.inflight++
 	info.devMask |= 1 << h.dev
+	if m.cfg.Adapt.Enabled {
+		m.adaptIssued(now, h.dev, pid, vAddr, h.lastWrite, h.canFault, newFrame)
+	}
 }
 
 func (h *atHook) Completed(now sim.VTimeInSec, pAddr uint64) {
@@ -376,7 +416,7 @@ func (m *Manager) remoteAccess(now sim.VTimeInSec, dev uint64, req mem.AccessReq
 	m.Stats.RemoteAccesses++
 	if _, ok := req.(*mem.ReadReq); ok {
 		m.Stats.RemoteReads++
-		owner := m.ownerOf(pAddr)
+		owner := m.homeOf(pAddr)
 		if owner < uint64(len(m.Stats.RemoteReadsByOwner)) {
 			m.Stats.RemoteReadsByOwner[owner]++
 		}
@@ -393,6 +433,12 @@ func (m *Manager) remoteAccess(now sim.VTimeInSec, dev uint64, req mem.AccessReq
 		return
 	}
 	u := m.getUnit(m.unitOf(info.pid, info.vAddr))
+	if m.cfg.Adapt.Enabled {
+		if u.phase == phaseIdle {
+			m.adaptCount(now, u, dev, pAddr, true)
+		}
+		return
+	}
 	if m.cfg.AllowPages != nil {
 		if !u.allowChecked {
 			u.allowChecked = true
@@ -509,6 +555,10 @@ func (m *Manager) Tick(now sim.VTimeInSec) bool {
 		}
 	}
 
+	if m.cfg.Adapt.Enabled && m.adaptTick(now) {
+		progress = true
+	}
+
 	stillActive := m.active[:0]
 	for _, u := range m.active {
 		switch u.phase {
@@ -541,13 +591,23 @@ func (m *Manager) startShootdown(now sim.VTimeInSec, u *unit) {
 	u.pages = u.pages[:0]
 	for va := start; va < end; va += pageSize {
 		p, ok := m.pageTable.Find(u.key.pid, va)
-		if !ok || p.VAddr != va || p.DeviceID == u.dst {
+		if !ok || p.VAddr != va {
+			continue
+		}
+		if u.a != nil && u.a.act != actStay {
+			if !m.adaptNeedsMove(u, p) {
+				continue
+			}
+		} else if p.DeviceID == u.dst {
 			continue
 		}
 		u.pages = append(u.pages, p)
 	}
 	if len(u.pages) == 0 {
 		m.Stats.NoopMigrations++
+		if u.a != nil {
+			u.a.act = actStay
+		}
 		u.phase = phaseIdle
 		u.faulters = u.faulters[:0]
 		m.wake(now, u)
@@ -650,6 +710,10 @@ func (m *Manager) startCopy(now sim.VTimeInSec, u *unit) {
 	dstEngine := m.gpms[u.dst].Engine
 	u.newPAddrs = u.newPAddrs[:0]
 	u.pendingChunks = 0
+	if u.a != nil && u.a.act != actStay {
+		m.adaptStartCopy(now, u)
+		return
+	}
 	for _, p := range u.pages {
 		m.frameInfo(p).state = frameFrozen
 		frame := m.allocFrame(u.dst)
@@ -692,6 +756,9 @@ func (m *Manager) remap(now sim.VTimeInSec, u *unit) {
 		p.PAddr = u.newPAddrs[i]
 		p.DeviceID = u.dst
 		m.pageTable.Update(p)
+		if u.a != nil && u.a.act != actStay {
+			m.adaptRemapFrame(u, p.PAddr)
+		}
 		m.Stats.PagesMigrated++
 		m.Stats.BytesMigrated += pageSize
 	}
@@ -705,6 +772,9 @@ func (m *Manager) remap(now sim.VTimeInSec, u *unit) {
 	}
 	u.everMigrated = true
 	u.lastEnd = now
+	if u.a != nil {
+		u.a.act = actStay
+	}
 	m.Stats.Migrations++
 	m.Stats.MigrationTimeSum += float64(now - u.triggerTime)
 	m.Stats.BlockedTimeSum += float64(now - u.blockStart)
@@ -766,7 +836,7 @@ func SortedKeys(h map[int]int) []int {
 
 // Busy reports whether migrations are in progress.
 func (m *Manager) Busy() bool {
-	if len(m.active) > 0 {
+	if len(m.active) > 0 || len(m.holds) > 0 {
 		return true
 	}
 	for _, h := range m.handlers {

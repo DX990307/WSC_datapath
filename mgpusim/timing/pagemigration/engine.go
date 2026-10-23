@@ -16,6 +16,8 @@ type chunk struct {
 	dstPAddr  uint64
 	size      uint64
 	linesLeft int
+	// done (P21) replaces Manager.chunkDone when set.
+	done func(now sim.VTimeInSec)
 }
 
 // serving is one pull being served by the source engine.
@@ -23,6 +25,10 @@ type serving struct {
 	req       *PullReq
 	data      []byte
 	linesLeft int
+	// local (P21): a chunk this engine copies to itself (source and
+	// destination on the same GPM, e.g. a 1 KB block that stays at its home
+	// while its page moves to a new frame); no network messages.
+	local *chunk
 }
 
 type lineRead struct {
@@ -143,6 +149,14 @@ func (e *CopyEngine) sendPulls(now sim.VTimeInSec) bool {
 	progress := false
 	for e.inWindow < e.cfg.PullWindow && len(e.pending) > 0 {
 		c := e.pending[0]
+		if c.src == e {
+			e.pending = e.pending[1:]
+			e.inWindow++
+			e.serveLines(now, &serving{data: make([]byte, c.size),
+				linesLeft: int(c.size / e.cfg.LineBytes), local: c}, c.srcPAddr)
+			progress = true
+			continue
+		}
 		req := newPullReq(now, e.remotePort, c.src.remotePort, c.srcPAddr, c.size)
 		if e.remotePort.Send(req) != nil {
 			break
@@ -200,14 +214,17 @@ func (e *CopyEngine) recvRemote(now sim.VTimeInSec) bool {
 }
 
 func (e *CopyEngine) serve(now sim.VTimeInSec, req *PullReq) {
-	line := e.cfg.LineBytes
-	s := &serving{
+	e.serveLines(now, &serving{
 		req:       req,
 		data:      make([]byte, req.Size),
-		linesLeft: int(req.Size / line),
-	}
-	for off := uint64(0); off < req.Size; off += line {
-		addr := req.PAddr + off
+		linesLeft: int(req.Size / e.cfg.LineBytes),
+	}, req.PAddr)
+}
+
+func (e *CopyEngine) serveLines(now sim.VTimeInSec, s *serving, base uint64) {
+	line := e.cfg.LineBytes
+	for off := uint64(0); off < uint64(len(s.data)); off += line {
+		addr := base + off
 		r := mem.ReadReqBuilder{}.
 			WithSendTime(now).
 			WithSrc(e.l2Port).
@@ -228,6 +245,10 @@ func (e *CopyEngine) land(now sim.VTimeInSec, rsp *PullRsp) {
 	}
 	delete(e.pulling, rsp.RespondTo)
 	e.PulledBytes += uint64(len(rsp.Data))
+	e.landChunk(now, c, rsp.Data)
+}
+
+func (e *CopyEngine) landChunk(now sim.VTimeInSec, c *chunk, data []byte) {
 	line := e.cfg.LineBytes
 	c.linesLeft = int(c.size / line)
 	for off := uint64(0); off < c.size; off += line {
@@ -237,7 +258,7 @@ func (e *CopyEngine) land(now sim.VTimeInSec, rsp *PullRsp) {
 			WithSrc(e.dramPort).
 			WithDst(e.DRAMFinder.Find(addr)).
 			WithAddress(addr).
-			WithData(rsp.Data[off : off+line]).
+			WithData(data[off : off+line]).
 			WithPID(0).
 			Build()
 		e.writes = append(e.writes, w)
@@ -263,7 +284,9 @@ func (e *CopyEngine) recvMem(now sim.VTimeInSec, port sim.Port) bool {
 			delete(e.readOwners, msg.RespondTo)
 			copy(lr.s.data[lr.offset:], msg.Data)
 			lr.s.linesLeft--
-			if lr.s.linesLeft == 0 {
+			if lr.s.linesLeft == 0 && lr.s.local != nil {
+				e.landChunk(now, lr.s.local, lr.s.data)
+			} else if lr.s.linesLeft == 0 {
 				e.rsps = append(e.rsps, newPullRsp(now, e.remotePort,
 					lr.s.req.Src, lr.s.req.ID, lr.s.data))
 			}
@@ -277,7 +300,11 @@ func (e *CopyEngine) recvMem(now sim.VTimeInSec, port sim.Port) bool {
 			c.linesLeft--
 			if c.linesLeft == 0 {
 				e.inWindow--
-				e.manager.chunkDone(now, c)
+				if c.done != nil {
+					c.done(now)
+				} else {
+					e.manager.chunkDone(now, c)
+				}
 			}
 		default:
 			log.Panicf("copy engine cannot handle %s", reflect.TypeOf(msg))

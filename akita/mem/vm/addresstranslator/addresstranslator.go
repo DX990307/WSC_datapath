@@ -57,6 +57,7 @@ type AddressTranslator struct {
 	// its page migrates) and reports the issue and completion of the
 	// physical access so that a migration can drain in-flight accesses.
 	migrationHook MigrationHook
+	hookRW        MigrationHookRW
 	held          []heldTranslation
 
 	// HeldAccesses counts the accesses the migration hook held.
@@ -79,6 +80,14 @@ type MigrationHook interface {
 	Completed(now sim.VTimeInSec, pAddr uint64)
 }
 
+// MigrationHookRW is an optional extension of MigrationHook (ISCA27 P21):
+// when the installed hook implements it, ResolveRW is called instead of
+// Resolve and also tells whether the access is a write.
+type MigrationHookRW interface {
+	ResolveRW(now sim.VTimeInSec, at Waker, pid vm.PID,
+		vAddr uint64, isWrite bool, page vm.Page) (vm.Page, bool)
+}
+
 // Waker is a component that can be asked to tick again.
 type Waker interface {
 	TickLater(now sim.VTimeInSec)
@@ -92,6 +101,17 @@ type heldTranslation struct {
 // SetMigrationHook installs a page-migration hook (nil removes it).
 func (t *AddressTranslator) SetMigrationHook(h MigrationHook) {
 	t.migrationHook = h
+	t.hookRW, _ = h.(MigrationHookRW)
+}
+
+func (t *AddressTranslator) resolve(now sim.VTimeInSec, req mem.AccessReq,
+	page vm.Page) (vm.Page, bool) {
+	if t.hookRW != nil {
+		_, isWrite := req.(*mem.WriteReq)
+		return t.hookRW.ResolveRW(now, t, req.GetPID(), req.GetAddress(),
+			isWrite, page)
+	}
+	return t.migrationHook.Resolve(now, t, req.GetPID(), req.GetAddress(), page)
 }
 
 // DeviceID returns the ID of the GPU that owns the translator.
@@ -275,8 +295,7 @@ func (t *AddressTranslator) parseTranslation(now sim.VTimeInSec) bool {
 	page := transRsp.Page
 	if t.migrationHook != nil {
 		reqFromTop := transaction.incomingReqs[0]
-		resolved, ok := t.migrationHook.Resolve(now, t, reqFromTop.GetPID(),
-			reqFromTop.GetAddress(), page)
+		resolved, ok := t.resolve(now, reqFromTop, page)
 		if !ok {
 			t.held = append(t.held, heldTranslation{transaction, transRsp})
 			t.HeldAccesses++
@@ -303,8 +322,7 @@ func (t *AddressTranslator) releaseHeld(now sim.VTimeInSec) bool {
 	for len(t.held) > 0 {
 		h := t.held[0]
 		reqFromTop := h.transaction.incomingReqs[0]
-		page, ok := t.migrationHook.Resolve(now, t, reqFromTop.GetPID(),
-			reqFromTop.GetAddress(), h.rsp.Page)
+		page, ok := t.resolve(now, reqFromTop, h.rsp.Page)
 		if !ok {
 			return madeProgress
 		}

@@ -1,0 +1,192 @@
+package runner
+
+// ISCA'27 P21 adaptive placement: flags, wiring and statistics. The
+// mechanism is in mgpusim/timing/pagemigration/adapt.go. Off by default.
+
+import (
+	"flag"
+	"fmt"
+	"strings"
+
+	"github.com/sarchlab/akita/v3/mem/mem"
+	"github.com/sarchlab/akita/v3/sim"
+	"github.com/sarchlab/mgpusim/v3/timing/cp"
+	"github.com/sarchlab/mgpusim/v3/timing/pagemigration"
+)
+
+var pmAdaptFlag = flag.Bool("pm-adapt", false,
+	"P21: adaptive placement on top of -page-migration=counter (4 KB): one "+
+		"benefit/cost decision per page over the action set -pm-adapt-actions.")
+var pmAdaptActionsFlag = flag.String("pm-adapt-actions", "move,block,spread,predict",
+	"P21: action set, comma separated subset of move, block (per 1 KB block), "+
+		"spread (hot pages: ring 12 / hash), replicate (hot read-only pages, 4 "+
+		"copies), predict (per-buffer rule pre-places untouched pages).")
+var pmAdaptCostFlag = flag.Bool("pm-adapt-costmodel", true,
+	"P21: benefit/cost decision; false = fixed -pm-threshold trigger and hot "+
+		"actions without the cost test (ablation).")
+var pmAdaptAlphaFlag = flag.Float64("pm-adapt-alpha", 2, "P21: act when benefit > alpha x cost.")
+var pmAdaptFixedFlag = flag.Float64("pm-adapt-fixed-ns", 2000,
+	"P21: fixed cost of one migrated page (software, shootdown, holding).")
+var pmAdaptCopyWFlag = flag.Float64("pm-adapt-copy-weight", 1,
+	"P21: cost of copying one line relative to one remote read over the same hops.")
+var pmAdaptQueueFlag = flag.Float64("pm-adapt-queue-ns", 0,
+	"P21: queueing term per access at an owner with average load (scaled by load).")
+var pmAdaptEvalFlag = flag.Int("pm-adapt-eval", 8, "P21: evaluate every this many counted accesses.")
+var pmAdaptHotKFlag = flag.Int("pm-adapt-hot-k", 4,
+	"P21: a page is hot when this many GPMs read it for the first time within -pm-adapt-hot-window-ns.")
+var pmAdaptHotWinFlag = flag.Int("pm-adapt-hot-window-ns", 2000, "P21: first-read window.")
+var pmAdaptConcFlag = flag.Float64("pm-adapt-conc", 0.3,
+	"P21: a buffer is concentrated when its most common device holds this share of its pages.")
+var pmAdaptSpreadOtherFlag = flag.String("pm-adapt-spread-other", "stay",
+	"P21: hot pages of non-concentrated buffers: stay or hash.")
+var pmAdaptPropPagesFlag = flag.Int("pm-adapt-prop-pages", 256,
+	"P21: hot buffers up to this many pages propagate the hot decision to all their pages.")
+var pmAdaptPropGateFlag = flag.Float64("pm-adapt-prop-gate", 0.5,
+	"P21: larger buffers propagate when hot / touched pages >= this.")
+var pmAdaptPredictMFlag = flag.Int("pm-adapt-predict-m", 2, "P21: consecutive hits to trust a rule.")
+var pmAdaptPredictWinFlag = flag.Int("pm-adapt-predict-window", 512,
+	"P21: pages pre-placed on each side of a confirmed observation.")
+var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
+	"P21 baseline: the first vector access to a page nobody touched makes the "+
+		"accessing GPM the home of the page (zero cost; host copies are not "+
+		"accesses). Use with -page-migration=observe.")
+
+func adaptConfigFromFlags() pagemigration.AdaptConfig {
+	a := pagemigration.DefaultAdaptConfig()
+	a.Enabled = *pmAdaptFlag
+	a.FirstTouch = *pmFirstTouchFlag
+	if a.Enabled && a.FirstTouch {
+		panic("-pm-adapt and -pm-first-touch are exclusive")
+	}
+	a.Move, a.Block, a.Spread, a.Replicate, a.Predict = false, false, false, false, false
+	for _, s := range strings.Split(*pmAdaptActionsFlag, ",") {
+		switch strings.TrimSpace(s) {
+		case "":
+		case "move":
+			a.Move = true
+		case "block":
+			a.Block = true
+		case "spread":
+			a.Spread = true
+		case "replicate":
+			a.Replicate = true
+		case "predict":
+			a.Predict = true
+		default:
+			panic(fmt.Sprintf("-pm-adapt-actions: unknown action %q", s))
+		}
+	}
+	a.CostModel = *pmAdaptCostFlag
+	a.Alpha = *pmAdaptAlphaFlag
+	a.FixedNS = *pmAdaptFixedFlag
+	a.CopyWeight = *pmAdaptCopyWFlag
+	a.QueueNS = *pmAdaptQueueFlag
+	a.EvalEvery = uint32(*pmAdaptEvalFlag)
+	a.HotK = *pmAdaptHotKFlag
+	a.HotWindowNS = uint64(*pmAdaptHotWinFlag)
+	a.ConcShare = *pmAdaptConcFlag
+	a.SpreadOther = *pmAdaptSpreadOtherFlag
+	if a.SpreadOther != "stay" && a.SpreadOther != "hash" {
+		panic("-pm-adapt-spread-other must be stay or hash")
+	}
+	a.PropSmallPages = *pmAdaptPropPagesFlag
+	a.PropGate = *pmAdaptPropGateFlag
+	a.PredictM = *pmAdaptPredictMFlag
+	a.PredictWindow = *pmAdaptPredictWinFlag
+	if a.EvalEvery == 0 {
+		panic("-pm-adapt-eval must be positive")
+	}
+	return a
+}
+
+func printAdaptConfig(c pagemigration.Config) {
+	a := c.Adapt
+	if a.FirstTouch {
+		fmt.Printf("[Config] P21 first-touch placement\n")
+	}
+	if !a.Enabled {
+		return
+	}
+	fmt.Printf("[Config] P21 adapt actions=%s costmodel=%v alpha=%g fixed=%gns "+
+		"copy-weight=%g queue=%gns eval=%d hot-k=%d hot-window=%dns conc=%g "+
+		"spread-other=%s prop-pages=%d prop-gate=%g predict-m=%d predict-window=%d "+
+		"base=%gns hop=%gns dom-share=%g max-migrations=%d\n",
+		*pmAdaptActionsFlag, a.CostModel, a.Alpha, a.FixedNS, a.CopyWeight,
+		a.QueueNS, a.EvalEvery, a.HotK, a.HotWindowNS, a.ConcShare,
+		a.SpreadOther, a.PropSmallPages, a.PropGate, a.PredictM, a.PredictWindow,
+		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations)
+}
+
+// wireAdaptive installs what the adaptive placement needs beyond the page
+// migration: copy engines that read any address from their own L2 slices
+// (blocks homed away from their address range), and the kernel-boundary
+// notification (replica collapse).
+func (b *R9NanoPlatformBuilder) wireAdaptive(m *pagemigration.Manager) {
+	if !b.pageMigration.Adapt.Enabled {
+		return
+	}
+	for _, gpu := range b.gpus {
+		if e := gpu.pm.engine; e != nil {
+			f, ok := e.L2Finder.(*mem.InterleavedLowModuleFinder)
+			if !ok {
+				panic("P21: unexpected copy engine L2 finder")
+			}
+			local := *f
+			local.UseAddressSpaceLimitation = false
+			local.ModuleForOtherAddresses = nil
+			e.L2Finder = &local
+		}
+		c, ok := gpu.CommandProcessor.(*cp.CommandProcessor)
+		if !ok {
+			panic("P21: command processor type")
+		}
+		c.KernelLaunchHooks = append(c.KernelLaunchHooks,
+			func(now sim.VTimeInSec) { m.KernelBoundary(now) })
+	}
+}
+
+func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
+	a := m.Config().Adapt
+	if !a.Enabled && !a.FirstTouch {
+		return
+	}
+	s := m.AStats
+	col := func(what string, v float64) {
+		r.metricsCollector.Collect("PageMigration", what, v)
+	}
+	col("pa_evaluations", float64(s.Evaluations))
+	buckets := []string{"r1", "r2_3", "r4_15", "r16p"}
+	for act, name := range pagemigration.ActionNames {
+		var tot uint64
+		for b, n := range s.Decided[act] {
+			tot += n
+			if n > 0 {
+				col(fmt.Sprintf("pa_decided_%s_%s", name, buckets[b]), float64(n))
+			}
+		}
+		col("pa_decided_"+name, float64(tot))
+		col("pa_blocks_moved_"+name, float64(s.BlocksMoved[act]))
+	}
+	col("pa_hot_detected", float64(s.HotDetected))
+	col("pa_hot_buffers", float64(s.HotBuffers))
+	col("pa_propagated", float64(s.Propagated))
+	col("pa_preplaced", float64(s.PrePlaced))
+	col("pa_pre_blocks", float64(s.PreBlocks))
+	col("pa_pre_raced", float64(s.PreRaced))
+	col("pa_pre_by_predict", float64(s.PreByPredict))
+	col("pa_pre_by_hot", float64(s.PreByHot))
+	col("pa_predict_obs", float64(s.PredictObs))
+	col("pa_predict_hits", float64(s.PredictHits))
+	col("pa_predict_confident", float64(s.PredictConf))
+	col("pa_predict_miss", float64(s.PredictMiss))
+	col("pa_pre_fallback", float64(s.PreFallback))
+	col("pa_replica_on", float64(s.ReplicaOn))
+	col("pa_replica_abort", float64(s.ReplicaAbort))
+	col("pa_replica_collapse_write", float64(s.ReplicaWrite))
+	col("pa_replica_collapse_kernel", float64(s.ReplicaKern))
+	col("pa_replica_reads", float64(s.ReplicaReads))
+	col("pa_first_touch_pages", float64(s.FirstTouch))
+	col("pa_copy_bytes", float64(s.CopyBytes))
+	col("pa_kernels", float64(s.Kernels))
+	col("pa_block_homes", float64(m.BlockHomes()))
+}

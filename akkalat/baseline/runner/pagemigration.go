@@ -147,6 +147,7 @@ func pageMigrationConfigFromFlags() pagemigration.Config {
 		c.SoftwareLatencyNS = 0
 		c.ShootdownLatencyNS = 0
 	}
+	c.Adapt = adaptConfigFromFlags()
 	return c
 }
 
@@ -160,6 +161,7 @@ func printPageMigrationConfig(c pagemigration.Config) {
 		c.Policy, (uint64(1)<<c.Log2Unit)>>10, c.SoftwareLatencyNS, c.BatchSize,
 		c.ShootdownLatencyNS, c.Threshold, c.CooldownNS, c.MaxMigrations,
 		c.ChunkBytes, c.PullWindow, c.L2Window, *pmIdealFlag, c.Check)
+	printAdaptConfig(c)
 	if c.Target != pagemigration.TargetArgmax || c.CountLocal || c.CountNetwork {
 		fmt.Printf("[Config] page-migration target=%s dom-share=%g "+
 			"median-max-readers=%d broadcast-k=%d min-saving=%g reader-noise=%g "+
@@ -296,6 +298,7 @@ func (b *R9NanoPlatformBuilder) buildPageMigrationManager(
 			}
 		}
 	}
+	b.wireAdaptive(m)
 	writearound.LocalBottomHook = nil
 	if b.pageMigration.CountLocal {
 		devOf := map[int]uint64{}
@@ -384,6 +387,7 @@ func (r *Runner) reportPageMigrationStats() {
 		col("pm_local_counted", float64(s.LocalCounted))
 		col("pm_replica_uncounted", float64(s.ReplicaUncounted))
 	}
+	r.reportAdaptStats(m)
 	col("pm_held_accesses", float64(held))
 	col("pm_dma_pulled_bytes", float64(pulled))
 	col("pm_dma_served_bytes", float64(served))
