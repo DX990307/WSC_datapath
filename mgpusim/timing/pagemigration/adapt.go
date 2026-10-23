@@ -149,6 +149,9 @@ type AdaptConfig struct {
 	// PreMinPrecision: a buffer whose pre-placement precision (hits+1) /
 	// (checks+2) is below this stops pre-placing.
 	PreMinPrecision float64
+	// PreProbe, PreProbePerHit: a buffer keeps at most PreProbe +
+	// PreProbePerHit x (checked hits) pre-placements unchecked (0 = no limit).
+	PreProbe, PreProbePerHit int
 	// ObservedReaders: replication of hot pages of non-concentrated buffers
 	// expects 2x the readers seen so far (capped at HotFutureReaders), each
 	// fetching as many lines as the readers so far did on average.
@@ -226,6 +229,8 @@ func DefaultAdaptConfig() AdaptConfig {
 		PredictConstWindow: 2,
 		PredictWinPerHit:   8,
 		PreMinPrecision:    0.5,
+		PreProbe:           16,
+		PreProbePerHit:     8,
 		ObservedReaders:    true,
 		HoldCost:           true,
 	}
@@ -296,16 +301,17 @@ type AdaptStats struct {
 	Recopies     uint64 // of which recopied dirty blocks at the switch
 	RecopyBlocks uint64
 	// pre-placement
-	PreHeld      uint64 // accesses held on a running pre-placement
-	PreHeldPages uint64
-	PreCostSkip  uint64 // untouched predicted pages skipped by the cost test
-	PreTouched   uint64 // predicted pages skipped because already touched
-	PreHomeOK    uint64 // predicted pages already at the predicted home
-	EarlyObs     uint64 // observations from the early signal
-	CountHotN    uint64 // pages found hot by the counters
-	PreChecks    uint64 // pre-placed pages checked against their dominant GPM
-	PreCheckHits uint64
-	PrePrecSkip  uint64 // observations whose window was skipped for low precision
+	PreHeld       uint64 // accesses held on a running pre-placement
+	PreHeldPages  uint64
+	PreCostSkip   uint64 // untouched predicted pages skipped by the cost test
+	PreTouched    uint64 // predicted pages skipped because already touched
+	PreHomeOK     uint64 // predicted pages already at the predicted home
+	EarlyObs      uint64 // observations from the early signal
+	CountHotN     uint64 // pages found hot by the counters
+	PreChecks     uint64 // pre-placed pages checked against their dominant GPM
+	PreCheckHits  uint64
+	PrePrecSkip   uint64 // observations whose window was skipped for low precision
+	PreBudgetSkip uint64 // predicted pages skipped: too many unchecked pre-placements
 	// realism
 	TrackEvict   uint64 // tracking entries evicted (TrackCap)
 	DecisionMsgs uint64 // evaluations and signals reported to the driver
@@ -347,17 +353,18 @@ type adaptState struct {
 	// copy-first: the migration copied before the switch; blocks written
 	// since (or possibly in flight at) the copy start; last write issue
 	// time per block.
-	copied   bool
-	dirty    [blocksPerPage]bool
-	lastW    [blocksPerPage]sim.VTimeInSec
-	observed bool           // fed to the buffer's learner
-	preCheck bool           // pre-placement checked against the dominant GPM
-	preCopy  bool           // pre-placement copy running
-	counted  bool           // counted in buf.touched
-	t0       sim.VTimeInSec // first counted access since the last reset
-	trackEl  *list.Element  // TrackCap LRU entry (nil = not tracked)
-	preHeld  bool
-	origPA   uint64 // physical address of the frame at tracking start
+	copied     bool
+	dirty      [blocksPerPage]bool
+	lastW      [blocksPerPage]sim.VTimeInSec
+	observed   bool           // fed to the buffer's learner
+	preCheck   bool           // pre-placement checked against the dominant GPM
+	preCounted bool           // counted in buf.prePending
+	preCopy    bool           // pre-placement copy running
+	counted    bool           // counted in buf.touched
+	t0         sim.VTimeInSec // first counted access since the last reset
+	trackEl    *list.Element  // TrackCap LRU entry (nil = not tracked)
+	preHeld    bool
+	origPA     uint64 // physical address of the frame at tracking start
 }
 
 type replica struct {
@@ -385,6 +392,7 @@ type buffer struct {
 	// pre-placement precision: pre-placed pages checked against their
 	// dominant GPM, and how many were right
 	preChecks, preHits int
+	prePending         int // pre-placements not yet checked
 }
 
 func (a *AdaptConfig) on() bool { return a.Enabled }
@@ -620,6 +628,7 @@ func (m *Manager) adaptCount(now sim.VTimeInSec, u *unit, dev, pAddr uint64, rem
 			// local and remote accesses alike: was the prediction right?
 			a.preCheck = true
 			a.buf.preChecks++
+			m.preRelease(a)
 			m.AStats.PreChecks++
 			dom, dc, tot := dominant(u.counts)
 			if float64(dc) >= m.cfg.DomShare*float64(tot) && dom == m.homeOf(pAddr) {
@@ -1336,6 +1345,7 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 	m.deferAct(now, majority(dst), func(now sim.VTimeInSec) {
 		if m.ppns[p.PAddr>>m.log2PageSize] != nil || u.phase != phaseIdle {
 			a.preplacing = false
+			m.preRelease(a)
 			m.AStats.PreLate++
 			return
 		}
@@ -1377,6 +1387,7 @@ func (m *Manager) prePlaceInPlace(now sim.VTimeInSec, u *unit, a *adaptState, p 
 		m.wake(now, u)
 		if m.ppns[ppn] != nil {
 			m.AStats.PreRaced++
+			m.preRelease(a)
 			return
 		}
 		for b := 0; b < blocksPerPage; b++ {
@@ -1421,6 +1432,7 @@ func (m *Manager) prePlaceRemap(now sim.VTimeInSec, u *unit, a *adaptState, p vm
 		m.wake(now, u)
 		if m.ppns[ppn] != nil {
 			m.AStats.PreRaced++
+			m.preRelease(a)
 			m.retireFrame(frame)
 			return
 		}
@@ -1996,7 +2008,14 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 				m.AStats.PreCostSkip++
 				continue
 			}
-			m.prePlace(now, v, dsts, actMove, true)
+			if c.PreProbe > 0 && b.prePending >= c.PreProbe+c.PreProbePerHit*b.preHits {
+				m.AStats.PreBudgetSkip++
+				continue
+			}
+			if m.prePlace(now, v, dsts, actMove, true) {
+				b.prePending++
+				va2.preCounted = true
+			}
 			continue
 		}
 		m.AStats.PreTouched++
@@ -2202,5 +2221,13 @@ func mgInc(c []uint32, d uint64, k int) {
 		if c[i] > 0 {
 			c[i]--
 		}
+	}
+}
+
+// preRelease takes a pre-placement out of its buffer's unchecked count.
+func (m *Manager) preRelease(a *adaptState) {
+	if a.preCounted && a.buf != nil {
+		a.buf.prePending--
+		a.preCounted = false
 	}
 }
