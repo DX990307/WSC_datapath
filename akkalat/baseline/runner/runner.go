@@ -428,6 +428,7 @@ func (r *Runner) buildTimingPlatform() {
 	}
 	pmConfig := pageMigrationConfigFromFlags()
 	printPageMigrationConfig(pmConfig)
+	applySwitchBypassFlags()
 	b := MakeR9NanoBuilder().
 		WithGPMPreset(gpmPreset).
 		WithLog2PageSize(configuredLog2PageSize()).

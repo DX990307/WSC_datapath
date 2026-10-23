@@ -15,6 +15,9 @@ import (
 type flitPipelineItem struct {
 	taskID string
 	flit   *messaging.Flit
+	// normal is set on bypass-capable ports when the flit took the normal
+	// pipeline (see bypass.go).
+	normal bool
 }
 
 func (f flitPipelineItem) TaskID() string {
@@ -52,6 +55,10 @@ type portComplex struct {
 	// switch to the port. The SendOutBuffer should have the capacity of this
 	// number.
 	numOutputChannel int
+
+	// bypass is the low-load short pipeline; nil when bypass is off or the
+	// port is not deeper than BypassLatency.
+	bypass *bypassState
 }
 
 // Switch is an Akita component that can forward request to destination.
@@ -111,11 +118,14 @@ func (s *Switch) startProcessing(now sim.VTimeInSec) (madeProgress bool) {
 				break
 			}
 
-			if !pc.pipeline.CanAccept() {
+			flit := item.(*messaging.Flit)
+			reason := -1
+			if pc.bypass != nil {
+				reason = s.chooseBypass(pc, flit)
+			}
+			if reason != bypassYes && !pc.pipeline.CanAccept() {
 				break
 			}
-
-			flit := item.(*messaging.Flit)
 			recvTime := flit.Meta().RecvTime
 			if recvTime == 0 {
 				recvTime = now
@@ -136,7 +146,21 @@ func (s *Switch) startProcessing(now sim.VTimeInSec) (madeProgress bool) {
 				taskID: s.flitTaskID(flit),
 				flit:   flit,
 			}
-			pc.pipeline.Accept(now, pipelineItem)
+			switch {
+			case reason == bypassYes:
+				flit.BypassRun++
+				pc.bypass.pipeline.Accept(now, pipelineItem)
+			case reason >= 0:
+				flit.BypassRun = 0
+				pipelineItem.normal = true
+				pc.bypass.normalInFlight++
+				pc.pipeline.Accept(now, pipelineItem)
+			default:
+				pc.pipeline.Accept(now, pipelineItem)
+			}
+			if reason >= 0 {
+				countBypass(reason)
+			}
 			port.Retrieve(now)
 			s.flitSwitchStart[flit.Meta().ID] = now
 			madeProgress = true
@@ -160,6 +184,9 @@ func (s *Switch) movePipeline(now sim.VTimeInSec) (madeProgress bool) {
 	for _, port := range s.ports {
 		pc := s.portToComplexMapping[port]
 		madeProgress = pc.pipeline.Tick(now) || madeProgress
+		if pc.bypass != nil {
+			madeProgress = pc.bypass.pipeline.Tick(now) || madeProgress
+		}
 	}
 
 	return madeProgress
@@ -188,6 +215,9 @@ func (s *Switch) route(now sim.VTimeInSec) (madeProgress bool) {
 					break
 				}
 				routeBuf.Pop()
+				if pipelineItem.normal {
+					pc.bypass.normalInFlight--
+				}
 				madeProgress = true
 				continue
 			}
@@ -209,6 +239,9 @@ func (s *Switch) route(now sim.VTimeInSec) (madeProgress bool) {
 			)
 			s.assignFlitOutputBuf(flit)
 			routeBuf.Pop()
+			if pipelineItem.normal {
+				pc.bypass.normalInFlight--
+			}
 			forwardBuf.Push(flit)
 			s.flitRouteStart[flit.Meta().ID] = now
 			madeProgress = true
@@ -595,6 +628,10 @@ func (a SwitchPortAdder) AddPort() {
 		sendOutBuffer:    sendOutBuf,
 		numInputChannel:  a.numInputChannel,
 		numOutputChannel: a.numOutputChannel,
+	}
+	if BypassLatency > 0 && a.latency > BypassLatency {
+		pc.bypass = newBypassState(a.localPort.Name(),
+			a.numInputChannel, routeBuf)
 	}
 
 	a.sw.addPort(pc)

@@ -13,6 +13,9 @@ type Flit struct {
 	NumFlitInMsg int
 	Msg          sim.Msg
 	OutputBuf    sim.Buffer // The buffer to route to within a switch
+	// BypassRun counts the consecutive switches this flit has crossed on
+	// the low-load bypass path (switching.BypassLatency); 0 when off.
+	BypassRun int
 }
 
 // Meta returns the meta data associated with the Flit.
