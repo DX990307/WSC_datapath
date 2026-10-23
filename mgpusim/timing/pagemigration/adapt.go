@@ -147,8 +147,7 @@ type AdaptConfig struct {
 	// (0 = always PredictWindow).
 	PredictWinPerHit int
 	// PreMinPrecision: a buffer whose pre-placement precision (hits+1) /
-	// (checks+2) is below this stops pre-placing; the benefit of a
-	// pre-placement is scaled by the precision.
+	// (checks+2) is below this stops pre-placing.
 	PreMinPrecision float64
 	// ObservedReaders: replication of hot pages of non-concentrated buffers
 	// expects 2x the readers seen so far (capped at HotFutureReaders), each
@@ -1960,7 +1959,6 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 			m.AStats.PrePrecSkip++
 			return
 		}
-		mean *= prec
 	}
 	for i := lo; i <= hi; i++ {
 		if i == idx {
