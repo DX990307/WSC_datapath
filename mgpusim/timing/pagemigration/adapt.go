@@ -142,6 +142,10 @@ type AdaptConfig struct {
 	// PredictConstWindow: pages pre-placed on each side of an observation
 	// when the trusted rule is "adjacent same" (it says nothing far away).
 	PredictConstWindow int
+	// PredictWinPerHit: the pre-placement window (each side) is this many
+	// pages per consecutive hit of the trusted rule, up to PredictWindow
+	// (0 = always PredictWindow).
+	PredictWinPerHit int
 	// ObservedReaders: replication of hot pages of non-concentrated buffers
 	// expects 2x the readers seen so far (capped at HotFutureReaders), each
 	// fetching as many lines as the readers so far did on average.
@@ -213,6 +217,7 @@ func DefaultAdaptConfig() AdaptConfig {
 		CountHot:           true,
 		PreCopyWeight:      0.25,
 		PredictConstWindow: 2,
+		PredictWinPerHit:   8,
 		ObservedReaders:    true,
 		HoldCost:           true,
 	}
@@ -1879,6 +1884,10 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 	c := &m.cfg.Adapt
 	ps := uint64(1) << m.log2PageSize
 	win := c.PredictWindow
+	if c.PredictWinPerHit > 0 && c.PredictWinPerHit*l.streak[l.conf] < win {
+		// the window grows with the rule's streak
+		win = c.PredictWinPerHit * l.streak[l.conf]
+	}
 	if l.conf == ruleConst && c.PredictConstWindow < win {
 		win = c.PredictConstWindow
 	}
