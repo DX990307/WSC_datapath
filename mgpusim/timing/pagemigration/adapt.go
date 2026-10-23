@@ -142,7 +142,8 @@ type AdaptConfig struct {
 	// when the trusted rule is "adjacent same" (it says nothing far away).
 	PredictConstWindow int
 	// ObservedReaders: replication of hot pages of non-concentrated buffers
-	// expects 2x the readers seen so far (capped at HotFutureReaders).
+	// expects 2x the readers seen so far (capped at HotFutureReaders), each
+	// fetching as many lines as the readers so far did on average.
 	ObservedReaders bool
 	// HoldCost: move / block / spread also pay rate x hold^2 / 2 (accesses
 	// arriving during the switch wait half of it on average); hold is the
@@ -808,11 +809,18 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 			// it has seen (re-evaluated at every new reader)
 			rfuture := future
 			if !a.buf.conc && c.ObservedReaders {
-				r := 2 * bits.OnesCount64(a.readMask)
+				seen := bits.OnesCount64(a.readMask)
+				r := 2 * seen
 				if r > c.HotFutureReaders {
 					r = c.HotFutureReaders
 				}
-				rfuture = float64(pageLines * r)
+				// lines each reader fetched so far (a row of an
+				// embedding table is a few lines, an IVF list the page)
+				per := float64(pageLines)
+				if seen > 0 && float64(a.n)/float64(seen) < per {
+					per = float64(a.n) / float64(seen)
+				}
+				rfuture = per * float64(r)
 			}
 			ch := choice{act: actReplicate}
 			var cost float64

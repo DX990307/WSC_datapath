@@ -81,7 +81,7 @@ var pmAdaptPreCopyWFlag = flag.Float64("pm-adapt-pre-copy-weight", 0.25,
 var pmAdaptConstWinFlag = flag.Int("pm-adapt-predict-const-window", 2,
 	"P21: pages pre-placed around an observation when the trusted rule is adjacent-same.")
 var pmAdaptObsReadersFlag = flag.Bool("pm-adapt-observed-readers", true,
-	"P21: replication of hot pages of non-concentrated buffers expects 2x the readers seen so far.")
+	"P21: replication of hot pages of non-concentrated buffers expects 2x the readers seen so far, each reading the lines readers so far read on average.")
 var pmAdaptHoldCostFlag = flag.Bool("pm-adapt-hold-cost", true,
 	"P21: move / block / spread also pay rate x hold^2 / 2 (hold = shootdown + recent drain at the home).")
 var pmAdaptDumpFlag = flag.String("pm-adapt-dump", "",
