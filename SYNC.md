@@ -538,3 +538,7 @@
 ### 2026-10-23 [claude-code] P20 结束（用户决定转 P21），结果收尾
 - 新增 / 更新 `results_index/place/{README.md, analysis.md, runs.csv, speedup.csv, runs_pm.csv, speedup_pm.csv, tables.md, tables_pm.md}`、`scripts/analyze_pm.py`、`scripts/server/collect.py`；改了 `STATUS.md`（P20 结束，日志一条）。
 - 代码 `isca27/placement` @ `53955c8`（已推送）。服务器 `~/akita-exp-test/place/` 的 PAUSE 保留，队列里没跑的运行留着。没有碰 P21 的 `adapt/`、`wt-adapt`。
+
+### 2026-10-23 [claude-code] P21 候选 1：只读共享数据的区域复制（oracle）
+- 新增 `results_index/adapt/rep/`（README、tables.md、speedup.csv、runs.tsv、scripts）；改了 `STATUS.md`、`SYNC.md`。
+- 代码 `isca27/adaptive-pm` @ `f7b83ff`（已推送）。结果未验证正确性（用户：先跑）。

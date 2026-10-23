@@ -35,7 +35,7 @@
 | T19 就近 WG 窃取 | **放弃**（用户 10-20：本篇只做通信，留给下一篇） | 10-20 | 代码保留在 `isca27/t19-steal` @ `eaa9c73`；不跑评估 |
 | P19 快速试错（D / Q0 / Q0b / Q1 / Q2 / Q5 / Q6） | 完成（⏸ go / no-go 和 Q5 等用户） | 10-22 | 分支 `isca27/quick-trials`（worktree `wt-qt`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `isca27/m1-wafer`）；W = 128、384 GB/s；配置确认见"需要用户决定"第一条 |
 | P20 放置 + M3+（迁移时选目标 `-pm-target`；两遍法 oracle 作上限） | **结束**（用户 10-23：不做了，转 P21）；oracle 全部完成，`-pm-target` 完成 209 / 352 | 10-23 | 分支 `isca27/placement`（worktree `wt-place`，= `isca27/a1-retain` @ `1335def` + 合并 `isca27/page-class` + `20f323e` 放置表开关）；W = 128、组合表 128、384 GB/s；配置确认见"需要用户决定"第一条 |
-| P21 自适应放置（统一收益-代价决策：不动/迁主读者/按块/热点拆散/只读复制/规律预放置；first-touch 对照） | 代码完成并推送（默认关）；离线分析完成；**主实验暂停**（主会话 10-23：用户"换一个想法"），回归 / verify 在跑；first-touch 离线检查和"只读数据剩余远程读"在做 | 10-23 | 分支 `isca27/adaptive-pm`（worktree `wt-adapt`）@ `c99ccdf`；服务器 `~/akita-exp-test/adapt/`；离线结果 `results_index/adapt/offline.md` |
+| P21 自适应放置 / 候选 1 区域复制 | 候选 1（oracle 区域复制）126 个跑完（MoE、MG 的 k=9 收尾中），**未验证正确性**；自适应迁移主实验暂停 | 10-23 | 分支 `isca27/adaptive-pm` @ `f7b83ff`；结果 `results_index/adapt/rep/`（v4m3+复制4 / v4m3 1.084，first-touch+M3++复制4 对 baseline 1.900）；离线 `results_index/adapt/offline.md` |
 | T11 探针实验 | 完成 | 10-13 04:55 | P1–P4 全部有结论（P1/P2/P4 通过，P3 路径通过、细节见结果摘要）；SPMD 骨架在 `mgpusim/benchmarks/microbench/probe/spmd.go` |
 
 ## 需要用户决定
@@ -754,6 +754,11 @@ mi200 与 hpca（10-15，代码 `67f1c03`，`-max-wg 32768`，spmv 1536；140 �
 ## 日志
 
 <!-- 追加格式：
+### 2026-10-23 夜 (P21 候选 1) 只读共享数据的区域复制（oracle），未验证正确性
+- 代码 `f7b83ff`：`-pm-replica-list`（observe 模式下零代价建副本，向量读取最近副本，写 / 主帧变化时折回）；配置 `obs`、`m3p_obs`、`v4m3_obs`。
+- 运行：yss2 / yss3 `~/akita-exp-test/adapt/`，126 个；结果和结论见 `results_index/adapt/rep/README.md`：复制在 M3+ / v4m3 之上 GMEAN 1.08–1.09（有可复制页的 18 个 1.12），热点类 1.17，first-touch+M3++复制4 对 baseline 1.900（25 个）。
+- 用户指示不做回归和 -verify；关闭开关时 fir / MM / npbcg c4k 的回归另外做过，total_time 与 `810531a` 相同。
+
 ### 2026-10-23 (P21) 自适应放置：代码、离线分析；主实验按主会话指示暂停
 - 代码 `isca27/adaptive-pm`（从 `isca27/placement` @ `53955c8` 开）：`ff92c2f` `-dump-alloc-map`（只导出页表 + 分配号后退出，离线用）；`c99ccdf` 统一决策框架 `-pm-adapt`（每页一项跟踪：4 个 1 KB 块的按 GPM 计数、各 GPM 首读位图 / 时间、本 kernel 写标记；同一个收益-代价模型在 {不动、整页迁主读者、按 1 KB 块迁、热点拆散（buffer 集中→环 12，否则不动 / 哈希）、只读复制 4 份、规律预放置} 里选；`-pm-adapt-actions` 只用于消融）、first-touch 对照 `-pm-first-touch`；配置 `pa`、`m3p_pa`、`ft`、`m3p_ft`。全部默认关；单元测试（learner、按块迁移数据正确、预放置被抢先访问时放弃、副本重定向 / 写时折回 / 帧退役、first-touch）通过。
 - 离线（`results_index/adapt/offline.md`）：热点识别用翻译端"每 GPM 首读，2 µs 内 ≥ 4 个 GPM"（召回 0.97、有害误判 0.08%）；规律预放置在线（m = 2、错一次回退）9 / 16 个 workload 被迁字节覆盖 ≥ 0.5；α = 2。

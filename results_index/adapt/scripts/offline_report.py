@@ -332,3 +332,82 @@ def EF():
 
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "EF":
     EF()
+
+
+def GH():
+    import math
+    bound = {r["workload"]: r for r in csv.DictReader(open(os.path.join(BASE, "..", "place", "bound.csv")))}
+    G = [json.load(open(os.path.join(RAW, "G", w + ".json"))) for w in WL]
+    H = [json.load(open(os.path.join(RAW, "H", w + ".json"))) for w in WL]
+    print("\n### G-1 首访者 = 主读者的一致率（按远程读加权）\n")
+    print("| workload | 采样 | 页 | 1 KB 块（近似） | 1 KB 块（trace 精确首访者，样本页） | 页级首访者：精确聚合 vs trace 一致 | 按类别（一致率 / 占远程读，≥ 1%） |")
+    print("|---|---|---|---|---|---|---|")
+    for d in G:
+        cl = "；".join("%s %s / %s" % (c, fmt(v[0]), fmt(v[1])) for c, v in sorted(d["agree_cls"].items(), key=lambda x: -x[1][1]))
+        print("| %s | 1/%d | %s | %s | %s | %s | %s |" % (d["w"], d["sample"], fmt(d["agree_page"]), fmt(d["agree_blk"]),
+              fmt(d["chk_blk_exact_agree"]), fmt(d["chk_page_ft_trace_eq"]), cl))
+    print("| **平均** | | %s | %s | %s | | |" % (fmt(sum(d["agree_page"] for d in G) / 16), fmt(sum(d["agree_blk"] for d in G) / 16),
+          fmt(sum(d["chk_blk_exact_agree"] or 0 for d in G) / 16)))
+    print("\n### G-2 剩余读×跳 / baseline 读×跳（剩余远程读在 csv）：first-touch 与其他放置并排\n")
+    print("| workload | 只 M3+ | FT（页） | FT（页）+M3+ | FT（1 KB）+M3+ | 主读者（页）+M3+ | 主读者（1 KB）+M3+ | 规律预放置（C，页，m=2）+M3+ | 规律预放置（1 KB）+M3+ | P-按类 v2 + M3+（bound.csv） | FT 页+M3+ 剩余远程读 | v2+M3+ 剩余远程读 |")
+    print("|" + "---|" * 12)
+    rows = []
+    for d in G:
+        b = bound.get(d["w"], {})
+        v2 = f(b.get("Hret_v2")); v2r = f(b.get("Rret_v2"))
+        rows.append((d, v2, v2r))
+        print("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s%s | %s | %s |" % (d["w"], fmt(d["page_Hret_base"]), fmt(d["page_H_ft"]), fmt(d["page_Hret_ft"]),
+              fmt(d["blk1k_Hret_ft"]), fmt(d["page_Hret_main"]), fmt(d["blk1k_Hret_main"]), fmt(d["page_Hret_rule"]), fmt(d["blk1k_Hret_rule"]),
+              fmt(v2), "（W=256）" if b.get("data") == "w256" else "", fmt(d["page_Rret_ft"]), fmt(v2r)))
+    keys = ["page_Hret_base", "page_H_ft", "page_Hret_ft", "blk1k_Hret_ft", "page_Hret_main", "blk1k_Hret_main", "page_Hret_rule", "blk1k_Hret_rule"]
+    am = [sum(d[k] for d in G) / 16 for k in keys]
+    gm = [math.exp(sum(math.log(max(1e-3, d[k])) for d in G) / 16) for k in keys]
+    v2a = sum(v for _, v, _ in rows) / 16
+    v2g = math.exp(sum(math.log(max(1e-3, v)) for _, v, _ in rows) / 16)
+    print("| **算术平均** | " + " | ".join(fmt(x) for x in am) + " | %s | %s | %s |" % (fmt(v2a), fmt(sum(d["page_Rret_ft"] for d in G) / 16), fmt(sum(r for _, _, r in rows) / 16)))
+    print("| **几何平均** | " + " | ".join(fmt(x) for x in gm) + " | %s | | |" % fmt(v2g))
+    print("\n### G-3 first-touch 做错的地方（页粒度，首访者 ≠ 主读者；每格：这些页占远程读 / 比放给主读者多出的读×跳 ÷ baseline 读×跳）\n")
+    print("| workload | 热点页 | 首访者只初始化 / 很少读（< 10%） | 无主读者的共享页（< 0.6） | 首访者是次要读者 | 其中 trace 首个 kernel 的主读者 = 首访者（跨 kernel 换主读者） |")
+    print("|---|---|---|---|---|---|")
+    for d in G:
+        c = lambda k: "%s / %+.3f" % (fmt(d["err_%s_rr" % k]), d["err_%s_H" % k])
+        print("| %s | %s | %s | %s | %s | %s |" % (d["w"], c("hot"), c("init"), c("noshare"), c("minor"), fmt(d["minor_kchg_share"])))
+    with open(os.path.join(BASE, "offline_G.csv"), "w", newline="") as fo:
+        ks = [k for k in G[0] if k != "agree_cls"] + ["agree_cls", "Hret_v2_bound", "Rret_v2_bound"]
+        wr = csv.DictWriter(fo, fieldnames=ks)
+        wr.writeheader()
+        for d, v2, v2r in rows:
+            r = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in d.items()}
+            r["agree_cls"] = json.dumps(d["agree_cls"], ensure_ascii=False)
+            r["Hret_v2_bound"] = v2; r["Rret_v2_bound"] = v2r
+            wr.writerow(r)
+    print("\n### H-1 剩余远程读里\"本 kernel 内只读\"的比例、读者数、跳数（trace，1/4 采样的 workload 只含样本页）\n")
+    print("| workload | 采样 | 只 M3+：剩余远程读 / baseline | 其中本 kernel 只读（1 KB 块 / line） | 只读部分的块内读者数 1 / 2–3 / 4–15 / ≥16 | 到 owner 跳数 均值 / p50 / p90 | FT+M3+：剩余远程读 / baseline | 其中只读（块 / line） | 读者数 1 / 2–3 / 4–15 / ≥16 | 到 home 跳数 均值 / p50 / p90 |")
+    print("|" + "---|" * 10)
+    hrows = []
+    for d in H:
+        cells = []
+        for h in ("base", "ft"):
+            x = d[h]
+            cells += ["%s" % fmt(x["rem"]), "%s / %s" % (fmt(x["ro"]), fmt(x["ro_line"])),
+                      " / ".join(fmt(v) for v in x["readers"].values()),
+                      "%s / %d / %d" % (fmt(x["hops_mean"], 1), x["hops_p50"], x["hops_p90"])]
+            hrows.append(dict(w=d["w"], home=h, sample=d["sample"], **{k: v for k, v in x.items() if k != "readers"},
+                              **{"readers_" + k: v for k, v in x["readers"].items()}))
+        print("| %s | 1/%d | %s |" % (d["w"], d["sample"], " | ".join(cells)))
+    for h in ("base", "ft"):
+        xs = [d[h] for d in H]
+        tot_rem = sum(x["rem"] for x in xs)
+        ro_w = sum(x["ro_of_baseline"] for x in xs)
+        rd = {k: sum(x["readers"][k] * x["ro_of_baseline"] for x in xs) / max(1e-9, ro_w) for k in xs[0]["readers"]}
+        print("| **%s 合计（16 个 workload 的剩余读按各自 baseline 归一后相加）** | | %s | %s | %s | | | | | |" % (
+            "只 M3+" if h == "base" else "FT+M3+", fmt(tot_rem / 16), fmt(ro_w / max(1e-9, tot_rem)), " / ".join(fmt(v) for v in rd.values())))
+    with open(os.path.join(BASE, "offline_H.csv"), "w", newline="") as fo:
+        wr = csv.DictWriter(fo, fieldnames=list(hrows[0].keys()))
+        wr.writeheader()
+        for r in hrows:
+            wr.writerow({k: (round(v, 4) if isinstance(v, float) else v) for k, v in r.items()})
+
+
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "GH":
+    GH()
