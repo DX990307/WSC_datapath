@@ -60,8 +60,19 @@ var pmAdaptReplBudgetFlag = flag.Int("pm-adapt-replica-budget-mb", 64,
 	"P21: replica bytes per GPM in MB (0 = no limit); the oldest replicated page with a copy there is dropped.")
 var pmAdaptBatchAmortFlag = flag.Float64("pm-adapt-batch-amort", 16,
 	"P21: a migration that joins a predicted batch pays fixed-ns / this.")
-var pmAdaptPredictTouchedFlag = flag.Bool("pm-adapt-predict-touched", true,
+var pmAdaptPredictTouchedFlag = flag.Bool("pm-adapt-predict-touched", false,
 	"P21: confident buffer rules also migrate touched neighbours in the same batch.")
+var pmAdaptCopyFirstFlag = flag.Bool("pm-adapt-copy-first", true,
+	"P21: copy a touched page while its old frame stays mapped; only the switch "+
+		"(shootdown, drain, recopy of blocks written meanwhile) holds accesses.")
+var pmAdaptEarlyObsFlag = flag.Bool("pm-adapt-early-observe", true,
+	"P21: a page whose first -pm-adapt-eval counted accesses have a dominant GPM "+
+		"is an observation for its buffer's rule.")
+var pmAdaptHoldPreFlag = flag.Bool("pm-adapt-hold-preplace", true,
+	"P21: an access to a page being pre-placed waits for the copy (moved to the "+
+		"front of the copy queue) instead of cancelling the pre-placement.")
+var pmAdaptDumpFlag = flag.String("pm-adapt-dump", "",
+	"P21 diagnostics: write one line per tracked page to this file at the end.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
 	"P21 baseline: the first vector access to a page nobody touched makes the "+
 		"accessing GPM the home of the page (zero cost; host copies are not "+
@@ -113,6 +124,9 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.ReplicaBudget = uint64(*pmAdaptReplBudgetFlag) << 20
 	a.BatchAmort = *pmAdaptBatchAmortFlag
 	a.PredictTouched = *pmAdaptPredictTouchedFlag
+	a.CopyFirst = *pmAdaptCopyFirstFlag
+	a.EarlyObserve = *pmAdaptEarlyObsFlag
+	a.HoldPrePlace = *pmAdaptHoldPreFlag
 	if a.BatchAmort <= 0 {
 		panic("-pm-adapt-batch-amort must be positive")
 	}
@@ -137,12 +151,14 @@ func printAdaptConfig(c pagemigration.Config) {
 		"copy-weight=%g queue=%gns eval=%d hot-k=%d hot-window=%dns conc=%g "+
 		"spread-other=%s prop-pages=%d prop-gate=%g predict-m=%d predict-window=%d "+
 		"base=%gns hop=%gns dom-share=%g max-migrations=%d hot-future=%d "+
-		"replica-budget=%dMB batch-amort=%g predict-touched=%v\n",
+		"replica-budget=%dMB batch-amort=%g predict-touched=%v copy-first=%v "+
+		"early-observe=%v hold-preplace=%v\n",
 		*pmAdaptActionsFlag, a.CostModel, a.Alpha, a.FixedNS, a.CopyWeight,
 		a.QueueNS, a.EvalEvery, a.HotK, a.HotWindowNS, a.ConcShare,
 		a.SpreadOther, a.PropSmallPages, a.PropGate, a.PredictM, a.PredictWindow,
 		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations, a.HotFutureReaders,
-		a.ReplicaBudget>>20, a.BatchAmort, a.PredictTouched)
+		a.ReplicaBudget>>20, a.BatchAmort, a.PredictTouched, a.CopyFirst,
+		a.EarlyObserve, a.HoldPrePlace)
 }
 
 // wireAdaptive installs what the adaptive placement needs beyond the page
@@ -240,6 +256,23 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 	col("pa_replica_peak_bytes", float64(s.ReplPeak))
 	col("pa_batch_triggered", float64(s.BatchTrig))
 	col("pa_kernels", float64(s.Kernels))
+	col("pa_precopies", float64(s.PreCopies))
+	col("pa_recopies", float64(s.Recopies))
+	col("pa_recopy_blocks", float64(s.RecopyBlocks))
+	col("pa_pre_held", float64(s.PreHeld))
+	col("pa_pre_held_pages", float64(s.PreHeldPages))
+	col("pa_pre_cost_skip", float64(s.PreCostSkip))
+	col("pa_pre_touched", float64(s.PreTouched))
+	col("pa_pre_home_ok", float64(s.PreHomeOK))
+	col("pa_early_obs", float64(s.EarlyObs))
+	if *pmAdaptDumpFlag != "" && a.Enabled {
+		f, err := os.Create(*pmAdaptDumpFlag)
+		if err != nil {
+			panic(err)
+		}
+		m.DumpAdapt(f)
+		f.Close()
+	}
 	col("pa_block_homes", float64(m.BlockHomes()))
 }
 

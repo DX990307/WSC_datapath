@@ -45,6 +45,11 @@ const (
 	phaseShootdown              // TLBs invalidated; all accesses held
 	phaseDrain                  // waiting for in-flight accesses to the old frames
 	phaseCopy                   // copy engines moving the pages
+	// phasePreCopy (P21 copy-first): the copy runs while the old frame stays
+	// mapped and accessed; writes mark their 1 KB blocks dirty. When the copy
+	// ends the unit goes through shootdown and drain, recopies the dirty
+	// blocks (phaseCopy) and is remapped.
+	phasePreCopy
 )
 
 // unitKey identifies a migration unit: the aligned 2^Log2Unit-byte block of
@@ -128,6 +133,8 @@ type ppnInfo struct {
 	inflight int32  // accesses issued by address translators, not answered
 	devMask  uint64 // GPMs that accessed it (their TLBs may hold it)
 	state    uint8
+	// lastIdle (P21 copy-first): last time inflight dropped to zero.
+	lastIdle sim.VTimeInSec
 }
 
 // Violation is the panic value of a broken migration invariant.
@@ -406,6 +413,9 @@ func (h *atHook) Completed(now sim.VTimeInSec, pAddr uint64) {
 		panic(fmt.Sprintf("page migration: completion without issue at %#x", pAddr))
 	}
 	info.inflight--
+	if info.inflight == 0 {
+		info.lastIdle = now
+	}
 }
 
 // RDMAHook returns the function the RDMA engine of GPM dev calls for every
@@ -528,7 +538,7 @@ func (m *Manager) Tick(now sim.VTimeInSec) bool {
 		if h.busy && now >= h.busyUntil {
 			h.busy = false
 			for _, u := range h.service {
-				m.startShootdown(now, u)
+				m.startAfterService(now, u)
 			}
 			h.service = h.service[:0]
 			progress = true
@@ -546,7 +556,7 @@ func (m *Manager) Tick(now sim.VTimeInSec) bool {
 			}
 			if m.cfg.SoftwareLatencyNS == 0 {
 				for _, u := range batch {
-					m.startShootdown(now, u)
+					m.startAfterService(now, u)
 				}
 			} else {
 				h.service = batch
@@ -576,7 +586,11 @@ func (m *Manager) Tick(now sim.VTimeInSec) bool {
 		if u.phase == phaseDrain && m.drained(u) {
 			m.Stats.DrainWaitSum += float64(now - m.drainStart[u])
 			delete(m.drainStart, u)
-			m.startCopy(now, u)
+			if u.a != nil && u.a.copied {
+				m.adaptSwitch(now, u)
+			} else {
+				m.startCopy(now, u)
+			}
 		}
 		if u.phase != phaseIdle {
 			stillActive = append(stillActive, u)
@@ -589,7 +603,19 @@ func (m *Manager) Tick(now sim.VTimeInSec) bool {
 	return progress
 }
 
-func (m *Manager) startShootdown(now sim.VTimeInSec, u *unit) {
+// startAfterService starts the shootdown of a serviced unit, or (P21
+// copy-first) its copy.
+func (m *Manager) startAfterService(now sim.VTimeInSec, u *unit) {
+	if u.a != nil && u.a.act != actStay && m.cfg.Adapt.CopyFirst {
+		m.adaptPreCopy(now, u)
+		return
+	}
+	m.startShootdown(now, u)
+}
+
+// collectPages fills u.pages with the pages of the unit that must move; it
+// returns false (and ends the migration as a no-op) when there are none.
+func (m *Manager) collectPages(now sim.VTimeInSec, u *unit) bool {
 	pageSize := uint64(1) << m.log2PageSize
 	start := u.key.idx << m.unitLog2
 	end := start + (uint64(1) << m.unitLog2)
@@ -616,9 +642,21 @@ func (m *Manager) startShootdown(now sim.VTimeInSec, u *unit) {
 		u.phase = phaseIdle
 		u.faulters = u.faulters[:0]
 		m.wake(now, u)
+		return false
+	}
+	return true
+}
+
+func (m *Manager) startShootdown(now sim.VTimeInSec, u *unit) {
+	if !m.collectPages(now, u) {
 		return
 	}
+	m.beginShootdown(now, u)
+	m.active = append(m.active, u)
+}
 
+// beginShootdown invalidates the TLB entries of u.pages and holds accesses.
+func (m *Manager) beginShootdown(now sim.VTimeInSec, u *unit) {
 	u.phase = phaseShootdown
 	u.blockStart = now
 	u.readyAt = now + ns(m.cfg.ShootdownLatencyNS)
@@ -626,7 +664,6 @@ func (m *Manager) startShootdown(now sim.VTimeInSec, u *unit) {
 	for _, p := range u.pages {
 		m.invalidate(p)
 	}
-	m.active = append(m.active, u)
 }
 
 // invalidate drops the TLB entries of page p in every GPM that accessed it
@@ -716,7 +753,7 @@ func (m *Manager) startCopy(now sim.VTimeInSec, u *unit) {
 	u.newPAddrs = u.newPAddrs[:0]
 	u.pendingChunks = 0
 	if u.a != nil && u.a.act != actStay {
-		m.adaptStartCopy(now, u)
+		m.adaptStartCopy(now, u, true)
 		return
 	}
 	for _, p := range u.pages {
@@ -743,8 +780,14 @@ func (m *Manager) chunkDone(now sim.VTimeInSec, c *chunk) {
 	if u.pendingChunks > 0 {
 		return
 	}
-	m.Stats.CopyTimeSum += float64(now - m.copyStart[u])
-	delete(m.copyStart, u)
+	if u.phase == phasePreCopy {
+		m.adaptPreCopyDone(now, u)
+		return
+	}
+	if t, ok := m.copyStart[u]; ok {
+		m.Stats.CopyTimeSum += float64(now - t)
+		delete(m.copyStart, u)
+	}
 	m.remap(now, u)
 }
 
@@ -779,6 +822,7 @@ func (m *Manager) remap(now sim.VTimeInSec, u *unit) {
 	u.lastEnd = now
 	if u.a != nil {
 		u.a.act = actStay
+		u.a.copied = false
 	}
 	m.Stats.Migrations++
 	m.Stats.MigrationTimeSum += float64(now - u.triggerTime)

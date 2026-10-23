@@ -57,6 +57,8 @@ package pagemigration
 // copies between kernels write the master frame).
 
 import (
+	"fmt"
+	"io"
 	"math"
 	"math/bits"
 	"sort"
@@ -114,6 +116,18 @@ type AdaptConfig struct {
 	// PredictTouched: confident buffer rules also trigger (batched)
 	// migrations of touched neighbours, not only pre-place untouched ones.
 	PredictTouched bool
+	// CopyFirst: a touched page is copied while its old frame stays mapped;
+	// only the switch (shootdown, drain, recopy of blocks written meanwhile)
+	// holds accesses.
+	CopyFirst bool
+	// EarlyObserve: a page whose first EvalEvery counted accesses have a
+	// dominant GPM is an observation for its buffer's rule (not only pages
+	// that are moved).
+	EarlyObserve bool
+	// HoldPrePlace: an access to a page whose pre-placement copy is running
+	// waits for it (its blocks go to the front of the copy queue) instead of
+	// cancelling the pre-placement.
+	HoldPrePlace bool
 
 	// ReplicaList (oracle region replication): original physical page ->
 	// replica devices. A listed page gets zero-cost read-only copies (fresh
@@ -150,7 +164,10 @@ func DefaultAdaptConfig() AdaptConfig {
 		HotFutureReaders: 48,
 		ReplicaBudget:    64 << 20,
 		BatchAmort:       16,
-		PredictTouched:   true,
+		PredictTouched:   false,
+		CopyFirst:        true,
+		EarlyObserve:     true,
+		HoldPrePlace:     true,
 	}
 }
 
@@ -214,6 +231,17 @@ type AdaptStats struct {
 	ReplPeak     uint64 // largest replica bytes on one GPM
 	BatchTrig    uint64 // touched pages migrated together with a predicted batch
 	Kernels      uint64
+	// copy-first
+	PreCopies    uint64 // migrations copied before the switch
+	Recopies     uint64 // of which recopied dirty blocks at the switch
+	RecopyBlocks uint64
+	// pre-placement
+	PreHeld      uint64 // accesses held on a running pre-placement
+	PreHeldPages uint64
+	PreCostSkip  uint64 // untouched predicted pages skipped by the cost test
+	PreTouched   uint64 // predicted pages skipped because already touched
+	PreHomeOK    uint64 // predicted pages already at the predicted home
+	EarlyObs     uint64 // observations from the early signal
 }
 
 type adaptState struct {
@@ -241,6 +269,17 @@ type adaptState struct {
 	act      int
 	blockDst [blocksPerPage]uint64
 	bucket   int
+
+	// copy-first: the migration copied before the switch; blocks written
+	// since (or possibly in flight at) the copy start; last write issue
+	// time per block.
+	copied   bool
+	dirty    [blocksPerPage]bool
+	lastW    [blocksPerPage]sim.VTimeInSec
+	observed bool // fed to the buffer's learner
+	preCopy  bool // pre-placement copy running
+	preHeld  bool
+	origPA   uint64 // physical address of the frame at tracking start
 }
 
 type replica struct {
@@ -264,6 +303,7 @@ type buffer struct {
 	learn      *learner
 	sumReads   float64
 	nReads     int
+	accesses   float64 // counted accesses to the buffer's pages
 }
 
 func (a *AdaptConfig) on() bool { return a.Enabled }
@@ -383,6 +423,9 @@ func (m *Manager) adaptUnit(u *unit) *adaptState {
 	}
 	a := &adaptState{writeKernel: -1}
 	va := u.key.idx << m.unitLog2
+	if p, ok := m.pageTable.Find(u.key.pid, va); ok {
+		a.origPA = p.PAddr
+	}
 	if m.buffers != nil {
 		if b, idx := m.bufferOf(u.key.pid, va); b != nil {
 			a.buf, a.idx = b, idx
@@ -454,6 +497,9 @@ func (m *Manager) adaptCount(now sim.VTimeInSec, u *unit, dev, pAddr uint64, rem
 		a.bc[(pAddr>>log2Block)&3][dev]++
 	}
 	a.n++
+	if a.buf != nil {
+		a.buf.accesses++
+	}
 	if !remote {
 		return
 	}
@@ -496,6 +542,11 @@ func (m *Manager) adaptIssued(now sim.VTimeInSec, dev uint64, pid vm.PID,
 	if isWrite {
 		a.writeSeq++
 		a.writeKernel = m.kernel
+		b := (vAddr >> log2Block) & (blocksPerPage - 1)
+		a.lastW[b] = now
+		if a.copied && u.phase == phasePreCopy {
+			a.dirty[b] = true
+		}
 		return
 	}
 	if !vector || a.readMask&(1<<dev) != 0 {
@@ -597,6 +648,12 @@ func (m *Manager) adaptEvaluate(now sim.VTimeInSec, u *unit) {
 		readers = r
 	}
 	hasDom := tot > 0 && float64(dc) >= m.cfg.DomShare*float64(tot)
+	if c.Predict && c.EarlyObserve && a.buf != nil && !a.observed && hasDom &&
+		tot >= c.EvalEvery && uniform {
+		a.observed = true
+		m.AStats.EarlyObs++
+		m.observe(now, a.buf, a.idx, dom, home[0], false)
+	}
 	// move: the whole page to the dominant reader
 	if c.Move && hasDom {
 		ch := choice{act: actMove}
@@ -819,9 +876,11 @@ func (m *Manager) adaptExecute(now sim.VTimeInSec, u *unit, a *adaptState,
 		m.AStats.PreFallback++
 	}
 	// learn: a page-level dominant target is an observation of its buffer
-	if m.cfg.Adapt.Predict && a.buf != nil && (ch.act == actMove || ch.act == actBlock) {
+	if m.cfg.Adapt.Predict && a.buf != nil && !a.observed &&
+		(ch.act == actMove || ch.act == actBlock) {
 		dom, dc, tot := dominant(u.counts)
 		if tot > 0 && float64(dc) >= m.cfg.DomShare*float64(tot) {
+			a.observed = true
 			a.buf.sumReads += float64(tot)
 			a.buf.nReads++
 			m.observe(now, a.buf, a.idx, dom, home[0], ch.act == actMove)
@@ -875,10 +934,12 @@ func (m *Manager) adaptNeedsMove(u *unit, p vm.Page) bool {
 
 // adaptStartCopy copies each 1 KB block from its home to its new home, into
 // a fresh frame allocated on the majority destination.
-func (m *Manager) adaptStartCopy(now sim.VTimeInSec, u *unit) {
+func (m *Manager) adaptStartCopy(now sim.VTimeInSec, u *unit, freeze bool) {
 	a := u.a
 	for _, p := range u.pages {
-		m.frameInfo(p).state = frameFrozen
+		if freeze {
+			m.frameInfo(p).state = frameFrozen
+		}
 		frame := m.allocFrame(u.dst)
 		u.newPAddrs = append(u.newPAddrs, frame)
 		home, _ := m.pageHomes(p)
@@ -931,6 +992,7 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 		return false
 	}
 	a.preplacing = true
+	a.preCopy = true
 	ppn := p.PAddr >> m.log2PageSize
 	done := func(now sim.VTimeInSec) {
 		pending--
@@ -938,6 +1000,8 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 			return
 		}
 		a.preplacing = false
+		a.preCopy = false
+		m.wake(now, u)
 		if m.ppns[ppn] != nil {
 			m.AStats.PreRaced++
 			return
@@ -971,6 +1035,7 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 			dstPAddr: p.PAddr + off,
 			size:     1 << log2Block,
 			done:     done,
+			pre:      a,
 		})
 		m.AStats.CopyBytes += 1 << log2Block
 	}
@@ -1151,6 +1216,13 @@ func (m *Manager) KernelBoundary(now sim.VTimeInSec) {
 	m.lastBoundary = now
 	m.kernel++
 	m.AStats.Kernels++
+	for _, u := range m.active {
+		if u.a != nil && u.a.copied {
+			for b := range u.a.dirty {
+				u.a.dirty[b] = true
+			}
+		}
+	}
 	us := make([]*unit, 0, len(m.replicated))
 	for u := range m.replicated {
 		us = append(us, u)
@@ -1204,7 +1276,102 @@ func (m *Manager) adaptResolve(now sim.VTimeInSec, at Waker, dev uint64,
 	if u == nil || u.a == nil {
 		return page, true
 	}
+	if u.a.preCopy && m.cfg.Adapt.HoldPrePlace {
+		m.holdPrePlace(now, at, u)
+		return page, false
+	}
 	return m.replicaResolve(now, at, dev, u, vector, isWrite, page)
+}
+
+// holdPrePlace makes an access wait for the running pre-placement of its
+// page; the page's blocks go to the front of their copy queues.
+func (m *Manager) holdPrePlace(now sim.VTimeInSec, at Waker, u *unit) {
+	a := u.a
+	m.AStats.PreHeld++
+	if !a.preHeld {
+		a.preHeld = true
+		m.AStats.PreHeldPages++
+		for _, g := range m.gpms {
+			if g != nil && g.Engine != nil {
+				g.Engine.promote(now, func(c *chunk) bool { return c.pre == a })
+			}
+		}
+	}
+	u.addWaiter(at)
+}
+
+// ---------------------------------------------------------------------------
+// copy-first migration
+
+// adaptPreCopy copies a serviced unit into its fresh frame while the old
+// frame stays mapped.
+func (m *Manager) adaptPreCopy(now sim.VTimeInSec, u *unit) {
+	if !m.collectPages(now, u) {
+		return
+	}
+	a := u.a
+	u.phase = phasePreCopy
+	a.copied = true
+	a.dirty = [blocksPerPage]bool{}
+	for _, p := range u.pages {
+		// writes issued before the copy start may still be in flight
+		if info := m.ppns[p.PAddr>>m.log2PageSize]; info != nil && info.inflight > 0 {
+			for b := 0; b < blocksPerPage; b++ {
+				if a.lastW[b] >= info.lastIdle && a.lastW[b] > 0 {
+					a.dirty[b] = true
+				}
+			}
+		}
+	}
+	m.AStats.PreCopies++
+	m.copyStart[u] = now
+	u.newPAddrs = u.newPAddrs[:0]
+	u.pendingChunks = 0
+	m.adaptStartCopy(now, u, false)
+	m.active = append(m.active, u)
+}
+
+// adaptPreCopyDone starts the switch: shootdown, then drain (Tick), then
+// adaptSwitch.
+func (m *Manager) adaptPreCopyDone(now sim.VTimeInSec, u *unit) {
+	m.Stats.CopyTimeSum += float64(now - m.copyStart[u])
+	delete(m.copyStart, u)
+	m.beginShootdown(now, u)
+	m.TickLater(now)
+}
+
+// adaptSwitch runs after the drain of a copy-first migration: recopy the
+// blocks written since the copy started, then remap.
+func (m *Manager) adaptSwitch(now sim.VTimeInSec, u *unit) {
+	a := u.a
+	u.phase = phaseCopy
+	u.pendingChunks = 0
+	for i, p := range u.pages {
+		m.frameInfo(p).state = frameFrozen
+		home, _ := m.pageHomes(p)
+		for b := 0; b < blocksPerPage; b++ {
+			if !a.dirty[b] {
+				continue
+			}
+			off := uint64(b) << log2Block
+			m.gpms[a.blockDst[b]].Engine.enqueue(now, &chunk{
+				u:        u,
+				src:      m.gpms[home[b]].Engine,
+				srcPAddr: p.PAddr + off,
+				dstPAddr: u.newPAddrs[i] + off,
+				size:     1 << log2Block,
+				urgent:   true,
+			})
+			u.pendingChunks++
+			m.AStats.RecopyBlocks++
+			m.AStats.CopyBytes += 1 << log2Block
+		}
+	}
+	if u.pendingChunks == 0 {
+		m.remap(now, u)
+		return
+	}
+	m.AStats.Recopies++
 }
 
 func (m *Manager) replicaResolve(now sim.VTimeInSec, at Waker, dev uint64,
@@ -1306,7 +1473,12 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 	if hi >= b.pages {
 		hi = b.pages - 1
 	}
-	mean := b.sumReads / float64(b.nReads)
+	// expected counted accesses of a page of this buffer: accesses so far
+	// per touched page (a lower bound of the final count)
+	mean := 0.0
+	if b.touched > 0 {
+		mean = b.accesses / float64(b.touched)
+	}
 	for i := lo; i <= hi; i++ {
 		if i == idx {
 			continue
@@ -1326,6 +1498,9 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 		}
 		home, uniform := m.pageHomes(p)
 		if !uniform || home[0] == d {
+			if uniform {
+				m.AStats.PreHomeOK++
+			}
 			continue
 		}
 		v := m.getUnit(m.unitOf(b.pid, va))
@@ -1336,11 +1511,13 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 		dsts := [blocksPerPage]uint64{d, d, d, d}
 		if m.ppns[p.PAddr>>m.log2PageSize] == nil {
 			if c.CostModel && mean*m.lat(d, home[0]) <= c.Alpha*m.copyCost(home[0], d, pageLines) {
+				m.AStats.PreCostSkip++
 				continue
 			}
 			m.prePlace(now, v, dsts, actMove, true)
 			continue
 		}
+		m.AStats.PreTouched++
 		// touched neighbour: join the batch (one software service and one
 		// shootdown round for the predicted pages), unless its own counter
 		// already points elsewhere
@@ -1436,4 +1613,63 @@ func (m *Manager) replicasCurrent(u *unit) bool {
 		}
 	}
 	return true
+}
+
+// DumpAdapt writes one line per tracked page (diagnostics): virtual page,
+// buffer start and index, original and current physical page, block homes,
+// flags, readers, counted accesses, migrations.
+func (m *Manager) DumpAdapt(w io.Writer) {
+	keys := make([]unitKey, 0, len(m.units))
+	for k, u := range m.units {
+		if u.a != nil {
+			keys = append(keys, k)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].pid != keys[j].pid {
+			return keys[i].pid < keys[j].pid
+		}
+		return keys[i].idx < keys[j].idx
+	})
+	fmt.Fprintf(w, "vpn\tbuf_start_vpn\tbuf_pages\tidx\torig_ppn\tcur_ppn\thomes\t"+
+		"touched\thot\thot_handled\tfixed\tpreplaced\treplicas\treaders\twritten\tn\t"+
+		"migrations\tobserved\tpre_held\tbuf_conc\tbuf_hot\tbuf_touched\tbuf_propagated\tbuf_conf\n")
+	for _, k := range keys {
+		u := m.units[k]
+		a := u.a
+		va := k.idx << m.unitLog2
+		p, ok := m.pageTable.Find(k.pid, va)
+		if !ok {
+			continue
+		}
+		h, _ := m.pageHomes(p)
+		touched := 0
+		if m.ppns[a.origPA>>m.log2PageSize] != nil {
+			touched = 1
+		}
+		bs, bp, conc, bhot, btouch, bprop, bconf := uint64(0), 0, 0, 0, 0, 0, -1
+		if b := a.buf; b != nil {
+			bs, bp, bhot, btouch = b.start>>m.log2PageSize, b.pages, b.hot, b.touched
+			if b.conc {
+				conc = 1
+			}
+			if b.propagated {
+				bprop = 1
+			}
+			bconf = b.learn.conf
+		}
+		b2i := func(x bool) int {
+			if x {
+				return 1
+			}
+			return 0
+		}
+		fmt.Fprintf(w, "%d\t%d\t%d\t%d\t%d\t%d\t%d,%d,%d,%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+			va>>m.log2PageSize, bs, bp, a.idx, a.origPA>>m.log2PageSize,
+			p.PAddr>>m.log2PageSize, h[0], h[1], h[2], h[3], touched,
+			b2i(a.hot), b2i(a.hotHandled), b2i(a.fixed), b2i(a.preplaced),
+			len(a.replicas), bits.OnesCount64(a.readMask), b2i(a.writeKernel >= 0),
+			a.n, u.migrations, b2i(a.observed), b2i(a.preHeld), conc, bhot, btouch,
+			bprop, bconf)
+	}
 }

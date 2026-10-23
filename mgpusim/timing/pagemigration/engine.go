@@ -18,6 +18,10 @@ type chunk struct {
 	linesLeft int
 	// done (P21) replaces Manager.chunkDone when set.
 	done func(now sim.VTimeInSec)
+	// urgent (P21): pulled before the ordinary queue (an access waits for it).
+	urgent bool
+	// pre (P21): the page whose pre-placement this chunk copies.
+	pre *adaptState
 }
 
 // serving is one pull being served by the source engine.
@@ -60,8 +64,10 @@ type CopyEngine struct {
 
 	// destination side
 	pending     []*chunk
+	urgentQ     []*chunk          // P21: chunks an access waits for
 	pulling     map[string]*chunk // by PullReq ID
 	inWindow    int
+	inBytes     uint64 // bytes of the chunks in the window
 	writes      []*mem.WriteReq
 	writeChunks map[string]*chunk // by WriteReq ID
 
@@ -109,14 +115,51 @@ func (e *CopyEngine) L2Port() sim.Port { return e.l2Port }
 
 // Busy reports whether the engine has work left.
 func (e *CopyEngine) Busy() bool {
-	return len(e.pending) > 0 || len(e.pulling) > 0 || len(e.writes) > 0 ||
+	return len(e.pending) > 0 || len(e.urgentQ) > 0 || len(e.pulling) > 0 || len(e.writes) > 0 ||
 		len(e.writeChunks) > 0 || len(e.reads) > 0 ||
 		len(e.readOwners) > 0 || len(e.rsps) > 0 || len(e.invals) > 0
 }
 
 func (e *CopyEngine) enqueue(now sim.VTimeInSec, c *chunk) {
-	e.pending = append(e.pending, c)
+	if c.urgent {
+		e.urgentQ = append(e.urgentQ, c)
+	} else {
+		e.pending = append(e.pending, c)
+	}
 	e.TickLater(now)
+}
+
+// promote (P21) moves the queued chunks for which f holds to the urgent
+// queue; it returns how many it moved.
+func (e *CopyEngine) promote(now sim.VTimeInSec, f func(c *chunk) bool) int {
+	n := 0
+	keep := e.pending[:0]
+	for _, c := range e.pending {
+		if f(c) {
+			c.urgent = true
+			e.urgentQ = append(e.urgentQ, c)
+			n++
+		} else {
+			keep = append(keep, c)
+		}
+	}
+	for i := len(keep); i < len(e.pending); i++ {
+		e.pending[i] = nil
+	}
+	e.pending = keep
+	if n > 0 {
+		e.TickLater(now)
+	}
+	return n
+}
+
+// QueuedChunks is the number of chunks waiting to be pulled.
+func (e *CopyEngine) QueuedChunks() int { return len(e.pending) + len(e.urgentQ) }
+
+// windowOpen: the pull window holds at most PullWindow full chunks of
+// bytes (chunks smaller than ChunkBytes, the P21 1 KB blocks, share it).
+func (e *CopyEngine) windowOpen(c *chunk) bool {
+	return e.inWindow == 0 || e.inBytes+c.size <= uint64(e.cfg.PullWindow)*e.cfg.ChunkBytes
 }
 
 // Tick runs one cycle.
@@ -163,11 +206,19 @@ func (e *CopyEngine) sendRsps(now sim.VTimeInSec) bool {
 
 func (e *CopyEngine) sendPulls(now sim.VTimeInSec) bool {
 	progress := false
-	for e.inWindow < e.cfg.PullWindow && len(e.pending) > 0 {
-		c := e.pending[0]
+	for {
+		q := &e.pending
+		if len(e.urgentQ) > 0 {
+			q = &e.urgentQ
+		}
+		if len(*q) == 0 || !e.windowOpen((*q)[0]) {
+			break
+		}
+		c := (*q)[0]
 		if c.src == e {
-			e.pending = e.pending[1:]
+			*q = (*q)[1:]
 			e.inWindow++
+			e.inBytes += c.size
 			e.serveLines(now, &serving{data: make([]byte, c.size),
 				linesLeft: int(c.size / e.cfg.LineBytes), local: c}, c.srcPAddr)
 			progress = true
@@ -177,9 +228,10 @@ func (e *CopyEngine) sendPulls(now sim.VTimeInSec) bool {
 		if e.remotePort.Send(req) != nil {
 			break
 		}
-		e.pending = e.pending[1:]
+		*q = (*q)[1:]
 		e.pulling[req.ID] = c
 		e.inWindow++
+		e.inBytes += c.size
 		progress = true
 	}
 	return progress
@@ -317,6 +369,7 @@ func (e *CopyEngine) recvMem(now sim.VTimeInSec, port sim.Port) bool {
 			c.linesLeft--
 			if c.linesLeft == 0 {
 				e.inWindow--
+				e.inBytes -= c.size
 				if c.done != nil {
 					c.done(now)
 				} else {
