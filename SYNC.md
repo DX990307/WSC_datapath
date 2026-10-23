@@ -529,3 +529,8 @@
 - 代码 `isca27/placement` @ `810531a`：合入 `isca27/page-migration` @ `15beab2`、cherry-pick Q6 `-pm-page-list`、`-pm-target argmax|median|class` 及阈值开关、`-pm-count-local` / `-pm-count-network`；默认全关 / argmax。
 - 改了 `STATUS.md`（配置确认，"需要用户决定"第一条）、`results_index/place/bound.md`（med 对照、热点集中规则）、`scripts/`（`place_targets.py` 阈值离线扫描等）。
 - 两遍法 oracle 的剩余运行（MT、PA、CFD、embbag、BH、med）照常跑，作上限。
+
+### 2026-10-23 [claude-code] P21：自适应放置代码与离线分析（主实验暂停）
+- 新增 `results_index/adapt/`（`offline.md`、`offline_{A,B,C,D}.csv`、`raw/`、`scripts/`）；改了 `STATUS.md`、`SYNC.md`。
+- 代码 `isca27/adaptive-pm` @ `c99ccdf`（已推送）：`-pm-adapt`（统一收益-代价决策）、`-pm-first-touch`、`-dump-alloc-map`；全部默认关。
+- 服务器 `~/akita-exp-test/adapt/`（yss2）：分配表导出 16 个、回归 / verify 13 个；没有碰 place/ qt/ 的进程和文件。
