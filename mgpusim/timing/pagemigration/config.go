@@ -104,6 +104,13 @@ type Config struct {
 	// P21 adaptive placement (adapt.go); off by default.
 	Adapt AdaptConfig
 
+	// FirstTouchMigrate (P21 real-cost first-touch baseline, PolicyOnFault):
+	// a unit faults only on its first vector access, and only when that
+	// access comes from a GPM other than its home; it then migrates to that
+	// GPM through the normal path (software batch, shootdown, drain, copy)
+	// while the faulting access waits. Later accesses never fault.
+	FirstTouchMigrate bool
+
 	// Check enables the expensive invariant checks (every L2 of every GPM is
 	// searched for lines of each new frame at allocation and at remap).
 	Check bool
@@ -165,6 +172,9 @@ func (c Config) Validate(log2PageSize uint64) error {
 	}
 	if c.Adapt.Enabled && (c.Policy != PolicyAccessCounter || c.Log2Unit != 12) {
 		return fmt.Errorf("adaptive placement needs the counter policy and 4 KB units")
+	}
+	if c.FirstTouchMigrate && c.Policy != PolicyOnFault {
+		return fmt.Errorf("first-touch migration needs the fault policy")
 	}
 	if c.Policy == PolicyAccessCounter && c.Threshold == 0 {
 		return fmt.Errorf("access-counter threshold must be positive")

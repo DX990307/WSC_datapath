@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 P21 baseline: hardware first-touch, m3p_ftm.json with software latency 0 (shootdown, drain and copy still paid): best case of first-touch migration.",
+  "extends": "m3p_ftm.json",
+  "pm-sw-latency-ns": 0
+}

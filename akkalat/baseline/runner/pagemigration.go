@@ -94,6 +94,12 @@ var pmCountLocalFlag = flag.Bool("pm-count-local", false,
 var pmCountNetworkFlag = flag.Bool("pm-count-network", false,
 	"Access counter: do not count remote accesses served by an M3 replica.")
 
+var pmFirstTouchMigrateFlag = flag.Bool("pm-first-touch-migrate", false,
+	"P21 real-cost first-touch baseline (with -page-migration=fault): a page "+
+		"faults only on its first vector access, from a GPM other than its home, "+
+		"and migrates to it (software batch, shootdown, drain, copy; the access "+
+		"waits); later accesses never fault.")
+
 func pageMigrationConfigFromFlags() pagemigration.Config {
 	policy, err := pagemigration.ParsePolicy(*pageMigrationFlag)
 	if err != nil {
@@ -147,6 +153,7 @@ func pageMigrationConfigFromFlags() pagemigration.Config {
 		c.SoftwareLatencyNS = 0
 		c.ShootdownLatencyNS = 0
 	}
+	c.FirstTouchMigrate = *pmFirstTouchMigrateFlag
 	c.Adapt = adaptConfigFromFlags()
 	return c
 }
@@ -161,6 +168,9 @@ func printPageMigrationConfig(c pagemigration.Config) {
 		c.Policy, (uint64(1)<<c.Log2Unit)>>10, c.SoftwareLatencyNS, c.BatchSize,
 		c.ShootdownLatencyNS, c.Threshold, c.CooldownNS, c.MaxMigrations,
 		c.ChunkBytes, c.PullWindow, c.L2Window, *pmIdealFlag, c.Check)
+	if c.FirstTouchMigrate {
+		fmt.Printf("[Config] page-migration first-touch-migrate=true\n")
+	}
 	printAdaptConfig(c)
 	if c.Target != pagemigration.TargetArgmax || c.CountLocal || c.CountNetwork {
 		fmt.Printf("[Config] page-migration target=%s dom-share=%g "+
@@ -332,6 +342,9 @@ func (r *Runner) reportPageMigrationStats() {
 	col("pm_cooldown_ns", float64(c.CooldownNS))
 	col("pm_max_migrations", float64(c.MaxMigrations))
 	col("pm_faults", float64(s.Faults))
+	if c.FirstTouchMigrate {
+		col("pm_first_touches", float64(s.FirstTouches))
+	}
 	col("pm_counter_triggers", float64(s.CounterTriggers))
 	col("pm_class_filtered_accesses", float64(s.ClassFilteredAccesses))
 	col("pm_batches", float64(s.Batches))

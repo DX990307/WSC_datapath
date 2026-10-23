@@ -1,0 +1,8 @@
+{
+  "_description": "ISCA'27 P21 baseline: first-touch with real migration cost on m3p (M3+): a page migrates to the GPM of its first vector access (if not already its home) through the pm fault path (UVM-style batch 256, software 5 us, shootdown 1 us, drain, 4 KB copy over the mesh; the faulting access waits; other GPMs use the old home or wait per pm semantics), then stays (max 1 migration, later accesses never fault).",
+  "extends": "m3p.json",
+  "page-migration": "fault",
+  "pm-unit-kb": 4,
+  "pm-max-migrations": 1,
+  "pm-first-touch-migrate": true
+}

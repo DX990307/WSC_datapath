@@ -82,6 +82,8 @@ type unit struct {
 
 	a *adaptState // P21 tracking entry (nil unless adaptive placement)
 
+	touched bool // P21 first-touch migration: the first vector access was seen
+
 	pages         []vm.Page
 	newPAddrs     []uint64
 	pendingChunks int
@@ -156,6 +158,7 @@ type handler struct {
 // Stats are the migration statistics.
 type Stats struct {
 	Faults                uint64 // on-fault triggers
+	FirstTouches          uint64 // P21 first-touch migration: units first touched
 	CounterTriggers       uint64 // access-counter triggers
 	ClassFilteredAccesses uint64 // P19 Q6: remote accesses to pages outside AllowPages
 	// P20 -pm-target median/class: decisions when a counter fired.
@@ -371,6 +374,25 @@ func (h *atHook) Resolve(
 				page = p
 			}
 		}
+	}
+	if h.canFault && m.cfg.Policy == PolicyOnFault && m.cfg.FirstTouchMigrate {
+		// P21 real-cost first touch: only the first vector access to the
+		// unit decides; a page already at its first toucher stays.
+		if u == nil {
+			u = m.getUnit(k)
+		}
+		if !u.touched {
+			u.touched = true
+			m.Stats.FirstTouches++
+			if page.DeviceID != h.dev && m.eligible(u, now) {
+				m.Stats.Faults++
+				u.faulters = append(u.faulters[:0], h.dev)
+				m.trigger(now, u, h.dev)
+				u.addWaiter(at)
+				return page, false
+			}
+		}
+		return page, true
 	}
 	if h.canFault && m.cfg.Policy == PolicyOnFault && page.DeviceID != h.dev {
 		if u == nil {
