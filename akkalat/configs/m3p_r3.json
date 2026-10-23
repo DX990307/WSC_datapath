@@ -1,5 +1,5 @@
 {
-  "_description": "ISCA'27 P21 round 3: m3p (M3+) + the break-even rule (pagemigration/r3.go): move / 1 KB block split / replicate / rule pre-placement, each taken when its accumulated regret reaches its one-time cost; constants from the platform (-switch-latency, link bandwidth, -pm-sw-latency-ns, -pm-shootdown-ns); no migration limit or cooldown (the accumulator restarts after each action). Copy-first migration, accesses wait for running pre-placements (round 2 mechanics).",
+  "_description": "ISCA'27 P21 round 3: m3p (M3+) + the break-even rule (pagemigration/r3.go): move / 1 KB block split / replicate / rule pre-placement, each taken when its accumulated regret reaches its one-time cost; constants from the platform (-switch-latency, link bandwidth, -pm-sw-latency-ns, -pm-shootdown-ns); no migration limit or cooldown (the accumulator restarts after each action). Accesses wait for running pre-placements (round 2 mechanics); copy-first is off (no contribution in the round 3 realistic test: GMEAN 2.025 with, 2.029 without). The hold cost uses the frame's measured issue rate and Little's-law residence time; a replicate decision is predicted for the buffer's other read-only pages by the same test.",
   "extends": "m3p.json",
   "page-migration": "counter",
   "pm-unit-kb": 4,
@@ -9,5 +9,6 @@
   "pm-cooldown-ns": 0,
   "pm-adapt": true,
   "pm-adapt-rule": "r3",
-  "pm-adapt-actions": "move,block,replicate,predict"
+  "pm-adapt-actions": "move,block,replicate,predict",
+  "pm-adapt-copy-first": false
 }

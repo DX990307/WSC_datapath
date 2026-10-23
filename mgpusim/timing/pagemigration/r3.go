@@ -320,6 +320,10 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 			bestR += regret(b, best)
 		}
 	}
+	if a.buf != nil && !a.r3Evaluated {
+		a.r3Evaluated = true
+		a.buf.r3Evaluated++
+	}
 	// observation and pre-placement check at the first evaluation
 	if a.buf != nil && c.Predict && !a.observed {
 		a.observed = true
@@ -335,7 +339,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 			m.AStats.PreCheckHits++
 		}
 	}
-	hold := m.holdCost(now, a, home[0])
+	hold := m.r3Hold(now, p.PAddr, home[0])
 	fixed := m.r3Fixed() + hold
 	type opt struct {
 		act    int
@@ -428,7 +432,14 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 	m.AStats.Decided[chosen.act][a.bucket]++
 	if chosen.act == actReplicate {
 		a.acc, a.nextEval = 0, 0
+		if a.buf != nil {
+			a.buf.repDecided++
+			a.buf.sumRepRegret += chosen.regret
+		}
 		m.startReplicate(now, u, a, p, home[0], chosen.reps)
+		if a.buf != nil {
+			m.r3PropagateReplicate(now, a.buf, a.idx, chosen.reps)
+		}
 		return
 	}
 	if a.preplaced {
@@ -485,3 +496,88 @@ func SetMeshWidth(w int) { meshWidth = w }
 
 // r3Readers is the number of distinct first readers (diagnostics).
 func r3Readers(a *adaptState) int { return bits.OnesCount64(a.readMask) }
+
+// r3Hold is the expected waiting of the accesses that arrive while the
+// page is switched: rate x hold^2 / 2 with the frame's measured issue rate
+// and hold = shootdown + drain (+ the copy without copy-first); the drain is
+// the larger of the recent drains at the home and the frame's Little's-law
+// residence time (in-flight accesses / issue rate).
+func (m *Manager) r3Hold(now sim.VTimeInSec, pAddr, home uint64) float64 {
+	info := m.ppns[pAddr>>m.log2PageSize]
+	if info == nil || info.issued == 0 {
+		return 0
+	}
+	age := float64(now-info.firstIssue) * 1e9
+	if age < 1 {
+		age = 1
+	}
+	rate := float64(info.issued) / age
+	drain := float64(info.inflight) / rate
+	if m.drainEMA != nil && m.drainEMA[home] > drain {
+		drain = m.drainEMA[home]
+	}
+	h := float64(m.cfg.ShootdownLatencyNS) + drain
+	if !m.cfg.Adapt.CopyFirst {
+		// the copy happens during the hold: one page over (at least) one hop
+		c := &m.cfg.Adapt
+		h += c.R3BaseNS + c.R3HopNS + float64(uint64(1)<<m.log2PageSize)/c.R3LinkBytesPerNS
+	}
+	return rate * h * h / 2
+}
+
+// r3PropagateReplicate applies a replicate decision to the buffer's other
+// read-only pages around idx (the action is predicted like a home): a page
+// is replicated iff p x E >= its replication cost, p = (pages that decided
+// replicate + 1) / (pages evaluated + 2), E = their mean regret at the
+// decision.
+func (m *Manager) r3PropagateReplicate(now sim.VTimeInSec, b *buffer, idx int, sites []uint64) {
+	if !m.cfg.Adapt.Replicate || b.repDecided == 0 {
+		return
+	}
+	p := float64(b.repDecided+1) / float64(b.r3Evaluated+2)
+	e := b.sumRepRegret / float64(b.repDecided)
+	ps := uint64(1) << m.log2PageSize
+	lo, hi := idx-m.cfg.Adapt.PredictWindow, idx+m.cfg.Adapt.PredictWindow
+	if lo < 0 {
+		lo = 0
+	}
+	if hi >= b.pages {
+		hi = b.pages - 1
+	}
+	for i := lo; i <= hi; i++ {
+		if i == idx {
+			continue
+		}
+		va := b.start + uint64(i)*ps
+		pg, ok := m.pageTable.Find(b.pid, va)
+		if !ok {
+			continue
+		}
+		home, uniform := m.pageHomes(pg)
+		if !uniform {
+			continue
+		}
+		v := m.getUnit(m.unitOf(b.pid, va))
+		a := m.adaptUnit(v)
+		if a.fixed || a.preplacing || len(a.replicas) > 0 || v.phase != phaseIdle ||
+			a.writeKernel == m.kernel {
+			continue
+		}
+		var rs []uint64
+		cost := 0.0
+		pw := float64(a.kernWritten+1) / float64(a.kernSeen+2)
+		for _, s := range sites {
+			if s == home[0] {
+				continue
+			}
+			rs = append(rs, s)
+			cost += m.r3Copy(home[0], s, float64(ps)) + pw*m.r3RTT(home[0], s)
+		}
+		if len(rs) == 0 || p*e < cost {
+			continue
+		}
+		m.AStats.Decided[actReplicate][a.bucket]++
+		m.AStats.Propagated++
+		m.startReplicate(now, v, a, pg, home[0], rs)
+	}
+}

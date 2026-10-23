@@ -138,6 +138,10 @@ type ppnInfo struct {
 	state    uint8
 	// lastIdle (P21 copy-first): last time inflight dropped to zero.
 	lastIdle sim.VTimeInSec
+	// issued accesses and the first issue time (P21 r3: Little's law
+	// residence time = inflight / issue rate)
+	issued     uint64
+	firstIssue sim.VTimeInSec
 }
 
 // Violation is the panic value of a broken migration invariant.
@@ -430,6 +434,10 @@ func (h *atHook) Issued(now sim.VTimeInSec, pid vm.PID, vAddr, pAddr uint64) {
 			h.dev, pAddr, vAddr, info.state)
 	}
 	info.inflight++
+	if info.issued == 0 {
+		info.firstIssue = now
+	}
+	info.issued++
 	info.devMask |= 1 << h.dev
 	if m.cfg.Adapt.Enabled {
 		m.adaptIssued(now, h.dev, pid, vAddr, h.lastWrite, h.canFault, newFrame)

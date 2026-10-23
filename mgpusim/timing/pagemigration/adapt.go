@@ -379,6 +379,7 @@ type adaptState struct {
 	// evaluation point, kernel write history
 	acc, nextEval                   float64
 	lastKern, kernSeen, kernWritten int
+	r3Evaluated                     bool
 	trackEl                         *list.Element // TrackCap LRU entry (nil = not tracked)
 	preHeld                         bool
 	origPA                          uint64 // physical address of the frame at tracking start
@@ -408,10 +409,12 @@ type buffer struct {
 	accesses   float64 // counted accesses to the buffer's pages
 	// pre-placement precision: pre-placed pages checked against their
 	// dominant GPM, and how many were right
-	preChecks, preHits int
-	prePending         int     // pre-placements not yet checked
-	sumRegret          float64 // r3: regret of the migrated pages at their move
-	nMig               int
+	preChecks, preHits      int
+	prePending              int     // pre-placements not yet checked
+	sumRegret               float64 // r3: regret of the migrated pages at their move
+	r3Evaluated, repDecided int     // r3: pages evaluated, pages that decided replicate
+	sumRepRegret            float64
+	nMig                    int
 }
 
 func (a *AdaptConfig) on() bool { return a.Enabled }
