@@ -787,10 +787,12 @@ func (m *Manager) r3Check(u *unit, a *adaptState) {
 func (m *Manager) startCmig(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Page, home, t uint64) {
 	ps := uint64(1) << m.log2PageSize
 	seq, kern := a.writeSeq, m.kernel
+	start := now // the data may be read at the home from here on
 	a.cmigBusy = true
 	a.cmigHolders |= 1 << t // attempted: no second pull by t this kernel
 	m.AStats.CopyBytes += ps
 	m.gpms[t].Engine.enqueue(now, &chunk{
+		pid:      p.PID,
 		src:      m.gpms[home].Engine,
 		srcPAddr: p.PAddr,
 		dstPAddr: p.PAddr,
@@ -804,7 +806,9 @@ func (m *Manager) startCmig(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Pag
 			line := m.cfg.LineBytes
 			n := 0
 			for off := uint64(0); off < ps; off += line {
-				if m.gpms[t].InstallRemote(now, p.PID, p.PAddr+off,
+				// sent at the pull's start: a pull opened before the
+				// requester's kernel boundary is dropped like a stale fill
+				if m.gpms[t].InstallRemote(start, p.PID, p.PAddr+off,
 					append([]byte(nil), data[off:off+line]...)) {
 					n++
 				} else {

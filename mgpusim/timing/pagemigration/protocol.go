@@ -1,6 +1,9 @@
 package pagemigration
 
-import "github.com/sarchlab/akita/v3/sim"
+import (
+	"github.com/sarchlab/akita/v3/mem/vm"
+	"github.com/sarchlab/akita/v3/sim"
+)
 
 const (
 	pullReqBytes    = 12 // same overhead as a memory read request
@@ -12,6 +15,7 @@ type PullReq struct {
 	sim.MsgMeta
 	PAddr uint64
 	Size  uint64
+	PID   vm.PID // the source reads its L2 with the page's PID
 }
 
 // Meta returns the message meta data.

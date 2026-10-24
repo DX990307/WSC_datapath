@@ -809,6 +809,7 @@ func (m *Manager) startCopy(now sim.VTimeInSec, u *unit) {
 		src := m.gpms[p.DeviceID].Engine
 		for off := uint64(0); off < pageSize; off += m.cfg.ChunkBytes {
 			dstEngine.enqueue(now, &chunk{
+				pid:      p.PID,
 				u:        u,
 				src:      src,
 				srcPAddr: p.PAddr + off,

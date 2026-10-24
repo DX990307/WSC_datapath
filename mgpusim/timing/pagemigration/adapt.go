@@ -1345,6 +1345,7 @@ func (m *Manager) adaptStartCopy(now sim.VTimeInSec, u *unit, freeze bool) {
 			off := uint64(b) << log2Block
 			dst := a.blockDst[b]
 			m.gpms[dst].Engine.enqueue(now, &chunk{
+				pid:      p.PID,
 				u:        u,
 				src:      m.gpms[home[b]].Engine,
 				srcPAddr: p.PAddr + off,
@@ -1479,6 +1480,7 @@ func (m *Manager) prePlaceInPlace(now sim.VTimeInSec, u *unit, a *adaptState, p 
 		}
 		off := uint64(b) << log2Block
 		m.gpms[dst[b]].Engine.enqueue(now, &chunk{
+			pid:      p.PID,
 			src:      m.gpms[home[b]].Engine,
 			srcPAddr: p.PAddr + off,
 			dstPAddr: p.PAddr + off,
@@ -1523,6 +1525,7 @@ func (m *Manager) prePlaceRemap(now sim.VTimeInSec, u *unit, a *adaptState, p vm
 		m.prePlaceDone(u, a, act, byPredict)
 	}
 	m.gpms[dst].Engine.enqueue(now, &chunk{
+		pid:      p.PID,
 		src:      m.gpms[src].Engine,
 		srcPAddr: p.PAddr,
 		dstPAddr: frame,
@@ -1646,6 +1649,7 @@ func (m *Manager) replicaCopies(now sim.VTimeInSec, a *adaptState, p vm.Page, ho
 		f := m.allocFrame(r)
 		*frames = append(*frames, replica{dev: r, frame: f})
 		m.gpms[r].Engine.enqueue(now, &chunk{
+			pid:      p.PID,
 			src:      m.gpms[home].Engine,
 			srcPAddr: p.PAddr,
 			dstPAddr: f,
@@ -1886,6 +1890,7 @@ func (m *Manager) adaptSwitch(now sim.VTimeInSec, u *unit) {
 			}
 			off := uint64(b) << log2Block
 			m.gpms[a.blockDst[b]].Engine.enqueue(now, &chunk{
+				pid:      p.PID,
 				u:        u,
 				src:      m.gpms[home[b]].Engine,
 				srcPAddr: p.PAddr + off,
