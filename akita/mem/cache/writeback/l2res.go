@@ -518,5 +518,12 @@ func (c *Cache) HoldsRemoteLine(line uint64) bool {
 // SetNetFetchHook (R4 statistics) makes the slice report every remote line
 // that arrives from the network (each remote fill attempt).
 func (c *Cache) SetNetFetchHook(f func(now, reqTime sim.VTimeInSec, line uint64)) {
+	if prev := c.netFetchHook; prev != nil {
+		c.netFetchHook = func(now, reqTime sim.VTimeInSec, line uint64) {
+			prev(now, reqTime, line)
+			f(now, reqTime, line)
+		}
+		return
+	}
 	c.netFetchHook = f
 }

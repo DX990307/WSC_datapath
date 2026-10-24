@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 R4 direction 4: l2r_b + congestion in the re-fetch cost: a remote line's cost adds the measured queueing to its home (per GPM and home, EMA over its network fetches of fill arrival - read open, minus the zero-load round trip). Only the cost function changes; no threshold.",
+  "extends": "l2r_b.json",
+  "l2res-congest": true
+}

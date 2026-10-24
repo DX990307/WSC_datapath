@@ -94,6 +94,24 @@ func (o nearestWriteObs) NoteWrite(now sim.VTimeInSec, addr, size uint64) {
 	o.m.NearestWrite(now, addr, size)
 }
 
+var l2resCongestFlag = flag.Bool("l2res-congest", false,
+	"R4 direction 4: the re-fetch cost of a remote line adds the measured queueing to its "+
+		"home (per GPM and home: EMA of fill arrival - read open, minus the zero-load round trip).")
+
+func mean(v []float64) float64 {
+	s, n := 0.0, 0
+	for _, x := range v {
+		if x > 0 {
+			s += x
+			n++
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	return s / float64(n)
+}
+
 // wireL2Res installs the R4 mechanisms after the page-migration manager.
 func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 	drv *driver.Driver, retain *writeback.RemoteRetainTracker) *writeback.HolderTable {
@@ -109,13 +127,40 @@ func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 			log.Panicf("-l2res-cost-mode %q", mode)
 		}
 		local := *l2resLocalNSFlag
+		congest := *l2resCongestFlag
 		for _, gpu := range b.gpus {
 			dev := gpu.GPUID
+			q := make([]float64, len(b.gpus)+2) // measured queueing per home (ns), direction 4
 			rtt := func(addr uint64) float64 {
 				if mode == "rrip" {
 					return 0
 				}
-				return m.L2ResRTT(dev, addr>>33, mode == "blind")
+				h := addr >> 33
+				extra := 0.0
+				if congest && int(h) < len(q) {
+					extra = q[h]
+					if mode == "blind" {
+						extra = mean(q)
+					}
+				}
+				return m.L2ResRTT(dev, h, mode == "blind") + extra
+			}
+			if congest {
+				note := func(now, req sim.VTimeInSec, line uint64) {
+					h := line >> 33
+					if int(h) >= len(q) || h == dev {
+						return
+					}
+					meas := float64(now-req) * 1e9
+					w := meas - m.L2ResRTT(dev, h, false)
+					if w < 0 {
+						w = 0
+					}
+					q[h] += (w - q[h]) / 64
+				}
+				for _, l2 := range gpu.pm.l2s {
+					l2.SetNetFetchHook(note)
+				}
 			}
 			class := func(addr uint64) int {
 				if mode == "rrip" || addr>>33 == dev {
