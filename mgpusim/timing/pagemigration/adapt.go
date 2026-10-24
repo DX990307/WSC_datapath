@@ -1979,10 +1979,14 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 	m.AStats.PredictObs++
 	wasConf := l.conf >= 0
 	if wasConf {
-		// out-of-sample test of the trusted rule (r3 evidence)
-		b.obsPred++
-		if l.predict(idx, int(owner)-1) == int(dst)-1 {
-			b.obsHit++
+		// out-of-sample test of the trusted rule (r3 evidence), only of
+		// the predictions that would move data (a pre-placement acts on
+		// those; "stays at its owner" predictions never do)
+		if pr := l.predict(idx, int(owner)-1); pr >= 0 && pr != int(owner)-1 {
+			b.obsPred++
+			if pr == int(dst)-1 {
+				b.obsHit++
+			}
 		}
 	}
 	hit := l.add(idx, int(dst)-1, int(owner)-1)
