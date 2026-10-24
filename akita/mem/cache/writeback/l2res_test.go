@@ -3,6 +3,8 @@ package writeback
 import (
 	"testing"
 
+	cachepkg "github.com/sarchlab/akita/v3/mem/cache"
+
 	"github.com/sarchlab/akita/v3/mem/mem"
 	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
@@ -47,7 +49,7 @@ func TestCostReplacementRemoteFillEvictsLocal(t *testing.T) {
 			return 1
 		}
 		return 10
-	})
+	}, nil, true)
 	setLocal(c, 0, 0x0)
 	setLocal(c, 1, 0x100)
 	if !c.installRemoteDataFill(l2resFill(remote, 1)) {
@@ -74,7 +76,7 @@ func TestCostReplacementRemoteFillEvictsLocal(t *testing.T) {
 			return 10
 		}
 		return 1
-	})
+	}, nil, true)
 	setLocal(c2, 0, uint64(1)<<33)
 	setLocal(c2, 1, uint64(1)<<33+0x100)
 	c2.directory.Visit(c2.directory.GetSets()[0].Blocks[0]) // hits: RRPV 0
@@ -86,7 +88,7 @@ func TestCostReplacementRemoteFillEvictsLocal(t *testing.T) {
 			return 10
 		}
 		return 1
-	})
+	}, nil, true)
 	if c2.installRemoteDataFill(f) {
 		t.Fatal("cheap first-touch fill replaced an expensive hot line")
 	}
@@ -174,3 +176,27 @@ func TestHolderTableMarkOnWrite(t *testing.T) {
 		t.Fatalf("boundary: inv %d ret %d", inv, ret)
 	}
 }
+
+func TestCostVictimFinderMeasuredReuse(t *testing.T) {
+	c := l2resTestCache()
+	c.EnableCostReplacement(func(a uint64) float64 {
+		if a>>33 == 0 {
+			return 1
+		}
+		return 3
+	}, func(a uint64) int { return int(a >> 33 & 1) }, false)
+	f := c.CostFinder()
+	// local lines: hits in state 0 are frequent; remote lines in state 2
+	// are evicted without hits
+	for i := 0; i < 50; i++ {
+		f.OnVisit(&c.directory.GetSets()[0], &cachepkgBlockLocal)
+	}
+	if r := f.Reuse(0, 0); r < 0.9 {
+		t.Fatalf("local state-0 re-use %f", r)
+	}
+	if r := f.Reuse(1, 2); r != 0.5 {
+		t.Fatalf("prior %f", r)
+	}
+}
+
+var cachepkgBlockLocal = cachepkg.Block{IsValid: true}

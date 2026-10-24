@@ -38,6 +38,10 @@ var l2resHolderModeFlag = flag.String("l2res-holder-mode", "drop",
 	"R4: what a write does to the holders' lines of the page: drop (at once) or "+
 		"mark (untracked: readable for the rest of the kernel like M3, A1 at the boundary).")
 
+var l2resReuseFlag = flag.String("l2res-reuse", "measured",
+	"R4: re-use probability of a line by RRPV: measured (per class local/remote, "+
+		"online hit-vs-eviction counts) or fixed (1, 1/2, 1/4, 1/8).")
+
 // wireL2Res installs the R4 mechanisms after the page-migration manager.
 func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 	drv *driver.Driver, retain *writeback.RemoteRetainTracker) *writeback.HolderTable {
@@ -61,11 +65,18 @@ func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 				}
 				return local + m.L2ResRTT(dev, addr>>33, mode == "blind")
 			}
+			class := func(addr uint64) int {
+				if mode == "rrip" || addr>>33 == dev {
+					return 0
+				}
+				return 1
+			}
 			for _, l2 := range gpu.pm.l2s {
-				l2.EnableCostReplacement(cost)
+				l2.EnableCostReplacement(cost, class, *l2resReuseFlag == "fixed")
 			}
 		}
-		fmt.Printf("[Config] R4 cost-aware L2 replacement (%s, local %.0f ns)\n", mode, local)
+		fmt.Printf("[Config] R4 cost-aware L2 replacement (%s, local %.0f ns, re-use %s)\n",
+			mode, local, *l2resReuseFlag)
 	}
 	if *l2resHoldersFlag == 0 {
 		return nil

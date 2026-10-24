@@ -22,6 +22,10 @@ type Block struct {
 	// block was just chosen as a victim (its next Visit is an insertion).
 	RRPV    uint8
 	RRFresh bool
+	// rrEvict: the block held a valid line (class rrEvC, state rrEvR) when
+	// it was chosen as a victim (CostVictimFinder statistics).
+	RREvict      bool
+	RREvC, RREvR uint8
 }
 
 // A Set is a list of blocks where a certain piece memory can be stored at

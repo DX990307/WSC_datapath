@@ -1,5 +1,5 @@
 {
-  "_description": "ISCA'27 R4 step b: l2r_base + cost-aware L2 replacement (re-fetch latency by hops to the home x 2-bit SRRIP re-use weight); remote fills lose the M3 protection rules (no eviction of local lines, first touch only into invalid ways) and are admitted when worth more than the victim.",
+  "_description": "ISCA'27 R4 step b: l2r_base + cost-aware L2 replacement: the victim is the line with the smallest re-fetch latency (hops to the home) x re-use probability, where the re-use probability of each 2-bit SRRIP state is measured online per class (local / remote: share of lines in that state whose next event was a hit, not an eviction). Remote fills lose the M3 protection rules (no eviction of local lines, first touch only into invalid ways) and are admitted when worth more than the victim. -l2res-reuse fixed = fixed weights 1, 1/2, 1/4, 1/8 (commit 646e35e).",
   "extends": "l2r_base.json",
   "l2res-cost-repl": true
 }

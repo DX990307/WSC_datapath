@@ -61,13 +61,17 @@ type L2ResStats struct {
 func (c *Cache) GetL2ResStats() L2ResStats { return c.l2resStats }
 
 // EnableCostReplacement switches the slice to cost-aware replacement; cost
-// gives the re-fetch latency (ns) of the line at a physical address.
-func (c *Cache) EnableCostReplacement(cost func(addr uint64) float64) {
+// gives the re-fetch latency (ns) of the line at a physical address, class
+// whether it is remote (1) or local (0); fixed uses fixed re-use weights
+// per RRPV instead of the measured probabilities.
+func (c *Cache) EnableCostReplacement(cost func(addr uint64) float64,
+	class func(addr uint64) int, fixed bool) {
 	d, ok := c.directory.(*cachepkg.DirectoryImpl)
 	if !ok {
 		panic("cost replacement needs the default directory")
 	}
-	c.costFinder = cachepkg.NewCostVictimFinder(cost)
+	c.costFinder = cachepkg.NewCostVictimFinder(cost, class)
+	c.costFinder.Fixed = fixed
 	d.SetVictimFinder(c.costFinder)
 }
 
