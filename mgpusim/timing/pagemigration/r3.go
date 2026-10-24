@@ -37,6 +37,9 @@ package pagemigration
 //	            invalidation messages; regret = sum_g count_g * (RTT(g, home)
 //	            - RTT(g, nearest copy))
 //
+// Every action that changes the address readers use also loses the lines
+// they keep in their L2s (M3): sum_g min(lines, fetches_g) x reuse x RTT to
+// the new location, reuse = M3 hits / (hits + fetches) of the page.
 // SW is -pm-sw-latency-ns, shootdown -pm-shootdown-ns, hold the waiting of
 // the accesses arriving during the switch (rate x hold^2 / 2, hold =
 // shootdown + recent drain at the home), copy(a, b, bytes) = RTT(a, b) +
@@ -343,6 +346,27 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 	}
 	hold := m.r3Hold(now, a, p.PAddr, home[0])
 	fixed := m.r3Fixed() + hold
+	// lines the readers keep in their L2s (M3) are lost when the data
+	// changes address: each reader g holds about min(lines, fetches of g)
+	// lines, reused with the observed probability hits / (hits + fetches),
+	// and re-fetches them from the new location
+	fetches := 0.0
+	for _, x := range tot {
+		fetches += x
+	}
+	reuse := 0.0
+	if fetches+float64(a.m3Hits) > 0 {
+		reuse = float64(a.m3Hits) / (fetches + float64(a.m3Hits))
+	}
+	refetch := func(b int, to uint64) float64 {
+		r := 0.0
+		for g, x := range w[b] {
+			if x > 0 {
+				r += math.Min(x, blockLines) * reuse * m.r3RTT(uint64(g), to)
+			}
+		}
+		return r
+	}
 	type opt struct {
 		act    int
 		dst    [blocksPerPage]uint64
@@ -366,7 +390,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 		for b := 0; b < blocksPerPage; b++ {
 			o.dst[b] = best
 			if home[b] != best {
-				o.cost += m.r3Copy(home[b], best, 1<<log2Block)
+				o.cost += m.r3Copy(home[b], best, 1<<log2Block) + refetch(b, best)
 				moved++
 			}
 		}
@@ -396,7 +420,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 			o.regret += br
 			distinct[bd] = true
 			if bd != home[b] {
-				o.cost += m.r3Copy(home[b], bd, 1<<log2Block)
+				o.cost += m.r3Copy(home[b], bd, 1<<log2Block) + refetch(b, bd)
 				moved++
 			}
 		}
@@ -454,6 +478,21 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 			for _, s := range o.reps {
 				o.cost += m.r3Copy(home[0], s, float64(uint64(1)<<m.log2PageSize)) +
 					pw*m.r3RTT(home[0], s)
+			}
+			// readers redirected to a copy re-fetch the lines they keep
+			for g, x := range tot {
+				if x <= 0 {
+					continue
+				}
+				near, at := m.r3RTT(uint64(g), home[0]), home[0]
+				for _, s := range o.reps {
+					if r := m.r3RTT(uint64(g), s); r < near {
+						near, at = r, s
+					}
+				}
+				if at != home[0] {
+					o.cost += math.Min(x, pageLines) * reuse * near
+				}
 			}
 			if len(o.reps) > 0 {
 				pick(o)

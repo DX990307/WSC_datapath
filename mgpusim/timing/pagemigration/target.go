@@ -250,6 +250,9 @@ func (m *Manager) ReplicaHit(dev uint64, pAddr uint64) {
 		return
 	}
 	u := m.units[m.unitOf(info.pid, info.vAddr)]
+	if u != nil && u.a != nil && m.cfg.Adapt.r3() {
+		u.a.m3Hits++ // reuse of lines the readers keep (r3 re-fetch cost)
+	}
 	if u == nil || u.phase != phaseIdle || u.counts[dev] == 0 {
 		return
 	}

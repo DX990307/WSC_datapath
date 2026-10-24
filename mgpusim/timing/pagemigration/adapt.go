@@ -380,6 +380,7 @@ type adaptState struct {
 	acc, nextEval                   float64
 	lastKern, kernSeen, kernWritten int
 	r3Evaluated                     bool
+	m3Hits                          uint64        // r3: accesses served by lines readers keep (M3)
 	trackEl                         *list.Element // TrackCap LRU entry (nil = not tracked)
 	preHeld                         bool
 	origPA                          uint64 // physical address of the frame at tracking start
