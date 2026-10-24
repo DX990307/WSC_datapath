@@ -407,26 +407,57 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 	if c.Replicate && uniform && a.writeKernel != m.kernel {
 		sites := m.r3Sites(tot, home[0], p.PAddr>>m.log2PageSize)
 		if len(sites) > 0 {
-			o := opt{act: actReplicate, reps: sites}
+			o := opt{act: actReplicate}
+			used := map[uint64]bool{}
 			for g, x := range tot {
 				if x <= 0 {
 					continue
 				}
-				near := m.r3RTT(uint64(g), home[0])
+				near, at := m.r3RTT(uint64(g), home[0]), home[0]
 				for _, s := range sites {
-					near = math.Min(near, m.r3RTT(uint64(g), s))
+					if r := m.r3RTT(uint64(g), s); r < near {
+						near, at = r, s
+					}
 				}
 				o.regret += x * (m.r3RTT(uint64(g), home[0]) - near)
+				if at != home[0] {
+					used[at] = true
+				}
+			}
+			// copies serve readers in at least two places (the home or
+			// sites); a single useful site is a move, which outlives the
+			// kernel
+			for _, s := range sites {
+				if used[s] {
+					o.reps = append(o.reps, s)
+				}
+			}
+			homeUsed := false
+			for g, x := range tot {
+				if x > 0 && !used[uint64(g)] {
+					near := m.r3RTT(uint64(g), home[0])
+					for _, s := range o.reps {
+						near = math.Min(near, m.r3RTT(uint64(g), s))
+					}
+					if near == m.r3RTT(uint64(g), home[0]) {
+						homeUsed = true
+					}
+				}
+			}
+			if len(o.reps) < 2 && !(len(o.reps) == 1 && homeUsed) {
+				o.reps = nil
 			}
 			// making copies visible needs the driver (frames, PTE replica
 			// bits) and a TLB shootdown, like a migration
 			o.cost = m.r3Fixed()
 			pw := float64(a.kernWritten+1) / float64(a.kernSeen+2)
-			for _, s := range sites {
+			for _, s := range o.reps {
 				o.cost += m.r3Copy(home[0], s, float64(uint64(1)<<m.log2PageSize)) +
 					pw*m.r3RTT(home[0], s)
 			}
-			pick(o)
+			if len(o.reps) > 0 {
+				pick(o)
+			}
 		}
 	}
 	if chosen == nil {
