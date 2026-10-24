@@ -34,6 +34,10 @@ var l2resPullSlotsFlag = flag.Int("l2res-pull-slots", 4,
 var l2resDecideNSFlag = flag.Int("l2res-decide-ns", 500,
 	"R4: hardware decision delay of the pull actions (ns).")
 
+var l2resHolderModeFlag = flag.String("l2res-holder-mode", "drop",
+	"R4: what a write does to the holders' lines of the page: drop (at once) or "+
+		"mark (untracked: readable for the rest of the kernel like M3, A1 at the boundary).")
+
 // wireL2Res installs the R4 mechanisms after the page-migration manager.
 func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 	drv *driver.Driver, retain *writeback.RemoteRetainTracker) *writeback.HolderTable {
@@ -71,7 +75,11 @@ func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 	}
 	t := writeback.NewHolderTable(writeback.HolderTableConfig{
 		Log2PageSize: 12, Log2OwnerSize: 33, CapPerOwner: *l2resHoldersFlag,
+		MarkOnWrite: *l2resHolderModeFlag == "mark",
 	})
+	if m := *l2resHolderModeFlag; m != "drop" && m != "mark" {
+		log.Panicf("-l2res-holder-mode %q", m)
+	}
 	t.Deliver = func(now sim.VTimeInSec, owner uint64, holder int, apply func()) {
 		m.SendHolderMsg(now, owner, holder, apply)
 	}
@@ -115,6 +123,7 @@ func (r *Runner) reportL2ResStats() {
 			s.UntrackedInstalls += x.UntrackedInstalls
 			s.PageInvals += x.PageInvals
 			s.LinesInvalByWrites += x.LinesInvalByWrites
+			s.LinesMarkedByWrites += x.LinesMarkedByWrites
 			s.Downgrades += x.Downgrades
 			s.BoundaryTrackedKept += x.BoundaryTrackedKept
 			s.BoundaryTrackedDropped += x.BoundaryTrackedDropped
@@ -136,6 +145,7 @@ func (r *Runner) reportL2ResStats() {
 	col("l2r_untracked_installs", float64(s.UntrackedInstalls))
 	col("l2r_page_invals", float64(s.PageInvals))
 	col("l2r_lines_inval_by_writes", float64(s.LinesInvalByWrites))
+	col("l2r_lines_marked_by_writes", float64(s.LinesMarkedByWrites))
 	col("l2r_downgrades", float64(s.Downgrades))
 	col("l2r_boundary_tracked_kept", float64(s.BoundaryTrackedKept))
 	col("l2r_boundary_tracked_dropped", float64(s.BoundaryTrackedDropped))

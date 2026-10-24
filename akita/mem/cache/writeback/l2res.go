@@ -45,6 +45,7 @@ type L2ResStats struct {
 	UntrackedInstalls                               uint64
 	PageInvals                                      uint64 // invalidation messages applied at this slice
 	LinesInvalByWrites                              uint64 // lines dropped by those messages
+	LinesMarkedByWrites                             uint64 // lines made untracked by them (MarkOnWrite)
 	Downgrades                                      uint64 // lines made untracked by holder-table replacement
 	BoundaryTrackedKept, BoundaryTrackedDropped     uint64
 	BoundaryUntrackedKept, BoundaryUntrackedDropped uint64
@@ -140,9 +141,20 @@ func (c *Cache) pageBlocks(page uint64) []*cachepkg.Block {
 }
 
 // invalidateRemotePage drops this slice's replica lines of page (a holder
-// invalidation message arrived).
+// invalidation message arrived); with MarkOnWrite they stay readable for the
+// rest of the kernel (M3 semantics) but become untracked, so the A1 rule
+// drops them at the next boundary.
 func (c *Cache) invalidateRemotePage(page uint64) {
 	c.l2resStats.PageInvals++
+	if c.holders.cfg.MarkOnWrite {
+		for _, block := range c.pageBlocks(page) {
+			if r := c.remoteReplicaBlocks[block]; r != nil && r.tracked {
+				r.tracked = false
+				c.l2resStats.LinesMarkedByWrites++
+			}
+		}
+		return
+	}
 	for _, block := range c.pageBlocks(page) {
 		if block.IsLocked {
 			continue
@@ -192,6 +204,9 @@ type HolderTableConfig struct {
 	Log2PageSize  uint // 12 = 4 KiB pages
 	Log2OwnerSize uint // home GPM = addr >> Log2OwnerSize
 	CapPerOwner   int  // entries per owner GPM; <= 0 = unlimited
+	// MarkOnWrite: a write makes the holders' lines of the page untracked
+	// (A1 at the next boundary) instead of dropping them at once.
+	MarkOnWrite bool
 }
 
 // HolderTableStats counts the table's work.

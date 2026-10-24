@@ -151,3 +151,26 @@ func TestHolderTableReplacementDowngrades(t *testing.T) {
 		t.Fatalf("boundary: inv %d ret %d", inv, ret)
 	}
 }
+
+func TestHolderTableMarkOnWrite(t *testing.T) {
+	c := l2resTestCache()
+	ht := NewHolderTable(HolderTableConfig{MarkOnWrite: true})
+	c.SetHolderTable(ht, 2)
+	page := uint64(1)<<33 + 0x3000
+	if !c.installRemoteDataFill(l2resFill(page, 1)) {
+		t.Fatal("setup")
+	}
+	ht.NoteWrite(3, page+0x40, 64)
+	if c.directory.Lookup(vm.PID(4), page) == nil {
+		t.Fatal("marked line dropped mid-kernel")
+	}
+	if !c.installRemoteDataFill(l2resFill(page+0x80, 5)) {
+		t.Fatal("refill")
+	}
+	// boundary: the marked line follows A1 (written: dropped), the line
+	// read after the write stays
+	inv, ret := c.InvalidateWrittenRemoteReplicas(10, func(uint64) bool { return true })
+	if inv != 1 || ret != 1 || c.directory.Lookup(vm.PID(4), page+0x80) == nil {
+		t.Fatalf("boundary: inv %d ret %d", inv, ret)
+	}
+}
