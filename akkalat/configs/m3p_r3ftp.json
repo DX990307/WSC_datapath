@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 P21 round 5: R3 with predicted first touch (learning-augmented rent-or-buy, pagemigration/ft.go, -pm-adapt-ft predict): m3p_r3real.json where a first touch buys at once (migrates through the fault path like m3p_ftm) iff (E + C)(p - (1 - p) f_o) > C with the buffer's measured precision p of 'first toucher = best place' and the measured share f_o of misses whose best place was the original home; otherwise the page rents (R3 break-even).",
+  "extends": "m3p_r3real.json",
+  "pm-adapt-ft": "predict"
+}

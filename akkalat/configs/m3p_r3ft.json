@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 P21 round 5: FT+R3 = m3p_r3real.json + first touch (pagemigration/ft.go, -pm-adapt-ft always): the first vector access to a page migrates it to the accessing GPM through the fault path (the access waits; software latency, shootdown, 4 KB copy, as m3p_ftm), not pinned; R3 then replicates, moves again and pre-places.",
+  "extends": "m3p_r3real.json",
+  "pm-adapt-ft": "always"
+}

@@ -196,6 +196,10 @@ type AdaptConfig struct {
 	R3BaseNS, R3HopNS, R3LinkBytesPerNS float64
 	FlatHops                            float64
 	R3Blind                             bool
+	// FT (r3, round 5, ft.go): first touch inside the break-even rule;
+	// "" off, "always" (every first touch migrates, then R3), "predict"
+	// (buy at first touch by the expected-value test, else rent).
+	FT string
 
 	// ReplicaList (oracle region replication): original physical page ->
 	// replica devices. A listed page gets zero-cost read-only copies (fresh
@@ -342,6 +346,8 @@ type AdaptStats struct {
 	LookupHolds  uint64 // accesses held for the redirect lookup
 	BhFull       uint64 // actions refused because the block-home table was full
 	BhPeak       uint64 // largest block-home table on one GPM
+	// first touch (round 5, ft.go)
+	FTFirst, FTMoves, FTRent, FTTests, FTHits, FTHarm uint64
 }
 
 type adaptState struct {
@@ -397,6 +403,12 @@ type adaptState struct {
 	trackEl                         *list.Element // TrackCap LRU entry (nil = not tracked)
 	preHeld                         bool
 	origPA                          uint64 // physical address of the frame at tracking start
+	// first touch (ft.go): first toucher + 1 (0 = no decision), its
+	// original home, evidence class, check state
+	ftG, ftOrig       uint64
+	ftClass           int
+	ftAcc             float64
+	ftTested, ftMoved bool
 }
 
 type replica struct {
@@ -433,6 +445,10 @@ type buffer struct {
 	// r3 evidence by distance class (log2 of the distance to the nearest
 	// observation): out-of-sample tests of the rule's moving predictions
 	evTests, evHits [numDistClass]int
+	// first-touch evidence (ft.go): checks and hits by class, misses whose
+	// best place was the original home
+	ftTests, ftHits [numFTClass]int
+	ftHarm          int
 }
 
 func (a *AdaptConfig) on() bool { return a.Enabled }
@@ -1774,6 +1790,16 @@ func (m *Manager) adaptResolve(now sim.VTimeInSec, at Waker, dev uint64,
 			}
 		}
 		return page, true
+	}
+	if m.cfg.Adapt.ft() && vector {
+		if u == nil {
+			u = m.getUnit(m.unitOf(page.PID, page.VAddr))
+		}
+		if !u.touched {
+			if p, ok := m.ftFirst(now, at, dev, u, page); !ok {
+				return p, false
+			}
+		}
 	}
 	if u == nil || u.a == nil {
 		return page, true
