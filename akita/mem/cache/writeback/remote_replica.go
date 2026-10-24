@@ -368,3 +368,21 @@ func (c *Cache) InvalidateRemoteReplicas(now sim.VTimeInSec) int {
 	c.replicaBoundaryStats.LinesInvalidated += uint64(n)
 	return n
 }
+
+// InstallRemoteLine (ISCA27 P21 cmig) installs a clean copy of a remote line
+// exactly like an admitted remote data fill (same victim policy, resident
+// filter tracking and kernel-boundary rules); it returns false when the fill
+// is dropped (no remote-replica path, line already present or in flight,
+// no evictable way).
+func (c *Cache) InstallRemoteLine(
+	now sim.VTimeInSec, pid vm.PID, addr uint64, data []byte,
+) bool {
+	fill := &mem.RemoteDataFill{
+		Address:    addr,
+		PID:        pid,
+		Data:       data,
+		Generation: c.remoteReplicaGeneration,
+	}
+	fill.SendTime = now
+	return c.installRemoteDataFill(fill)
+}

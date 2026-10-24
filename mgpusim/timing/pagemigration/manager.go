@@ -33,6 +33,9 @@ type GPM struct {
 	// slice of the GPM holds the line at a physical address or has an MSHR
 	// for it (local lines and M3 remote replicas alike).
 	HoldsLine func(pAddr uint64) bool
+	// InstallRemote (P21 cmig) installs a clean copy of a remote line in
+	// the GPM's L2 like an admitted M3 fill; false = dropped.
+	InstallRemote func(now sim.VTimeInSec, pid vm.PID, pAddr uint64, data []byte) bool
 }
 
 // phase is where a unit is in its migration (DESIGN.md 2.3):

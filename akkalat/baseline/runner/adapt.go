@@ -22,7 +22,8 @@ var pmAdaptFlag = flag.Bool("pm-adapt", false,
 var pmAdaptActionsFlag = flag.String("pm-adapt-actions", "move,block,spread,predict",
 	"P21: action set, comma separated subset of move, block (per 1 KB block), "+
 		"spread (hot pages: ring 12 / hash), replicate (hot read-only pages, 4 "+
-		"copies), predict (per-buffer rule pre-places untouched pages).")
+		"copies), predict (per-buffer rule pre-places untouched pages), cmig "+
+		"(r3: L2-resident migration into the reader's L2).")
 var pmAdaptCostFlag = flag.Bool("pm-adapt-costmodel", true,
 	"P21: benefit/cost decision; false = fixed -pm-threshold trigger and hot "+
 		"actions without the cost test (ablation).")
@@ -123,6 +124,7 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 		panic("-pm-adapt and -pm-first-touch are exclusive")
 	}
 	a.Move, a.Block, a.Spread, a.Replicate, a.Predict = false, false, false, false, false
+	a.Cmig = false
 	for _, s := range strings.Split(*pmAdaptActionsFlag, ",") {
 		switch strings.TrimSpace(s) {
 		case "":
@@ -136,6 +138,8 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 			a.Replicate = true
 		case "predict":
 			a.Predict = true
+		case "cmig":
+			a.Cmig = true
 		default:
 			panic(fmt.Sprintf("-pm-adapt-actions: unknown action %q", s))
 		}
@@ -334,6 +338,13 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 	col("pa_early_obs", float64(s.EarlyObs))
 	col("pa_count_hot", float64(s.CountHotN))
 	col("pa_track_evict", float64(s.TrackEvict))
+	col("pa_cmig_pages", float64(s.CmigPages))
+	col("pa_cmig_lines", float64(s.CmigLines))
+	col("pa_cmig_dropped_lines", float64(s.CmigDropped))
+	col("pa_cmig_aborts", float64(s.CmigAborts))
+	col("pa_cmig_holder_hits", float64(s.CmigHolderHits))
+	col("pa_cmig_invals", float64(s.CmigInvals))
+	col("pa_cmig_upgrades", float64(s.CmigUpgrades))
 	col("pa_pre_checks", float64(s.PreChecks))
 	col("pa_pre_check_hits", float64(s.PreCheckHits))
 	col("pa_pre_prec_skip", float64(s.PrePrecSkip))

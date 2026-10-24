@@ -22,6 +22,9 @@ type chunk struct {
 	urgent bool
 	// pre (P21): the page whose pre-placement this chunk copies.
 	pre *adaptState
+	// install (P21 cmig): the pulled data goes to this function (into the
+	// destination GPM's L2) instead of DRAM.
+	install func(now sim.VTimeInSec, data []byte)
 }
 
 // serving is one pull being served by the source engine.
@@ -318,6 +321,16 @@ func (e *CopyEngine) land(now sim.VTimeInSec, rsp *PullRsp) {
 }
 
 func (e *CopyEngine) landChunk(now sim.VTimeInSec, c *chunk, data []byte) {
+	if c.install != nil {
+		c.install(now, data)
+		e.inWindow--
+		e.inBytes -= c.size
+		if c.done != nil {
+			c.done(now)
+		}
+		e.TickLater(now)
+		return
+	}
 	line := e.cfg.LineBytes
 	c.linesLeft = int(c.size / line)
 	for off := uint64(0); off < c.size; off += line {

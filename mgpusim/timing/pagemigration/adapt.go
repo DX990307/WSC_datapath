@@ -83,6 +83,9 @@ type AdaptConfig struct {
 	Enabled bool
 	// action set
 	Move, Block, Spread, Replicate, Predict bool
+	// Cmig (r3): L2-resident migration - the page's lines are pulled into
+	// the reader's L2 as M3 lines (home, PTE and TLBs unchanged).
+	Cmig bool
 	// CostModel false: fixed threshold triggers move / block, hot actions
 	// are taken without the cost test, pre-placement without the test.
 	CostModel bool
@@ -256,11 +259,12 @@ const (
 	actBlock
 	actSpread
 	actReplicate
+	actCmig
 	numActs
 )
 
 // ActionNames name the actions in the statistics.
-var ActionNames = [numActs]string{"stay", "move", "block", "spread", "replicate"}
+var ActionNames = [numActs]string{"stay", "move", "block", "spread", "replicate", "cmig"}
 
 // reader-distribution buckets of a decision (for the "distribution ->
 // action" table): readers 1, 2-3, 4-15, >= 16.
@@ -314,17 +318,20 @@ type AdaptStats struct {
 	Recopies     uint64 // of which recopied dirty blocks at the switch
 	RecopyBlocks uint64
 	// pre-placement
-	PreHeld       uint64 // accesses held on a running pre-placement
-	PreHeldPages  uint64
-	PreCostSkip   uint64 // untouched predicted pages skipped by the cost test
-	PreTouched    uint64 // predicted pages skipped because already touched
-	PreHomeOK     uint64 // predicted pages already at the predicted home
-	EarlyObs      uint64 // observations from the early signal
-	CountHotN     uint64 // pages found hot by the counters
-	PreChecks     uint64 // pre-placed pages checked against their dominant GPM
-	PreCheckHits  uint64
-	PrePrecSkip   uint64 // observations whose window was skipped for low precision
-	PreBudgetSkip uint64 // predicted pages skipped: too many unchecked pre-placements
+	PreHeld      uint64 // accesses held on a running pre-placement
+	PreHeldPages uint64
+	PreCostSkip  uint64 // untouched predicted pages skipped by the cost test
+	PreTouched   uint64 // predicted pages skipped because already touched
+	PreHomeOK    uint64 // predicted pages already at the predicted home
+	EarlyObs     uint64 // observations from the early signal
+	CountHotN    uint64 // pages found hot by the counters
+	// cmig (r3)
+	CmigPages, CmigLines, CmigDropped, CmigAborts uint64
+	CmigHolderHits, CmigInvals, CmigUpgrades      uint64
+	PreChecks                                     uint64 // pre-placed pages checked against their dominant GPM
+	PreCheckHits                                  uint64
+	PrePrecSkip                                   uint64 // observations whose window was skipped for low precision
+	PreBudgetSkip                                 uint64 // predicted pages skipped: too many unchecked pre-placements
 	// realism
 	TrackEvict   uint64 // tracking entries evicted (TrackCap)
 	DecisionMsgs uint64 // evaluations and signals reported to the driver
@@ -380,8 +387,10 @@ type adaptState struct {
 	acc, nextEval                   float64
 	lastKern, kernSeen, kernWritten int
 	r3Evaluated                     bool
-	m3Hits                          uint64        // r3: accesses served by lines readers keep (M3)
-	accOrig                         float64       // r3: access cost at the original home since a pre-placement
+	m3Hits                          uint64  // r3: accesses served by lines readers keep (M3)
+	accOrig                         float64 // r3: access cost at the original home since a pre-placement
+	cmigHolders                     uint64  // r3: GPMs whose L2 got the page's lines by cmig
+	cmigBusy                        bool
 	preClass                        int           // r3: distance class of the prediction that pre-placed the page
 	trackEl                         *list.Element // TrackCap LRU entry (nil = not tracked)
 	preHeld                         bool
@@ -732,6 +741,9 @@ func (m *Manager) adaptIssued(now sim.VTimeInSec, dev uint64, pid vm.PID,
 		m.r3Kernel(a)
 	}
 	if isWrite {
+		if a.cmigHolders != 0 {
+			m.r3CmigWrite(now, a, m.ownerOf(a.origPA))
+		}
 		a.writeSeq++
 		a.writeKernel = m.kernel
 		b := (vAddr >> log2Block) & (blocksPerPage - 1)

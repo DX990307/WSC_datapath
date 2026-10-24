@@ -67,6 +67,7 @@ import (
 	"math/bits"
 	"sort"
 
+	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 )
 
@@ -503,12 +504,45 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 			}
 		}
 	}
+	if c.Cmig && uniform && a.writeKernel != m.kernel && !a.cmigBusy {
+		// L2-resident migration to the reader with the most regret: its
+		// future fetches hit its own L2; only the copy is paid
+		var t uint64
+		var tr float64
+		for g, x := range tot {
+			if x <= 0 || uint64(g) == home[0] || a.cmigHolders&(1<<uint(g)) != 0 {
+				continue
+			}
+			if r := x * m.r3RTT(uint64(g), home[0]); r > tr {
+				t, tr = uint64(g), r
+			}
+		}
+		if tr > 0 && m.gpms[t].InstallRemote != nil {
+			pick(opt{act: actCmig, dst: [blocksPerPage]uint64{t, t, t, t}, regret: tr,
+				cost: m.r3Copy(home[0], t, float64(uint64(1)<<m.log2PageSize))})
+		}
+	}
 	if chosen == nil {
 		a.nextEval = 2 * a.acc
 		return
 	}
 	a.bucket = readerBucket(readers)
 	m.AStats.Decided[chosen.act][a.bucket]++
+	if chosen.act == actCmig {
+		t := chosen.dst[0]
+		u.counts[t] = 0
+		if a.bc[0] != nil {
+			for b := range a.bc {
+				a.bc[b][t] = 0
+			}
+		}
+		a.acc, a.nextEval = 0, 0
+		m.startCmig(now, u, a, p, home[0], t)
+		return
+	}
+	if a.cmigHolders != 0 && (chosen.act == actMove || chosen.act == actBlock) {
+		m.AStats.CmigUpgrades++
+	}
 	if chosen.act == actReplicate {
 		a.acc, a.nextEval = 0, 0
 		if a.buf != nil {
@@ -714,4 +748,59 @@ func (m *Manager) r3Check(u *unit, a *adaptState) {
 		a.buf.evHits[a.preClass]++
 		m.AStats.PreCheckHits++
 	}
+}
+
+// startCmig pulls the page from its home into GPM t's L2 (copy engine; the
+// lines are installed like M3 fills, so the normal L2 replacement and the
+// M3 kernel-boundary rules apply). A write to the page during the copy
+// cancels the install.
+func (m *Manager) startCmig(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Page, home, t uint64) {
+	ps := uint64(1) << m.log2PageSize
+	seq, kern := a.writeSeq, m.kernel
+	a.cmigBusy = true
+	m.AStats.CopyBytes += ps
+	m.gpms[t].Engine.enqueue(now, &chunk{
+		src:      m.gpms[home].Engine,
+		srcPAddr: p.PAddr,
+		dstPAddr: p.PAddr,
+		size:     ps,
+		install: func(now sim.VTimeInSec, data []byte) {
+			a.cmigBusy = false
+			if a.writeSeq != seq || m.kernel != kern {
+				m.AStats.CmigAborts++
+				return
+			}
+			line := m.cfg.LineBytes
+			n := 0
+			for off := uint64(0); off < ps; off += line {
+				if m.gpms[t].InstallRemote(now, p.PID, p.PAddr+off,
+					append([]byte(nil), data[off:off+line]...)) {
+					n++
+				} else {
+					m.AStats.CmigDropped++
+				}
+			}
+			m.AStats.CmigLines += uint64(n)
+			if n > 0 {
+				a.cmigHolders |= 1 << t
+				m.AStats.CmigPages++
+			}
+		},
+	})
+}
+
+// r3CmigWrite: a write to a page with cmig holders sends them an
+// invalidation message each (the M3 kernel-boundary rules keep the data
+// coherent; the messages are the traffic of the holder table).
+func (m *Manager) r3CmigWrite(now sim.VTimeInSec, a *adaptState, home uint64) {
+	for d, g := range m.gpms {
+		if g == nil || a.cmigHolders&(1<<uint(d)) == 0 {
+			continue
+		}
+		if src := m.gpms[home]; src != nil && src.Engine != nil && g.Engine != nil {
+			src.Engine.sendInval(now, g.Engine)
+			m.AStats.CmigInvals++
+		}
+	}
+	a.cmigHolders = 0
 }

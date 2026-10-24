@@ -284,6 +284,9 @@ func (b *R9NanoPlatformBuilder) buildPageMigrationManager(
 				return l2.AuthoritativeResidentLookup(0, a) ||
 					l2.AuthoritativeMSHRLookup(0, a)
 			},
+			InstallRemote: func(now sim.VTimeInSec, pid vm.PID, a uint64, data []byte) bool {
+				return l2Of(a).InstallRemoteLine(now, pid, a, data)
+			},
 		}
 	}
 	m := pagemigration.NewManager("PageMigrationManager", b.engine,
