@@ -49,7 +49,7 @@ func TestCostReplacementRemoteFillEvictsLocal(t *testing.T) {
 			return 1
 		}
 		return 10
-	}, nil, true)
+	}, 0, false, nil, true)
 	setLocal(c, 0, 0x0)
 	setLocal(c, 1, 0x100)
 	if !c.installRemoteDataFill(l2resFill(remote, 1)) {
@@ -76,7 +76,7 @@ func TestCostReplacementRemoteFillEvictsLocal(t *testing.T) {
 			return 10
 		}
 		return 1
-	}, nil, true)
+	}, 0, false, nil, true)
 	setLocal(c2, 0, uint64(1)<<33)
 	setLocal(c2, 1, uint64(1)<<33+0x100)
 	c2.directory.Visit(c2.directory.GetSets()[0].Blocks[0]) // hits: RRPV 0
@@ -88,7 +88,7 @@ func TestCostReplacementRemoteFillEvictsLocal(t *testing.T) {
 			return 10
 		}
 		return 1
-	}, nil, true)
+	}, 0, false, nil, true)
 	if c2.installRemoteDataFill(f) {
 		t.Fatal("cheap first-touch fill replaced an expensive hot line")
 	}
@@ -184,7 +184,7 @@ func TestCostVictimFinderMeasuredReuse(t *testing.T) {
 			return 1
 		}
 		return 3
-	}, func(a uint64) int { return int(a >> 33 & 1) }, false)
+	}, 0, false, func(a uint64) int { return int(a >> 33 & 1) }, false)
 	f := c.CostFinder()
 	// local lines: hits in state 0 are frequent; remote lines in state 2
 	// are evicted without hits

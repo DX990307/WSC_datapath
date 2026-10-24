@@ -42,6 +42,10 @@ var l2resReuseFlag = flag.String("l2res-reuse", "measured",
 	"R4: re-use probability of a line by RRPV: measured (per class local/remote, "+
 		"online hit-vs-eviction counts) or fixed (1, 1/2, 1/4, 1/8).")
 
+var l2resLocalMeasureFlag = flag.Bool("l2res-local-measure", true,
+	"R4: the local re-fetch latency is the measured mean of the slice's demand read misses "+
+		"(starting at -l2res-local-ns).")
+
 // wireL2Res installs the R4 mechanisms after the page-migration manager.
 func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 	drv *driver.Driver, retain *writeback.RemoteRetainTracker) *writeback.HolderTable {
@@ -59,11 +63,11 @@ func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 		local := *l2resLocalNSFlag
 		for _, gpu := range b.gpus {
 			dev := gpu.GPUID
-			cost := func(addr uint64) float64 {
+			rtt := func(addr uint64) float64 {
 				if mode == "rrip" {
-					return 1
+					return 0
 				}
-				return local + m.L2ResRTT(dev, addr>>33, mode == "blind")
+				return m.L2ResRTT(dev, addr>>33, mode == "blind")
 			}
 			class := func(addr uint64) int {
 				if mode == "rrip" || addr>>33 == dev {
@@ -72,7 +76,8 @@ func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 				return 1
 			}
 			for _, l2 := range gpu.pm.l2s {
-				l2.EnableCostReplacement(cost, class, *l2resReuseFlag == "fixed")
+				l2.EnableCostReplacement(rtt, local, *l2resLocalMeasureFlag && mode != "rrip", class,
+					*l2resReuseFlag == "fixed")
 			}
 		}
 		fmt.Printf("[Config] R4 cost-aware L2 replacement (%s, local %.0f ns, re-use %s)\n",
@@ -145,6 +150,8 @@ func (r *Runner) reportL2ResStats() {
 			s.PulledUsed += x.PulledUsed
 			s.VictimScoreSum += x.VictimScoreSum
 			s.VictimCount += x.VictimCount
+			s.LocalMissSamples += x.LocalMissSamples
+			s.LocalMissSumNS += x.LocalMissSumNS
 		}
 	}
 	col := func(what string, v float64) { r.metricsCollector.Collect("L2Res", what, v) }
@@ -176,6 +183,9 @@ func (r *Runner) reportL2ResStats() {
 	col("l2r_pulled_installed", float64(s.PulledInstalled))
 	col("l2r_pulled_dropped", float64(s.PulledDropped))
 	col("l2r_pulled_used", float64(s.PulledUsed))
+	if s.LocalMissSamples > 0 {
+		col("l2r_local_miss_mean_ns", s.LocalMissSumNS/float64(s.LocalMissSamples))
+	}
 	if s.VictimCount > 0 {
 		col("l2r_victim_score_mean", s.VictimScoreSum/float64(s.VictimCount))
 	}

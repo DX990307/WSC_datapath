@@ -108,11 +108,13 @@ type Cache struct {
 	retainStats       RemoteRetainBoundaryStats
 	// ISCA27 R4 (l2res.go): cost-aware replacement and the owner-side
 	// holder table. nil unless enabled.
-	costFinder      *cache.CostVictimFinder
-	holders         *HolderTable
-	holderID        int
-	remotePageIndex map[uint64]map[*cache.Block]struct{}
-	l2resStats      L2ResStats
+	costFinder       *cache.CostVictimFinder
+	holders          *HolderTable
+	holderID         int
+	remotePageIndex  map[uint64]map[*cache.Block]struct{}
+	l2resStats       L2ResStats
+	localMissNS      float64
+	measureLocalMiss bool
 
 	localMemoryPathStats LocalMemoryPathStats
 	fillForwarding       bool

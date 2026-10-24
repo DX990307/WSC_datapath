@@ -55,24 +55,43 @@ type L2ResStats struct {
 	// the remote fills installed under cost-aware replacement
 	VictimScoreSum float64
 	VictimCount    uint64
+	// measured local miss latency (demand read misses)
+	LocalMissSamples uint64
+	LocalMissSumNS   float64
 }
 
 // GetL2ResStats returns the R4 counters.
 func (c *Cache) GetL2ResStats() L2ResStats { return c.l2resStats }
 
-// EnableCostReplacement switches the slice to cost-aware replacement; cost
-// gives the re-fetch latency (ns) of the line at a physical address, class
-// whether it is remote (1) or local (0); fixed uses fixed re-use weights
-// per RRPV instead of the measured probabilities.
-func (c *Cache) EnableCostReplacement(cost func(addr uint64) float64,
-	class func(addr uint64) int, fixed bool) {
+// EnableCostReplacement switches the slice to cost-aware replacement. The
+// re-fetch latency of a line is the local miss latency plus rtt(addr) (the
+// round trip to a remote home, 0 for local lines). With measureLocal the
+// local miss latency is measured (EWMA of this slice's demand read misses,
+// starting at localNS), otherwise localNS. class tells remote (1) from local
+// (0); fixed uses fixed re-use weights per RRPV instead of the measured
+// probabilities.
+func (c *Cache) EnableCostReplacement(rtt func(addr uint64) float64, localNS float64,
+	measureLocal bool, class func(addr uint64) int, fixed bool) {
 	d, ok := c.directory.(*cachepkg.DirectoryImpl)
 	if !ok {
 		panic("cost replacement needs the default directory")
 	}
+	c.localMissNS = localNS
+	c.measureLocalMiss = measureLocal
+	cost := func(addr uint64) float64 { return c.localMissNS + rtt(addr) }
 	c.costFinder = cachepkg.NewCostVictimFinder(cost, class)
 	c.costFinder.Fixed = fixed
 	d.SetVictimFinder(c.costFinder)
+}
+
+// noteLocalMiss updates the measured local miss latency (R4).
+func (c *Cache) noteLocalMiss(ns float64) {
+	if c.costFinder == nil || !c.measureLocalMiss {
+		return
+	}
+	c.localMissNS += (ns - c.localMissNS) / 256
+	c.l2resStats.LocalMissSamples++
+	c.l2resStats.LocalMissSumNS += ns
 }
 
 // CostFinder returns the cost-aware victim finder (nil = LRU).

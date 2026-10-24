@@ -96,6 +96,9 @@ func (s *mshrStage) respondRead(
 	dataReady := builder.Build()
 	s.cache.topSender.Send(dataReady)
 	s.cache.recordDemandReadCompletion(now, trans)
+	if trans.read != nil && !trans.prefetch && !trans.read.LookupOnly && now >= trans.l2Arrival {
+		s.cache.noteLocalMiss(float64(now-trans.l2Arrival) * 1e9)
+	}
 	memtrace.ObservationTransitionByRequest(
 		read.Meta().ID, "l2_response_ready", "l2_response_link", now)
 
