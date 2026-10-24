@@ -215,7 +215,6 @@ func (m *Manager) l2rStartPull(now sim.VTimeInSec, a *adaptState, p vm.Page, hom
 		dstPAddr: p.PAddr,
 		size:     ps,
 		mask:     o.lines,
-		pid:      p.PID,
 		install: func(t sim.VTimeInSec, data []byte) {
 			if a.writeSeq != seq || m.kernel != kern {
 				m.L2Res.PullAborts++
