@@ -238,6 +238,8 @@ type Manager struct {
 	drvEnd       []sim.VTimeInSec // per GPM driver queue (P21 BatchSW)
 	drvN         []int
 	lookupPass   map[Waker]sim.VTimeInSec
+	cmigHit      []uint64 // r3 cmig: fetches by a GPM of its cmig pages served by the pulled lines
+	cmigMiss     []uint64 // ... and those that still went to the home
 	replOrder    []*unit
 	AStats       AdaptStats
 	// Storage is the global storage (only for the oracle replica list).

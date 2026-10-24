@@ -86,6 +86,14 @@ func (c *Cache) recordRemoteFillDropped(fill *mem.RemoteDataFill) {
 }
 
 func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
+	return c.installRemoteDataFillPolicy(fill, false)
+}
+
+// installRemoteDataFillPolicy installs a remote fill; evictLocalClean lets
+// it replace a clean local line chosen by the normal victim policy (P21
+// cmig: a predicted demand fill), otherwise only invalid ways and other
+// remote lines are used (opportunistic M3 fills).
+func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocalClean bool) bool {
 	c.recordRemoteFillAttempt(fill)
 	if c.remoteReplicaFilter == nil || fill == nil {
 		c.recordRemoteFillDropped(fill)
@@ -139,10 +147,13 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 	// Remote clean fills are opportunistic. Never evict an ordinary local clean
 	// line for one. Invalid ways and existing remote-clean lines remain eligible
 	// under the benchmark-independent victim policy.
-	if victimWasValid && !replacedRemote {
+	if victimWasValid && !replacedRemote && !evictLocalClean {
 		c.remoteReplicaStats.LocalCleanProtectionDrops++
 		c.recordRemoteFillDropped(fill)
 		return false
+	}
+	if victimWasValid && !replacedRemote {
+		c.remoteReplicaStats.FillDisplacedLocalClean++
 	}
 	if replacedRemote {
 		delete(c.remoteReplicaBlocks, block)
@@ -384,5 +395,7 @@ func (c *Cache) InstallRemoteLine(
 		Generation: c.remoteReplicaGeneration,
 	}
 	fill.SendTime = now
-	return c.installRemoteDataFill(fill)
+	// a predicted demand fill: normal replacement (clean local lines may be
+	// evicted; dirty, locked and in-use lines never)
+	return c.installRemoteDataFillPolicy(fill, true)
 }

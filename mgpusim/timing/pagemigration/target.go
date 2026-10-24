@@ -252,8 +252,11 @@ func (m *Manager) ReplicaHit(dev uint64, pAddr uint64) {
 	u := m.units[m.unitOf(info.pid, info.vAddr)]
 	if u != nil && u.a != nil && m.cfg.Adapt.r3() {
 		u.a.m3Hits++ // reuse of lines the readers keep (r3 re-fetch cost)
-		if u.a.cmigHolders&(1<<dev) != 0 {
+		if u.a.cmigHolders&(1<<dev) != 0 && u.a.cmigKernel == m.kernel {
 			m.AStats.CmigHolderHits++
+			if m.cmigHit != nil {
+				m.cmigHit[dev]++
+			}
 		}
 	}
 	if u == nil || u.phase != phaseIdle || u.counts[dev] == 0 {

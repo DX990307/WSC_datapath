@@ -139,6 +139,10 @@ func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr
 	if !remote {
 		return
 	}
+	if a.cmigHolders&(1<<dev) != 0 && a.cmigKernel == m.kernel && !a.cmigBusy &&
+		m.cmigMiss != nil {
+		m.cmigMiss[dev]++ // a fetch of a cmig page the pulled lines did not serve
+	}
 	a.acc += m.r3RTT(dev, m.homeOf(pAddr))
 	if a.nextEval == 0 {
 		a.nextEval = m.r3Fixed()
@@ -504,16 +508,23 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 			}
 		}
 	}
+	if a.cmigKernel != m.kernel {
+		a.cmigHolders, a.cmigKernel = 0, m.kernel // attempts are per kernel
+	}
 	if c.Cmig && uniform && a.writeKernel != m.kernel && !a.cmigBusy {
 		// L2-resident migration to the reader with the most regret: its
-		// future fetches hit its own L2; only the copy is paid
+		// future fetches hit its own L2 with the measured probability that
+		// a fetch of a cmig page there is served by the pulled lines
+		// (they may be dropped, replaced or invalidated first); only the
+		// copy is paid; one attempt per reader, page and kernel
 		var t uint64
 		var tr float64
 		for g, x := range tot {
 			if x <= 0 || uint64(g) == home[0] || a.cmigHolders&(1<<uint(g)) != 0 {
 				continue
 			}
-			if r := x * m.r3RTT(uint64(g), home[0]); r > tr {
+			ph := float64(m.cmigHit[g]+1) / float64(m.cmigHit[g]+m.cmigMiss[g]+2)
+			if r := x * m.r3RTT(uint64(g), home[0]) * ph; r > tr {
 				t, tr = uint64(g), r
 			}
 		}
@@ -554,6 +565,10 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 	}
 	if a.preplaced {
 		m.AStats.PreFallback++
+		if a.preWrong && a.buf != nil {
+			a.buf.preWrongMoved++
+			a.preWrong = false
+		}
 	}
 	if a.buf != nil {
 		a.buf.sumRegret += chosen.regret
@@ -596,13 +611,26 @@ func (m *Manager) r3PrePlaceOK(b *buffer, k int, h, d uint64) bool {
 	if b.nMig == 0 {
 		return false
 	}
-	// evidence at this distance class (Laplace prior): out-of-sample tests
-	// of the rule's moving predictions and checks of pre-placed pages
-	p := float64(b.evHits[k]+1) / float64(b.evTests[k]+2)
+	// evidence (Laplace prior): checks of pre-placed pages once there are
+	// any (they test exactly the predictions acted on), before that the
+	// trusted rule's moving predictions of new observations
+	tests, hits := 0, 0
+	for i := range b.evTests {
+		tests += b.evTests[i]
+		hits += b.evHits[i]
+	}
+	p := float64(hits+1) / float64(tests+2)
+	if b.preChecks > 0 {
+		p = float64(b.preHits+1) / float64(b.preChecks+2)
+	}
 	e := b.sumRegret / float64(b.nMig)
-	// a right placement saves about E, a wrong one costs about E (the page
-	// pays regret elsewhere and must be moved): p E - (1-p) E > copy
-	return (2*p-1)*e > m.r3Copy(h, d, float64(uint64(1)<<m.log2PageSize))
+	// a right placement saves about E (the regret the page would pay before
+	// being moved); a wrong one costs the share f of wrong placements that
+	// had to be moved again (measured, Laplace prior) times a migration
+	// (about E at break-even); a wrong one that need not move costs only
+	// the copy
+	f := float64(b.preWrongMoved+1) / float64(b.preChecks-b.preHits+2)
+	return e*(p-(1-p)*f) > m.r3Copy(h, d, float64(uint64(1)<<m.log2PageSize))
 }
 
 // SetMeshWidth sets the mesh width used for tile coordinates (7 by default).
@@ -747,6 +775,8 @@ func (m *Manager) r3Check(u *unit, a *adaptState) {
 		a.buf.preHits++
 		a.buf.evHits[a.preClass]++
 		m.AStats.PreCheckHits++
+	} else {
+		a.preWrong = true
 	}
 }
 
@@ -758,6 +788,7 @@ func (m *Manager) startCmig(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Pag
 	ps := uint64(1) << m.log2PageSize
 	seq, kern := a.writeSeq, m.kernel
 	a.cmigBusy = true
+	a.cmigHolders |= 1 << t // attempted: no second pull by t this kernel
 	m.AStats.CopyBytes += ps
 	m.gpms[t].Engine.enqueue(now, &chunk{
 		src:      m.gpms[home].Engine,
@@ -782,7 +813,6 @@ func (m *Manager) startCmig(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Pag
 			}
 			m.AStats.CmigLines += uint64(n)
 			if n > 0 {
-				a.cmigHolders |= 1 << t
 				m.AStats.CmigPages++
 			}
 		},

@@ -391,6 +391,8 @@ type adaptState struct {
 	accOrig                         float64 // r3: access cost at the original home since a pre-placement
 	cmigHolders                     uint64  // r3: GPMs whose L2 got the page's lines by cmig
 	cmigBusy                        bool
+	cmigKernel                      int
+	preWrong                        bool          // r3: the pre-placement check missed
 	preClass                        int           // r3: distance class of the prediction that pre-placed the page
 	trackEl                         *list.Element // TrackCap LRU entry (nil = not tracked)
 	preHeld                         bool
@@ -427,6 +429,7 @@ type buffer struct {
 	r3Evaluated, repDecided int     // r3: pages evaluated, pages that decided replicate
 	sumRepRegret            float64
 	nMig                    int
+	preWrongMoved           int // r3: pre-placed pages that missed their check and were moved later
 	// r3 evidence by distance class (log2 of the distance to the nearest
 	// observation): out-of-sample tests of the rule's moving predictions
 	evTests, evHits [numDistClass]int
@@ -510,6 +513,8 @@ func (m *Manager) initAdapt() {
 		a.FlatHops = float64(sum) / float64(n)
 	}
 	m.bhCount = make([]int, len(m.gpms))
+	m.cmigHit = make([]uint64, len(m.gpms))
+	m.cmigMiss = make([]uint64, len(m.gpms))
 	m.trackLRU = make([]*list.List, len(m.gpms))
 	for i := range m.trackLRU {
 		m.trackLRU[i] = list.New()
