@@ -200,3 +200,16 @@ func TestCostVictimFinderMeasuredReuse(t *testing.T) {
 }
 
 var cachepkgBlockLocal = cachepkg.Block{IsValid: true}
+
+func TestPullInstallDroppedAcrossBoundary(t *testing.T) {
+	c := l2resTestCache()
+	line := uint64(1)<<33 + 0x40
+	// a pull opened at 5, boundary at 7, data lands at 9: dropped
+	c.InvalidateWrittenRemoteReplicas(7, func(uint64) bool { return false })
+	if c.PullInstallLine(9, vm.PID(4), line, make([]byte, 64), 5) {
+		t.Fatal("pull opened before the boundary installed after it")
+	}
+	if !c.PullInstallLine(9, vm.PID(4), line, make([]byte, 64), 8) {
+		t.Fatal("pull opened after the boundary dropped")
+	}
+}

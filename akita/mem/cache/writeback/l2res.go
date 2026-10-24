@@ -472,7 +472,10 @@ func (c *Cache) PullInstallLine(
 		Address: addr, PID: pid, Data: data,
 		Generation: c.remoteReplicaGeneration, ReqTime: reqTime,
 	}
-	fill.SendTime = now
+	// the data may have been read at the home as early as reqTime: a pull
+	// opened before this slice's last kernel boundary must not install
+	// (the M3 stale-fill rule compares SendTime with the boundary)
+	fill.SendTime = reqTime
 	if !c.installRemoteDataFillPolicy(fill, true) {
 		c.l2resStats.PulledDropped++
 		return false
