@@ -46,6 +46,10 @@ var l2resLocalMeasureFlag = flag.Bool("l2res-local-measure", true,
 	"R4: the local re-fetch latency is the measured mean of the slice's demand read misses "+
 		"(starting at -l2res-local-ns).")
 
+var l2resFTProtectFlag = flag.Bool("l2res-ft-protect", false,
+	"R4: under cost replacement a first-touch remote fill may replace only invalid ways "+
+		"and remote lines (no valid local line).")
+
 // wireL2Res installs the R4 mechanisms after the page-migration manager.
 func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 	drv *driver.Driver, retain *writeback.RemoteRetainTracker) *writeback.HolderTable {
@@ -78,6 +82,7 @@ func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 			for _, l2 := range gpu.pm.l2s {
 				l2.EnableCostReplacement(rtt, local, *l2resLocalMeasureFlag && mode != "rrip", class,
 					*l2resReuseFlag == "fixed")
+				l2.FirstTouchProtect = *l2resFTProtectFlag
 			}
 		}
 		fmt.Printf("[Config] R4 cost-aware L2 replacement (%s, local %.0f ns, re-use %s)\n",

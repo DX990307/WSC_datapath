@@ -99,11 +99,22 @@ func (c *Cache) CostFinder() *cachepkg.CostVictimFinder { return c.costFinder }
 
 // costRemoteVictim picks the victim of a remote fill under cost-aware
 // replacement: never dirty, locked or in-use blocks; nil = drop the fill.
-func (c *Cache) costRemoteVictim(line uint64, insertRRPV uint8) *cachepkg.Block {
+func (c *Cache) costRemoteVictim(line uint64, insertRRPV uint8, firstTouch bool) *cachepkg.Block {
 	d := c.directory.(*cachepkg.DirectoryImpl)
 	set := d.SetOf(line)
+	protect := firstTouch && c.FirstTouchProtect
 	v := c.costFinder.FindVictimWhere(set, func(b *cachepkg.Block) bool {
-		return !(b.IsValid && b.IsDirty)
+		if b.IsValid && b.IsDirty {
+			return false
+		}
+		// first-touch fills (no evidence of re-use yet) may replace only
+		// invalid ways and remote lines
+		if protect && b.IsValid {
+			if _, remote := c.remoteReplicaBlocks[b]; !remote {
+				return false
+			}
+		}
+		return true
 	})
 	if v == nil {
 		return nil

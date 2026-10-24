@@ -108,13 +108,16 @@ type Cache struct {
 	retainStats       RemoteRetainBoundaryStats
 	// ISCA27 R4 (l2res.go): cost-aware replacement and the owner-side
 	// holder table. nil unless enabled.
-	costFinder       *cache.CostVictimFinder
-	holders          *HolderTable
-	holderID         int
-	remotePageIndex  map[uint64]map[*cache.Block]struct{}
-	l2resStats       L2ResStats
-	localMissNS      float64
-	measureLocalMiss bool
+	costFinder      *cache.CostVictimFinder
+	holders         *HolderTable
+	holderID        int
+	remotePageIndex map[uint64]map[*cache.Block]struct{}
+	l2resStats      L2ResStats
+	localMissNS     float64
+	// FirstTouchProtect (R4): under cost replacement a first-touch remote
+	// fill may not evict a valid local line.
+	FirstTouchProtect bool
+	measureLocalMiss  bool
 
 	localMemoryPathStats LocalMemoryPathStats
 	fillForwarding       bool

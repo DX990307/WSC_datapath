@@ -230,7 +230,7 @@ func (c *Cache) installRemoteDataFillCost(fill *mem.RemoteDataFill, line uint64)
 	if fill.RequireInvalidVictim {
 		ins = 3
 	}
-	block := c.costRemoteVictim(line, ins)
+	block := c.costRemoteVictim(line, ins, fill.RequireInvalidVictim)
 	if block == nil {
 		c.recordRemoteFillDropped(fill)
 		return false
