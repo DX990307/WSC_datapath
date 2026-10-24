@@ -200,6 +200,12 @@ type AdaptConfig struct {
 	// "" off, "always" (every first touch migrates, then R3), "predict"
 	// (buy at first touch by the expected-value test, else rent).
 	FT string
+	// R3Mult (ablation): an action needs regret >= R3Mult x its cost (1 =
+	// break-even; 2 = Black & Sleator's migration threshold 2m).
+	// R3Decrement (ablation): each counted access also decrements the
+	// largest other non-zero counter (their algorithm M).
+	R3Mult      float64
+	R3Decrement bool
 
 	// ReplicaList (oracle region replication): original physical page ->
 	// replica devices. A listed page gets zero-cost read-only copies (fresh
@@ -251,6 +257,7 @@ func DefaultAdaptConfig() AdaptConfig {
 		R3BaseNS:           65.7,
 		R3HopNS:            72.2,
 		R3LinkBytesPerNS:   384,
+		R3Mult:             1,
 		ObservedReaders:    true,
 		HoldCost:           true,
 	}
@@ -348,6 +355,9 @@ type AdaptStats struct {
 	BhPeak       uint64 // largest block-home table on one GPM
 	// first touch (round 5, ft.go)
 	FTFirst, FTMoves, FTRent, FTTests, FTHits, FTHarm uint64
+	// GRIT baseline (grit.go)
+	GritFaults, GritTouchMoves, GritCounterMoves, GritDupFaults uint64
+	GritToCounter, GritToDup, GritAdopted                       uint64
 }
 
 type adaptState struct {
@@ -409,6 +419,12 @@ type adaptState struct {
 	ftClass           int
 	ftAcc             float64
 	ftTested, ftMoved bool
+	// GRIT baseline (grit.go): scheme, faults and read/write bit of the
+	// current scheme, GPMs waiting for a copy, write epoch
+	gScheme, gFaults int
+	gWritten         bool
+	gWait            uint64
+	gEpoch           uint64
 }
 
 type replica struct {
@@ -691,8 +707,20 @@ func (m *Manager) adaptCount(now sim.VTimeInSec, u *unit, dev, pAddr uint64, rem
 		if a.bc[0] != nil {
 			a.bc[(pAddr>>log2Block)&3][dev]++
 		}
+		if m.cfg.Adapt.R3Decrement {
+			// Black & Sleator's algorithm M: the access also takes one
+			// from a competing non-zero counter (here the largest other)
+			decOther(u.counts, dev)
+			if a.bc[0] != nil {
+				decOther(a.bc[(pAddr>>log2Block)&3], dev)
+			}
+		}
 	}
 	a.n++
+	if m.cfg.Adapt.grit() {
+		m.gritCount(now, u, a, dev, remote)
+		return
+	}
 	if m.cfg.Adapt.r3() {
 		if a.buf != nil {
 			a.buf.accesses++
@@ -774,7 +802,7 @@ func (m *Manager) adaptIssued(now sim.VTimeInSec, dev uint64, pid vm.PID,
 		}
 		return
 	}
-	if !vector || a.readMask&(1<<dev) != 0 {
+	if !vector || a.readMask&(1<<dev) != 0 || m.cfg.Adapt.grit() {
 		return
 	}
 	m.track(u, a)
@@ -1750,6 +1778,9 @@ func (m *Manager) KernelBoundary(now sim.VTimeInSec) {
 		if m.cfg.Adapt.ReplicaList != nil && m.replicasCurrent(u) {
 			continue // master unchanged (no host copy): the copies stay valid
 		}
+		if m.cfg.Adapt.grit() && m.gritReplicasCurrent(u) {
+			continue // GRIT copies live until a write
+		}
 		m.collapse(now, u, false)
 		u.a.hotHandled = false
 		m.AStats.ReplicaKern++
@@ -1790,6 +1821,9 @@ func (m *Manager) adaptResolve(now sim.VTimeInSec, at Waker, dev uint64,
 			}
 		}
 		return page, true
+	}
+	if m.cfg.Adapt.grit() {
+		return m.gritResolve(now, at, dev, u, vector, isWrite, page)
 	}
 	if m.cfg.Adapt.ft() && vector {
 		if u == nil {
@@ -2326,6 +2360,19 @@ func (m *Manager) noteDrain(home uint64, ns float64) {
 }
 
 // mgInc is a Misra-Gries update with k counters over the per-GPM slots of c.
+// decOther decrements the largest counter of c other than d (if any).
+func decOther(c []uint32, d uint64) {
+	best := -1
+	for i, x := range c {
+		if uint64(i) != d && x > 0 && (best < 0 || x > c[best]) {
+			best = i
+		}
+	}
+	if best >= 0 {
+		c[best]--
+	}
+}
+
 func mgInc(c []uint32, d uint64, k int) {
 	if c[d] > 0 {
 		c[d]++

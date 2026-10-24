@@ -1,0 +1,13 @@
+{
+  "_description": "ISCA'27 P21 round 5 baseline: GRIT (HPCA 2024) on m3p (M3+), pagemigration/grit.go: per-page scheme on-touch (default: every non-home touch faults and migrates, the access waits) / counter (256 remote accesses of one GPM, 4 KB pages) / duplication (a read fault gives the reader a local copy, a write invalidates all copies); 4 faults re-select by the read/write bit (written -> counter, read-only -> duplication); neighboring-aware prediction over aligned 8 / 64 pages. Same real costs as R3: driver batches of 256 paying 5 us, shootdown 1 us, drain, copies over the mesh; copies kept across kernels until a write.",
+  "extends": "m3p.json",
+  "page-migration": "counter",
+  "pm-unit-kb": 4,
+  "pm-count-network": true,
+  "pm-max-migrations": 0,
+  "pm-cooldown-ns": 0,
+  "pm-adapt": true,
+  "pm-adapt-rule": "grit",
+  "pm-adapt-actions": "move",
+  "pm-adapt-copy-first": false
+}

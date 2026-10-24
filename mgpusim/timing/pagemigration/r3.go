@@ -387,7 +387,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 	}
 	var chosen *opt
 	pick := func(o opt) {
-		if o.regret < o.cost {
+		if o.regret < c.R3Mult*o.cost {
 			return
 		}
 		if chosen == nil || o.regret-o.cost > chosen.regret-chosen.cost {

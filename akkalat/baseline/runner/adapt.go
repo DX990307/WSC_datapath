@@ -112,6 +112,10 @@ var pmAdaptFTFlag = flag.String("pm-adapt-ft", "",
 	"P21 round 5 (r3): first touch inside the break-even rule: always (every first "+
 		"vector access migrates the page to the accessing GPM through the fault path, "+
 		"then R3) or predict (buy at first touch by the expected-value test).")
+var pmAdaptR3MultFlag = flag.Float64("pm-adapt-r3-mult", 1,
+	"P21 r3 ablation: an action needs regret >= this x its cost (2 = Black & Sleator's migration threshold).")
+var pmAdaptR3DecFlag = flag.Bool("pm-adapt-r3-decrement", false,
+	"P21 r3 ablation: each counted access also decrements the largest other non-zero counter (Black & Sleator's algorithm M).")
 var pmAdaptDumpFlag = flag.String("pm-adapt-dump", "",
 	"P21 diagnostics: write one line per tracked page to this file at the end.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
@@ -189,9 +193,11 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.BlockHomeCap = *pmAdaptBlockHomeCapFlag
 	a.ApproxCount = *pmAdaptApproxCountFlag
 	a.Rule = *pmAdaptRuleFlag
-	if a.Rule != "" && a.Rule != "r3" {
-		panic("-pm-adapt-rule must be empty or r3")
+	if a.Rule != "" && a.Rule != "r3" && a.Rule != "grit" {
+		panic("-pm-adapt-rule must be empty, r3 or grit")
 	}
+	a.R3Mult = *pmAdaptR3MultFlag
+	a.R3Decrement = *pmAdaptR3DecFlag
 	a.R3Blind = *pmAdaptR3BlindFlag
 	a.FT = *pmAdaptFTFlag
 	if a.FT != "" && a.FT != "always" && a.FT != "predict" {
@@ -233,14 +239,14 @@ func printAdaptConfig(c pagemigration.Config) {
 		"spread-other=%s prop-pages=%d prop-gate=%g predict-m=%d predict-window=%d "+
 		"base=%gns hop=%gns dom-share=%g max-migrations=%d hot-future=%d "+
 		"replica-budget=%dMB batch-amort=%g predict-touched=%v copy-first=%v "+
-		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v win-per-hit=%d pre-min-precision=%g pre-probe=%d+%d/hit track-cap=%d decide=%dns batch-sw=%v lookup=%dns blockhome-cap=%d approx-count=%v rule=%q r3-base=%gns r3-hop=%gns r3-link=%gB/ns flat=%v r3-blind=%v ft=%q\n",
+		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v win-per-hit=%d pre-min-precision=%g pre-probe=%d+%d/hit track-cap=%d decide=%dns batch-sw=%v lookup=%dns blockhome-cap=%d approx-count=%v rule=%q r3-base=%gns r3-hop=%gns r3-link=%gB/ns flat=%v r3-blind=%v ft=%q r3-mult=%g r3-decrement=%v\n",
 		*pmAdaptActionsFlag, a.CostModel, a.Alpha, a.FixedNS, a.CopyWeight,
 		a.QueueNS, a.EvalEvery, a.HotK, a.HotWindowNS, a.ConcShare,
 		a.SpreadOther, a.PropSmallPages, a.PropGate, a.PredictM, a.PredictWindow,
 		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations, a.HotFutureReaders,
 		a.ReplicaBudget>>20, a.BatchAmort, a.PredictTouched, a.CopyFirst,
 		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot, a.PreCopyWeight, a.PredictConstWindow, a.ObservedReaders, a.HoldCost, a.PredictWinPerHit, a.PreMinPrecision, a.PreProbe, a.PreProbePerHit, a.TrackCap, a.DecideNS, a.BatchSW, a.LookupNS, a.BlockHomeCap, a.ApproxCount, a.Rule, a.R3BaseNS, a.R3HopNS,
-		a.R3LinkBytesPerNS, a.FlatHops != 0, a.R3Blind, a.FT)
+		a.R3LinkBytesPerNS, a.FlatHops != 0, a.R3Blind, a.FT, a.R3Mult, a.R3Decrement)
 }
 
 // wireAdaptive installs what the adaptive placement needs beyond the page
@@ -249,6 +255,9 @@ func printAdaptConfig(c pagemigration.Config) {
 // notification (replica collapse).
 func (b *R9NanoPlatformBuilder) wireAdaptive(m *pagemigration.Manager) {
 	a := b.pageMigration.Adapt
+	if a.Rule == "grit" {
+		m.Storage = b.globalStorage // copies kept across kernels unless the host wrote the master
+	}
 	if a.ReplicaList != nil {
 		m.Storage = b.globalStorage
 		tileDev := map[uint64]uint64{}
@@ -368,6 +377,15 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 	col("pa_lookup_holds", float64(s.LookupHolds))
 	col("pa_bh_full", float64(s.BhFull))
 	col("pa_bh_peak", float64(s.BhPeak))
+	if a.Rule == "grit" {
+		col("pa_grit_faults", float64(s.GritFaults))
+		col("pa_grit_touch_moves", float64(s.GritTouchMoves))
+		col("pa_grit_counter_moves", float64(s.GritCounterMoves))
+		col("pa_grit_dup_faults", float64(s.GritDupFaults))
+		col("pa_grit_to_counter", float64(s.GritToCounter))
+		col("pa_grit_to_dup", float64(s.GritToDup))
+		col("pa_grit_adopted", float64(s.GritAdopted))
+	}
 	if a.FT != "" {
 		col("pa_ft_first", float64(s.FTFirst))
 		col("pa_ft_moves", float64(s.FTMoves))

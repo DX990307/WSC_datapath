@@ -51,3 +51,31 @@ func TestFTPredictLearns(t *testing.T) {
 		t.Fatalf("always: first touch should migrate: %+v", m.AStats)
 	}
 }
+
+// GRIT: a read-only page touched by several GPMs ping-pongs under on-touch
+// until the fourth fault, then switches to duplication; a reader then
+// waits for its own copy.
+func TestGritOnTouchToDup(t *testing.T) {
+	m, pt := r3Wafer(t)
+	m.cfg.Adapt.Rule = "grit"
+	m.cfg.Adapt.Replicate = false
+	u := m.getUnit(m.unitOf(1, 0x100000))
+	for i, dev := range []uint64{10, 20, 30} {
+		p, _ := (*pt).Find(1, 0x100000)
+		if _, ok := m.adaptResolve(0, nopWaker{}, dev, u, true, false, p); ok {
+			t.Fatalf("touch %d by %d should fault", i, dev)
+		}
+		// pretend the migration finished
+		p.DeviceID = dev
+		p.PAddr = dev*8*gb + 0x5000
+		(*pt).Update(p)
+		u.phase = phaseIdle
+	}
+	p, _ := (*pt).Find(1, 0x100000)
+	if _, ok := m.adaptResolve(0, nopWaker{}, 40, u, true, false, p); ok {
+		t.Fatal("fourth touch should fault (duplication)")
+	}
+	if u.a.gScheme != gritDup || m.AStats.GritToDup != 1 || m.AStats.GritDupFaults != 1 {
+		t.Fatalf("scheme %d stats %+v", u.a.gScheme, m.AStats)
+	}
+}
