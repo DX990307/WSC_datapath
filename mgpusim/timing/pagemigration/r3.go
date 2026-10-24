@@ -54,9 +54,12 @@ package pagemigration
 // nobody touched; the page is pre-placed iff p E - (1 - p) E > copy (a
 // right placement saves about E, a wrong one costs about as much), where
 // E is the mean regret the buffer's migrated pages had accumulated when
-// they were moved and p = (hits + 1) / (tests + 2) over every out-of-sample
-// test of the rule: its predictions of new observations while trusted and
-// the checks of pre-placed pages at their first evaluation. Observations for the rule: a page's best candidate at its
+// they were moved and p = (hits + 1) / (tests + 2) over the out-of-sample
+// tests of the rule at the page's distance class (log2 of the distance to
+// the nearest observation): the trusted rule's moving predictions of new
+// observations and the checks of pre-placed pages (made when their accesses
+// would have cost one evaluation at the original home, local or remote).
+// A rule is trusted only as far from its observations as it was validated. Observations for the rule: a page's best candidate at its
 // first evaluation.
 
 import (
@@ -555,17 +558,13 @@ func dominantF(c []float64) (uint64, float64, float64) {
 
 // r3PrePlaceOK is the pre-placement test of an untouched page of buffer b
 // predicted at d (home h).
-func (m *Manager) r3PrePlaceOK(b *buffer, h, d uint64) bool {
+func (m *Manager) r3PrePlaceOK(b *buffer, k int, h, d uint64) bool {
 	if b.nMig == 0 {
 		return false
 	}
-	// evidence (Laplace prior): the checks of pre-placed pages once there
-	// are any (they test exactly the predictions acted on); before that the
-	// trusted rule's predictions of new observations that would move data
-	p := float64(b.obsHit+1) / float64(b.obsPred+2)
-	if b.preChecks > 0 {
-		p = float64(b.preHits+1) / float64(b.preChecks+2)
-	}
+	// evidence at this distance class (Laplace prior): out-of-sample tests
+	// of the rule's moving predictions and checks of pre-placed pages
+	p := float64(b.evHits[k]+1) / float64(b.evTests[k]+2)
 	e := b.sumRegret / float64(b.nMig)
 	// a right placement saves about E, a wrong one costs about E (the page
 	// pays regret elsewhere and must be moved): p E - (1-p) E > copy
@@ -707,10 +706,12 @@ func (m *Manager) r3Check(u *unit, a *adaptState) {
 	}
 	a.preCheck = true
 	a.buf.preChecks++
+	a.buf.evTests[a.preClass]++
 	m.AStats.PreChecks++
 	home, _ := m.pageHomes(p)
 	if m.r3Best(u, a, home) == home[0] {
 		a.buf.preHits++
+		a.buf.evHits[a.preClass]++
 		m.AStats.PreCheckHits++
 	}
 }

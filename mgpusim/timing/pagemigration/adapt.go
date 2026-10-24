@@ -382,6 +382,7 @@ type adaptState struct {
 	r3Evaluated                     bool
 	m3Hits                          uint64        // r3: accesses served by lines readers keep (M3)
 	accOrig                         float64       // r3: access cost at the original home since a pre-placement
+	preClass                        int           // r3: distance class of the prediction that pre-placed the page
 	trackEl                         *list.Element // TrackCap LRU entry (nil = not tracked)
 	preHeld                         bool
 	origPA                          uint64 // physical address of the frame at tracking start
@@ -417,7 +418,9 @@ type buffer struct {
 	r3Evaluated, repDecided int     // r3: pages evaluated, pages that decided replicate
 	sumRepRegret            float64
 	nMig                    int
-	obsPred, obsHit         int // r3: trusted-rule predictions of new observations, and hits
+	// r3 evidence by distance class (log2 of the distance to the nearest
+	// observation): out-of-sample tests of the rule's moving predictions
+	evTests, evHits [numDistClass]int
 }
 
 func (a *AdaptConfig) on() bool { return a.Enabled }
@@ -1982,11 +1985,13 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 	if wasConf {
 		// out-of-sample test of the trusted rule (r3 evidence), only of
 		// the predictions that would move data (a pre-placement acts on
-		// those; "stays at its owner" predictions never do)
+		// those; "stays at its owner" predictions never do), by distance
+		// class to the nearest earlier observation
 		if pr := l.predict(idx, int(owner)-1); pr >= 0 && pr != int(owner)-1 {
-			b.obsPred++
+			k := distClass(l.nearest(idx))
+			b.evTests[k]++
 			if pr == int(dst)-1 {
-				b.obsHit++
+				b.evHits[k]++
 			}
 		}
 	}
@@ -2068,8 +2073,11 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 		}
 		dsts := [blocksPerPage]uint64{d, d, d, d}
 		if m.ppns[p.PAddr>>m.log2PageSize] == nil && c.r3() {
-			if m.r3PrePlaceOK(b, home[0], d) {
-				m.prePlace(now, v, dsts, actMove, true)
+			k := distClass(l.nearest(i))
+			if m.r3PrePlaceOK(b, k, home[0], d) {
+				if m.prePlace(now, v, dsts, actMove, true) {
+					va2.preClass = k
+				}
 			} else {
 				m.AStats.PreCostSkip++
 			}
@@ -2303,4 +2311,19 @@ func (m *Manager) preRelease(a *adaptState) {
 		a.buf.prePending--
 		a.preCounted = false
 	}
+}
+
+const numDistClass = 12
+
+// distClass is the log2 class of a page-index distance (0 for 0 or 1).
+func distClass(d int) int {
+	if d < 0 {
+		return numDistClass - 1
+	}
+	k := 0
+	for d > 1 && k < numDistClass-1 {
+		d >>= 1
+		k++
+	}
+	return k
 }

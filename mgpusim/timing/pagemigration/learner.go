@@ -266,3 +266,19 @@ func fitLin(h []obs) (linParams, bool) {
 	}
 	return best, true
 }
+
+// nearest is the distance from page index i to the nearest observation in
+// the history (-1 without history).
+func (l *learner) nearest(i int) int {
+	best := -1
+	for _, h := range l.hist {
+		d := h.i - i
+		if d < 0 {
+			d = -d
+		}
+		if best < 0 || d < best {
+			best = d
+		}
+	}
+	return best
+}
