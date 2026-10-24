@@ -416,6 +416,7 @@ type buffer struct {
 	r3Evaluated, repDecided int     // r3: pages evaluated, pages that decided replicate
 	sumRepRegret            float64
 	nMig                    int
+	obsPred, obsHit         int // r3: trusted-rule predictions of new observations, and hits
 }
 
 func (a *AdaptConfig) on() bool { return a.Enabled }
@@ -1977,6 +1978,13 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 	l := b.learn
 	m.AStats.PredictObs++
 	wasConf := l.conf >= 0
+	if wasConf {
+		// out-of-sample test of the trusted rule (r3 evidence)
+		b.obsPred++
+		if l.predict(idx, int(owner)-1) == int(dst)-1 {
+			b.obsHit++
+		}
+	}
 	hit := l.add(idx, int(dst)-1, int(owner)-1)
 	if hit {
 		m.AStats.PredictHits++

@@ -51,11 +51,12 @@ package pagemigration
 // every regret) doubles, starting at SW + shootdown.
 //
 // Pre-placement: the buffer's rule (learner.go) predicts the home of a page
-// nobody touched; the page is pre-placed iff p x E > copy, where p =
-// (hits + 1) / (checks + 2) over the buffer's pre-placed pages checked at
-// their first evaluation (the best candidate is the predicted home), and E
-// is the mean regret the buffer's migrated pages had accumulated when they
-// were moved. Observations for the rule: a page's best candidate at its
+// nobody touched; the page is pre-placed iff p E - (1 - p) E > copy (a
+// right placement saves about E, a wrong one costs about as much), where
+// E is the mean regret the buffer's migrated pages had accumulated when
+// they were moved and p = (hits + 1) / (tests + 2) over every out-of-sample
+// test of the rule: its predictions of new observations while trusted and
+// the checks of pre-placed pages at their first evaluation. Observations for the rule: a page's best candidate at its
 // first evaluation.
 
 import (
@@ -558,9 +559,13 @@ func (m *Manager) r3PrePlaceOK(b *buffer, h, d uint64) bool {
 	if b.nMig == 0 {
 		return false
 	}
-	p := float64(b.preHits+1) / float64(b.preChecks+2)
+	// evidence: every out-of-sample test of the rule (trusted predictions of
+	// new observations, checks of pre-placed pages), Laplace prior
+	p := float64(b.obsHit+b.preHits+1) / float64(b.obsPred+b.preChecks+2)
 	e := b.sumRegret / float64(b.nMig)
-	return p*e > m.r3Copy(h, d, float64(uint64(1)<<m.log2PageSize))
+	// a right placement saves about E, a wrong one costs about E (the page
+	// pays regret elsewhere and must be moved): p E - (1-p) E > copy
+	return (2*p-1)*e > m.r3Copy(h, d, float64(uint64(1)<<m.log2PageSize))
 }
 
 // SetMeshWidth sets the mesh width used for tile coordinates (7 by default).
