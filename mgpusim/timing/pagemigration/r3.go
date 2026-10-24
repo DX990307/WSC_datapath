@@ -123,6 +123,15 @@ func (m *Manager) r3Kernel(a *adaptState) {
 // r3Count is the R3 part of a counted access (after the counters).
 func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr uint64, remote bool) {
 	m.r3Kernel(a)
+	if a.preplaced && !a.preCheck && a.buf != nil {
+		// check a pre-placed page when its accesses would have cost one
+		// evaluation's worth at the original home, whether the prediction
+		// was right (accesses local) or wrong (remote): unbiased evidence
+		a.accOrig += m.r3RTT(dev, m.ownerOf(a.origPA))
+		if a.accOrig >= m.r3Fixed() {
+			m.r3Check(u, a)
+		}
+	}
 	if !remote {
 		return
 	}
@@ -335,15 +344,6 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 		a.observed = true
 		m.AStats.EarlyObs++
 		m.observe(now, a.buf, a.idx, best, home[0], false)
-	}
-	if a.preplaced && !a.preCheck && a.buf != nil {
-		a.preCheck = true
-		a.buf.preChecks++
-		m.AStats.PreChecks++
-		if best == home[0] {
-			a.buf.preHits++
-			m.AStats.PreCheckHits++
-		}
 	}
 	hold := m.r3Hold(now, a, p.PAddr, home[0])
 	fixed := m.r3Fixed() + hold
@@ -559,9 +559,13 @@ func (m *Manager) r3PrePlaceOK(b *buffer, h, d uint64) bool {
 	if b.nMig == 0 {
 		return false
 	}
-	// evidence: every out-of-sample test of the rule (trusted predictions of
-	// new observations, checks of pre-placed pages), Laplace prior
-	p := float64(b.obsHit+b.preHits+1) / float64(b.obsPred+b.preChecks+2)
+	// evidence (Laplace prior): the checks of pre-placed pages once there
+	// are any (they test exactly the predictions acted on); before that the
+	// trusted rule's predictions of new observations that would move data
+	p := float64(b.obsHit+1) / float64(b.obsPred+2)
+	if b.preChecks > 0 {
+		p = float64(b.preHits+1) / float64(b.preChecks+2)
+	}
 	e := b.sumRegret / float64(b.nMig)
 	// a right placement saves about E, a wrong one costs about E (the page
 	// pays regret elsewhere and must be moved): p E - (1-p) E > copy
@@ -656,5 +660,57 @@ func (m *Manager) r3PropagateReplicate(now sim.VTimeInSec, b *buffer, idx int, s
 		m.AStats.Decided[actReplicate][a.bucket]++
 		m.AStats.Propagated++
 		m.startReplicate(now, v, a, pg, home[0], rs)
+	}
+}
+
+// r3Best is the candidate with the largest regret over the page's counts
+// (the GPMs that accessed it, the weighted median, the current homes).
+func (m *Manager) r3Best(u *unit, a *adaptState, home [blocksPerPage]uint64) uint64 {
+	w := m.r3Weights(u, a)
+	tot := make([]float64, len(m.gpms))
+	for g := range m.gpms {
+		for b := 0; b < blocksPerPage; b++ {
+			tot[g] += w[b][g]
+		}
+	}
+	cands := []uint64{home[0]}
+	for g, x := range tot {
+		if x > 0 && m.gpms[g] != nil {
+			cands = append(cands, uint64(g))
+		}
+	}
+	if d, ok := m.r3Median(tot, -1); ok {
+		cands = append(cands, d)
+	}
+	best, bestR := home[0], 0.0
+	for _, c := range cands {
+		r := 0.0
+		for b := 0; b < blocksPerPage; b++ {
+			for g, x := range w[b] {
+				if x > 0 {
+					r += x * (m.r3RTT(uint64(g), home[b]) - m.r3RTT(uint64(g), c))
+				}
+			}
+		}
+		if r > bestR {
+			best, bestR = c, r
+		}
+	}
+	return best
+}
+
+// r3Check records whether a pre-placed page is at its best place.
+func (m *Manager) r3Check(u *unit, a *adaptState) {
+	p, ok := m.pageTable.Find(u.key.pid, u.key.idx<<m.unitLog2)
+	if !ok {
+		return
+	}
+	a.preCheck = true
+	a.buf.preChecks++
+	m.AStats.PreChecks++
+	home, _ := m.pageHomes(p)
+	if m.r3Best(u, a, home) == home[0] {
+		a.buf.preHits++
+		m.AStats.PreCheckHits++
 	}
 }

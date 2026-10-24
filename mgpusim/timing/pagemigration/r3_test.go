@@ -68,3 +68,32 @@ func TestR3MovesPrivatePage(t *testing.T) {
 		t.Fatalf("private page not moved to its reader: phase %d dst %d, %+v", u.phase, u.dst, m.AStats.Decided)
 	}
 }
+
+// A pre-placed page that its reader accesses locally (the prediction was
+// right) is checked too, and counts as a hit; a wrong one counts as a miss.
+func TestR3PrePlaceCheckIsUnbiased(t *testing.T) {
+	m, _ := r3Wafer(t)
+	right := m.getUnit(m.unitOf(1, 0x102000))
+	wrong := m.getUnit(m.unitOf(1, 0x103000))
+	for _, u := range []*unit{right, wrong} {
+		a := m.adaptUnit(u)
+		a.preplaced = true
+		if a.buf == nil {
+			t.Fatal("page without buffer")
+		}
+	}
+	// the right page was pre-placed (re-homed in place) at its reader 30
+	for b := uint64(0); b < blocksPerPage; b++ {
+		m.setBlockHome((8*gb+2*4096)>>log2Block+b, 30)
+	}
+	for k := 0; k < 200; k++ {
+		now := sim.VTimeInSec(float64(k) * 1e-9)
+		m.adaptCount(now, right, 30, 8*gb+2*4096+uint64(k%64)*64, false) // reader local
+		m.adaptCount(now, wrong, 40, 8*gb+3*4096+uint64(k%64)*64, true)  // far reader, remote
+	}
+	b := right.a.buf
+	if m.AStats.PreChecks != 2 || m.AStats.PreCheckHits != 1 || b.preChecks != 2 || b.preHits != 1 {
+		t.Fatalf("checks %d hits %d (buffer %d / %d), want 2 / 1",
+			m.AStats.PreChecks, m.AStats.PreCheckHits, b.preChecks, b.preHits)
+	}
+}
