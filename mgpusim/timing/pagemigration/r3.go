@@ -131,7 +131,11 @@ func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr
 		// check a pre-placed page when its accesses would have cost one
 		// evaluation's worth at the original home, whether the prediction
 		// was right (accesses local) or wrong (remote): unbiased evidence
-		a.accOrig += m.r3RTT(dev, m.ownerOf(a.origPA))
+		// the access costs RTT(dev, orig) had the page stayed and
+		// RTT(dev, here) where it is: count both, so a page pre-placed
+		// away from the GPM that reads it at its original home (wrong,
+		// RTT(dev, orig) = 0) is checked as surely as a right one
+		a.accOrig += m.r3RTT(dev, m.ownerOf(a.origPA)) + m.r3RTT(dev, m.homeOf(pAddr))
 		if a.accOrig >= m.r3Fixed() {
 			m.r3Check(u, a)
 		}
