@@ -84,6 +84,51 @@ func (c *Cache) EnableCostReplacement(rtt func(addr uint64) float64, localNS flo
 	d.SetVictimFinder(c.costFinder)
 }
 
+// Set dueling of the first-touch rule (R4, -l2res-ft-protect duel): leader
+// sets (index mod 32 = 0) protect valid local lines from first-touch remote
+// fills, leader sets (mod 32 = 1) do not; each side accumulates the latency
+// of the misses its sets take (local demand misses at the measured local
+// latency, network fetches of remote lines, seen as their fill attempts, at
+// the local latency plus the round trip); the other sets follow the cheaper
+// side. Accumulators are halved every 1024 misses.
+func (c *Cache) duelSide(addr uint64) int {
+	i := c.directory.(*cachepkg.DirectoryImpl).SetIndexOf(addr) % 32
+	if i < 2 {
+		return i
+	}
+	return -1
+}
+
+func (c *Cache) firstTouchProtected(addr uint64) bool {
+	if !c.FirstTouchDuel {
+		return c.FirstTouchProtect
+	}
+	switch c.duelSide(addr) {
+	case 0:
+		return true
+	case 1:
+		return false
+	}
+	return c.duelCost[0] < c.duelCost[1]
+}
+
+func (c *Cache) noteDuelMiss(addr uint64, ns float64) {
+	if !c.FirstTouchDuel {
+		return
+	}
+	side := c.duelSide(addr)
+	if side < 0 {
+		return
+	}
+	c.duelCost[side] += ns
+	c.duelEvents++
+	if c.duelEvents >= 1024 {
+		c.duelEvents = 0
+		c.duelCost[0] /= 2
+		c.duelCost[1] /= 2
+	}
+}
+
 // noteLocalMiss updates the measured local miss latency (R4).
 func (c *Cache) noteLocalMiss(ns float64) {
 	if c.costFinder == nil || !c.measureLocalMiss {
@@ -102,7 +147,7 @@ func (c *Cache) CostFinder() *cachepkg.CostVictimFinder { return c.costFinder }
 func (c *Cache) costRemoteVictim(line uint64, insertRRPV uint8, firstTouch bool) *cachepkg.Block {
 	d := c.directory.(*cachepkg.DirectoryImpl)
 	set := d.SetOf(line)
-	protect := firstTouch && c.FirstTouchProtect
+	protect := firstTouch && c.firstTouchProtected(line)
 	v := c.costFinder.FindVictimWhere(set, func(b *cachepkg.Block) bool {
 		if b.IsValid && b.IsDirty {
 			return false

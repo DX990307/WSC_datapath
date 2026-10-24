@@ -117,7 +117,11 @@ type Cache struct {
 	// FirstTouchProtect (R4): under cost replacement a first-touch remote
 	// fill may not evict a valid local line.
 	FirstTouchProtect bool
-	measureLocalMiss  bool
+	// FirstTouchDuel: decide FirstTouchProtect by set dueling.
+	FirstTouchDuel   bool
+	duelCost         [2]float64
+	duelEvents       int
+	measureLocalMiss bool
 
 	localMemoryPathStats LocalMemoryPathStats
 	fillForwarding       bool

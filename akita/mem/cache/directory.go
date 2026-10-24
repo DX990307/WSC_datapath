@@ -138,6 +138,12 @@ func (d *DirectoryImpl) SetVictimFinder(v VictimFinder) { d.victimFinder = v }
 // VictimFinderInUse returns the victim finder.
 func (d *DirectoryImpl) VictimFinderInUse() VictimFinder { return d.victimFinder }
 
+// SetIndexOf returns the index of the set that holds addr.
+func (d *DirectoryImpl) SetIndexOf(addr uint64) int {
+	_, i := d.getSet(addr)
+	return i
+}
+
 // SetOf returns the set that holds addr.
 func (d *DirectoryImpl) SetOf(addr uint64) *Set {
 	set, _ := d.getSet(addr)

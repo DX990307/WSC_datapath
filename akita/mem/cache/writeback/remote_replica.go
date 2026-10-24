@@ -132,6 +132,9 @@ func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocal
 	}
 
 	if c.costFinder != nil {
+		if c.FirstTouchDuel {
+			c.noteDuelMiss(line, c.costFinder.Cost(line))
+		}
 		return c.installRemoteDataFillCost(fill, line)
 	}
 	block := c.directory.FindVictim(line)
