@@ -140,7 +140,7 @@ func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr
 			m.r3Check(u, a)
 		}
 	}
-	m.ftAccess(u, a, dev)
+	m.ftAccess(now, u, a, dev)
 	if !remote {
 		return
 	}
@@ -289,7 +289,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 	}
 	m.AStats.Evaluations++
 	m.AStats.DecisionMsgs++
-	m.ftTest(u, a) // first-touch check at the first evaluation at the latest
+	m.ftTest(now, u, a) // first-touch check at the first evaluation at the latest
 	home, uniform := m.pageHomes(p)
 	w := m.r3Weights(u, a)
 	tot := make([]float64, len(m.gpms))
@@ -596,6 +596,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 	a.n = 0
 	a.acc, a.nextEval = 0, 0
 	m.Stats.CounterTriggers++
+	m.AStats.MoveHoldModelNS += hold
 	u.faulters = u.faulters[:0]
 	m.adaptTrigger(now, u, majority(chosen.dst))
 }

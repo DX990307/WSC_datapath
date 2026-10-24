@@ -355,6 +355,7 @@ type AdaptStats struct {
 	BhPeak       uint64 // largest block-home table on one GPM
 	// first touch (round 5, ft.go)
 	FTFirst, FTMoves, FTRent, FTTests, FTHits, FTHarm uint64
+	FTHeldNS, MoveHeldNS, MoveHoldModelNS             float64
 	// GRIT baseline (grit.go)
 	GritFaults, GritTouchMoves, GritCounterMoves, GritDupFaults uint64
 	GritToCounter, GritToDup, GritAdopted                       uint64
@@ -417,9 +418,10 @@ type adaptState struct {
 	// original home, evidence class, check state
 	ftG, ftOrig       uint64
 	ftClass           int
-	ftAcc             float64
+	ftAcc, ftCost     float64
 	ftTested, ftMoved bool
 	ftHitRec          bool
+	ftPending         bool
 	// GRIT baseline (grit.go): scheme, faults and read/write bit of the
 	// current scheme, GPMs waiting for a copy, write epoch
 	gScheme, gFaults int
@@ -469,6 +471,8 @@ type buffer struct {
 	// best place was the original home
 	ftTests, ftHits [numFTClass]int
 	ftHarm          int
+	ftHeld          float64 // measured waiting of the FT migrations (ns)
+	ftHeldN         int
 }
 
 func (a *AdaptConfig) on() bool { return a.Enabled }

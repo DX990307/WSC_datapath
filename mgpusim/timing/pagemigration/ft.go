@@ -77,6 +77,13 @@ func (m *Manager) ftFirst(now sim.VTimeInSec, at Waker, dev uint64, u *unit,
 	o := home[0]
 	cost := m.r3Fixed() + m.r3Copy(o, dev, float64(uint64(1)<<m.log2PageSize))
 	a.ftG, a.ftOrig = dev+1, o
+	// the buy also stalls the accesses that arrive during it: the
+	// buffer's measured waiting per FT migration (none measured yet: 0)
+	stall := 0.0
+	if b := a.buf; b != nil && b.ftHeldN > 0 {
+		stall = b.ftHeld / float64(b.ftHeldN)
+	}
+	a.ftCost = cost + stall
 	if b := a.buf; b != nil {
 		if l := b.learn; l.conf >= 0 && l.predict(a.idx, int(o)-1) == int(dev)-1 {
 			a.ftClass = 0
@@ -85,7 +92,7 @@ func (m *Manager) ftFirst(now sim.VTimeInSec, at Waker, dev uint64, u *unit,
 		}
 	}
 	m.AStats.FTFirst++
-	if m.cfg.Adapt.FT == "predict" && !m.ftWorth(a, cost) {
+	if m.cfg.Adapt.FT == "predict" && !m.ftWorth(a, cost, a.ftCost) {
 		m.AStats.FTRent++
 		return page, true
 	}
@@ -97,11 +104,36 @@ func (m *Manager) ftFirst(now sim.VTimeInSec, at Waker, dev uint64, u *unit,
 	u.faulters = append(u.faulters[:0], dev)
 	m.trigger(now, u, dev)
 	u.addWaiter(at)
+	u.heldN++
+	u.heldT += float64(now)
+	a.ftPending = true
 	return page, false
 }
 
-// ftWorth is the expected-value test of a first-touch buy.
-func (m *Manager) ftWorth(a *adaptState, cost float64) bool {
+// noteHeld records the measured waiting of the accesses a migration held
+// (ns): FT migrations per buffer (the stall part of the first-touch cost),
+// R3 moves in total (against the modeled hold).
+func (m *Manager) noteHeld(u *unit, end float64) {
+	a := u.a
+	w := (float64(u.heldN)*end - u.heldT) * 1e9
+	if w < 0 {
+		w = 0
+	}
+	if a.ftPending {
+		a.ftPending = false
+		m.AStats.FTHeldNS += w
+		if b := a.buf; b != nil {
+			b.ftHeld += w
+			b.ftHeldN++
+		}
+		return
+	}
+	m.AStats.MoveHeldNS += w
+}
+
+// ftWorth is the expected-value test of a first-touch buy: cost is the
+// migration (SW + shootdown + copy), buy the cost plus the measured stall.
+func (m *Manager) ftWorth(a *adaptState, cost, buy float64) bool {
 	b := a.buf
 	if b == nil {
 		return false
@@ -117,22 +149,24 @@ func (m *Manager) ftWorth(a *adaptState, cost float64) bool {
 	if b.nMig > 0 {
 		e = b.sumRegret / float64(b.nMig)
 	}
-	return (e+cost)*(p-(1-p)*fo) > cost
+	return (e+cost)*(p-(1-p)*fo) > buy
 }
 
 // ftAccess feeds a counted access of GPM dev to the first-touch check.
-func (m *Manager) ftAccess(u *unit, a *adaptState, dev uint64) {
+func (m *Manager) ftAccess(now sim.VTimeInSec, u *unit, a *adaptState, dev uint64) {
 	if a.ftG == 0 || a.ftTested || a.buf == nil {
 		return
 	}
-	a.ftAcc += m.r3RTT(dev, a.ftOrig)
-	if a.ftAcc >= m.r3Fixed() {
-		m.ftTest(u, a)
+	// checked once the accesses cost as much as the buy, counted at both
+	// the original home and the first toucher (moved or not: unbiased)
+	a.ftAcc += m.r3RTT(dev, a.ftOrig) + m.r3RTT(dev, a.ftG-1)
+	if a.ftAcc >= a.ftCost {
+		m.ftTest(now, u, a)
 	}
 }
 
 // ftTest records whether the first toucher is the page's best place.
-func (m *Manager) ftTest(u *unit, a *adaptState) {
+func (m *Manager) ftTest(now sim.VTimeInSec, u *unit, a *adaptState) {
 	if a.ftG == 0 || a.ftTested || a.buf == nil {
 		return
 	}
@@ -146,6 +180,15 @@ func (m *Manager) ftTest(u *unit, a *adaptState) {
 	m.AStats.FTTests++
 	home, _ := m.pageHomes(p)
 	best := m.r3Best(u, a, home)
+	if now == 0 && m.TickingComponent != nil {
+		now = m.Engine.CurrentTime() // a local access (LocalAccess has no time)
+	}
+	if m.cfg.Adapt.Predict && !a.observed {
+		// the check is an observation for the buffer's rule too (FT'd
+		// pages are rarely evaluated)
+		a.observed = true
+		m.observe(now, b, a.idx, best, a.ftOrig, false)
+	}
 	switch {
 	case best == a.ftG-1:
 		b.ftHits[a.ftClass]++

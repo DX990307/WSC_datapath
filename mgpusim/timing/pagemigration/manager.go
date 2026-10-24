@@ -87,6 +87,10 @@ type unit struct {
 	a *adaptState // P21 tracking entry (nil unless adaptive placement)
 
 	touched bool // P21 first-touch migration: the first vector access was seen
+	// accesses held by the running migration (count, sum of hold times):
+	// the measured waiting it caused is heldN x end - heldT
+	heldN int
+	heldT float64
 
 	pages         []vm.Page
 	newPAddrs     []uint64
@@ -381,6 +385,8 @@ func (h *atHook) Resolve(
 	if u != nil {
 		if u.blocks(h.dev) {
 			u.addWaiter(at)
+			u.heldN++
+			u.heldT += float64(now)
 			return page, false
 		}
 		if u.everMigrated {
@@ -873,6 +879,10 @@ func (m *Manager) remap(now sim.VTimeInSec, u *unit) {
 		u.a.act = actStay
 		u.a.copied = false
 	}
+	if u.a != nil {
+		m.noteHeld(u, float64(now))
+	}
+	u.heldN, u.heldT = 0, 0
 	m.Stats.Migrations++
 	m.Stats.MigrationTimeSum += float64(now - u.triggerTime)
 	m.Stats.BlockedTimeSum += float64(now - u.blockStart)

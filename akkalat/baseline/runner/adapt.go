@@ -386,7 +386,10 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 		col("pa_grit_to_dup", float64(s.GritToDup))
 		col("pa_grit_adopted", float64(s.GritAdopted))
 	}
+	col("pa_move_held_ns", s.MoveHeldNS)
+	col("pa_move_hold_model_ns", s.MoveHoldModelNS)
 	if a.FT != "" {
+		col("pa_ft_held_ns", s.FTHeldNS)
 		col("pa_ft_first", float64(s.FTFirst))
 		col("pa_ft_moves", float64(s.FTMoves))
 		col("pa_ft_rent", float64(s.FTRent))
