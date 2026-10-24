@@ -498,3 +498,25 @@ func (c *Cache) PullUse() (installed, used uint64) {
 func (c *Cache) VictimScore() (sum float64, n uint64) {
 	return c.l2resStats.VictimScoreSum, c.l2resStats.VictimCount
 }
+
+// HoldsRemoteLine (R4 nearest-copy statistics) reports whether this slice
+// holds a valid M3 replica of line (any PID). Read-only.
+func (c *Cache) HoldsRemoteLine(line uint64) bool {
+	d, ok := c.directory.(*cachepkg.DirectoryImpl)
+	if !ok || c.remoteReplicaBlocks == nil {
+		return false
+	}
+	for _, b := range d.SetOf(line).Blocks {
+		if b.IsValid && b.Tag == line {
+			_, remote := c.remoteReplicaBlocks[b]
+			return remote
+		}
+	}
+	return false
+}
+
+// SetNetFetchHook (R4 statistics) makes the slice report every remote line
+// that arrives from the network (each remote fill attempt).
+func (c *Cache) SetNetFetchHook(f func(now, reqTime sim.VTimeInSec, line uint64)) {
+	c.netFetchHook = f
+}

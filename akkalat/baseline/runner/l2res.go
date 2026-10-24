@@ -50,6 +50,50 @@ var l2resFTProtectFlag = flag.String("l2res-ft-protect", "off",
 	"R4: under cost replacement a first-touch remote fill may replace only invalid ways "+
 		"and remote lines (no valid local line): off, on, or duel (set dueling per slice).")
 
+var l2resNearestStatFlag = flag.Bool("l2res-nearest-stat", false,
+	"R4 direction 3 offline bound (read-only): for every network fetch, the hops to the "+
+		"nearest GPM that fetched the line earlier in the kernel (ideal) or holds an M3 "+
+		"replica (real), against the hops to the home.")
+
+// wireNearestStat installs the read-only nearest-copy statistics.
+func (b *R9NanoPlatformBuilder) wireNearestStat(m *pagemigration.Manager,
+	drv *driver.Driver) {
+	if !*l2resNearestStatFlag {
+		return
+	}
+	if m == nil {
+		log.Panic("-l2res-nearest-stat needs -page-migration")
+	}
+	m.EnableNearestStats()
+	l2of := map[uint64]func(uint64) *writeback.Cache{}
+	for _, gpu := range b.gpus {
+		l2of[gpu.GPUID] = gpu.pm.l2Of
+	}
+	holds := func(line uint64) func(g uint64) bool {
+		return func(g uint64) bool {
+			f, ok := l2of[g]
+			return ok && f(line).HoldsRemoteLine(line)
+		}
+	}
+	w := nearestWriteObs{m}
+	for _, gpu := range b.gpus {
+		dev := gpu.GPUID
+		for _, l2 := range gpu.pm.l2s {
+			l2.SetNetFetchHook(func(now, req sim.VTimeInSec, line uint64) {
+				m.NearestNote(dev, line, holds(line))
+			})
+			l2.AddHomeWriteObserver(w)
+		}
+	}
+	drv.AddPhysicalWriteHook(m.NearestWrite)
+}
+
+type nearestWriteObs struct{ m *pagemigration.Manager }
+
+func (o nearestWriteObs) NoteWrite(now sim.VTimeInSec, addr, size uint64) {
+	o.m.NearestWrite(now, addr, size)
+}
+
 // wireL2Res installs the R4 mechanisms after the page-migration manager.
 func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 	drv *driver.Driver, retain *writeback.RemoteRetainTracker) *writeback.HolderTable {
@@ -127,6 +171,7 @@ func (f homeWriteFanout) NoteWrite(now sim.VTimeInSec, addr, size uint64) {
 
 // reportL2ResStats writes the R4 counters (summed over all L2 slices).
 func (r *Runner) reportL2ResStats() {
+	r.reportNearestStats()
 	if !*l2resCostReplFlag && *l2resHoldersFlag == 0 && !strings.Contains(*pmAdaptActionsFlag, "l2pull") {
 		return
 	}
@@ -204,5 +249,56 @@ func (r *Runner) reportL2ResStats() {
 		col("l2r_slot_replacements", float64(m.L2Res.SlotReplacements))
 		col("l2r_prefetches", float64(m.L2Res.Prefetches))
 		col("l2r_prefetch_skips", float64(m.L2Res.PrefetchSkips))
+	}
+}
+
+func (r *Runner) reportNearestStats() {
+	m := r.platform.PageMigration
+	if m == nil || m.NearestStats() == nil {
+		return
+	}
+	s := m.NearestStats()
+	col := func(what string, v float64) { r.metricsCollector.Collect("L2Res", what, v) }
+	col("nc_fetches", float64(s.Fetches))
+	col("nc_hops_home", s.HopsHome)
+	col("nc_hops_ideal", s.HopsIdeal)
+	col("nc_hops_real", s.HopsReal)
+	col("nc_rtt_home", s.RTTHome)
+	col("nc_rtt_ideal", s.RTTIdeal)
+	col("nc_rtt_real", s.RTTReal)
+	col("nc_closer_ideal", float64(s.CloserIdeal))
+	col("nc_closer_real", float64(s.CloserReal))
+	for k := 0; k < 4; k++ {
+		col(fmt.Sprintf("nc_cat%d_fetches", k), float64(s.Cat[k]))
+		col(fmt.Sprintf("nc_cat%d_hops_home", k), s.CatHome[k])
+		col(fmt.Sprintf("nc_cat%d_hops_ideal", k), s.CatIdeal[k])
+		col(fmt.Sprintf("nc_cat%d_hops_real", k), s.CatReal[k])
+	}
+	maxOf := func(v []uint64) (mx uint64) {
+		for _, x := range v {
+			if x > mx {
+				mx = x
+			}
+		}
+		return
+	}
+	col("nc_owner_max_home", float64(maxOf(s.OwnerHome)))
+	col("nc_owner_max_ideal", float64(maxOf(s.OwnerIdeal)))
+	col("nc_owner_max_real", float64(maxOf(s.OwnerReal)))
+	var ch, ci, cr float64
+	for _, g := range m.NearestCorners() {
+		ch += float64(s.OwnerHome[g])
+		ci += float64(s.OwnerIdeal[g])
+		cr += float64(s.OwnerReal[g])
+	}
+	col("nc_corner_home", ch)
+	col("nc_corner_ideal", ci)
+	col("nc_corner_real", cr)
+	for g := range s.OwnerHome {
+		if s.OwnerHome[g]+s.OwnerIdeal[g]+s.OwnerReal[g] > 0 {
+			r.metricsCollector.Collect(fmt.Sprintf("GPU%d", g), "nc_served_home", float64(s.OwnerHome[g]))
+			r.metricsCollector.Collect(fmt.Sprintf("GPU%d", g), "nc_served_ideal", float64(s.OwnerIdeal[g]))
+			r.metricsCollector.Collect(fmt.Sprintf("GPU%d", g), "nc_served_real", float64(s.OwnerReal[g]))
+		}
 	}
 }

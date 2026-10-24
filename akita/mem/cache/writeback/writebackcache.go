@@ -119,6 +119,7 @@ type Cache struct {
 	FirstTouchProtect bool
 	// FirstTouchDuel: decide FirstTouchProtect by set dueling.
 	FirstTouchDuel   bool
+	netFetchHook     func(now, reqTime sim.VTimeInSec, line uint64)
 	duelCost         [2]float64
 	duelEvents       int
 	measureLocalMiss bool

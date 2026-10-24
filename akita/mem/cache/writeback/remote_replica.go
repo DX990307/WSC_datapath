@@ -99,6 +99,9 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 // remote lines are used (opportunistic M3 fills).
 func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocalClean bool) bool {
 	c.recordRemoteFillAttempt(fill)
+	if c.netFetchHook != nil && fill != nil && fill.ReqTime > 0 {
+		c.netFetchHook(c.Engine.CurrentTime(), fill.ReqTime, fill.Address)
+	}
 	if c.remoteReplicaFilter == nil || fill == nil {
 		c.recordRemoteFillDropped(fill)
 		return false
