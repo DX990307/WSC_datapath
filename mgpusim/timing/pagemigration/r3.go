@@ -533,8 +533,9 @@ func r3Readers(a *adaptState) int { return bits.OnesCount64(a.readMask) }
 // r3Hold is the expected waiting of the page's counted accesses (the same
 // accesses the regret counts) that arrive while the page is switched: rate
 // x hold^2 / 2, hold = shootdown + drain (+ the copy without copy-first);
-// the drain is the larger of the recent drains at the home and the frame's
-// Little's-law residence time (in-flight accesses / issue rate).
+// the drain is the measured drain of recent migrations from the home (a
+// Little's-law estimate from the frame's lifetime issue rate overestimated
+// it for bursty pages and suppressed migrations, round 3 it5).
 func (m *Manager) r3Hold(now sim.VTimeInSec, a *adaptState, pAddr, home uint64) float64 {
 	if a.n == 0 {
 		return 0
@@ -545,15 +546,8 @@ func (m *Manager) r3Hold(now sim.VTimeInSec, a *adaptState, pAddr, home uint64) 
 	}
 	rate := float64(a.n) / age
 	drain := 0.0
-	if info := m.ppns[pAddr>>m.log2PageSize]; info != nil && info.issued > 0 {
-		fage := float64(now-info.firstIssue) * 1e9
-		if fage < 1 {
-			fage = 1
-		}
-		drain = float64(info.inflight) / (float64(info.issued) / fage)
-	}
-	if m.drainEMA != nil && m.drainEMA[home] > drain {
-		drain = m.drainEMA[home]
+	if m.drainEMA != nil {
+		drain = m.drainEMA[home] // measured drains of recent migrations from home
 	}
 	h := float64(m.cfg.ShootdownLatencyNS) + drain
 	if !m.cfg.Adapt.CopyFirst {
