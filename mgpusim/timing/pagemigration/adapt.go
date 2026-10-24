@@ -406,8 +406,8 @@ type adaptState struct {
 	cmigHolders                     uint64  // r3: GPMs whose L2 got the page's lines by cmig
 	cmigBusy                        bool
 	cmigKernel                      int
-	l2r                             *l2rPage // R4 footprints (nil = none yet)
-	l2rObsKern                      int      // R4: kernel of the last observation (+1)
+	l2r                             *l2rPage      // R4 footprints (nil = none yet)
+	l2rObsKern                      int           // R4: kernel of the last observation (+1)
 	preWrong                        bool          // r3: the pre-placement check missed
 	preClass                        int           // r3: distance class of the prediction that pre-placed the page
 	trackEl                         *list.Element // TrackCap LRU entry (nil = not tracked)
@@ -445,7 +445,7 @@ type buffer struct {
 	r3Evaluated, repDecided int     // r3: pages evaluated, pages that decided replicate
 	sumRepRegret            float64
 	nMig                    int
-	preWrongMoved           int // r3: pre-placed pages that missed their check and were moved later
+	preWrongMoved           int     // r3: pre-placed pages that missed their check and were moved later
 	l2rRent                 float64 // R4: rent at the decided pulls of this buffer
 	l2rPulls                int
 	l2rFP                   uint64 // R4: footprint of the last observed page's best reader

@@ -6,6 +6,7 @@ import (
 	"reflect"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
+	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 )
 
@@ -28,6 +29,9 @@ type chunk struct {
 	install func(now sim.VTimeInSec, data []byte)
 	// mask (R4): only these 64-B lines of the chunk are copied (0 = all).
 	mask uint64
+	// pid (R4): the PID the source reads its L2 with (the page's, so that
+	// dirty lines the L2 holds under it are seen; R3 migrations use 0).
+	pid vm.PID
 }
 
 // serving is one pull being served by the source engine.
@@ -37,6 +41,7 @@ type serving struct {
 	linesLeft int
 	// mask (R4): only these lines are read and sent (0 = all).
 	mask uint64
+	pid  vm.PID
 	// local (P21): a chunk this engine copies to itself (source and
 	// destination on the same GPM, e.g. a 1 KB block that stays at its home
 	// while its page moves to a new frame); no network messages.
@@ -241,6 +246,7 @@ func (e *CopyEngine) sendPulls(now sim.VTimeInSec) bool {
 		}
 		req := newPullReq(now, e.remotePort, c.src.remotePort, c.srcPAddr, c.size)
 		req.Mask = c.mask
+		req.PID = c.pid
 		if e.remotePort.Send(req) != nil {
 			break
 		}
@@ -311,6 +317,7 @@ func (e *CopyEngine) serve(now sim.VTimeInSec, req *PullReq) {
 		data:      make([]byte, req.Size),
 		linesLeft: n,
 		mask:      req.Mask,
+		pid:       req.PID,
 	}, req.PAddr)
 }
 
@@ -327,7 +334,7 @@ func (e *CopyEngine) serveLines(now sim.VTimeInSec, s *serving, base uint64) {
 			WithDst(e.L2Finder.Find(addr)).
 			WithAddress(addr).
 			WithByteSize(line).
-			WithPID(0).
+			WithPID(s.pid).
 			Build()
 		e.reads = append(e.reads, r)
 		e.readOwners[r.ID] = lineRead{s: s, offset: off}
