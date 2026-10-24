@@ -179,7 +179,14 @@ func (e *CopyEngine) Tick(now sim.VTimeInSec) bool {
 
 // sendInval queues an invalidation message to another engine (P21).
 func (e *CopyEngine) sendInval(now sim.VTimeInSec, dst *CopyEngine) {
-	e.invals = append(e.invals, newInvalMsg(now, e.remotePort, dst.remotePort))
+	e.sendInvalThen(now, dst, nil)
+}
+
+// sendInvalThen is sendInval with a function run at the receiver (R4).
+func (e *CopyEngine) sendInvalThen(now sim.VTimeInSec, dst *CopyEngine, f func()) {
+	m := newInvalMsg(now, e.remotePort, dst.remotePort)
+	m.OnArrive = f
+	e.invals = append(e.invals, m)
 	e.TickLater(now)
 }
 
@@ -279,6 +286,9 @@ func (e *CopyEngine) recvRemote(now sim.VTimeInSec) bool {
 		case *PullRsp:
 			e.land(now, msg)
 		case *InvalMsg:
+			if msg.OnArrive != nil {
+				msg.OnArrive()
+			}
 		default:
 			log.Panicf("copy engine cannot handle %s", reflect.TypeOf(msg))
 		}

@@ -242,6 +242,8 @@ type Manager struct {
 	cmigMiss     []uint64 // ... and those that still went to the home
 	replOrder    []*unit
 	AStats       AdaptStats
+	L2Res        L2ResStats // ISCA27 R4
+	meanHops     float64
 	// Storage is the global storage (only for the oracle replica list).
 	Storage *mem.Storage
 

@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 R4 step c without b (holder table on M3+ replacement), to show the holder table on its own.",
+  "extends": "l2r_base.json",
+  "l2res-holders": 1024
+}

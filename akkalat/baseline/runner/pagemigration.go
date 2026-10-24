@@ -207,6 +207,7 @@ type gpmPageMigrationParts struct {
 	// l2Of returns the L2 slice that holds (or would hold) a physical line,
 	// local or remote (M3 replica), with the GPM's slice interleaving.
 	l2Of func(pAddr uint64) *writeback.Cache
+	l2s  []*writeback.Cache
 }
 
 // buildPageMigrationEngine creates the GPM's copy engine. Only a migrating
@@ -250,6 +251,7 @@ func (b *R9NanoGPUBuilder) recordPageMigrationParts() {
 	}
 	p.tlbs = append(p.tlbs, b.l2TLB)
 	l2s := append([]*writeback.Cache(nil), b.l2Caches...)
+	p.l2s = l2s
 	interleave := uint64(1) << b.log2MemoryBankInterleavingSize
 	p.l2Of = func(a uint64) *writeback.Cache {
 		return l2s[a/interleave%uint64(len(l2s))]

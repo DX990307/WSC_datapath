@@ -32,6 +32,8 @@ type Platform struct {
 
 	// PageMigration is nil unless -page-migration is set.
 	PageMigration *pagemigration.Manager
+	// Holders is the R4 holder table (nil unless -l2res-holders).
+	Holders *writeback.HolderTable
 
 	// PageTable is the global page table (P21 -dump-alloc-map).
 	PageTable vm.PageTable

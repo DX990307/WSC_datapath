@@ -259,6 +259,9 @@ type remoteLineEntry struct {
 	// invalidation, so its data may predate the boundary; it never fills the
 	// requester L2 and takes no new merges.
 	boundaryStale bool
+	// created (ISCA27 R4): when the entry was opened; the data is read at
+	// the home no earlier.
+	created sim.VTimeInSec
 }
 
 type remotePrefetchCandidate struct {

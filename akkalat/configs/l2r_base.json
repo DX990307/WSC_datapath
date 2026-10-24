@@ -1,0 +1,17 @@
+{
+  "_description": "ISCA'27 R4 base: m3p (M3+) plus the page-migration manager with no action (tracking table 1024 pages/GPM LRU, decision delay 1 us, copy engines on the mesh), so that every R4 step runs on the same hardware. Nothing migrates; M3+ with the infrastructure.",
+  "extends": "m3p.json",
+  "page-migration": "counter",
+  "pm-unit-kb": 4,
+  "pm-count-local": true,
+  "pm-count-network": true,
+  "pm-max-migrations": 0,
+  "pm-cooldown-ns": 0,
+  "pm-adapt": true,
+  "pm-adapt-rule": "r3",
+  "pm-adapt-actions": "",
+  "pm-adapt-copy-first": false,
+  "pm-adapt-track-cap": 1024,
+  "pm-adapt-decide-ns": 1000,
+  "pm-adapt-batch-sw": true
+}

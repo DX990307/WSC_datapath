@@ -17,6 +17,11 @@ type Block struct {
 	ReadCount    int
 	IsLocked     bool
 	DirtyMask    []bool
+	// RRPV and RRFresh are used only by CostVictimFinder (ISCA27 R4): the
+	// re-reference prediction value (0 = near, 3 = distant) and whether the
+	// block was just chosen as a victim (its next Visit is an insertion).
+	RRPV    uint8
+	RRFresh bool
 }
 
 // A Set is a list of blocks where a certain piece memory can be stored at
@@ -117,6 +122,22 @@ func (d *DirectoryImpl) Visit(block *Block) {
 		}
 	}
 	set.LRUQueue = append(set.LRUQueue, block)
+	if o, ok := d.victimFinder.(VisitObserver); ok {
+		o.OnVisit(&d.Sets[block.SetID], block)
+	}
+}
+
+// SetVictimFinder replaces the victim finder (ISCA27 R4 cost-aware
+// replacement).
+func (d *DirectoryImpl) SetVictimFinder(v VictimFinder) { d.victimFinder = v }
+
+// VictimFinderInUse returns the victim finder.
+func (d *DirectoryImpl) VictimFinderInUse() VictimFinder { return d.victimFinder }
+
+// SetOf returns the set that holds addr.
+func (d *DirectoryImpl) SetOf(addr uint64) *Set {
+	set, _ := d.getSet(addr)
+	return set
 }
 
 // GetSets returns all the sets in a directory

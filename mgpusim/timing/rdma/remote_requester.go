@@ -848,6 +848,7 @@ func (c *Comp) insertRemoteLine(
 	key remoteLineKey,
 	entry *remoteLineEntry,
 ) {
+	entry.created = c.Engine.CurrentTime()
 	c.remoteLines[key] = entry
 	c.m1IndexLine(entry)
 	if uint64(len(c.remoteLines)) > c.RemoteDataPathStats.PeakLineEntries {
@@ -1668,6 +1669,7 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 				}
 			}
 			fill := fillBuilder.Build()
+			fill.ReqTime = entry.created
 			if err := c.ToL2.Send(fill); err != nil {
 				c.RemoteDataPathStats.TwoTouchFillAttempts--
 				return false

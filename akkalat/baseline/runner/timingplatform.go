@@ -558,6 +558,7 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 	connector.EstablishNetwork()
 	b.checkIOMMUTopology(connector)
 	pm := b.buildPageMigrationManager(pageTable)
+	holders := b.wireL2Res(pm, gpuDriver, remoteRetain)
 
 	for _, gpu := range b.gpus {
 		gpu.MMUEngine = mmuComponent
@@ -602,6 +603,7 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 		IOMMUTLB:      b.IOMMUTLB,
 		RemoteRetain:  remoteRetain,
 		PageMigration: pm,
+		Holders:       holders,
 		PageTable:     pageTable,
 	}
 }

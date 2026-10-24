@@ -31,6 +31,8 @@ func (r *PullRsp) Meta() *sim.MsgMeta { return &r.MsgMeta }
 // (only its network traffic matters; the receiver discards it).
 type InvalMsg struct {
 	sim.MsgMeta
+	// OnArrive (ISCA27 R4) runs when the message reaches the holder.
+	OnArrive func()
 }
 
 // Meta returns the message meta data.

@@ -333,7 +333,7 @@ func (c *Cache) InvalidateWrittenRemoteReplicas(
 	for _, block := range blocks {
 		record := c.remoteReplicaBlocks[block]
 		c.retainStats.LinesChecked++
-		if !written(record.key.line) {
+		if !c.replicaStale(record, written) {
 			if !record.retained {
 				record.retained = true
 				record.usedAfterRetain = false
