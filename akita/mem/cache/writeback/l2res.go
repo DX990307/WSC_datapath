@@ -5,6 +5,8 @@ import (
 	"sort"
 
 	cachepkg "github.com/sarchlab/akita/v3/mem/cache"
+	"github.com/sarchlab/akita/v3/mem/mem"
+	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 )
 
@@ -46,6 +48,12 @@ type L2ResStats struct {
 	Downgrades                                      uint64 // lines made untracked by holder-table replacement
 	BoundaryTrackedKept, BoundaryTrackedDropped     uint64
 	BoundaryUntrackedKept, BoundaryUntrackedDropped uint64
+	// pulled lines (R4 step d): installed / dropped / hit at least once
+	PulledInstalled, PulledDropped, PulledUsed uint64
+	// displacement: sum of the victims' scores (0 for invalid ways) over
+	// the remote fills installed under cost-aware replacement
+	VictimScoreSum float64
+	VictimCount    uint64
 }
 
 // GetL2ResStats returns the R4 counters.
@@ -358,4 +366,38 @@ func (t *HolderTable) NoteWrite(now sim.VTimeInSec, addr, size uint64) {
 func (t *HolderTable) WrittenAfter(line uint64, ts sim.VTimeInSec) bool {
 	w, ok := t.lastWrite[line>>t.cfg.Log2PageSize]
 	return ok && w >= ts
+}
+
+// PullInstallLine (R4 step d) installs a line pulled by the copy engine
+// (read opened at reqTime) like a remote fill at the insertion RRPV; the
+// line is marked as pulled for the use statistics.
+func (c *Cache) PullInstallLine(
+	now sim.VTimeInSec, pid vm.PID, addr uint64, data []byte, reqTime sim.VTimeInSec,
+) bool {
+	fill := &mem.RemoteDataFill{
+		Address: addr, PID: pid, Data: data,
+		Generation: c.remoteReplicaGeneration, ReqTime: reqTime,
+	}
+	fill.SendTime = now
+	if !c.installRemoteDataFillPolicy(fill, true) {
+		c.l2resStats.PulledDropped++
+		return false
+	}
+	if b := c.directory.Lookup(pid, addr); b != nil {
+		if r := c.remoteReplicaBlocks[b]; r != nil {
+			r.pulled = true
+		}
+	}
+	c.l2resStats.PulledInstalled++
+	return true
+}
+
+// PullUse returns the pulled lines installed and used.
+func (c *Cache) PullUse() (installed, used uint64) {
+	return c.l2resStats.PulledInstalled, c.l2resStats.PulledUsed
+}
+
+// VictimScore returns the mean score of the victims of remote fills.
+func (c *Cache) VictimScore() (sum float64, n uint64) {
+	return c.l2resStats.VictimScoreSum, c.l2resStats.VictimCount
 }

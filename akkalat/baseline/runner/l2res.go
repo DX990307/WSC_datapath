@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/sim"
@@ -26,6 +27,12 @@ var l2resLocalNSFlag = flag.Float64("l2res-local-ns", 130,
 var l2resHoldersFlag = flag.Int("l2res-holders", 0,
 	"R4: owner-side holder table entries (pages) per GPM; 0 = off, -1 = unlimited. "+
 		"Writes invalidate holders; tracked lines survive kernel boundaries.")
+
+var l2resPullSlotsFlag = flag.Int("l2res-pull-slots", 4,
+	"R4: readers with a line footprint per tracked page (action l2pull).")
+
+var l2resDecideNSFlag = flag.Int("l2res-decide-ns", 500,
+	"R4: hardware decision delay of the pull actions (ns).")
 
 // wireL2Res installs the R4 mechanisms after the page-migration manager.
 func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
@@ -90,7 +97,7 @@ func (f homeWriteFanout) NoteWrite(now sim.VTimeInSec, addr, size uint64) {
 
 // reportL2ResStats writes the R4 counters (summed over all L2 slices).
 func (r *Runner) reportL2ResStats() {
-	if !*l2resCostReplFlag && *l2resHoldersFlag == 0 {
+	if !*l2resCostReplFlag && *l2resHoldersFlag == 0 && !strings.Contains(*pmAdaptActionsFlag, "l2pull") {
 		return
 	}
 	var s writeback.L2ResStats
@@ -113,6 +120,11 @@ func (r *Runner) reportL2ResStats() {
 			s.BoundaryTrackedDropped += x.BoundaryTrackedDropped
 			s.BoundaryUntrackedKept += x.BoundaryUntrackedKept
 			s.BoundaryUntrackedDropped += x.BoundaryUntrackedDropped
+			s.PulledInstalled += x.PulledInstalled
+			s.PulledDropped += x.PulledDropped
+			s.PulledUsed += x.PulledUsed
+			s.VictimScoreSum += x.VictimScoreSum
+			s.VictimCount += x.VictimCount
 		}
 	}
 	col := func(what string, v float64) { r.metricsCollector.Collect("L2Res", what, v) }
@@ -140,7 +152,18 @@ func (r *Runner) reportL2ResStats() {
 		col("l2r_ht_writes_with_holders", float64(h.WritesWithHolders))
 		col("l2r_ht_peak_entries", float64(h.PeakEntries))
 	}
+	col("l2r_pulled_installed", float64(s.PulledInstalled))
+	col("l2r_pulled_dropped", float64(s.PulledDropped))
+	col("l2r_pulled_used", float64(s.PulledUsed))
+	if s.VictimCount > 0 {
+		col("l2r_victim_score_mean", s.VictimScoreSum/float64(s.VictimCount))
+	}
 	if m := r.platform.PageMigration; m != nil {
 		col("l2r_holder_msgs_net", float64(m.L2Res.HolderMsgs))
+		col("l2r_pulls", float64(m.L2Res.Pulls))
+		col("l2r_pull_lines", float64(m.L2Res.PullLines))
+		col("l2r_pull_installed", float64(m.L2Res.PullInstalled))
+		col("l2r_pull_aborts", float64(m.L2Res.PullAborts))
+		col("l2r_slot_replacements", float64(m.L2Res.SlotReplacements))
 	}
 }

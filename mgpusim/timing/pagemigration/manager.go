@@ -36,6 +36,14 @@ type GPM struct {
 	// InstallRemote (P21 cmig) installs a clean copy of a remote line in
 	// the GPM's L2 like an admitted M3 fill; false = dropped.
 	InstallRemote func(now sim.VTimeInSec, pid vm.PID, pAddr uint64, data []byte) bool
+	// R4: PullInstall installs a pulled line (read opened at reqTime) and
+	// marks it as pulled; PullUse reports pulled lines installed and used
+	// by the GPM's L2; VictimScore the mean expected re-fetch cost (ns) of
+	// the lines remote fills displaced.
+	PullInstall func(now sim.VTimeInSec, pid vm.PID, pAddr uint64, data []byte,
+		reqTime sim.VTimeInSec) bool
+	PullUse     func() (installed, used uint64)
+	VictimScore func() float64
 }
 
 // phase is where a unit is in its migration (DESIGN.md 2.3):

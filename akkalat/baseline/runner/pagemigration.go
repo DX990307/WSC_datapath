@@ -289,6 +289,31 @@ func (b *R9NanoPlatformBuilder) buildPageMigrationManager(
 			InstallRemote: func(now sim.VTimeInSec, pid vm.PID, a uint64, data []byte) bool {
 				return l2Of(a).InstallRemoteLine(now, pid, a, data)
 			},
+			PullInstall: func(now sim.VTimeInSec, pid vm.PID, a uint64, data []byte,
+				req sim.VTimeInSec) bool {
+				return l2Of(a).PullInstallLine(now, pid, a, data, req)
+			},
+		}
+		l2s := p.l2s
+		gpms[gpu.GPUID].PullUse = func() (inst, used uint64) {
+			for _, l2 := range l2s {
+				i, u := l2.PullUse()
+				inst += i
+				used += u
+			}
+			return
+		}
+		gpms[gpu.GPUID].VictimScore = func() float64 {
+			sum, n := 0.0, uint64(0)
+			for _, l2 := range l2s {
+				s, k := l2.VictimScore()
+				sum += s
+				n += k
+			}
+			if n == 0 {
+				return 0
+			}
+			return sum / float64(n)
 		}
 	}
 	m := pagemigration.NewManager("PageMigrationManager", b.engine,

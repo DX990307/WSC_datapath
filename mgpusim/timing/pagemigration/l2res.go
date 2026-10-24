@@ -1,6 +1,11 @@
 package pagemigration
 
-import "github.com/sarchlab/akita/v3/sim"
+import (
+	"math/bits"
+
+	"github.com/sarchlab/akita/v3/mem/vm"
+	"github.com/sarchlab/akita/v3/sim"
+)
 
 // ISCA27 R4 (L2 residency instead of page migration): the manager supplies
 // the latency model of the L2 cost-aware replacement and carries the holder
@@ -52,5 +57,171 @@ func (m *Manager) SendHolderMsg(now sim.VTimeInSec, owner uint64, holder int, ap
 
 // L2ResStats counts the manager-side R4 work.
 type L2ResStats struct {
-	HolderMsgs uint64
+	HolderMsgs                                  uint64
+	Pulls, PullLines, PullInstalled, PullAborts uint64
+	SlotReplacements                            uint64
+}
+
+// ---------------------------------------------------------------------------
+// R4 step d: footprint pulls into a reader's L2
+
+// l2rSlot is one reader's line footprint of a tracked page: the lines it
+// fetched (counted remote accesses, M3 hits included) in kernel kern and in
+// the kernel before.
+type l2rSlot struct {
+	dev       uint64
+	cur, prev uint64
+	kern      int
+	tried     int // kernel of the last pull attempt (-1 = none)
+	n         uint32
+}
+
+type l2rPage struct {
+	slots []l2rSlot
+}
+
+type l2rOpt struct {
+	g      uint64
+	lines  uint64
+	regret float64
+	cost   float64
+}
+
+// l2rNote records a counted remote access of dev to pAddr.
+func (m *Manager) l2rNote(a *adaptState, dev, pAddr uint64) {
+	k := m.cfg.Adapt.L2PullSlots
+	if k <= 0 {
+		k = 4
+	}
+	if a.l2r == nil {
+		a.l2r = &l2rPage{}
+	}
+	p := a.l2r
+	line := uint64(1) << ((pAddr >> 6) & 63)
+	for i := range p.slots {
+		s := &p.slots[i]
+		if s.dev != dev {
+			continue
+		}
+		if s.kern != m.kernel {
+			if s.kern == m.kernel-1 {
+				s.prev = s.cur
+			} else {
+				s.prev = 0
+			}
+			s.cur, s.kern = 0, m.kernel
+		}
+		s.cur |= line
+		s.n++
+		return
+	}
+	ns := l2rSlot{dev: dev, cur: line, kern: m.kernel, tried: -1, n: 1}
+	if len(p.slots) < k {
+		p.slots = append(p.slots, ns)
+		return
+	}
+	// replace the slot with the fewest accesses
+	j := 0
+	for i := range p.slots {
+		if p.slots[i].n < p.slots[j].n {
+			j = i
+		}
+	}
+	p.slots[j] = ns
+	m.L2Res.SlotReplacements++
+}
+
+// l2rOption is the best pull for the page: for reader g, the rent paid so
+// far (its counted network fetches x RTT x the measured probability that a
+// pulled line is used) against the copy of the footprint lines it does not
+// hold plus the expected re-fetch cost of the lines they displace.
+func (m *Manager) l2rOption(a *adaptState, tot []float64, home, base uint64) (l2rOpt, bool) {
+	var best l2rOpt
+	found := false
+	for i := range a.l2r.slots {
+		s := &a.l2r.slots[i]
+		g := s.dev
+		if g == home || s.tried == m.kernel || int(g) >= len(tot) || tot[g] <= 0 {
+			continue
+		}
+		gp := m.gpms[g]
+		if gp == nil || gp.PullInstall == nil {
+			continue
+		}
+		fp := s.prev
+		if s.kern == m.kernel {
+			fp |= s.cur
+		} else if s.kern == m.kernel-1 {
+			fp = s.cur
+		} else {
+			fp = 0
+		}
+		var lines uint64
+		for x := fp; x != 0; x &= x - 1 {
+			b := uint64(bits.TrailingZeros64(x))
+			if !gp.HoldsLine(base + b*64) {
+				lines |= 1 << b
+			}
+		}
+		n := bits.OnesCount64(lines)
+		if n == 0 {
+			continue
+		}
+		inst, used := gp.PullUse()
+		ph := float64(used+1) / float64(inst+2)
+		r := tot[g] * m.r3RTT(g, home) * ph
+		c := m.r3Copy(home, g, float64(n*64)) + float64(n)*gp.VictimScore()
+		if !found || r-c > best.regret-best.cost {
+			best = l2rOpt{g: g, lines: lines, regret: r, cost: c}
+			found = true
+		}
+	}
+	return best, found
+}
+
+// l2rDecide starts the pull after the hardware decision delay.
+func (m *Manager) l2rDecide(now sim.VTimeInSec, a *adaptState, p vm.Page, home uint64, o l2rOpt) {
+	for i := range a.l2r.slots {
+		if a.l2r.slots[i].dev == o.g {
+			a.l2r.slots[i].tried = m.kernel
+		}
+	}
+	d := m.cfg.Adapt.L2DecideNS
+	if d == 0 {
+		m.l2rStartPull(now, a, p, home, o)
+		return
+	}
+	m.later(now+ns(d), func(t sim.VTimeInSec) { m.l2rStartPull(t, a, p, home, o) })
+}
+
+// l2rStartPull pulls the chosen lines from the home into g's L2 (copy
+// engine; one attempt per reader, page and kernel).
+func (m *Manager) l2rStartPull(now sim.VTimeInSec, a *adaptState, p vm.Page, home uint64, o l2rOpt) {
+	g := o.g
+	ps := uint64(1) << m.log2PageSize
+	seq, kern := a.writeSeq, m.kernel
+	n := bits.OnesCount64(o.lines)
+	m.L2Res.Pulls++
+	m.L2Res.PullLines += uint64(n)
+	m.AStats.CopyBytes += uint64(n * 64)
+	m.gpms[g].Engine.enqueue(now, &chunk{
+		src:      m.gpms[home].Engine,
+		srcPAddr: p.PAddr,
+		dstPAddr: p.PAddr,
+		size:     ps,
+		mask:     o.lines,
+		install: func(t sim.VTimeInSec, data []byte) {
+			if a.writeSeq != seq || m.kernel != kern {
+				m.L2Res.PullAborts++
+				return
+			}
+			for x := o.lines; x != 0; x &= x - 1 {
+				off := uint64(bits.TrailingZeros64(x)) * 64
+				if m.gpms[g].PullInstall(t, p.PID, p.PAddr+off,
+					append([]byte(nil), data[off:off+64]...), now) {
+					m.L2Res.PullInstalled++
+				}
+			}
+		},
+	})
 }

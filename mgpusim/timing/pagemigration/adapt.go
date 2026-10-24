@@ -86,6 +86,14 @@ type AdaptConfig struct {
 	// Cmig (r3): L2-resident migration - the page's lines are pulled into
 	// the reader's L2 as M3 lines (home, PTE and TLBs unchanged).
 	Cmig bool
+	// L2Pull (R4 step d): pull the lines a reader used (this kernel and
+	// the previous one) that are not in its L2 into its L2 (break-even
+	// rule; cost = copy + displaced lines; no migration).
+	L2Pull bool
+	// L2PullSlots: readers with a footprint per tracked page.
+	L2PullSlots int
+	// L2DecideNS: hardware decision delay of the R4 actions (ns).
+	L2DecideNS uint64
 	// CostModel false: fixed threshold triggers move / block, hot actions
 	// are taken without the cost test, pre-placement without the test.
 	CostModel bool
@@ -260,11 +268,12 @@ const (
 	actSpread
 	actReplicate
 	actCmig
+	actL2Pull
 	numActs
 )
 
 // ActionNames name the actions in the statistics.
-var ActionNames = [numActs]string{"stay", "move", "block", "spread", "replicate", "cmig"}
+var ActionNames = [numActs]string{"stay", "move", "block", "spread", "replicate", "cmig", "l2pull"}
 
 // reader-distribution buckets of a decision (for the "distribution ->
 // action" table): readers 1, 2-3, 4-15, >= 16.
@@ -392,6 +401,7 @@ type adaptState struct {
 	cmigHolders                     uint64  // r3: GPMs whose L2 got the page's lines by cmig
 	cmigBusy                        bool
 	cmigKernel                      int
+	l2r                             *l2rPage // R4 footprints (nil = none yet)
 	preWrong                        bool          // r3: the pre-placement check missed
 	preClass                        int           // r3: distance class of the prediction that pre-placed the page
 	trackEl                         *list.Element // TrackCap LRU entry (nil = not tracked)

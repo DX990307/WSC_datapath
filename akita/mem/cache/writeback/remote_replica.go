@@ -26,6 +26,7 @@ type remoteReplicaRecord struct {
 	// R4: registered in the holder table, and when the read was opened.
 	tracked bool
 	reqTime sim.VTimeInSec
+	pulled  bool
 }
 
 // RemoteReplicaStats reports only the work performed by the requester-side
@@ -235,6 +236,10 @@ func (c *Cache) installRemoteDataFillCost(fill *mem.RemoteDataFill, line uint64)
 		return false
 	}
 	oldRecord, replacedRemote := c.remoteReplicaBlocks[block]
+	c.l2resStats.VictimCount++
+	if block.IsValid {
+		c.l2resStats.VictimScoreSum += c.costFinder.Score(block)
+	}
 	switch {
 	case !block.IsValid:
 		c.l2resStats.FillIntoInvalid++
@@ -280,6 +285,9 @@ func (c *Cache) recordRemoteReplicaHit(
 	}
 	record := c.remoteReplicaBlocks[block]
 	record.hits++
+	if record.pulled && record.hits == 1 {
+		c.l2resStats.PulledUsed++
+	}
 	c.remoteReplicaStats.ReplicaProbeHits++
 	c.remoteReplicaStats.TwoTouchReplicaHits++
 	if !record.used {

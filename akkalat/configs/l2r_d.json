@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 R4 step d: l2r_c + footprint pulls (action l2pull): a reader's lines of a tracked page (this kernel and the previous one, 4 reader slots per page) that are not in its L2 are pulled by the copy engines into its L2 when its rent paid on the page (network fetches x RTT x measured use of pulled lines) reaches the copy plus the expected re-fetch cost of the displaced lines; evaluations start at one mesh-average round trip and double; hardware decision delay 500 ns; one attempt per reader, page and kernel.",
+  "extends": "l2r_c.json",
+  "pm-adapt-actions": "l2pull"
+}

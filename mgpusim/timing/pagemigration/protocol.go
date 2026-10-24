@@ -12,6 +12,8 @@ type PullReq struct {
 	sim.MsgMeta
 	PAddr uint64
 	Size  uint64
+	// Mask (R4): only these 64-B lines are copied (0 = all).
+	Mask uint64
 }
 
 // Meta returns the message meta data.

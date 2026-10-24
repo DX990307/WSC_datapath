@@ -2,6 +2,7 @@ package pagemigration
 
 import (
 	"log"
+	"math/bits"
 	"reflect"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
@@ -25,6 +26,8 @@ type chunk struct {
 	// install (P21 cmig): the pulled data goes to this function (into the
 	// destination GPM's L2) instead of DRAM.
 	install func(now sim.VTimeInSec, data []byte)
+	// mask (R4): only these 64-B lines of the chunk are copied (0 = all).
+	mask uint64
 }
 
 // serving is one pull being served by the source engine.
@@ -32,6 +35,8 @@ type serving struct {
 	req       *PullReq
 	data      []byte
 	linesLeft int
+	// mask (R4): only these lines are read and sent (0 = all).
+	mask uint64
 	// local (P21): a chunk this engine copies to itself (source and
 	// destination on the same GPM, e.g. a 1 KB block that stays at its home
 	// while its page moves to a new frame); no network messages.
@@ -235,6 +240,7 @@ func (e *CopyEngine) sendPulls(now sim.VTimeInSec) bool {
 			continue
 		}
 		req := newPullReq(now, e.remotePort, c.src.remotePort, c.srcPAddr, c.size)
+		req.Mask = c.mask
 		if e.remotePort.Send(req) != nil {
 			break
 		}
@@ -296,16 +302,24 @@ func (e *CopyEngine) recvRemote(now sim.VTimeInSec) bool {
 }
 
 func (e *CopyEngine) serve(now sim.VTimeInSec, req *PullReq) {
+	n := int(req.Size / e.cfg.LineBytes)
+	if req.Mask != 0 {
+		n = bits.OnesCount64(req.Mask)
+	}
 	e.serveLines(now, &serving{
 		req:       req,
 		data:      make([]byte, req.Size),
-		linesLeft: int(req.Size / e.cfg.LineBytes),
+		linesLeft: n,
+		mask:      req.Mask,
 	}, req.PAddr)
 }
 
 func (e *CopyEngine) serveLines(now sim.VTimeInSec, s *serving, base uint64) {
 	line := e.cfg.LineBytes
 	for off := uint64(0); off < uint64(len(s.data)); off += line {
+		if s.mask != 0 && s.mask&(1<<(off/line)) == 0 {
+			continue
+		}
 		addr := base + off
 		r := mem.ReadReqBuilder{}.
 			WithSendTime(now).
@@ -379,8 +393,13 @@ func (e *CopyEngine) recvMem(now sim.VTimeInSec, port sim.Port) bool {
 			if lr.s.linesLeft == 0 && lr.s.local != nil {
 				e.landChunk(now, lr.s.local, lr.s.data)
 			} else if lr.s.linesLeft == 0 {
-				e.rsps = append(e.rsps, newPullRsp(now, e.remotePort,
-					lr.s.req.Src, lr.s.req.ID, lr.s.data))
+				rsp := newPullRsp(now, e.remotePort,
+					lr.s.req.Src, lr.s.req.ID, lr.s.data)
+				if lr.s.mask != 0 {
+					rsp.TrafficBytes = bits.OnesCount64(lr.s.mask)*int(e.cfg.LineBytes) +
+						pullRspOverhead
+				}
+				e.rsps = append(e.rsps, rsp)
 			}
 		case *mem.WriteDoneRsp:
 			e.dramInflight--
