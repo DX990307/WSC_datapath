@@ -165,5 +165,7 @@ func (r *Runner) reportL2ResStats() {
 		col("l2r_pull_installed", float64(m.L2Res.PullInstalled))
 		col("l2r_pull_aborts", float64(m.L2Res.PullAborts))
 		col("l2r_slot_replacements", float64(m.L2Res.SlotReplacements))
+		col("l2r_prefetches", float64(m.L2Res.Prefetches))
+		col("l2r_prefetch_skips", float64(m.L2Res.PrefetchSkips))
 	}
 }

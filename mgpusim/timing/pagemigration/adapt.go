@@ -94,6 +94,11 @@ type AdaptConfig struct {
 	L2PullSlots int
 	// L2DecideNS: hardware decision delay of the R4 actions (ns).
 	L2DecideNS uint64
+	// L2Prefetch (R4 step f): the buffer's placement rule (learner)
+	// predicts the reader of pages it has not fetched in this kernel; their
+	// expected footprint is pulled into the reader's L2 when p E > copy +
+	// displacement (E = mean rent of the buffer's decided pulls).
+	L2Prefetch bool
 	// CostModel false: fixed threshold triggers move / block, hot actions
 	// are taken without the cost test, pre-placement without the test.
 	CostModel bool
@@ -402,6 +407,7 @@ type adaptState struct {
 	cmigBusy                        bool
 	cmigKernel                      int
 	l2r                             *l2rPage // R4 footprints (nil = none yet)
+	l2rObsKern                      int      // R4: kernel of the last observation (+1)
 	preWrong                        bool          // r3: the pre-placement check missed
 	preClass                        int           // r3: distance class of the prediction that pre-placed the page
 	trackEl                         *list.Element // TrackCap LRU entry (nil = not tracked)
@@ -440,6 +446,9 @@ type buffer struct {
 	sumRepRegret            float64
 	nMig                    int
 	preWrongMoved           int // r3: pre-placed pages that missed their check and were moved later
+	l2rRent                 float64 // R4: rent at the decided pulls of this buffer
+	l2rPulls                int
+	l2rFP                   uint64 // R4: footprint of the last observed page's best reader
 	// r3 evidence by distance class (log2 of the distance to the nearest
 	// observation): out-of-sample tests of the rule's moving predictions
 	evTests, evHits [numDistClass]int
@@ -2099,6 +2108,10 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 			continue
 		}
 		dsts := [blocksPerPage]uint64{d, d, d, d}
+		if c.L2Prefetch {
+			m.l2rPrefetch(now, b, i, v, va2, p, home[0], d)
+			continue
+		}
 		if m.ppns[p.PAddr>>m.log2PageSize] == nil && c.r3() {
 			k := distClass(l.nearest(i))
 			if m.r3PrePlaceOK(b, k, home[0], d) {

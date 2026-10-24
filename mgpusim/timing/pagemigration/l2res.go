@@ -60,6 +60,7 @@ type L2ResStats struct {
 	HolderMsgs                                  uint64
 	Pulls, PullLines, PullInstalled, PullAborts uint64
 	SlotReplacements                            uint64
+	Prefetches, PrefetchSkips                   uint64
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +187,10 @@ func (m *Manager) l2rDecide(now sim.VTimeInSec, a *adaptState, p vm.Page, home u
 			a.l2r.slots[i].tried = m.kernel
 		}
 	}
+	if o.regret > 0 && a.buf != nil {
+		a.buf.l2rRent += o.regret
+		a.buf.l2rPulls++
+	}
 	d := m.cfg.Adapt.L2DecideNS
 	if d == 0 {
 		m.l2rStartPull(now, a, p, home, o)
@@ -224,4 +229,105 @@ func (m *Manager) l2rStartPull(now sim.VTimeInSec, a *adaptState, p vm.Page, hom
 			}
 		},
 	})
+}
+
+// ---------------------------------------------------------------------------
+// R4 step f: rule-predicted pulls
+
+// l2rFootprint is g's footprint of the page (this kernel and the previous).
+func (m *Manager) l2rFootprint(a *adaptState, g uint64) uint64 {
+	if a.l2r == nil {
+		return 0
+	}
+	for i := range a.l2r.slots {
+		s := &a.l2r.slots[i]
+		if s.dev != g {
+			continue
+		}
+		switch {
+		case s.kern == m.kernel:
+			return s.cur | s.prev
+		case s.kern == m.kernel-1:
+			return s.cur
+		}
+	}
+	return 0
+}
+
+func (m *Manager) l2rSlot(a *adaptState, g uint64) *l2rSlot {
+	if a.l2r == nil {
+		return nil
+	}
+	for i := range a.l2r.slots {
+		if a.l2r.slots[i].dev == g {
+			return &a.l2r.slots[i]
+		}
+	}
+	return nil
+}
+
+// l2rPrefetch pulls the expected footprint of page idx of buffer b into the
+// L2 of its predicted reader d, unless d already fetched it in this kernel.
+// Test: p E ph > copy + displacement, p = the rule's out-of-sample hit rate
+// (Laplace), E = mean rent of the buffer's decided pulls, ph = measured use
+// of pulled lines at d.
+func (m *Manager) l2rPrefetch(now sim.VTimeInSec, b *buffer, idx int, v *unit,
+	a *adaptState, p vm.Page, home, d uint64) {
+	if d == home || b.l2rPulls == 0 || v.phase != phaseIdle {
+		return
+	}
+	if a.writeKernel == m.kernel {
+		return
+	}
+	if s := m.l2rSlot(a, d); s != nil && (s.tried == m.kernel ||
+		(s.kern == m.kernel && s.cur != 0)) {
+		return
+	}
+	gp := m.gpms[d]
+	if gp == nil || gp.PullInstall == nil {
+		return
+	}
+	fp := m.l2rFootprint(a, d)
+	if fp == 0 {
+		fp = b.l2rFP
+	}
+	var lines uint64
+	for x := fp; x != 0; x &= x - 1 {
+		bit := uint64(bits.TrailingZeros64(x))
+		if !gp.HoldsLine(p.PAddr + bit*64) {
+			lines |= 1 << bit
+		}
+	}
+	n := bits.OnesCount64(lines)
+	if n == 0 {
+		return
+	}
+	tests, hits := 0, 0
+	for i := range b.evTests {
+		tests += b.evTests[i]
+		hits += b.evHits[i]
+	}
+	pr := float64(hits+1) / float64(tests+2)
+	inst, used := gp.PullUse()
+	ph := float64(used+1) / float64(inst+2)
+	e := b.l2rRent / float64(b.l2rPulls)
+	c := m.r3Copy(home, d, float64(n*64)) + float64(n)*gp.VictimScore()
+	if pr*e*ph <= c {
+		m.L2Res.PrefetchSkips++
+		return
+	}
+	if a.l2r == nil {
+		a.l2r = &l2rPage{}
+	}
+	if s := m.l2rSlot(a, d); s == nil {
+		k := m.cfg.Adapt.L2PullSlots
+		if k <= 0 {
+			k = 4
+		}
+		if len(a.l2r.slots) < k {
+			a.l2r.slots = append(a.l2r.slots, l2rSlot{dev: d, kern: m.kernel, tried: -1})
+		}
+	}
+	m.L2Res.Prefetches++
+	m.l2rDecide(now, a, p, home, l2rOpt{g: d, lines: lines})
 }

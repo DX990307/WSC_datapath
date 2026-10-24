@@ -367,6 +367,17 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 		m.AStats.EarlyObs++
 		m.observe(now, a.buf, a.idx, best, home[0], false)
 	}
+	if a.buf != nil && c.L2Prefetch && a.l2rObsKern != m.kernel+1 {
+		// R4: one observation per page and kernel (the pattern may be
+		// a per-kernel one); the best reader's footprint is the guess
+		// for the predicted pages
+		a.l2rObsKern = m.kernel + 1
+		if fp := m.l2rFootprint(a, best); fp != 0 {
+			a.buf.l2rFP = fp
+		}
+		m.AStats.EarlyObs++
+		m.observe(now, a.buf, a.idx, best, home[0], false)
+	}
 	hold := m.r3Hold(now, a, p.PAddr, home[0])
 	fixed := m.r3Fixed() + hold
 	// lines the readers keep in their L2s (M3) are lost when the data
