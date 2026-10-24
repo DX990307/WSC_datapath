@@ -540,6 +540,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 		return
 	}
 	a.bucket = readerBucket(readers)
+	a.r3Acts++
 	m.AStats.Decided[chosen.act][a.bucket]++
 	if chosen.act == actCmig {
 		t := chosen.dst[0]

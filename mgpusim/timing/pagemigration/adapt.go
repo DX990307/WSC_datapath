@@ -419,12 +419,16 @@ type adaptState struct {
 	ftClass           int
 	ftAcc             float64
 	ftTested, ftMoved bool
+	ftHitRec          bool
 	// GRIT baseline (grit.go): scheme, faults and read/write bit of the
 	// current scheme, GPMs waiting for a copy, write epoch
 	gScheme, gFaults int
 	gWritten         bool
 	gWait            uint64
 	gEpoch           uint64
+	// diagnostics: first vector toucher + 1, R3 actions taken
+	firstG uint64
+	r3Acts int
 }
 
 type replica struct {
@@ -1825,6 +1829,14 @@ func (m *Manager) adaptResolve(now sim.VTimeInSec, at Waker, dev uint64,
 	if m.cfg.Adapt.grit() {
 		return m.gritResolve(now, at, dev, u, vector, isWrite, page)
 	}
+	if vector && m.cfg.Adapt.r3() {
+		if u == nil {
+			u = m.getUnit(m.unitOf(page.PID, page.VAddr))
+		}
+		if a := m.adaptUnit(u); a.firstG == 0 {
+			a.firstG = dev + 1
+		}
+	}
 	if m.cfg.Adapt.ft() && vector {
 		if u == nil {
 			u = m.getUnit(m.unitOf(page.PID, page.VAddr))
@@ -2292,7 +2304,8 @@ func (m *Manager) DumpAdapt(w io.Writer) {
 	})
 	fmt.Fprintf(w, "vpn\tbuf_start_vpn\tbuf_pages\tidx\torig_ppn\tcur_ppn\thomes\t"+
 		"touched\thot\thot_handled\tfixed\tpreplaced\treplicas\treaders\twritten\tn\t"+
-		"migrations\tobserved\tpre_held\tbuf_conc\tbuf_hot\tbuf_touched\tbuf_propagated\tbuf_conf\n")
+		"migrations\tobserved\tpre_held\tbuf_conc\tbuf_hot\tbuf_touched\tbuf_propagated\tbuf_conf\t"+
+		"orig_home\tfirst_g\tft_moved\tft_test\tr3_acts\n")
 	for _, k := range keys {
 		u := m.units[k]
 		a := u.a
@@ -2323,13 +2336,20 @@ func (m *Manager) DumpAdapt(w io.Writer) {
 			}
 			return 0
 		}
-		fmt.Fprintf(w, "%d\t%d\t%d\t%d\t%d\t%d\t%d,%d,%d,%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+		ftt := 0
+		if a.ftTested {
+			ftt = 2
+			if bestHit := a.ftHitRec; bestHit {
+				ftt = 1
+			}
+		}
+		fmt.Fprintf(w, "%d\t%d\t%d\t%d\t%d\t%d\t%d,%d,%d,%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
 			va>>m.log2PageSize, bs, bp, a.idx, a.origPA>>m.log2PageSize,
 			p.PAddr>>m.log2PageSize, h[0], h[1], h[2], h[3], touched,
 			b2i(a.hot), b2i(a.hotHandled), b2i(a.fixed), b2i(a.preplaced),
 			len(a.replicas), bits.OnesCount64(a.readMask), b2i(a.writeKernel >= 0),
 			a.n, u.migrations, b2i(a.observed), b2i(a.preHeld), conc, bhot, btouch,
-			bprop, bconf)
+			bprop, bconf, m.ownerOf(a.origPA), int(a.firstG)-1, b2i(a.ftMoved), ftt, a.r3Acts)
 	}
 }
 

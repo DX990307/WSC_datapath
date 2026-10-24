@@ -150,6 +150,7 @@ func (m *Manager) ftTest(u *unit, a *adaptState) {
 	case best == a.ftG-1:
 		b.ftHits[a.ftClass]++
 		m.AStats.FTHits++
+		a.ftHitRec = true
 	case best == a.ftOrig:
 		b.ftHarm++
 		m.AStats.FTHarm++
