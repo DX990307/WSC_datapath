@@ -735,6 +735,7 @@ func (b *R9NanoGPUBuilder) connectL2AndDRAM() {
 	}
 	b.l2ToDramConnection.PlugIn(
 		b.pageMigrationController.GetPortByName("LocalMem"), 16)
+	b.wireCmpRDCPort(lowModuleFinder)
 }
 
 func (b *R9NanoGPUBuilder) connectL1TLBToL2TLB() {

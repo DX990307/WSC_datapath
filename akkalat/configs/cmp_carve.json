@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 comparison design, CARVE-HWC-style (Young et al., MICRO 2018) on the M3+ base: every GPM's L2 caches remote lines (normal LRU replacement) and a 256-MiB Remote Data Cache in local DRAM (3.1% of the GPM's 8 GiB; direct-mapped, 128-B lines, tag in ECC: one 128-B DRAM access per probe) is looked up after an L2 miss to remote data; coherence is GPU-VI write-invalidate broadcast for lines the 2-bit In-Memory Sharing Tracker marks as shared. See isca27/results_index/compare/README.md.",
+  "extends": "m3p.json",
+  "cmp-mode": "carve"
+}

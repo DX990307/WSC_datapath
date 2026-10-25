@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 comparison design, HMG-style (Ren et al., HPCA 2020) on the M3+ base: every GPM's L2 caches remote lines (normal LRU replacement, no M3 protection rules), kept coherent by per-GPM set-associative directories (16K entries x 8 ways, 4 lines per entry, sharer vector, VI, no acks); the 7x7 mesh is cut into quadrants that play the GPUs: an L2 miss goes to the region home of the address (hash over the quadrant's GPMs), which caches the line and forwards its misses to the system home. Writes at the home invalidate the sharers, region homes forward. See isca27/results_index/compare/README.md.",
+  "extends": "m3p.json",
+  "cmp-mode": "hmg"
+}

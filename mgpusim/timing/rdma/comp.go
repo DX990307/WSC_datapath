@@ -8,6 +8,7 @@ import (
 	"github.com/sarchlab/akita/v3/mem/cache/writeback"
 	"github.com/sarchlab/akita/v3/mem/mem"
 	memtrace "github.com/sarchlab/akita/v3/mem/trace"
+	"github.com/sarchlab/akita/v3/mem/vm"
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/akita/v3/tracing"
 )
@@ -108,6 +109,15 @@ type Comp struct {
 
 	// ISCA'27 P13 occupancy statistic; nil when off (obs_occupancy.go).
 	obsOcc *obsOccState
+
+	// ISCA'27 comparison designs (cmp.go); nil when off.
+	cmp         *cmpState
+	rdcPort     sim.Port
+	rdcFinder   mem.LowModuleFinder
+	rdcBase     uint64
+	relayActive bool
+	// ReplicaAgeFunc returns the age of a replica line in this GPM's L2.
+	ReplicaAgeFunc func(pid vm.PID, line uint64) (sim.VTimeInSec, bool)
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -144,6 +154,9 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 		c.obsOccTick(now)
 	}
 	madeProgress = c.processFromCtrlPort(now) || madeProgress
+	if c.cmp != nil {
+		madeProgress = c.cmpTick(now) || madeProgress
+	}
 	if c.isDraining {
 		madeProgress = c.drainRDMA(now) || madeProgress
 	}
@@ -381,7 +394,7 @@ func (c *Comp) fullyDrained() bool {
 	return len(c.transactionsFromOutside) == 0 &&
 		len(c.transactionsFromInside) == 0 &&
 		!c.remoteDataPathHasPendingWork() &&
-		!c.t18HasPendingWork()
+		!c.t18HasPendingWork() && !c.cmpHasPendingWork()
 }
 
 func (c *Comp) firstSeen(
@@ -526,7 +539,16 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 				return madeProgress
 			}
 			madeProgress = true
+		case *CohInvalMsg:
+			if !c.cmpFromOutside(now, req) {
+				return madeProgress
+			}
+			madeProgress = true
 		case mem.AccessReq:
+			if c.cmp != nil && c.cmpFromOutside(now, req) {
+				madeProgress = true
+				continue
+			}
 			if c.t18 != nil && c.t18.ownerActive {
 				if handled, progress := c.t18OwnerReqFromOutside(
 					now, req); handled {
@@ -739,6 +761,11 @@ func (c *Comp) processReqFromOutside(
 		)
 		c.ToOutside.Retrieve(now)
 		c.forgetSeen(c.firstSeenFromOutsideReq, req.Meta().ID)
+		if c.cmp != nil {
+			if _, isRead := req.(*mem.ReadReq); isRead {
+				c.cmp.t.OwnerRemoteRead(req.GetAddress())
+			}
+		}
 
 		c.traceOutsideInStart(req, cloned)
 
@@ -831,6 +858,9 @@ func (c *Comp) processRspFromOutside(
 	now sim.VTimeInSec,
 	rsp mem.AccessRsp,
 ) bool {
+	if c.cmp != nil && c.cmpSiblingRsp(now, rsp) {
+		return true
+	}
 	if c.t18 != nil && c.t18.reqActive {
 		if handled, progress := c.t18ReqRsp(now, rsp); handled {
 			return progress

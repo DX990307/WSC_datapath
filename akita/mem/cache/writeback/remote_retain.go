@@ -300,6 +300,7 @@ func (h homeWriteObservers) NoteWrite(now sim.VTimeInSec, addr, size uint64) {
 }
 
 func (c *Cache) noteHomeWrite(now sim.VTimeInSec, addr uint64, size uint64) {
+	c.cmpNoteWriteTime(now, addr, size)
 	if c.homeWriteObserver == nil {
 		return
 	}

@@ -34,6 +34,8 @@ type Platform struct {
 	PageMigration *pagemigration.Manager
 	// Holders is the R4 holder table (nil unless -l2res-holders).
 	Holders *writeback.HolderTable
+	// Cmp is the comparison design state (nil unless -cmp-mode).
+	Cmp *writeback.CmpCoherence
 
 	// PageTable is the global page table (P21 -dump-alloc-map).
 	PageTable vm.PageTable

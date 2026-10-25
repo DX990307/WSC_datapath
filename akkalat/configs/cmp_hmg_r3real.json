@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 comparison: our migration / replication / pre-placement (R3 realistic; R5 adds -pm-adapt-ft move -pm-adapt-hold-measured on the command line) on top of the HMG-style comparison design instead of the M3+ remote data cache.",
+  "extends": "m3p_r3real.json",
+  "cmp-mode": "hmg"
+}

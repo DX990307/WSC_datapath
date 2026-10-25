@@ -227,6 +227,7 @@ type remoteWaiter struct {
 	req       *mem.ReadReq
 	arrival   sim.VTimeInSec
 	firstSeen sim.VTimeInSec
+	relay     bool // comparison HMG: a read relayed from another GPM
 }
 
 type remoteLineEntry struct {
@@ -262,6 +263,13 @@ type remoteLineEntry struct {
 	// created (ISCA27 R4): when the entry was opened; the data is read at
 	// the home no earlier.
 	created sim.VTimeInSec
+	// comparison designs (cmp.go): age of the data (when it was read at the
+	// home), RDC lookup done / data from the RDC, RDC line being completed.
+	age       sim.VTimeInSec
+	hasAge    bool
+	rdcProbed bool
+	fromRDC   bool
+	rdcFill   *rdcFill
 }
 
 type remotePrefetchCandidate struct {

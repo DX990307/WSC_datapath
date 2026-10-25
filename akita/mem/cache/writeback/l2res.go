@@ -184,7 +184,7 @@ func (c *Cache) indexRemote(block *cachepkg.Block, line uint64) {
 	if c.remotePageIndex == nil {
 		return
 	}
-	p := line >> c.holders.cfg.Log2PageSize
+	p := line >> c.remoteIndexLog2()
 	m := c.remotePageIndex[p]
 	if m == nil {
 		m = make(map[*cachepkg.Block]struct{})
@@ -197,7 +197,7 @@ func (c *Cache) unindexRemote(block *cachepkg.Block, line uint64) {
 	if c.remotePageIndex == nil {
 		return
 	}
-	p := line >> c.holders.cfg.Log2PageSize
+	p := line >> c.remoteIndexLog2()
 	if m := c.remotePageIndex[p]; m != nil {
 		delete(m, block)
 		if len(m) == 0 {
@@ -259,6 +259,11 @@ func (c *Cache) downgradeRemotePage(page uint64) {
 }
 
 func (c *Cache) replicaStale(record *remoteReplicaRecord, written func(uint64) bool) bool {
+	if c.cmp != nil && record.tracked {
+		stale := c.cmp.WrittenAfter(record.key.line, record.reqTime)
+		c.cmp.noteBoundaryCheck(!stale)
+		return stale
+	}
 	if c.holders != nil && record.tracked {
 		if c.holders.WrittenAfter(record.key.line, record.reqTime) {
 			c.l2resStats.BoundaryTrackedDropped++

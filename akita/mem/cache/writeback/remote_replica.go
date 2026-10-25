@@ -157,6 +157,11 @@ func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocal
 			return false
 		}
 	}
+	if c.cmpFillLRU {
+		// comparison designs: remote lines compete with local lines under
+		// the normal (LRU) replacement
+		evictLocalClean = true
+	}
 	// Remote clean fills are opportunistic. Never evict an ordinary local clean
 	// line for one. Invalid ways and existing remote-clean lines remain eligible
 	// under the benchmark-independent victim policy.
@@ -212,7 +217,11 @@ func (c *Cache) writeRemoteFill(fill *mem.RemoteDataFill, line uint64, block *ca
 		record.patternKey = &patternKey
 	}
 	c.remoteReplicaBlocks[block] = record
-	if c.holders != nil {
+	if c.cmp != nil {
+		record.reqTime = fill.ReqTime
+		record.tracked = c.cmp.register(c.Engine.CurrentTime(), c.cmpID, line)
+		c.indexRemote(block, line)
+	} else if c.holders != nil {
 		record.reqTime = fill.ReqTime
 		record.tracked = c.holders.register(fill.ReqTime, c.holderID, line)
 		if record.tracked {

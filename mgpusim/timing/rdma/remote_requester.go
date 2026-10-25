@@ -891,6 +891,7 @@ func (c *Comp) addRemoteWaiter(
 		req:       read,
 		arrival:   arrival,
 		firstSeen: firstSeen,
+		relay:     c.relayActive,
 	})
 	if entry.speculative && !entry.speculativeUseful {
 		entry.speculativeUseful = true
@@ -920,7 +921,11 @@ func (c *Comp) consumeRemoteRead(now sim.VTimeInSec, read *mem.ReadReq) {
 		c.Name(), read.Info, read.ID, read.SendTime,
 		c.firstSeenFromL1Req[read.ID], read.Src, read.Dst,
 	)
-	c.ToL1.Retrieve(now)
+	if c.relayActive {
+		c.consumeRelay()
+	} else {
+		c.ToL1.Retrieve(now)
+	}
 	delete(c.remotePrefetchObserved, read.ID)
 	delete(c.remotePrefetchCandidates, read.ID)
 	c.forgetSeen(c.firstSeenFromL1Req, read.ID)
@@ -1111,6 +1116,11 @@ func (c *Comp) processRemotePendingBatches(now sim.VTimeInSec) bool {
 		return false
 	}
 	entry := c.remotePendingBatch[0]
+	if c.cmp != nil && c.rdcMayProbe(entry) {
+		c.remotePendingBatch = c.remotePendingBatch[1:]
+		c.rdcStartProbe(now, entry)
+		return true
+	}
 	if c.remoteConfig.DisableBatching {
 		if !c.sendRemoteEntryDirect(now, entry) {
 			return false
@@ -1131,7 +1141,11 @@ func (c *Comp) sendRemoteEntryDirect(
 	now sim.VTimeInSec,
 	entry *remoteLineEntry,
 ) bool {
-	if c.m1Composed() && !c.m1CanSend(entry.owner) {
+	dst := entry.owner
+	if c.cmp != nil {
+		dst = c.cmpRoute(entry.owner, entry.key.lineAddr)
+	}
+	if c.m1Composed() && !c.m1CanSend(dst) {
 		return false
 	}
 	info := memtrace.WithL2RemoteInfo(
@@ -1139,7 +1153,7 @@ func (c *Comp) sendRemoteEntryDirect(
 	req := mem.ReadReqBuilder{}.
 		WithSendTime(now).
 		WithSrc(c.ToOutside).
-		WithDst(entry.owner).
+		WithDst(dst).
 		WithAddress(entry.key.lineAddr).
 		WithByteSize(remoteLineBytes).
 		WithPID(entry.key.pid).
@@ -1149,12 +1163,12 @@ func (c *Comp) sendRemoteEntryDirect(
 		return false
 	}
 
-	c.obsNetSend(entry.owner, req.ID, entry.key.lineAddr, 1, now)
+	c.obsNetSend(dst, req.ID, entry.key.lineAddr, 1, now)
 	entry.state = remoteLineInflight
 	entry.fromRemote = true
 	c.remoteSingleInflight[req.ID] = entry
 	if c.m1Composed() {
-		c.m1Acquire(now, entry.owner, req.ID)
+		c.m1Acquire(now, dst, req.ID)
 	}
 	c.RemoteDataPathStats.SingleReadPackets++
 	c.RemoteDataPathStats.BatchSizeHistogram[1]++
@@ -1509,6 +1523,9 @@ func (c *Comp) processRemoteSingleRsp(
 	entry.data = append([]byte(nil), dataRsp.Data...)
 	entry.state = remoteLineReady
 	entry.fromRemote = true
+	if c.cmp != nil {
+		c.cmpNoteRsp(entry, rsp)
+	}
 	if memtrace.ObsEnabled() {
 		memtrace.ObsReqArrive(c.Name(), rsp.GetRspTo(), entry.key.lineAddr,
 			rsp.Meta().RecvTime)
@@ -1593,6 +1610,15 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 		return false
 	}
 	entry := c.remoteReady[0]
+	if len(entry.waiters) > 0 && entry.waiters[0].relay {
+		if !c.sendRelayRsp(now, entry, entry.waiters[0]) {
+			return false
+		}
+		entry.waiters = entry.waiters[1:]
+		c.remoteOutstandingReads--
+		c.RemoteDataPathStats.FanoutResponses++
+		return true
+	}
 	if len(entry.waiters) > 0 {
 		waiter := entry.waiters[0]
 		data := append([]byte(nil), entry.data...)
@@ -1630,7 +1656,7 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 		return true
 	}
 
-	shouldFill := entry.fromRemote &&
+	shouldFill := (entry.fromRemote || entry.fromRDC) &&
 		!c.remoteConfig.DisableRequesterL2 &&
 		entry.admit && !entry.boundaryStale &&
 		!c.remoteUncacheable[entry.key.remoteLineIdentity]
@@ -1658,7 +1684,8 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 				WithInfo(entry.info).
 				WithGeneration(entry.replicaGeneration)
 			if entry.firstTouchAdmission &&
-				c.remoteConfig.FirstTouchAdmission == 1 {
+				c.remoteConfig.FirstTouchAdmission == 1 &&
+				(c.cmp == nil || !c.cmp.fillLRU) {
 				fillBuilder = fillBuilder.WithRequireInvalidVictim()
 			}
 			if entry.speculative {
@@ -1670,6 +1697,9 @@ func (c *Comp) processRemoteReady(now sim.VTimeInSec) bool {
 			}
 			fill := fillBuilder.Build()
 			fill.ReqTime = entry.created
+			if entry.hasAge && entry.age < fill.ReqTime {
+				fill.ReqTime = entry.age
+			}
 			if err := c.ToL2.Send(fill); err != nil {
 				c.RemoteDataPathStats.TwoTouchFillAttempts--
 				return false
