@@ -108,6 +108,11 @@ type Comp struct {
 
 	// ISCA'27 P13 occupancy statistic; nil when off (obs_occupancy.go).
 	obsOcc *obsOccState
+
+	// r5-distance A: nearest-copy oracle (nearest.go); nil when off.
+	nearest    *NearestOracle
+	nearProbes map[string]*mem.ReadReq // holder L2 lookup ID -> served request
+	nearFwd    map[string]*mem.ReadReq // forwarded read ID -> served request
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -266,6 +271,13 @@ func (c *Comp) requesterOutstandingCount() int {
 }
 
 func (c *Comp) ownerOutstandingCount() int {
+	if c.nearest != nil {
+		n := len(c.transactionsFromOutside) + c.remoteOwnerOccupancy() + c.nearestLive()
+		if c.t18 != nil {
+			n += c.t18.ownerLive
+		}
+		return n
+	}
 	if c.t18 != nil {
 		return len(c.transactionsFromOutside) + c.remoteOwnerOccupancy() +
 			c.t18.ownerLive
@@ -381,7 +393,8 @@ func (c *Comp) fullyDrained() bool {
 	return len(c.transactionsFromOutside) == 0 &&
 		len(c.transactionsFromInside) == 0 &&
 		!c.remoteDataPathHasPendingWork() &&
-		!c.t18HasPendingWork()
+		!c.t18HasPendingWork() &&
+		(c.nearest == nil || c.nearestLive() == 0)
 }
 
 func (c *Comp) firstSeen(
@@ -460,6 +473,13 @@ func (c *Comp) processFromL2(now sim.VTimeInSec) bool {
 		}
 		switch req := req.(type) {
 		case mem.AccessRsp:
+			if lk, ok := req.(*mem.CacheLookupRsp); ok && c.nearProbes[lk.RespondTo] != nil {
+				if !c.nearestProbeRsp(now, lk) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			if c.isRemoteProbeRsp(req) {
 				if !c.processRemoteProbeRsp(now, req) {
 					return madeProgress
@@ -527,6 +547,13 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			}
 			madeProgress = true
 		case mem.AccessReq:
+			if c.nearest != nil && c.nearest.holderRq[req.Meta().ID] {
+				if !c.nearestServe(now, req.(*mem.ReadReq)) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			if c.t18 != nil && c.t18.ownerActive {
 				if handled, progress := c.t18OwnerReqFromOutside(
 					now, req); handled {
@@ -543,6 +570,13 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			}
 			madeProgress = true
 		case mem.AccessRsp:
+			if d, ok := req.(*mem.DataReadyRsp); ok && c.nearFwd[d.RespondTo] != nil {
+				if !c.nearestFwdRsp(now, d) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			ret := c.processRspFromOutside(now, req)
 			if !ret {
 				return madeProgress

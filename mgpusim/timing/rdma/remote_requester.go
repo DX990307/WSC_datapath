@@ -1131,7 +1131,21 @@ func (c *Comp) sendRemoteEntryDirect(
 	now sim.VTimeInSec,
 	entry *remoteLineEntry,
 ) bool {
-	if c.m1Composed() && !c.m1CanSend(entry.owner) {
+	dst := entry.owner
+	redirected := false
+	if c.nearest != nil {
+		if entry.nearDst == nil {
+			// the oracle's choice is made once per line entry (a send
+			// retried under back-pressure keeps it)
+			entry.nearDst = entry.owner
+			if h, ok := c.nearest.pick(c, entry.key.lineAddr, entry.owner); ok {
+				entry.nearDst = h
+			}
+		}
+		dst = entry.nearDst
+		redirected = dst != entry.owner
+	}
+	if c.m1Composed() && !c.m1CanSend(dst) {
 		return false
 	}
 	info := memtrace.WithL2RemoteInfo(
@@ -1139,7 +1153,7 @@ func (c *Comp) sendRemoteEntryDirect(
 	req := mem.ReadReqBuilder{}.
 		WithSendTime(now).
 		WithSrc(c.ToOutside).
-		WithDst(entry.owner).
+		WithDst(dst).
 		WithAddress(entry.key.lineAddr).
 		WithByteSize(remoteLineBytes).
 		WithPID(entry.key.pid).
@@ -1148,13 +1162,20 @@ func (c *Comp) sendRemoteEntryDirect(
 	if err := c.ToOutside.Send(req); err != nil {
 		return false
 	}
+	if c.nearest != nil {
+		if redirected {
+			c.nearest.holderRq[req.ID] = true
+		} else {
+			c.nearest.Stats.ServedByEngine[c.nearest.byPort[entry.owner]]++
+		}
+	}
 
-	c.obsNetSend(entry.owner, req.ID, entry.key.lineAddr, 1, now)
+	c.obsNetSend(dst, req.ID, entry.key.lineAddr, 1, now)
 	entry.state = remoteLineInflight
 	entry.fromRemote = true
 	c.remoteSingleInflight[req.ID] = entry
 	if c.m1Composed() {
-		c.m1Acquire(now, entry.owner, req.ID)
+		c.m1Acquire(now, dst, req.ID)
 	}
 	c.RemoteDataPathStats.SingleReadPackets++
 	c.RemoteDataPathStats.BatchSizeHistogram[1]++

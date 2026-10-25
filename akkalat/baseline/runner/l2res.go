@@ -217,6 +217,7 @@ func (f homeWriteFanout) NoteWrite(now sim.VTimeInSec, addr, size uint64) {
 // reportL2ResStats writes the R4 counters (summed over all L2 slices).
 func (r *Runner) reportL2ResStats() {
 	r.reportNearestStats()
+	r.reportNearestOracle()
 	if !*l2resCostReplFlag && *l2resHoldersFlag == 0 && !strings.Contains(*pmAdaptActionsFlag, "l2pull") {
 		return
 	}
