@@ -100,6 +100,15 @@ func (m *Manager) ftFirst(now sim.VTimeInSec, at Waker, dev uint64, u *unit,
 	a.ftMoved = true
 	a.act = actMove
 	a.blockDst = [blocksPerPage]uint64{dev, dev, dev, dev}
+	if m.cfg.Adapt.FT == "move" {
+		// buy at once with R3's own move: the access goes on to the
+		// home (rent) while the driver works; only the switch holds
+		a.ftPending = true
+		u.faulters = u.faulters[:0]
+		m.Stats.CounterTriggers++
+		m.adaptTrigger(now, u, dev)
+		return page, true
+	}
 	m.Stats.Faults++
 	u.faulters = append(u.faulters[:0], dev)
 	m.trigger(now, u, dev)
