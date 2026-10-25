@@ -360,6 +360,9 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 		m.observe(now, a.buf, a.idx, best, home[0], false)
 	}
 	hold := m.r3Hold(now, a, p.PAddr, home[0])
+	if b := a.buf; c.HoldMeasured && b != nil && b.mvHeldN > 0 {
+		hold = b.mvHeld / float64(b.mvHeldN)
+	}
 	fixed := m.r3Fixed() + hold
 	// lines the readers keep in their L2s (M3) are lost when the data
 	// changes address: each reader g holds about min(lines, fetches of g)
@@ -597,6 +600,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 	a.acc, a.nextEval = 0, 0
 	m.Stats.CounterTriggers++
 	m.AStats.MoveHoldModelNS += hold
+	a.wasMove = true
 	u.faulters = u.faulters[:0]
 	m.adaptTrigger(now, u, majority(chosen.dst))
 }

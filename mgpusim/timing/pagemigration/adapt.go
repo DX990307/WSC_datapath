@@ -205,6 +205,11 @@ type AdaptConfig struct {
 	// sees it at once) instead of by its accesses, and a wrong placement
 	// is taken to cost as much as a right one saves (E).
 	PreTouchCheck bool
+	// HoldMeasured (r3): the hold cost of a move is the buffer's measured
+	// waiting of the accesses its earlier moves held (the model rate x
+	// hold^2 / 2 counts only L1-miss accesses and was 5-200x too low);
+	// the model until a move of the buffer was measured.
+	HoldMeasured bool
 	// R3Mult (ablation): an action needs regret >= R3Mult x its cost (1 =
 	// break-even; 2 = Black & Sleator's migration threshold 2m).
 	// R3Decrement (ablation): each counted access also decrements the
@@ -427,6 +432,7 @@ type adaptState struct {
 	ftTested, ftMoved bool
 	ftHitRec          bool
 	ftPending         bool
+	wasMove           bool // an R3 move / block migration is running
 	// GRIT baseline (grit.go): scheme, faults and read/write bit of the
 	// current scheme, GPMs waiting for a copy, write epoch
 	gScheme, gFaults int
@@ -478,6 +484,8 @@ type buffer struct {
 	ftHarm          int
 	ftHeld          float64 // measured waiting of the FT migrations (ns)
 	ftHeldN         int
+	mvHeld          float64 // measured waiting of the R3 moves (ns)
+	mvHeldN         int
 }
 
 func (a *AdaptConfig) on() bool { return a.Enabled }

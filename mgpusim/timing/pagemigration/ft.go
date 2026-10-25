@@ -129,6 +129,11 @@ func (m *Manager) noteHeld(u *unit, end float64) {
 		return
 	}
 	m.AStats.MoveHeldNS += w
+	if b := a.buf; b != nil && a.wasMove {
+		b.mvHeld += w
+		b.mvHeldN++
+	}
+	a.wasMove = false
 }
 
 // ftWorth is the expected-value test of a first-touch buy: cost is the
