@@ -137,6 +137,10 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	}
 	a.Move, a.Block, a.Spread, a.Replicate, a.Predict = false, false, false, false, false
 	a.Cmig = false
+	a.L2Pull = false
+	a.L2Prefetch = false
+	a.L2PullSlots = *l2resPullSlotsFlag
+	a.L2DecideNS = uint64(*l2resDecideNSFlag)
 	for _, s := range strings.Split(*pmAdaptActionsFlag, ",") {
 		switch strings.TrimSpace(s) {
 		case "":
@@ -152,6 +156,10 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 			a.Predict = true
 		case "cmig":
 			a.Cmig = true
+		case "l2pull":
+			a.L2Pull = true
+		case "l2prefetch":
+			a.L2Prefetch = true
 		default:
 			panic(fmt.Sprintf("-pm-adapt-actions: unknown action %q", s))
 		}

@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 R4 step c: l2r_b + owner-side holder table (1024 pages per GPM, LRU): home writes invalidate the holders' lines (messages on the mesh), tracked lines survive kernel boundaries; untracked lines keep A1.",
+  "extends": "l2r_b.json",
+  "l2res-holders": 1024
+}

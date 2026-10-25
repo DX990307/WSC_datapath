@@ -1,6 +1,9 @@
 package pagemigration
 
-import "github.com/sarchlab/akita/v3/sim"
+import (
+	"github.com/sarchlab/akita/v3/mem/vm"
+	"github.com/sarchlab/akita/v3/sim"
+)
 
 const (
 	pullReqBytes    = 12 // same overhead as a memory read request
@@ -12,6 +15,10 @@ type PullReq struct {
 	sim.MsgMeta
 	PAddr uint64
 	Size  uint64
+	// Mask (R4): only these 64-B lines are copied (0 = all).
+	Mask uint64
+	// PID (R4) is the PID the source reads its L2 with.
+	PID vm.PID
 }
 
 // Meta returns the message meta data.
@@ -31,6 +38,8 @@ func (r *PullRsp) Meta() *sim.MsgMeta { return &r.MsgMeta }
 // (only its network traffic matters; the receiver discards it).
 type InvalMsg struct {
 	sim.MsgMeta
+	// OnArrive (ISCA27 R4) runs when the message reaches the holder.
+	OnArrive func()
 }
 
 // Meta returns the message meta data.

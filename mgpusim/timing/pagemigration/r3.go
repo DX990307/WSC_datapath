@@ -110,6 +110,17 @@ func (m *Manager) r3Fixed() float64 {
 	return float64(m.cfg.SoftwareLatencyNS + m.cfg.ShootdownLatencyNS)
 }
 
+// r3First is where the break-even evaluations of a page start: the fixed
+// cost of a migration, or (R4: only L2 pulls, no migration) the round trip
+// to a page at the mesh-average distance.
+func (m *Manager) r3First() float64 {
+	c := &m.cfg.Adapt
+	if c.L2Pull && !c.Move && !c.Block && !c.Replicate && !c.Cmig {
+		return c.R3BaseNS + c.R3HopNS*m.avgHops()
+	}
+	return m.r3Fixed()
+}
+
 // r3Kernel updates the per-page kernel write history.
 func (m *Manager) r3Kernel(a *adaptState) {
 	if a.lastKern == m.kernel {
@@ -144,13 +155,16 @@ func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr
 	if !remote {
 		return
 	}
+	if m.cfg.Adapt.L2Pull {
+		m.l2rNote(a, dev, pAddr)
+	}
 	if a.cmigHolders&(1<<dev) != 0 && a.cmigKernel == m.kernel && !a.cmigBusy &&
 		m.cmigMiss != nil {
 		m.cmigMiss[dev]++ // a fetch of a cmig page the pulled lines did not serve
 	}
 	a.acc += m.r3RTT(dev, m.homeOf(pAddr))
 	if a.nextEval == 0 {
-		a.nextEval = m.r3Fixed()
+		a.nextEval = m.r3First()
 	}
 	if a.acc >= a.nextEval {
 		m.r3Evaluate(now, u)
@@ -359,6 +373,17 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 		m.AStats.EarlyObs++
 		m.observe(now, a.buf, a.idx, best, home[0], false)
 	}
+	if a.buf != nil && c.L2Prefetch && a.l2rObsKern != m.kernel+1 {
+		// R4: one observation per page and kernel (the pattern may be
+		// a per-kernel one); the best reader's footprint is the guess
+		// for the predicted pages
+		a.l2rObsKern = m.kernel + 1
+		if fp := m.l2rFootprint(a, best); fp != 0 {
+			a.buf.l2rFP = fp
+		}
+		m.AStats.EarlyObs++
+		m.observe(now, a.buf, a.idx, best, home[0], false)
+	}
 	hold := m.r3Hold(now, a, p.PAddr, home[0])
 	if b := a.buf; c.HoldMeasured && b != nil && b.mvHeldN > 0 {
 		hold = b.mvHeld / float64(b.mvHeldN)
@@ -393,6 +418,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 		cost   float64
 	}
 	var chosen *opt
+	var l2rChosen l2rOpt
 	pick := func(o opt) {
 		if o.regret < c.R3Mult*o.cost {
 			return
@@ -542,8 +568,31 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 				cost: m.r3Copy(home[0], t, float64(uint64(1)<<m.log2PageSize))})
 		}
 	}
+	if c.L2Pull && uniform && a.writeKernel != m.kernel && a.l2r != nil {
+		if o, ok := m.l2rOption(a, tot, home[0], p.PAddr); ok {
+			pick(opt{act: actL2Pull, dst: [blocksPerPage]uint64{o.g, o.g, o.g, o.g},
+				regret: o.regret, cost: o.cost})
+			if chosen != nil && chosen.act == actL2Pull {
+				l2rChosen = o
+			}
+		}
+	}
 	if chosen == nil {
 		a.nextEval = 2 * a.acc
+		return
+	}
+	if chosen.act == actL2Pull {
+		a.bucket = readerBucket(readers)
+		m.AStats.Decided[actL2Pull][a.bucket]++
+		t := chosen.dst[0]
+		u.counts[t] = 0
+		if a.bc[0] != nil {
+			for b := range a.bc {
+				a.bc[b][t] = 0
+			}
+		}
+		a.acc, a.nextEval = 0, 0
+		m.l2rDecide(now, a, p, home[0], l2rChosen)
 		return
 	}
 	a.bucket = readerBucket(readers)

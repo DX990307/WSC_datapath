@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 R4 step c, mark variant: l2r_c with -l2res-holder-mode mark: a home write makes the holders' lines of the page untracked (they stay readable for the rest of the kernel, as under M3, and follow A1 at the next boundary) instead of dropping them at once; lines read after the write stay tracked and survive the boundary.",
+  "extends": "l2r_c.json",
+  "l2res-holder-mode": "mark"
+}

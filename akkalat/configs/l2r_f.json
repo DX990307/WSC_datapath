@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 R4 step f (without e): l2r_d + rule-predicted pulls (action l2prefetch): each page's best reader at its first evaluation in a kernel is an observation for the buffer's rule (R3 learner); pages the rule assigns to another reader that has not fetched them in this kernel get the reader's previous footprint (or the observed page's footprint) pulled into its L2 when p E ph > copy + displacement.",
+  "extends": "l2r_d.json",
+  "pm-adapt-actions": "l2pull,l2prefetch"
+}

@@ -23,6 +23,10 @@ type remoteReplicaRecord struct {
 	// whether it was hit after that.
 	retained        bool
 	usedAfterRetain bool
+	// R4: registered in the holder table, and when the read was opened.
+	tracked bool
+	reqTime sim.VTimeInSec
+	pulled  bool
 }
 
 // RemoteReplicaStats reports only the work performed by the requester-side
@@ -95,6 +99,9 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 // remote lines are used (opportunistic M3 fills).
 func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocalClean bool) bool {
 	c.recordRemoteFillAttempt(fill)
+	if c.netFetchHook != nil && fill != nil && fill.ReqTime > 0 {
+		c.netFetchHook(c.Engine.CurrentTime(), fill.ReqTime, fill.Address)
+	}
 	if c.remoteReplicaFilter == nil || fill == nil {
 		c.recordRemoteFillDropped(fill)
 		return false
@@ -127,6 +134,12 @@ func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocal
 		return false
 	}
 
+	if c.costFinder != nil {
+		if c.FirstTouchDuel {
+			c.noteDuelMiss(line, c.costFinder.Cost(line))
+		}
+		return c.installRemoteDataFillCost(fill, line)
+	}
 	block := c.directory.FindVictim(line)
 	if block == nil || block.IsLocked || block.ReadCount > 0 ||
 		(block.IsValid && block.IsDirty) {
@@ -157,6 +170,7 @@ func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocal
 	}
 	if replacedRemote {
 		delete(c.remoteReplicaBlocks, block)
+		c.unindexRemote(block, oldRecord.key.line)
 	}
 	c.untrackResidentBlock(block)
 	if replacedRemote {
@@ -166,6 +180,12 @@ func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocal
 	} else {
 		c.remoteReplicaStats.FillIntoInvalid++
 	}
+	c.writeRemoteFill(fill, line, block)
+	return true
+}
+
+// writeRemoteFill installs fill into block (victim already retired).
+func (c *Cache) writeRemoteFill(fill *mem.RemoteDataFill, line uint64, block *cachepkg.Block) {
 	data := append([]byte(nil), fill.Data...)
 	if err := c.storage.Write(block.CacheAddress, data); err != nil {
 		panic(err)
@@ -192,9 +212,60 @@ func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocal
 		record.patternKey = &patternKey
 	}
 	c.remoteReplicaBlocks[block] = record
+	if c.holders != nil {
+		record.reqTime = fill.ReqTime
+		record.tracked = c.holders.register(fill.ReqTime, c.holderID, line)
+		if record.tracked {
+			c.l2resStats.TrackedInstalls++
+		} else {
+			c.l2resStats.UntrackedInstalls++
+		}
+		c.indexRemote(block, line)
+	}
 	c.remoteReplicaStats.InstalledFills++
 	c.remoteReplicaStats.TwoTouchInstalledFills++
 	c.updateRemoteReplicaOccupancy()
+}
+
+// installRemoteDataFillCost is the install path under cost-aware
+// replacement (R4): the victim is the clean block with the smallest
+// expected re-fetch cost, and the fill is installed only when that is below
+// the new line's (first touch at RRPV 3).
+func (c *Cache) installRemoteDataFillCost(fill *mem.RemoteDataFill, line uint64) bool {
+	ins := c.costFinder.InsertRRPV
+	if fill.RequireInvalidVictim {
+		ins = 3
+	}
+	block := c.costRemoteVictim(line, ins, fill.RequireInvalidVictim)
+	if block == nil {
+		c.recordRemoteFillDropped(fill)
+		return false
+	}
+	oldRecord, replacedRemote := c.remoteReplicaBlocks[block]
+	c.l2resStats.VictimCount++
+	if block.IsValid {
+		c.l2resStats.VictimScoreSum += c.costFinder.Score(block)
+	}
+	switch {
+	case !block.IsValid:
+		c.l2resStats.FillIntoInvalid++
+		c.remoteReplicaStats.FillIntoInvalid++
+	case replacedRemote:
+		c.l2resStats.FillEvictRemote++
+		c.remoteReplicaStats.FillReplacedRemote++
+	default:
+		c.l2resStats.FillEvictLocal++
+		c.remoteReplicaStats.FillDisplacedLocalClean++
+	}
+	if replacedRemote {
+		delete(c.remoteReplicaBlocks, block)
+		c.unindexRemote(block, oldRecord.key.line)
+		c.recordRemoteReplicaRetirement(oldRecord)
+		c.remoteReplicaStats.TrackedEvictions++
+	}
+	c.untrackResidentBlock(block)
+	c.writeRemoteFill(fill, line, block)
+	block.RRPV = ins
 	return true
 }
 
@@ -220,6 +291,9 @@ func (c *Cache) recordRemoteReplicaHit(
 	}
 	record := c.remoteReplicaBlocks[block]
 	record.hits++
+	if record.pulled && record.hits == 1 {
+		c.l2resStats.PulledUsed++
+	}
 	c.remoteReplicaStats.ReplicaProbeHits++
 	c.remoteReplicaStats.TwoTouchReplicaHits++
 	if !record.used {
@@ -263,6 +337,7 @@ func (c *Cache) untrackRemoteReplica(block *cachepkg.Block) {
 	}
 	c.recordRemoteReplicaRetirement(record)
 	delete(c.remoteReplicaBlocks, block)
+	c.unindexRemote(block, record.key.line)
 	c.remoteReplicaStats.TrackedEvictions++
 	c.updateRemoteReplicaOccupancy()
 }

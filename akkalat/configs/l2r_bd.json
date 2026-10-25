@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 R4 step b with set dueling of the first-touch rule: per L2 slice, leader sets with and without protection of valid local lines from first-touch remote fills measure the latency of the misses they take; the other sets follow the cheaper rule (km needs first-touch fills to replace local lines, pa loses 3% when they do).",
+  "extends": "l2r_b.json",
+  "l2res-ft-protect": "duel"
+}

@@ -282,6 +282,23 @@ func (c *Cache) SetHomeWriteObserver(o HomeWriteObserver) {
 	c.homeWriteObserver = o
 }
 
+// AddHomeWriteObserver adds an observer next to the existing one.
+func (c *Cache) AddHomeWriteObserver(o HomeWriteObserver) {
+	if c.homeWriteObserver == nil {
+		c.homeWriteObserver = o
+		return
+	}
+	c.homeWriteObserver = homeWriteObservers{c.homeWriteObserver, o}
+}
+
+type homeWriteObservers []HomeWriteObserver
+
+func (h homeWriteObservers) NoteWrite(now sim.VTimeInSec, addr, size uint64) {
+	for _, o := range h {
+		o.NoteWrite(now, addr, size)
+	}
+}
+
 func (c *Cache) noteHomeWrite(now sim.VTimeInSec, addr uint64, size uint64) {
 	if c.homeWriteObserver == nil {
 		return
@@ -333,7 +350,7 @@ func (c *Cache) InvalidateWrittenRemoteReplicas(
 	for _, block := range blocks {
 		record := c.remoteReplicaBlocks[block]
 		c.retainStats.LinesChecked++
-		if !written(record.key.line) {
+		if !c.replicaStale(record, written) {
 			if !record.retained {
 				record.retained = true
 				record.usedAfterRetain = false

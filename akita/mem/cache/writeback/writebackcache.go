@@ -106,6 +106,23 @@ type Cache struct {
 	// unless A1 is enabled.
 	homeWriteObserver HomeWriteObserver
 	retainStats       RemoteRetainBoundaryStats
+	// ISCA27 R4 (l2res.go): cost-aware replacement and the owner-side
+	// holder table. nil unless enabled.
+	costFinder      *cache.CostVictimFinder
+	holders         *HolderTable
+	holderID        int
+	remotePageIndex map[uint64]map[*cache.Block]struct{}
+	l2resStats      L2ResStats
+	localMissNS     float64
+	// FirstTouchProtect (R4): under cost replacement a first-touch remote
+	// fill may not evict a valid local line.
+	FirstTouchProtect bool
+	// FirstTouchDuel: decide FirstTouchProtect by set dueling.
+	FirstTouchDuel   bool
+	netFetchHook     func(now, reqTime sim.VTimeInSec, line uint64)
+	duelCost         [2]float64
+	duelEvents       int
+	measureLocalMiss bool
 
 	localMemoryPathStats LocalMemoryPathStats
 	fillForwarding       bool

@@ -579,6 +579,9 @@ type RemoteDataFill struct {
 	PatternOwner         uint64
 	PatternAddress       uint64
 	RequireInvalidVictim bool
+	// ReqTime (ISCA27 R4) is when the requester opened the remote read
+	// (the data was read at the home no earlier); 0 = unknown.
+	ReqTime sim.VTimeInSec
 }
 
 // Meta returns the metadata attached to the fill.
