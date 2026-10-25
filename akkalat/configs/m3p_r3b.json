@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 P21 round 5: R3 + b = m3p_r3real.json on R4 step b (cost-aware L2 replacement, isca27/l2-resident: victim = smallest re-fetch latency x measured re-use probability; remote fills without the M3 protection rules).",
+  "extends": "m3p_r3real.json",
+  "l2res-cost-repl": true
+}
