@@ -89,3 +89,19 @@ func TestCmpCARVEIMST(t *testing.T) {
 		t.Fatalf("stale rdc line kept across boundary")
 	}
 }
+
+func TestCmpCARVEDropsCachedLine(t *testing.T) {
+	c := l2resTestCache()
+	co := NewCmpCoherence(CmpConfig{Mode: CmpCARVE, Log2Group: 7, Log2OwnerSize: 33,
+		GPMs: []int{1, 2}, RDCSets: 16})
+	c.SetCmp(co, 2, nil, true)
+	line := uint64(1)<<33 + 0x3040
+	if !c.installRemoteDataFill(l2resFill(line, 1)) {
+		t.Fatal("setup")
+	}
+	co.OwnerRemoteRead(line)
+	co.noteWrite(3, line, 64, false)
+	if co.stats.LinesInvalidated != 1 {
+		t.Fatalf("lines invalidated %d", co.stats.LinesInvalidated)
+	}
+}

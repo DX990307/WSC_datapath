@@ -124,23 +124,23 @@ func (b *R9NanoPlatformBuilder) wireCmp(drv *driver.Driver) *writeback.CmpCohere
 	}
 	for _, gpu := range b.gpus {
 		id := int(gpu.GPUID)
-		var l2s []*writeback.Cache
+		byPort := map[sim.Port]*writeback.Cache{}
 		for _, c := range gpu.L2Caches {
 			l2, ok := c.(*writeback.Cache)
 			if !ok {
 				log.Panic("cmp: L2 is not a writeback cache")
 			}
-			l2s = append(l2s, l2)
+			byPort[l2.GetPortByName("Top")] = l2
 			l2.SetCmp(t, id, gpu.RDMAEngine.ToL2, *cmpFillLRUFlag)
 		}
 		gpu.RDMAEngine.EnableCmp(t, id, ports, *cmpFillLRUFlag)
+		r := gpu.RDMAEngine
 		gpu.RDMAEngine.ReplicaAgeFunc = func(pid vm.PID, line uint64) (sim.VTimeInSec, bool) {
-			for _, l2 := range l2s {
-				if a, ok := l2.ReplicaAge(pid, line); ok {
-					return a, true
-				}
+			l2 := byPort[r.RemoteCacheModuleFinder().Find(line)]
+			if l2 == nil {
+				return 0, false
 			}
-			return 0, false
+			return l2.ReplicaAge(pid, line)
 		}
 	}
 	drv.AddPhysicalWriteHook(t.NoteWrite)

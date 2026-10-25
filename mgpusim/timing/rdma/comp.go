@@ -136,6 +136,11 @@ func (c *Comp) SetRemoteCacheModuleFinder(lmf mem.LowModuleFinder) {
 	c.remoteCacheModules = lmf
 }
 
+// RemoteCacheModuleFinder returns the finder set by SetRemoteCacheModuleFinder.
+func (c *Comp) RemoteCacheModuleFinder() mem.LowModuleFinder {
+	return c.remoteCacheModules
+}
+
 // SetRequestFilters connects RDMA metadata accesses to the existing
 // requester-L2 slices. It does not allocate a per-RDMA filter.
 func (c *Comp) SetRequestFilters(
