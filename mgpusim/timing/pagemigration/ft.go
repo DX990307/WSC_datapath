@@ -92,7 +92,7 @@ func (m *Manager) ftFirst(now sim.VTimeInSec, at Waker, dev uint64, u *unit,
 		}
 	}
 	m.AStats.FTFirst++
-	if m.cfg.Adapt.FT == "predict" && !m.ftWorth(a, cost, a.ftCost) {
+	if (m.cfg.Adapt.FT == "predict" || m.cfg.Adapt.FT == "pmove") && !m.ftWorth(a, cost, a.ftCost) {
 		m.AStats.FTRent++
 		return page, true
 	}
@@ -100,7 +100,7 @@ func (m *Manager) ftFirst(now sim.VTimeInSec, at Waker, dev uint64, u *unit,
 	a.ftMoved = true
 	a.act = actMove
 	a.blockDst = [blocksPerPage]uint64{dev, dev, dev, dev}
-	if m.cfg.Adapt.FT == "move" {
+	if m.cfg.Adapt.FT == "move" || m.cfg.Adapt.FT == "pmove" {
 		// buy at once with R3's own move: the access goes on to the
 		// home (rent) while the driver works; only the switch holds
 		a.ftPending = true

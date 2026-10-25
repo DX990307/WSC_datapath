@@ -214,8 +214,8 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.FT = *pmAdaptFTFlag
 	a.PreTouchCheck = *pmAdaptPreTouchFlag
 	a.HoldMeasured = *pmAdaptHoldMeasFlag
-	if a.FT != "" && a.FT != "always" && a.FT != "predict" && a.FT != "move" {
-		panic("-pm-adapt-ft must be empty, always, move or predict")
+	if a.FT != "" && a.FT != "always" && a.FT != "predict" && a.FT != "move" && a.FT != "pmove" {
+		panic("-pm-adapt-ft must be empty, always, predict, move or pmove")
 	}
 	if a.FT != "" && a.Rule != "r3" {
 		panic("-pm-adapt-ft needs -pm-adapt-rule r3")
