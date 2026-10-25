@@ -2179,8 +2179,20 @@ func (m *Manager) observe(now sim.VTimeInSec, b *buffer, idx int, dst, owner uin
 		if m.ppns[p.PAddr>>m.log2PageSize] == nil && c.r3() {
 			k := distClass(l.nearest(i))
 			if m.r3PrePlaceOK(b, k, home[0], d) {
+				if c.PreTouchCheck && b.prePending > b.preHits {
+					// the pages of one rule stand or fall together: at
+					// most as many unchecked placements as checked hits
+					// (+1), so the amount at stake doubles per round of
+					// confirmations (like the evaluation points)
+					m.AStats.PreBudgetSkip++
+					continue
+				}
 				if m.prePlace(now, v, dsts, actMove, true) {
 					va2.preClass = k
+					if c.PreTouchCheck {
+						b.prePending++
+						va2.preCounted = true
+					}
 				}
 			} else {
 				m.AStats.PreCostSkip++

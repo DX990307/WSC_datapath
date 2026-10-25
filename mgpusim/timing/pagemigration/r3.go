@@ -785,6 +785,7 @@ func (m *Manager) r3TouchCheck(u *unit, a *adaptState, dev uint64) {
 		return
 	}
 	a.preCheck = true
+	m.preRelease(a)
 	a.buf.preChecks++
 	a.buf.evTests[a.preClass]++
 	m.AStats.PreChecks++
