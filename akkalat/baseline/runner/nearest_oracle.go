@@ -39,13 +39,15 @@ func (b *R9NanoPlatformBuilder) wireNearestOracle(drv *driver.Driver) {
 		}
 	}
 	o := rdma.NewNearestOracle(engines)
-	o.Holds = func(e *rdma.Comp, line uint64) bool {
-		for _, c := range l2s[e] {
-			if c.HoldsRemoteLine(line) {
-				return true
-			}
+	byTop := make(map[sim.Port]*writeback.Cache)
+	for _, cs := range l2s {
+		for _, c := range cs {
+			byTop[c.GetPortByName("Top")] = c
 		}
-		return false
+	}
+	o.Holds = func(e *rdma.Comp, line uint64) bool {
+		c := byTop[e.RemoteCacheSlice(line)]
+		return c != nil && c.HoldsRemoteLine(line)
 	}
 	w := nearestOracleWrites{o}
 	for _, gpu := range b.gpus {

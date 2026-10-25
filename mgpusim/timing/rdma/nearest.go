@@ -258,3 +258,12 @@ func (c *Comp) nearestFwdRsp(now sim.VTimeInSec, rsp *mem.DataReadyRsp) bool {
 
 // NearestOracleOf returns the oracle attached to this engine (nil when off).
 func (c *Comp) NearestOracleOf() *NearestOracle { return c.nearest }
+
+// RemoteCacheSlice is the port of this GPM's L2 slice that holds (or would
+// hold) addr, local or remote.
+func (c *Comp) RemoteCacheSlice(addr uint64) sim.Port {
+	if c.remoteCacheModules == nil {
+		return nil
+	}
+	return c.remoteCacheModules.Find(addr)
+}
