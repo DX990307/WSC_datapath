@@ -116,6 +116,8 @@ var pmAdaptR3MultFlag = flag.Float64("pm-adapt-r3-mult", 1,
 	"P21 r3 ablation: an action needs regret >= this x its cost (2 = Black & Sleator's migration threshold).")
 var pmAdaptR3DecFlag = flag.Bool("pm-adapt-r3-decrement", false,
 	"P21 r3 ablation: each counted access also decrements the largest other non-zero counter (Black & Sleator's algorithm M).")
+var pmAdaptPreTouchFlag = flag.Bool("pm-adapt-pre-touch-check", false,
+	"P21 r3: a pre-placed page is checked by its first vector touch (toucher = placed home), and a wrong placement costs E.")
 var pmAdaptDumpFlag = flag.String("pm-adapt-dump", "",
 	"P21 diagnostics: write one line per tracked page to this file at the end.")
 var pmFirstTouchFlag = flag.Bool("pm-first-touch", false,
@@ -200,6 +202,7 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.R3Decrement = *pmAdaptR3DecFlag
 	a.R3Blind = *pmAdaptR3BlindFlag
 	a.FT = *pmAdaptFTFlag
+	a.PreTouchCheck = *pmAdaptPreTouchFlag
 	if a.FT != "" && a.FT != "always" && a.FT != "predict" {
 		panic("-pm-adapt-ft must be empty, always or predict")
 	}

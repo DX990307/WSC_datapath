@@ -127,7 +127,7 @@ func (m *Manager) r3Kernel(a *adaptState) {
 // r3Count is the R3 part of a counted access (after the counters).
 func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr uint64, remote bool) {
 	m.r3Kernel(a)
-	if a.preplaced && !a.preCheck && a.buf != nil {
+	if a.preplaced && !a.preCheck && a.buf != nil && !m.cfg.Adapt.PreTouchCheck {
 		// check a pre-placed page when its accesses would have cost one
 		// evaluation's worth at the original home, whether the prediction
 		// was right (accesses local) or wrong (remote): unbiased evidence
@@ -638,6 +638,12 @@ func (m *Manager) r3PrePlaceOK(b *buffer, k int, h, d uint64) bool {
 	// (about E at break-even); a wrong one that need not move costs only
 	// the copy
 	f := float64(b.preWrongMoved+1) / float64(b.preChecks-b.preHits+2)
+	if m.cfg.Adapt.PreTouchCheck {
+		// a wrong placement pays rent at the wrong place until it is
+		// moved again (about E at break-even) or for good (less than
+		// the break-even rent, E): count it as E
+		f = 1
+	}
 	return e*(p-(1-p)*f) > m.r3Copy(h, d, float64(uint64(1)<<m.log2PageSize))
 }
 
@@ -766,6 +772,29 @@ func (m *Manager) r3Best(u *unit, a *adaptState, home [blocksPerPage]uint64) uin
 		}
 	}
 	return best
+}
+
+// r3TouchCheck (PreTouchCheck) checks a pre-placed page at its first
+// vector touch: hit iff the toucher is the GPM it was placed on.
+func (m *Manager) r3TouchCheck(u *unit, a *adaptState, dev uint64) {
+	if !m.cfg.Adapt.PreTouchCheck || a.preCheck || a.buf == nil {
+		return
+	}
+	p, ok := m.pageTable.Find(u.key.pid, u.key.idx<<m.unitLog2)
+	if !ok {
+		return
+	}
+	a.preCheck = true
+	a.buf.preChecks++
+	a.buf.evTests[a.preClass]++
+	m.AStats.PreChecks++
+	if h, _ := m.pageHomes(p); h[0] == dev {
+		a.buf.preHits++
+		a.buf.evHits[a.preClass]++
+		m.AStats.PreCheckHits++
+	} else {
+		a.preWrong = true
+	}
 }
 
 // r3Check records whether a pre-placed page is at its best place.

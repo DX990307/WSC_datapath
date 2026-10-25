@@ -200,6 +200,11 @@ type AdaptConfig struct {
 	// "" off, "always" (every first touch migrates, then R3), "predict"
 	// (buy at first touch by the expected-value test, else rent).
 	FT string
+	// PreTouchCheck (r3): a pre-placed page is checked by its first vector
+	// touch (hit iff the toucher is where it was placed; the translation
+	// sees it at once) instead of by its accesses, and a wrong placement
+	// is taken to cost as much as a right one saves (E).
+	PreTouchCheck bool
 	// R3Mult (ablation): an action needs regret >= R3Mult x its cost (1 =
 	// break-even; 2 = Black & Sleator's migration threshold 2m).
 	// R3Decrement (ablation): each counted access also decrements the
@@ -1495,6 +1500,9 @@ func (m *Manager) prePlaceDone(u *unit, a *adaptState, act int, byPredict bool) 
 	if act == actSpread {
 		a.fixed = true
 	}
+	if a.firstG != 0 {
+		m.r3TouchCheck(u, a, a.firstG-1) // touched while the copy ran
+	}
 }
 
 // prePlaceInPlace copies the blocks of an untouched page to their new homes
@@ -1839,6 +1847,9 @@ func (m *Manager) adaptResolve(now sim.VTimeInSec, at Waker, dev uint64,
 		}
 		if a := m.adaptUnit(u); a.firstG == 0 {
 			a.firstG = dev + 1
+			if a.preplaced {
+				m.r3TouchCheck(u, a, dev)
+			}
 		}
 	}
 	if m.cfg.Adapt.ft() && vector {
