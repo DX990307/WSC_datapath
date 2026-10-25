@@ -108,6 +108,8 @@ var pmAdaptRuleFlag = flag.String("pm-adapt-rule", "",
 	"P21 round 3: \"r3\" = one break-even (ski-rental) rule for move / block / replicate / pre-placement with constants from the platform (see pagemigration/r3.go).")
 var pmAdaptR3BlindFlag = flag.Bool("pm-adapt-r3-blind", false,
 	"P21 round 3 experiment: targets and replica sites ignore distance (GPM with most accesses, random sites).")
+var pmAdaptR3FlatCostFlag = flag.Bool("pm-adapt-r3-flatcost", false,
+	"P21 r3 ablation: the regret prices every remote access at the mesh-average round trip (local 0), also between candidate homes (two-level local/remote cost, Jeong & Dubois style); action costs keep real distances.")
 var pmAdaptFTFlag = flag.String("pm-adapt-ft", "",
 	"P21 round 5 (r3): first touch inside the break-even rule: always (every first "+
 		"vector access migrates the page to the accessing GPM through the fault path, "+
@@ -211,6 +213,7 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.R3Mult = *pmAdaptR3MultFlag
 	a.R3Decrement = *pmAdaptR3DecFlag
 	a.R3Blind = *pmAdaptR3BlindFlag
+	a.R3FlatCost = *pmAdaptR3FlatCostFlag
 	a.FT = *pmAdaptFTFlag
 	a.PreTouchCheck = *pmAdaptPreTouchFlag
 	a.HoldMeasured = *pmAdaptHoldMeasFlag
@@ -253,14 +256,14 @@ func printAdaptConfig(c pagemigration.Config) {
 		"spread-other=%s prop-pages=%d prop-gate=%g predict-m=%d predict-window=%d "+
 		"base=%gns hop=%gns dom-share=%g max-migrations=%d hot-future=%d "+
 		"replica-budget=%dMB batch-amort=%g predict-touched=%v copy-first=%v "+
-		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v win-per-hit=%d pre-min-precision=%g pre-probe=%d+%d/hit track-cap=%d decide=%dns batch-sw=%v lookup=%dns blockhome-cap=%d approx-count=%v rule=%q r3-base=%gns r3-hop=%gns r3-link=%gB/ns flat=%v r3-blind=%v ft=%q r3-mult=%g r3-decrement=%v\n",
+		"early-observe=%v hold-preplace=%v replicate-any=%v count-hot=%v pre-copy-weight=%g const-window=%d observed-readers=%v hold-cost=%v win-per-hit=%d pre-min-precision=%g pre-probe=%d+%d/hit track-cap=%d decide=%dns batch-sw=%v lookup=%dns blockhome-cap=%d approx-count=%v rule=%q r3-base=%gns r3-hop=%gns r3-link=%gB/ns flat=%v r3-blind=%v ft=%q r3-mult=%g r3-decrement=%v r3-flatcost=%v\n",
 		*pmAdaptActionsFlag, a.CostModel, a.Alpha, a.FixedNS, a.CopyWeight,
 		a.QueueNS, a.EvalEvery, a.HotK, a.HotWindowNS, a.ConcShare,
 		a.SpreadOther, a.PropSmallPages, a.PropGate, a.PredictM, a.PredictWindow,
 		a.BaseNS, a.HopNS, c.DomShare, c.MaxMigrations, a.HotFutureReaders,
 		a.ReplicaBudget>>20, a.BatchAmort, a.PredictTouched, a.CopyFirst,
 		a.EarlyObserve, a.HoldPrePlace, a.ReplicateAny, a.CountHot, a.PreCopyWeight, a.PredictConstWindow, a.ObservedReaders, a.HoldCost, a.PredictWinPerHit, a.PreMinPrecision, a.PreProbe, a.PreProbePerHit, a.TrackCap, a.DecideNS, a.BatchSW, a.LookupNS, a.BlockHomeCap, a.ApproxCount, a.Rule, a.R3BaseNS, a.R3HopNS,
-		a.R3LinkBytesPerNS, a.FlatHops != 0, a.R3Blind, a.FT, a.R3Mult, a.R3Decrement)
+		a.R3LinkBytesPerNS, a.FlatHops != 0, a.R3Blind, a.FT, a.R3Mult, a.R3Decrement, a.R3FlatCost)
 }
 
 // wireAdaptive installs what the adaptive placement needs beyond the page
