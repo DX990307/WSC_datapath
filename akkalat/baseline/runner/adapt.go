@@ -224,7 +224,7 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	// switch latency and 4.1 ns of link and router pipeline in each direction
 	a.R3HopNS = 2 * (float64(*switchLatencyFlag) + 4.1)
 	a.R3BaseNS = 65.7
-	a.R3LinkBytesPerNS = float64(*bandwidthFlag * *networkFlitSizeFlag)
+	a.R3LinkBytesPerNS = float64(netScaled(*bandwidthFlag) * *networkFlitSizeFlag)
 	if *flatNetworkFlag {
 		a.FlatHops = -1 // the manager computes the average pair distance
 	}

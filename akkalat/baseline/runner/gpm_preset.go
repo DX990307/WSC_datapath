@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"flag"
 	"fmt"
 	"sort"
 	"strings"
@@ -412,10 +413,10 @@ var mi200EighthScaleGPMPreset = func() gpmPreset {
 var gpmPresets = map[string]gpmPreset{
 	mi200QuarterScaleGPMPreset.Name: mi200QuarterScaleGPMPreset,
 	mi200EighthScaleGPMPreset.Name:  mi200EighthScaleGPMPreset,
-	hpcaGPMPreset.Name:         hpcaGPMPreset,
-	mi300xEighthGPMPreset.Name: mi300xEighthGPMPreset,
-	mi200QuarterGPMPreset.Name: mi200QuarterGPMPreset,
-	mi200ScaledGPMPreset.Name:  mi200ScaledGPMPreset,
+	hpcaGPMPreset.Name:              hpcaGPMPreset,
+	mi300xEighthGPMPreset.Name:      mi300xEighthGPMPreset,
+	mi200QuarterGPMPreset.Name:      mi200QuarterGPMPreset,
+	mi200ScaledGPMPreset.Name:       mi200ScaledGPMPreset,
 }
 
 func gpmPresetNames() string {
@@ -518,6 +519,37 @@ func CUsPerGPM() int {
 		panic(fmt.Sprintf("unknown -gpm-preset %q (choose from %s)", *gpmPresetFlag, gpmPresetNames()))
 	}
 	return p.NumCU()
+}
+
+var scaleNetworkFlag = flag.Bool("scale-network", false,
+	"Scale model (user 10-26 eve): with a scale-model -gpm-preset (mi200-quarter / "+
+		"mi200-eighth), also scale the wafer network and the wafer-shared translation by "+
+		"s: -bandwidth, -switch-buffer-flits, -endpoint-channels, -endpoint-buffer-size, "+
+		"-rdma-pipeline-width, -rdma-max-outstanding, the T18 windows and tables "+
+		"(-t18-window, -t18-owner-window, -t18-req-entries, -t18-owner-entries, "+
+		"-t18-req-waiters, -t18-compose-table-entries), -pm-pull-window, the IOMMU TLB "+
+		"sets and the MMU walks in flight. The flags keep their full-scale values; latencies "+
+		"are not scaled. No effect with a full-size preset.")
+
+// netScaleDen returns 1/s for the network when -scale-network is on, else 1.
+func netScaleDen() int {
+	if !*scaleNetworkFlag {
+		return 1
+	}
+	return GPMCapacityScaleDen()
+}
+
+// netScaled divides a network-side size by netScaleDen, keeping 0 (= derived
+// or unset) and at least 1.
+func netScaled(v int) int {
+	d := netScaleDen()
+	if v <= 0 || d == 1 {
+		return v
+	}
+	if v/d < 1 {
+		return 1
+	}
+	return v / d
 }
 
 // orDefault returns v, or def when v is 0.

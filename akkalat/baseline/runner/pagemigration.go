@@ -138,7 +138,7 @@ func pageMigrationConfigFromFlags() pagemigration.Config {
 		}
 	}
 	c.ChunkBytes = uint64(*pmChunkBytesFlag)
-	c.PullWindow = *pmPullWindowFlag
+	c.PullWindow = netScaled(*pmPullWindowFlag)
 	c.L2Window = scaledPerGPM(*pmL2WindowFlag)
 	c.Check = *pmCheckFlag
 	t, ok := pagemigration.ParseTarget(*pmTargetFlag)

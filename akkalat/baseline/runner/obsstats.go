@@ -92,7 +92,7 @@ func (r *Runner) addObsStats() {
 		CycleNS:         cycleNS,
 		AggWindowCycles: *obsAggWindowFlag,
 		WindowNS:        *obsSampleNSFlag,
-		LinkBytesPerNS:  float64(*bandwidthFlag * *networkFlitSizeFlag),
+		LinkBytesPerNS:  float64(netScaled(*bandwidthFlag) * *networkFlitSizeFlag),
 		FlitBytes:       *networkFlitSizeFlag,
 	}
 	memtrace.EnableObsStats(cfg)

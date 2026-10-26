@@ -441,6 +441,20 @@ func (r *Runner) buildTimingPlatform() {
 			gpmPreset.CapScaleDen, scaledPerGPM(*pmAdaptTrackCapFlag),
 			scaledPerGPM(*pmAdaptReplBudgetFlag), scaledPerGPM(*pmL2WindowFlag))
 	}
+	if d := netScaleDen(); d > 1 {
+		fmt.Printf("[Config] scale model network s=1/%d: bandwidth=%d switch-buffer-flits=%d "+
+			"endpoint-channels=%d endpoint-buffer-size=%d rdma-pipeline-width=%d "+
+			"rdma-max-outstanding=%d t18-window=%d t18-compose-table-entries=%d "+
+			"pm-pull-window=%d IOMMU TLB %d sets x 32 ways, MMU %d walks in flight "+
+			"(latencies unchanged)\n", d, netScaled(*bandwidthFlag),
+			netScaled(*switchBufferFlitsFlag), netScaled(*endpointChannelsFlag),
+			netScaled(*endpointBufferSizeFlag), netScaled(*rdmaPipelineWidthFlag),
+			netScaled(*rdmaMaxOutstandingFlag), netScaled(*t18WindowFlag),
+			netScaled(*t18ComposeTableEntriesFlag), netScaled(*pmPullWindowFlag),
+			netScaled(64), netScaled(256))
+	} else if *scaleNetworkFlag {
+		fmt.Printf("[Config] -scale-network has no effect with -gpm-preset=%s\n", gpmPreset.Name)
+	}
 	if features := gpmPreset.DRAM.modelFeatures(); len(features) > 0 {
 		fmt.Printf("[Config] DRAM model: %s\n", strings.Join(features, " "))
 	}
@@ -449,18 +463,18 @@ func (r *Runner) buildTimingPlatform() {
 	b := MakeR9NanoBuilder().
 		WithGPMPreset(gpmPreset).
 		WithLog2PageSize(configuredLog2PageSize()).
-		WithBandwidth(*bandwidthFlag).
+		WithBandwidth(netScaled(*bandwidthFlag)).
 		WithSwitchLatency(*switchLatencyFlag).
 		WithMaxNumHops(*maxNumHopsFlag).
 		WithMeshSize(MeshSize()).
 		WithNetworkFlitSize(*networkFlitSizeFlag).
-		WithEndpointChannels(*endpointChannelsFlag).
-		WithEndpointBufferSize(*endpointBufferSizeFlag).
-		WithSwitchBufferFlits(*switchBufferFlitsFlag).
+		WithEndpointChannels(netScaled(*endpointChannelsFlag)).
+		WithEndpointBufferSize(netScaled(*endpointBufferSizeFlag)).
+		WithSwitchBufferFlits(netScaled(*switchBufferFlitsFlag)).
 		WithRDMAPipeline(
-			*rdmaPipelineWidthFlag,
+			netScaled(*rdmaPipelineWidthFlag),
 			*rdmaPipelineLatencyFlag,
-			*rdmaMaxOutstandingFlag,
+			netScaled(*rdmaMaxOutstandingFlag),
 		).
 		WithL1VRemoteMaxInflight(*l1vRemoteMaxInflightFlag).
 		WithL1VMSHREntries(*l1vMSHREntriesFlag).

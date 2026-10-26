@@ -1232,3 +1232,14 @@ func TestScaleModelPresets(t *testing.T) {
 		t.Error("mi200 must keep the historical translation sizes")
 	}
 }
+
+func TestNetScaledOffIsIdentity(t *testing.T) {
+	if *scaleNetworkFlag {
+		t.Skip("flag set")
+	}
+	for _, v := range []int{0, 1, 3, 24, 128} {
+		if netScaled(v) != v {
+			t.Errorf("netScaled(%d) = %d without -scale-network", v, netScaled(v))
+		}
+	}
+}

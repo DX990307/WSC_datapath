@@ -166,27 +166,27 @@ func t18ConfigFromFlags() rdma.T18Config {
 		ReqMerge:        reqMerge,
 		OwnerMerge:      *t18OwnerMergeFlag,
 		OwnerMulticast:  *t18OwnerMulticastFlag,
-		Window:          *t18WindowFlag,
+		Window:          netScaled(*t18WindowFlag),
 		DistCredits:     policy != rdma.T18CreditShared,
 		CreditPolicy:    policy,
 		ExtraStats:      *cupathV3StatsFlag,
-		OwnerWindow:     *t18OwnerWindowFlag,
-		ReqEntries:      *t18ReqEntriesFlag,
-		OwnerEntries:    *t18OwnerEntriesFlag,
+		OwnerWindow:     netScaled(*t18OwnerWindowFlag),
+		ReqEntries:      netScaled(*t18ReqEntriesFlag),
+		OwnerEntries:    netScaled(*t18OwnerEntriesFlag),
 		Ways:            *t18WaysFlag,
 		FingerprintBits: *t18FingerprintBitsFlag,
 		MaxKicks:        *t18MaxKicksFlag,
-		ReqWaiters:      *t18ReqWaitersFlag,
+		ReqWaiters:      netScaled(*t18ReqWaitersFlag),
 		BypassWhenFull:  *t18BypassWhenFullFlag,
 
-		ComposeLineEntries: *t18ComposeTableEntriesFlag,
+		ComposeLineEntries: netScaled(*t18ComposeTableEntriesFlag),
 	}
 	if policy == rdma.T18CreditNear {
 		c.NearReserve = *t18NearReserveFlag
 		c.NearHops = *t18NearHopsFlag
 		window := c.Window
 		if window <= 0 {
-			window = *rdmaMaxOutstandingFlag
+			window = netScaled(*rdmaMaxOutstandingFlag)
 		}
 		if c.NearReserve >= window {
 			panic(fmt.Sprintf("-t18-near-reserve=%d must be below the window W=%d",
@@ -476,7 +476,7 @@ func t18GroupOfHop(h int) int {
 func composeTableDescription(c rdma.T18Config) string {
 	window := c.Window
 	if window <= 0 {
-		window = *rdmaMaxOutstandingFlag
+		window = netScaled(*rdmaMaxOutstandingFlag)
 	}
 	if c.ComposeLineEntries > 0 {
 		waiters := 4 * c.ComposeLineEntries
