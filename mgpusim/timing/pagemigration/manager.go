@@ -3,6 +3,7 @@ package pagemigration
 import (
 	"container/list"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
@@ -226,7 +227,10 @@ type Manager struct {
 	active   []*unit
 
 	drainStart map[*unit]sim.VTimeInSec
-	copyStart  map[*unit]sim.VTimeInSec
+
+	stallNext    sim.VTimeInSec // Config.StallWatchNS
+	stallReports int
+	copyStart    map[*unit]sim.VTimeInSec
 
 	// recent remote reads served per device (median/class tie-break),
 	// halved every LoadWindowNS; nil with the argmax target.
@@ -663,7 +667,61 @@ func (m *Manager) Tick(now sim.VTimeInSec) bool {
 	if len(m.active) > 0 {
 		progress = true
 	}
+	if m.cfg.StallWatchNS > 0 {
+		m.stallWatch(now)
+	}
 	return progress
+}
+
+// stallWatch (Config.StallWatchNS, diagnostic) prints the units that have
+// been migrating for longer than StallWatchNS, with the in-flight accesses of
+// their frames.
+func (m *Manager) stallWatch(now sim.VTimeInSec) {
+	if now < m.stallNext {
+		return
+	}
+	m.stallNext = now + ns(m.cfg.StallWatchNS)
+	var stuck []*unit
+	for _, u := range m.active {
+		if now-u.triggerTime > ns(m.cfg.StallWatchNS) {
+			stuck = append(stuck, u)
+		}
+	}
+	queued := 0
+	for _, h := range m.handlers {
+		queued += len(h.queue) + len(h.service)
+		for _, u := range append(append([]*unit(nil), h.queue...), h.service...) {
+			if now-u.triggerTime > ns(m.cfg.StallWatchNS) {
+				stuck = append(stuck, u)
+			}
+		}
+	}
+	if len(stuck) == 0 {
+		return
+	}
+	m.stallReports++
+	fmt.Fprintf(os.Stderr, "PMSTALL report=%d now=%.9f active=%d queued_or_service=%d stuck=%d\n",
+		m.stallReports, float64(now), len(m.active), queued, len(stuck))
+	for i, u := range stuck {
+		if i >= 40 {
+			break
+		}
+		fmt.Fprintf(os.Stderr, "PMSTALL unit pid=%d idx=%#x phase=%d dst=%d trigger=%.9f block=%.9f faulters=%v waiters=%d migrations=%d pages=%d pending=%d\n",
+			u.key.pid, u.key.idx, u.phase, u.dst, float64(u.triggerTime), float64(u.blockStart),
+			u.faulters, len(u.waiters), u.migrations, len(u.pages), u.pendingChunks)
+		for _, p := range u.pages {
+			if info := m.ppns[p.PAddr>>m.log2PageSize]; info != nil {
+				fmt.Fprintf(os.Stderr, "PMSTALL   page va=%#x pa=%#x dev=%d inflight=%d issued=%d devMask=%#x state=%d lastIdle=%.9f\n",
+					p.VAddr, p.PAddr, p.DeviceID, info.inflight, info.issued, info.devMask, info.state, float64(info.lastIdle))
+			} else {
+				fmt.Fprintf(os.Stderr, "PMSTALL   page va=%#x pa=%#x dev=%d (no frame info)\n", p.VAddr, p.PAddr, p.DeviceID)
+			}
+		}
+	}
+	if m.cfg.StallReports > 0 && m.stallReports >= m.cfg.StallReports {
+		panic(fmt.Sprintf("page migration: %d units stuck for more than %d ns (-pm-stall-watch-ns)",
+			len(stuck), m.cfg.StallWatchNS))
+	}
 }
 
 // startAfterService starts the shootdown of a serviced unit, or (P21

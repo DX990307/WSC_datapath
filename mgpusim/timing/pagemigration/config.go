@@ -111,6 +111,12 @@ type Config struct {
 	// while the faulting access waits. Later accesses never fault.
 	FirstTouchMigrate bool
 
+	// StallWatchNS (diagnostic, 0 = off): report on stderr every migration
+	// unit that has been out of the idle phase for longer than this, at most
+	// StallReports times (then panic so the run ends).
+	StallWatchNS uint64
+	StallReports int
+
 	// Check enables the expensive invariant checks (every L2 of every GPM is
 	// searched for lines of each new frame at allocation and at remap).
 	Check bool

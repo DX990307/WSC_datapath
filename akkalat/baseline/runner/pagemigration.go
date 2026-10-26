@@ -47,6 +47,11 @@ var pmThresholdFlag = flag.Int("pm-threshold", 256,
 		"trigger a migration (NVIDIA uvm_perf_access_counter_threshold default).")
 var pmCooldownFlag = flag.Int("pm-cooldown-ns", 5000,
 	"Page migration: a unit does not migrate again within this time.")
+var pmStallWatchFlag = flag.Int("pm-stall-watch-ns", 0,
+	"Page migration diagnostic: print the units migrating for longer than this "+
+		"(0 = off); see -pm-stall-reports.")
+var pmStallReportsFlag = flag.Int("pm-stall-reports", 3,
+	"Page migration diagnostic: panic after this many -pm-stall-watch-ns reports (0 = never).")
 var pmMaxMigrationsFlag = flag.Int("pm-max-migrations", 3,
 	"Page migration: a unit that migrated this many times is pinned "+
 		"(0 = unlimited; NVIDIA uvm_perf_thrashing_threshold default 3).")
@@ -118,6 +123,8 @@ func pageMigrationConfigFromFlags() pagemigration.Config {
 	c.Threshold = uint32(*pmThresholdFlag)
 	c.CooldownNS = uint64(*pmCooldownFlag)
 	c.MaxMigrations = *pmMaxMigrationsFlag
+	c.StallWatchNS = uint64(*pmStallWatchFlag)
+	c.StallReports = *pmStallReportsFlag
 	c.ChunkBytes = uint64(*pmChunkBytesFlag)
 	c.PullWindow = *pmPullWindowFlag
 	c.L2Window = *pmL2WindowFlag
