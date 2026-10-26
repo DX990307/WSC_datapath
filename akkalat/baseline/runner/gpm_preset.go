@@ -377,6 +377,9 @@ func lookupGPMPresetKB(name string, numMemoryBanks, l2CacheSizeMB, l2CacheSizeKB
 		panic(fmt.Sprintf("-gpm-preset=%s requires -num-memory-banks=%d, got %d",
 			name, p.NumMemoryBanks, numMemoryBanks))
 	}
+	if *l2SizeSensitivityFlag && l2CacheSizeKB > 0 {
+		return p // L2 capacity sensitivity: -l2-cache-size-kb overrides the preset's size
+	}
 	if p.L2CacheSizeKB != 0 && p.L2CacheSizeKB != l2CacheSizeKB {
 		panic(fmt.Sprintf("-gpm-preset=%s requires -l2-cache-size-kb=%d, got %d",
 			name, p.L2CacheSizeKB, l2CacheSizeKB))

@@ -239,7 +239,9 @@ func (c *Cache) invalidateRemotePage(page uint64) {
 			continue
 		}
 		c.obsL2InvalidateBlock(block)
+		c.rcCoherence = true
 		c.untrackRemoteReplica(block)
+		c.rcCoherence = false
 		c.untrackResidentBlock(block)
 		block.IsValid = false
 		block.IsDirty = false

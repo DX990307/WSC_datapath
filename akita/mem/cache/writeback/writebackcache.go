@@ -113,7 +113,15 @@ type Cache struct {
 	holderID        int
 	remotePageIndex map[uint64]map[*cache.Block]struct{}
 	l2resStats      L2ResStats
-	localMissNS     float64
+	// -l2-cls-stats (clsstats.go): remote read classes, occupancy
+	rc                        *ReadClassifier
+	rcGPM                     int
+	rcCoherence               bool
+	occOn                     bool
+	occLast                   sim.VTimeInSec
+	occV, occR, occT          int
+	occSumV, occSumR, occSumT float64
+	localMissNS               float64
 	// FirstTouchProtect (R4): under cost replacement a first-touch remote
 	// fill may not evict a valid local line.
 	FirstTouchProtect bool
@@ -173,6 +181,9 @@ func (c *Cache) SetLowModuleFinder(lmf mem.LowModuleFinder) {
 // Tick updates the internal states of the Cache.
 func (c *Cache) Tick(now sim.VTimeInSec) bool {
 	madeProgress := false
+	if c.occOn {
+		c.occSample(now, false)
+	}
 
 	madeProgress = c.controlPortSender.Tick(now) || madeProgress
 	if c.state != cacheStateRunning {
