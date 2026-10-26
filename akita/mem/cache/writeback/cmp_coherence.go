@@ -178,7 +178,12 @@ func (t *CmpCoherence) RegionHome(g int, addr uint64) int {
 // NextHop returns where GPM g sends an L2 miss to addr under HMG: the region
 // home, or the system home when it is in g's region or g is the region home.
 func (t *CmpCoherence) NextHop(g int, addr uint64) int {
-	o := t.home(addr)
+	return t.NextHopFrom(g, t.home(addr), addr)
+}
+
+// NextHopFrom is NextHop for an address served by GPM o (a 1-KB block
+// re-homed at run time is served by another GPM than addr's DRAM).
+func (t *CmpCoherence) NextHopFrom(g, o int, addr uint64) int {
 	if t.cfg.RegionOf[g] == t.cfg.RegionOf[o] {
 		return o
 	}

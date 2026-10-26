@@ -62,6 +62,7 @@ type cmpState struct {
 	t       *writeback.CmpCoherence
 	self    int
 	ports   map[int]sim.Port
+	portID  map[sim.Port]int
 	fillLRU bool
 	out     []cohOut
 	relayQ  []*mem.ReadReq
@@ -87,6 +88,10 @@ func (c *Comp) EnableCmp(t *writeback.CmpCoherence, self int, ports map[int]sim.
 		rdcFills:   make(map[uint64]*rdcFill),
 		sibFlight:  make(map[string]*rdcFill),
 		dramWrites: make(map[string]bool),
+		portID:     make(map[sim.Port]int),
+	}
+	for id, p := range ports {
+		c.cmp.portID[p] = id
 	}
 	if c.rdcPort != nil && c.rdcFinder != nil {
 		c.cmp.toDRAM = c.rdcPort
@@ -108,6 +113,20 @@ func (c *Comp) EnableRDCPort(bufferSize int) sim.Port {
 func (c *Comp) SetRDC(dram mem.LowModuleFinder, base uint64) {
 	c.rdcFinder = dram
 	c.rdcBase = base
+}
+
+// cmpHome returns the GPM that serves addr (the RDMA address table follows
+// run-time block homes of page migration).
+func (c *Comp) cmpHome(addr uint64) int {
+	if p := c.RemoteRDMAAddressTable.Find(addr); p != nil {
+		if p == c.ToOutside {
+			return c.cmp.self
+		}
+		if id, ok := c.cmp.portID[p]; ok {
+			return id
+		}
+	}
+	return c.cmp.t.Home(addr)
 }
 
 // QueueCohInval queues an invalidation of group to GPM to.
@@ -135,8 +154,9 @@ func (c *Comp) cmpRoute(owner sim.Port, line uint64) sim.Port {
 	if !c.cmpHMG() {
 		return owner
 	}
-	n := c.cmp.t.NextHop(c.cmp.self, line)
-	if n == c.cmp.t.Home(line) {
+	o := c.cmpHome(line)
+	n := c.cmp.t.NextHopFrom(c.cmp.self, o, line)
+	if n == o {
 		c.cmp.stats.RoutedHome++
 		return owner
 	}
@@ -157,7 +177,7 @@ func (c *Comp) cmpFromOutside(now sim.VTimeInSec, msg sim.Msg) bool {
 		c.cmp.t.OnInval(now, c.cmp.self, m.Group)
 		return true
 	case *mem.ReadReq:
-		if !c.cmpHMG() || c.cmp.t.Home(m.Address) == c.cmp.self {
+		if !c.cmpHMG() || c.cmpHome(m.Address) == c.cmp.self {
 			return false
 		}
 		c.ToOutside.Retrieve(now)
