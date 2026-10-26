@@ -57,10 +57,12 @@ type leaseEntry struct {
 
 // LeaseTable keeps the per-page re-use counts of one GPM's remote fetches.
 type LeaseTable struct {
-	cfg   LeaseTableConfig
-	lru   *list.List
-	m     map[uint64]*leaseEntry
-	stats LeaseTableStats
+	cfg LeaseTableConfig
+	// all pages (Symmetric): episodes and re-used episodes, decayed
+	allFirst, allReus float64
+	lru               *list.List
+	m                 map[uint64]*leaseEntry
+	stats             LeaseTableStats
 }
 
 // NewLeaseTable creates a lease table.
@@ -103,8 +105,14 @@ func (t *LeaseTable) entry(line uint64, alloc bool) *leaseEntry {
 func (t *LeaseTable) bump(e *leaseEntry, first bool) {
 	if first {
 		e.first++
+		t.allFirst++
 	} else {
 		e.reus++
+		t.allReus++
+	}
+	if t.allFirst+t.allReus >= 65536 {
+		t.allFirst /= 2
+		t.allReus /= 2
 	}
 	if e.first+e.reus >= t.cfg.MaxCount {
 		e.first /= 2
@@ -127,6 +135,7 @@ func (t *LeaseTable) NoteFetch(line uint64, refetch bool) {
 		}
 		if e.open&bit != 0 { // the previous episode ends with this re-use
 			e.reus++
+			t.allReus++
 		}
 		e.fetched |= bit
 		e.open |= bit
@@ -158,6 +167,7 @@ func (t *LeaseTable) NoteHit(line uint64) {
 		if e.open&bit != 0 {
 			e.open &^= bit
 			e.reus++
+			t.allReus++
 			if e.first+e.reus >= t.cfg.MaxCount {
 				e.first /= 2
 				e.reus /= 2
@@ -184,6 +194,20 @@ func (t *LeaseTable) Reuse(line uint64, prior float64) float64 {
 	return (e.reus + 2*prior) / (e.reus + e.first + 2)
 }
 
+// Multiplier (Symmetric) is the re-use of the page of line relative to the
+// average over all pages of the table (1 for pages not in the table).
+func (t *LeaseTable) Multiplier(line uint64) float64 {
+	avg := (t.allReus + 1) / (t.allFirst + 2)
+	if !t.cfg.Episodes {
+		avg = (t.allReus + 1) / (t.allReus + t.allFirst + 2)
+	}
+	e := t.m[line>>t.cfg.Log2PageSize]
+	if e == nil {
+		return 1
+	}
+	return t.Reuse(line, avg) / avg
+}
+
 // LeaseStats counts the lease decisions of one L2 slice.
 type LeaseStats struct {
 	BlockedFills   uint64 // fills of pages with a pending migration (value 0)
@@ -204,6 +228,16 @@ func (c *Cache) SetLease(t *LeaseTable, blocked func(line uint64) bool) {
 	c.leaseOn = true
 	c.lease = t
 	c.leaseBlocked = blocked
+}
+
+// SetLeaseSymmetric makes the page re-use a multiplier of the class x state
+// probability, applied to incoming and resident remote lines alike.
+func (c *Cache) SetLeaseSymmetric() {
+	if c.lease == nil {
+		panic("symmetric lease needs the page table")
+	}
+	c.leaseSym = true
+	c.costFinder.Scale = c.lease.Multiplier
 }
 
 // GetLeaseStats returns the lease counters of the slice.
@@ -228,11 +262,16 @@ func (c *Cache) leaseValue(line uint64, ins uint8) float64 {
 		c.leaseStats.BlockedFills++
 		return 0
 	}
-	p := c.costFinder.Reuse(1, ins)
-	if c.lease != nil {
-		p = c.lease.Reuse(line, p)
+	var v float64
+	if c.leaseSym {
+		v = c.costFinder.ScoreOf(line, ins)
+	} else {
+		p := c.costFinder.Reuse(1, ins)
+		if c.lease != nil {
+			p = c.lease.Reuse(line, p)
+		}
+		v = c.costFinder.Cost(line) * p
 	}
-	v := c.costFinder.Cost(line) * p
 	c.leaseStats.ValueSum += v
 	c.leaseStats.ValueN++
 	return v

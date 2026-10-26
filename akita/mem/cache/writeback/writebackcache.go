@@ -115,6 +115,7 @@ type Cache struct {
 	l2resStats      L2ResStats
 	// lease (lease.go): per-GPM page re-use table, migration-pending test
 	leaseOn      bool
+	leaseSym     bool
 	lease        *LeaseTable
 	leaseBlocked func(line uint64) bool
 	leaseStats   LeaseStats

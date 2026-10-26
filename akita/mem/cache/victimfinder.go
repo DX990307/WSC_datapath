@@ -58,6 +58,10 @@ type CostVictimFinder struct {
 	// probabilities (ablation).
 	Fixed  bool
 	Weight [4]float64
+	// Scale (lease, nil = 1) multiplies the re-use probability of remote
+	// (class 1) lines: the measured re-use of the line's page relative to
+	// the average remote page.
+	Scale func(tag uint64) float64
 
 	hit, evict [2][4]float64
 	events     float64
@@ -92,12 +96,17 @@ func (f *CostVictimFinder) Reuse(c int, r uint8) float64 {
 
 // Score is the expected re-fetch cost of evicting b.
 func (f *CostVictimFinder) Score(b *Block) float64 {
-	return f.Cost(b.Tag) * f.Reuse(f.class(b.Tag), b.RRPV)
+	return f.ScoreOf(b.Tag, b.RRPV)
 }
 
 // ScoreOf is the score a line with tag would have at RRPV r.
 func (f *CostVictimFinder) ScoreOf(tag uint64, r uint8) float64 {
-	return f.Cost(tag) * f.Reuse(f.class(tag), r)
+	c := f.class(tag)
+	s := f.Cost(tag) * f.Reuse(c, r)
+	if c == 1 && f.Scale != nil {
+		s *= f.Scale(tag)
+	}
+	return s
 }
 
 func (f *CostVictimFinder) count(ev *[2][4]float64, c int, r uint8) {
