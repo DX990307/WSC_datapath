@@ -432,6 +432,15 @@ func (r *Runner) buildTimingPlatform() {
 		gpmPreset.Name, gpmPreset.NumCU(), gpmPreset.NumSA,
 		gpmPreset.NumCUPerSA, *numMemBankFlag,
 	)
+	if gpmPreset.CapScaleDen != 0 {
+		fmt.Printf("[Config] scale model s=1/%d: L2TLB %d sets x 16 ways, "+
+			"%d MSHRs, %d req/cycle; GMMU %d walks in flight; per-GPM mechanism "+
+			"tables / %d (pm-adapt-track-cap=%d pm-adapt-replica-budget-mb=%d "+
+			"pm-l2-window=%d)\n", gpmPreset.CapScaleDen, gpmPreset.L2TLBSets,
+			gpmPreset.L2TLBMSHR, gpmPreset.L2TLBReqPerCycle, gpmPreset.GMMUInFlight,
+			gpmPreset.CapScaleDen, scaledPerGPM(*pmAdaptTrackCapFlag),
+			scaledPerGPM(*pmAdaptReplBudgetFlag), scaledPerGPM(*pmL2WindowFlag))
+	}
 	if features := gpmPreset.DRAM.modelFeatures(); len(features) > 0 {
 		fmt.Printf("[Config] DRAM model: %s\n", strings.Join(features, " "))
 	}

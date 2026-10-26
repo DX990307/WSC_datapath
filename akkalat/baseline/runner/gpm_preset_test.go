@@ -1212,3 +1212,23 @@ func TestMI200DRAMControllerBuilder(t *testing.T) {
 		}
 	}
 }
+
+func TestScaleModelPresets(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		banks, kb, cu int
+		den           int
+	}{{"mi200-quarter", 2, 512, 8, 4}, {"mi200-eighth", 1, 256, 4, 8}} {
+		p := lookupGPMPresetKB(c.name, c.banks, 2, c.kb)
+		if p.NumCU() != c.cu || p.CapScaleDen != c.den || p.NumCUPerSA != 2 {
+			t.Errorf("%s: CUs %d den %d", c.name, p.NumCU(), p.CapScaleDen)
+		}
+		if p.L2MSHRPerBank != mi200QuarterGPMPreset.L2MSHRPerBank ||
+			p.L1VBytes != mi200QuarterGPMPreset.L1VBytes {
+			t.Errorf("%s: per-CU / per-slice resources changed", c.name)
+		}
+	}
+	if mi200QuarterGPMPreset.CapScaleDen != 0 || mi200QuarterGPMPreset.L2TLBSets != 0 {
+		t.Error("mi200 must keep the historical translation sizes")
+	}
+}

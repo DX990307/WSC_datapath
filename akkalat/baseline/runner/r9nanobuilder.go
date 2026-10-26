@@ -977,9 +977,9 @@ func (b *R9NanoGPUBuilder) buildL2TLB() {
 		WithEngine(b.engine).
 		WithFreq(b.freq).
 		WithNumWays(16).
-		WithNumSets(32).
-		WithNumMSHREntry(32).
-		WithNumReqPerCycle(32).
+		WithNumSets(orDefault(b.gpmPreset.L2TLBSets, 32)).
+		WithNumMSHREntry(orDefault(b.gpmPreset.L2TLBMSHR, 32)).
+		WithNumReqPerCycle(orDefault(b.gpmPreset.L2TLBReqPerCycle, 32)).
 		WithPageSize(1 << b.log2PageSize).
 		WithLowModule(b.gmmu.GetPortByName("Top")).
 		WithDeviceID(b.gpuID).
@@ -1016,7 +1016,7 @@ func (b *R9NanoGPUBuilder) buildGMMU() {
 		WithFreq(b.freq).
 		WithDeviceID(b.gpuID).
 		WithLog2PageSize(b.log2PageSize).
-		WithMaxNumReqInFlight(16).
+		WithMaxNumReqInFlight(orDefault(b.gpmPreset.GMMUInFlight, 16)).
 		WithPageTable(b.pageTable).
 		WithPageWalkingLatency(100).
 		WithLowModule(b.mmu.GetPortByName("Top")).

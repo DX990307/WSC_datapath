@@ -50,6 +50,22 @@ type gpmPreset struct {
 	L2CacheSizeKB int
 
 	DRAM dramPreset
+
+	// In-GPM translation (scale-model presets). 0 keeps the historical
+	// values: L2 TLB 32 sets x 16 ways, 32 MSHRs, 32 requests per cycle;
+	// GMMU 16 page walks in flight.
+	L2TLBSets        int
+	L2TLBMSHR        int
+	L2TLBReqPerCycle int
+	GMMUInFlight     int
+
+	// CapScaleDen, when non-zero, marks a scale-model preset with GPM
+	// shared resources scaled by 1/CapScaleDen. The per-GPM capacity-like
+	// tables of the mechanisms (-pm-adapt-track-cap,
+	// -pm-adapt-replica-budget-mb, -pm-l2-window) are divided by it, so the
+	// command lines of the full-size GPM keep their meaning (see
+	// scaledPerGPM).
+	CapScaleDen int
 }
 
 // dramPreset describes one memory controller (one HBM channel).
@@ -345,7 +361,57 @@ var mi200ScaledGPMPreset = func() gpmPreset {
 	return p
 }()
 
+// Scale-model presets (user 10-26; SeyyedAghaei et al., HPCA'24): the mi200
+// GPM with its shared resources scaled by s = 1/4 or 1/8, while every
+// per-CU resource, every latency and the wafer network (7x7 mesh, links,
+// switches, RDMA windows, central IOMMU) stay as in mi200. Inputs are scaled
+// with the machine (weak scaling); see
+// isca27/results_index/scalemodel/README.md.
+//   - CUs: 2-CU shader arrays as in mi200 (per-SA L1I / L1S unchanged), so
+//     28 x s is rounded up to an even count: 8 (4 SA) for 1/4 and 4 (2 SA)
+//     for 1/8, i.e. 8/7 x s;
+//   - L2: 2 slices (512 KiB) / 1 slice (256 KiB) of the mi200 slice (256 KiB,
+//     16-way, 32 MSHRs, 2 requests/cycle); one HBM2e channel per slice as in
+//     mi200, so HBM bandwidth is exactly s (DRAM timing unchanged; the GPM
+//     still maps 8 GB, controllers keep their 2-GB organization and the
+//     high address bits alias, which has no timing effect with close-page
+//     row handling);
+//   - L2 TLB sets (16 ways kept), MSHRs and requests/cycle, and GMMU walks in
+//     flight: x s;
+//   - mechanism tables sized per GPM: x s through CapScaleDen.
+var mi200QuarterScaleGPMPreset = func() gpmPreset {
+	p := mi200QuarterGPMPreset
+	p.Name = "mi200-quarter"
+	p.NumSA = 4
+	p.NumMemoryBanks = 2
+	p.L2CacheSizeMB = 0
+	p.L2CacheSizeKB = 2 * 256
+	p.L2TLBSets = 8
+	p.L2TLBMSHR = 8
+	p.L2TLBReqPerCycle = 8
+	p.GMMUInFlight = 4
+	p.CapScaleDen = 4
+	return p
+}()
+
+var mi200EighthScaleGPMPreset = func() gpmPreset {
+	p := mi200QuarterGPMPreset
+	p.Name = "mi200-eighth"
+	p.NumSA = 2
+	p.NumMemoryBanks = 1
+	p.L2CacheSizeMB = 0
+	p.L2CacheSizeKB = 256
+	p.L2TLBSets = 4
+	p.L2TLBMSHR = 4
+	p.L2TLBReqPerCycle = 4
+	p.GMMUInFlight = 2
+	p.CapScaleDen = 8
+	return p
+}()
+
 var gpmPresets = map[string]gpmPreset{
+	mi200QuarterScaleGPMPreset.Name: mi200QuarterScaleGPMPreset,
+	mi200EighthScaleGPMPreset.Name:  mi200EighthScaleGPMPreset,
 	hpcaGPMPreset.Name:         hpcaGPMPreset,
 	mi300xEighthGPMPreset.Name: mi300xEighthGPMPreset,
 	mi200QuarterGPMPreset.Name: mi200QuarterGPMPreset,
@@ -452,4 +518,37 @@ func CUsPerGPM() int {
 		panic(fmt.Sprintf("unknown -gpm-preset %q (choose from %s)", *gpmPresetFlag, gpmPresetNames()))
 	}
 	return p.NumCU()
+}
+
+// orDefault returns v, or def when v is 0.
+func orDefault(v, def int) int {
+	if v == 0 {
+		return def
+	}
+	return v
+}
+
+// GPMCapacityScaleDen returns 1/s of the selected -gpm-preset: 1 for the
+// full-size presets, 4 for mi200-quarter, 8 for mi200-eighth. Mechanisms
+// whose tables are sized per GPM divide their capacities by it.
+func GPMCapacityScaleDen() int {
+	applyConfigFiles()
+	p, ok := gpmPresets[*gpmPresetFlag]
+	if !ok || p.CapScaleDen == 0 {
+		return 1
+	}
+	return p.CapScaleDen
+}
+
+// scaledPerGPM divides a per-GPM capacity by GPMCapacityScaleDen, keeping 0
+// (unlimited) and at least 1.
+func scaledPerGPM(v int) int {
+	d := GPMCapacityScaleDen()
+	if v <= 0 || d == 1 {
+		return v
+	}
+	if v/d < 1 {
+		return 1
+	}
+	return v / d
 }
