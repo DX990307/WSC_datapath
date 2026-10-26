@@ -673,6 +673,13 @@ func (m *Manager) Tick(now sim.VTimeInSec) bool {
 	return progress
 }
 
+func nbuf(p sim.Port) int {
+	if l, ok := p.(*sim.LimitNumMsgPort); ok {
+		return l.NumBuffered()
+	}
+	return -1
+}
+
 // stallWatch (Config.StallWatchNS, diagnostic) prints the units that have
 // been migrating for longer than StallWatchNS, with the in-flight accesses of
 // their frames.
@@ -717,6 +724,16 @@ func (m *Manager) stallWatch(now sim.VTimeInSec) {
 				fmt.Fprintf(os.Stderr, "PMSTALL   page va=%#x pa=%#x dev=%d (no frame info)\n", p.VAddr, p.PAddr, p.DeviceID)
 			}
 		}
+	}
+	for d, g := range m.gpms {
+		e := g.Engine
+		if e == nil || !e.Busy() {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "PMSTALL engine gpm=%d pending=%d urgent=%d pulling=%d inWindow=%d writes=%d writeChunks=%d reads=%d readOwners=%d l2Inflight=%d dramInflight=%d rsps=%d invals=%d remoteBuf=%d l2Buf=%d\n",
+			d, len(e.pending), len(e.urgentQ), len(e.pulling), e.inWindow, len(e.writes), len(e.writeChunks),
+			len(e.reads), len(e.readOwners), e.l2Inflight, e.dramInflight, len(e.rsps), len(e.invals),
+			nbuf(e.remotePort), nbuf(e.l2Port))
 	}
 	if m.cfg.StallReports > 0 && m.stallReports >= m.cfg.StallReports {
 		panic(fmt.Sprintf("page migration: %d units stuck for more than %d ns (-pm-stall-watch-ns)",
