@@ -182,7 +182,7 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.PredictM = *pmAdaptPredictMFlag
 	a.PredictWindow = *pmAdaptPredictWinFlag
 	a.HotFutureReaders = *pmAdaptHotFutureFlag
-	a.ReplicaBudget = uint64(*pmAdaptReplBudgetFlag) << 20
+	a.ReplicaBudget = uint64(scaledPerGPM(*pmAdaptReplBudgetFlag)) << 20
 	a.BatchAmort = *pmAdaptBatchAmortFlag
 	a.PredictTouched = *pmAdaptPredictTouchedFlag
 	a.CopyFirst = *pmAdaptCopyFirstFlag
@@ -198,7 +198,7 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.PreMinPrecision = *pmAdaptPreMinPrecFlag
 	a.PreProbe = *pmAdaptPreProbeFlag
 	a.PreProbePerHit = *pmAdaptPreProbePerHitFlag
-	a.TrackCap = *pmAdaptTrackCapFlag
+	a.TrackCap = scaledPerGPM(*pmAdaptTrackCapFlag)
 	a.DecideNS = uint64(*pmAdaptDecideNSFlag)
 	a.BatchSW = *pmAdaptBatchSWFlag
 	a.LookupNS = uint64(*pmAdaptLookupNSFlag)

@@ -1,0 +1,7 @@
+{
+  "_description": "ISCA'27 scale model s = 1/8 (user 10-26): overlay on mi200.json (or any config extending it) with the GPM shared resources scaled by 1/8 and the wafer network unchanged. Use after the mechanism config, e.g. -config m3p_r3real.json,mi200_eighth.json. See isca27/results_index/scalemodel/README.md.",
+  "_gpm-preset": "mi200-eighth (gpm_preset.go): 4 CUs (2 SA x 2; 28/8 = 3.5 rounded up to whole 2-CU shader arrays), 1 L2 slice of 256 KiB with 1 HBM2e channel; L2 TLB 4 sets x 16 ways, 4 MSHRs, 4 req/cycle; GMMU 2 walks in flight; -pm-adapt-track-cap, -pm-adapt-replica-budget-mb and -pm-l2-window are divided by 8 in the simulator. Per-CU resources, latencies, network, RDMA windows and the central IOMMU are those of mi200.",
+  "gpm-preset": "mi200-eighth",
+  "num-memory-banks": 1,
+  "l2-cache-size-kb": 256
+}
