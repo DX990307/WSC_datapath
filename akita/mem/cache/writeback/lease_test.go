@@ -46,3 +46,30 @@ func TestLeaseTableReuse(t *testing.T) {
 		t.Fatalf("decayed ratio, got %v", got)
 	}
 }
+
+func TestLeaseTableEpisodes(t *testing.T) {
+	tb := NewLeaseTable(LeaseTableConfig{Episodes: true})
+	// page A: each line fetched once, hit 10 times -> every episode re-used once
+	for i := uint64(0); i < 8; i++ {
+		tb.NoteFetch(0x1000+i*64, false)
+		for k := 0; k < 10; k++ {
+			tb.NoteHit(0x1000 + i*64)
+		}
+	}
+	if got := tb.Reuse(0x1000, 0.5); got < 0.85 || got > 1.0 {
+		t.Fatalf("re-used page %v", got)
+	}
+	// page B: lines fetched once, never again
+	for i := uint64(0); i < 8; i++ {
+		tb.NoteFetch(0x2000+i*64, false)
+	}
+	if got := tb.Reuse(0x2000, 0.5); got > 0.15 {
+		t.Fatalf("streaming page %v", got)
+	}
+	// page C: fetched twice (not kept): first episode re-used, second open
+	tb.NoteFetch(0x3000, false)
+	tb.NoteFetch(0x3000, false)
+	if got := tb.Reuse(0x3000, 0.5); got < 0.4 || got > 0.6 {
+		t.Fatalf("re-fetched line %v", got)
+	}
+}

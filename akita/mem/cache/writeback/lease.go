@@ -33,6 +33,11 @@ type LeaseTableConfig struct {
 	// LineBits: a re-fetch is detected by a per-entry bit per 64-B line
 	// (else by the requester's seen filter).
 	LineBits bool
+	// Episodes: E[re-use] = share of fetches (episodes) whose line was
+	// accessed again (an L2 hit or a re-fetch) before the GPM's next fetch
+	// of it; one count per episode, the same quantity as the victims'
+	// P(next event is a hit). Otherwise every hit counts.
+	Episodes bool
 }
 
 // LeaseTableStats counts the table's work.
@@ -46,6 +51,7 @@ type leaseEntry struct {
 	page        uint64
 	first, reus float64
 	fetched     uint64 // lines of the page fetched before (64 x 64 B in 4 KiB)
+	open        uint64 // Episodes: lines whose last fetch has not been re-used yet
 	el          *list.Element
 }
 
@@ -112,6 +118,21 @@ func (t *LeaseTable) bump(e *leaseEntry, first bool) {
 // requester's seen filter hit, cleared at kernel boundaries) does.
 func (t *LeaseTable) NoteFetch(line uint64, refetch bool) {
 	e := t.entry(line, true)
+	if t.cfg.Episodes {
+		bit := uint64(1) << ((line >> 6) & 63)
+		if e.fetched&bit != 0 {
+			t.stats.Refetches++
+		} else {
+			t.stats.Fetches++
+		}
+		if e.open&bit != 0 { // the previous episode ends with this re-use
+			e.reus++
+		}
+		e.fetched |= bit
+		e.open |= bit
+		t.bump(e, true) // a new episode
+		return
+	}
 	if t.cfg.LineBits {
 		bit := uint64(1) << ((line >> 6) & 63)
 		refetch = e.fetched&bit != 0
@@ -128,9 +149,23 @@ func (t *LeaseTable) NoteFetch(line uint64, refetch bool) {
 // NoteHit records an L2 hit on a leased (remote) line.
 func (t *LeaseTable) NoteHit(line uint64) {
 	t.stats.Hits++
-	if e := t.entry(line, false); e != nil {
-		t.bump(e, false)
+	e := t.entry(line, false)
+	if e == nil {
+		return
 	}
+	if t.cfg.Episodes {
+		bit := uint64(1) << ((line >> 6) & 63)
+		if e.open&bit != 0 {
+			e.open &^= bit
+			e.reus++
+			if e.first+e.reus >= t.cfg.MaxCount {
+				e.first /= 2
+				e.reus /= 2
+			}
+		}
+		return
+	}
+	t.bump(e, false)
 }
 
 // Reuse is the re-use probability of a line of the page of line: the
@@ -142,6 +177,9 @@ func (t *LeaseTable) Reuse(line uint64, prior float64) float64 {
 	if e == nil {
 		t.stats.LookupMisses++
 		return prior
+	}
+	if t.cfg.Episodes { // first = episodes, reus = re-used episodes
+		return (e.reus + 2*prior) / (e.first + 2)
 	}
 	return (e.reus + 2*prior) / (e.reus + e.first + 2)
 }
