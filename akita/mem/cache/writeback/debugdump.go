@@ -52,11 +52,23 @@ func (c *Cache) DebugDump() string {
 		return fmt.Sprintf("%s addr=%#x pid=%d src=%s action=%d evicting=%v fetch=%#x fetchSent=%v",
 			kind, r.GetAddress(), r.GetPID(), src, t.action, c.evictingList[line], t.fetchAddress, t.fetchReadReq != nil)
 	}
-	if it := c.dirStageBuffer.Peek(); it != nil {
-		fmt.Fprintf(&b, "  dirHead %s\n", desc(it.(dirPipelineItem).trans))
+	head := func(name string, it interface{}) {
+		switch t := it.(type) {
+		case *transaction:
+			fmt.Fprintf(&b, "  %s %s\n", name, desc(t))
+		case dirPipelineItem:
+			fmt.Fprintf(&b, "  %s %s\n", name, desc(t.trans))
+		case nil:
+		default:
+			fmt.Fprintf(&b, "  %s %T\n", name, it)
+		}
 	}
-	if it := c.writeBufferBuffer.Peek(); it != nil {
-		fmt.Fprintf(&b, "  wbHead %s\n", desc(it.(*transaction)))
+	head("dirBufHead", c.dirStageBuffer.Peek())
+	head("dirPostHead", c.dirStage.buf.Peek())
+	head("wbHead", c.writeBufferBuffer.Peek())
+	head("mshrBufHead", c.mshrStageBuffer.Peek())
+	for i, x := range c.dirToBankBuffers {
+		head(fmt.Sprintf("dir2bank%dHead", i), x.Peek())
 	}
 	for i, e := range c.mshr.AllEntries() {
 		if i >= 8 {
