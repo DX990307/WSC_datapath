@@ -210,6 +210,9 @@ func (m *Manager) robOpen(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Page,
 			srcPAddr: src,
 			dstPAddr: f,
 			size:     ps,
+			// read the home's L2 under the page's PID: dirty lines written
+			// in earlier kernels and still held there are copied too
+			pid: p.PID,
 			done: func(now sim.VTimeInSec) {
 				a.robPend[g] = false
 				if a.writeSeq != seq || m.kernel != kern || !m.robSrcOK(u, src, home) {
