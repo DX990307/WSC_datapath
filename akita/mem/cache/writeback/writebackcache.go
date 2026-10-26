@@ -113,7 +113,12 @@ type Cache struct {
 	holderID        int
 	remotePageIndex map[uint64]map[*cache.Block]struct{}
 	l2resStats      L2ResStats
-	localMissNS     float64
+	// lease (lease.go): per-GPM page re-use table, migration-pending test
+	leaseOn      bool
+	lease        *LeaseTable
+	leaseBlocked func(line uint64) bool
+	leaseStats   LeaseStats
+	localMissNS  float64
 	// FirstTouchProtect (R4): under cost replacement a first-touch remote
 	// fill may not evict a valid local line.
 	FirstTouchProtect bool

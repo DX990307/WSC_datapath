@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 lease on M3+: l2r_b.json (M3+ with the idle migration manager, R4 cost-aware replacement) where a remote fill with no invalid way is installed iff its value E[re-use] x re-fetch cost exceeds the lowest-value clean victim's; E[re-use] of the incoming line is measured per page (per-GPM table of 4096 pages: re-uses = L2 replica hits + re-fetches of lines fetched before, over all fetches; prior = the slice's class rate). Lines of pages with a migration pending or in flight have no value. See isca27/results_index/lease/README.md.",
+  "extends": "l2r_b.json",
+  "lease": true
+}

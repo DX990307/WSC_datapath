@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 lease on R3 (R5 with -pm-adapt-ft move -pm-adapt-hold-measured on the command line): m3p_r3b.json (R3 realistic + R4 cost-aware replacement) with the lease rule of lease_m3p.json; lines of a page whose migration is decided or in flight are never leased over a valid line.",
+  "extends": "m3p_r3b.json",
+  "lease": true
+}

@@ -331,3 +331,20 @@ func (m *Manager) l2rPrefetch(now sim.VTimeInSec, b *buffer, idx int, v *unit,
 	m.L2Res.Prefetches++
 	m.l2rDecide(now, a, p, home, l2rOpt{g: d, lines: lines})
 }
+
+// LeaseBlocked (lease) reports whether the frame of pAddr is about to change
+// address: a migration of its unit is decided (pending the decision delay or
+// the driver), in flight, or the frame is no longer live. Lines of such a
+// frame cached by a reader die with the migration, so the lease gives them
+// no value.
+func (m *Manager) LeaseBlocked(pAddr uint64) bool {
+	info := m.ppns[pAddr>>m.log2PageSize]
+	if info == nil {
+		return false
+	}
+	if info.state != frameLive {
+		return true
+	}
+	u := m.units[m.unitOf(info.pid, info.vAddr)]
+	return u != nil && u.phase != phaseIdle
+}

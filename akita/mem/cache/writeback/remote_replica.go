@@ -99,6 +99,9 @@ func (c *Cache) installRemoteDataFill(fill *mem.RemoteDataFill) bool {
 // remote lines are used (opportunistic M3 fills).
 func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocalClean bool) bool {
 	c.recordRemoteFillAttempt(fill)
+	if c.lease != nil && fill != nil {
+		c.leaseNoteFetch(fill.Address, !fill.RequireInvalidVictim)
+	}
 	if c.netFetchHook != nil && fill != nil && fill.ReqTime > 0 {
 		c.netFetchHook(c.Engine.CurrentTime(), fill.ReqTime, fill.Address)
 	}
@@ -291,6 +294,7 @@ func (c *Cache) recordRemoteReplicaHit(
 	}
 	record := c.remoteReplicaBlocks[block]
 	record.hits++
+	c.leaseNoteHit(line)
 	if record.pulled && record.hits == 1 {
 		c.l2resStats.PulledUsed++
 	}

@@ -227,6 +227,8 @@ type gpmPageMigrationParts struct {
 	// local or remote (M3 replica), with the GPM's slice interleaving.
 	l2Of func(pAddr uint64) *writeback.Cache
 	l2s  []*writeback.Cache
+	// lease: the GPM's page re-use table (nil = off or class re-use)
+	lease *writeback.LeaseTable
 }
 
 // buildPageMigrationEngine creates the GPM's copy engine. Only a migrating

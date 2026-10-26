@@ -177,6 +177,9 @@ func (b *R9NanoPlatformBuilder) wireL2Res(m *pagemigration.Manager,
 		}
 		fmt.Printf("[Config] R4 cost-aware L2 replacement (%s, local %.0f ns, re-use %s)\n",
 			mode, local, *l2resReuseFlag)
+		b.wireLease(m)
+	} else if *leaseFlag {
+		log.Panic("-lease needs -l2res-cost-repl")
 	}
 	if *l2resHoldersFlag == 0 {
 		return nil
@@ -258,6 +261,7 @@ func (r *Runner) reportL2ResStats() {
 	col("l2r_tracked_installs", float64(s.TrackedInstalls))
 	col("l2r_untracked_installs", float64(s.UntrackedInstalls))
 	col("l2r_page_invals", float64(s.PageInvals))
+	r.reportLeaseStats()
 	col("l2r_lines_inval_by_writes", float64(s.LinesInvalByWrites))
 	col("l2r_lines_marked_by_writes", float64(s.LinesMarkedByWrites))
 	col("l2r_downgrades", float64(s.Downgrades))

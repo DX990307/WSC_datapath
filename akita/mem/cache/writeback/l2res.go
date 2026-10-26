@@ -164,9 +164,21 @@ func (c *Cache) costRemoteVictim(line uint64, insertRRPV uint8, firstTouch bool)
 	if v == nil {
 		return nil
 	}
-	if v.IsValid && c.costFinder.Score(v) >= c.costFinder.ScoreOf(line, insertRRPV) {
+	if !v.IsValid {
+		return v
+	}
+	var in float64
+	if c.leaseOn {
+		in = c.leaseValue(line, insertRRPV)
+	} else {
+		in = c.costFinder.ScoreOf(line, insertRRPV)
+	}
+	if c.costFinder.Score(v) >= in {
 		v.RRFresh = false
 		c.l2resStats.CostAdmitDrops++
+		if c.leaseOn && in == 0 {
+			c.leaseStats.BlockedDrops++
+		}
 		return nil
 	}
 	return v
