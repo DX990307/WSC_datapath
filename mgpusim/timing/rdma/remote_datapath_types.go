@@ -270,6 +270,8 @@ type remoteLineEntry struct {
 	rdcProbed bool
 	fromRDC   bool
 	rdcFill   *rdcFill
+	// relayEntry: opened by an HMG relay at a region home (no window slot)
+	relayEntry bool
 }
 
 type remotePrefetchCandidate struct {

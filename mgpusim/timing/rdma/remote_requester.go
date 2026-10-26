@@ -415,7 +415,7 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 	}
 	if entry := existing; entry != nil {
 		c.clearRemoteBlockedNegative(read.ID)
-		if c.remoteOutstandingReads >= c.remoteWaiterCapacity() {
+		if !c.relayActive && c.remoteOutstandingReads >= c.remoteWaiterCapacity() {
 			c.RemoteDataPathStats.WaiterEntryFullStalls++
 			return true, false
 		}
@@ -445,7 +445,7 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 	// The line table is a bounded coalescing/dedup resource separate from the
 	// packet-granular RDMA outstanding table. Existing lines above are allowed
 	// to merge even when no new line entry can be allocated.
-	if len(c.remoteLines) >= c.remoteOutstandingCapacity() {
+	if !c.relayActive && len(c.remoteLines) >= c.remoteOutstandingCapacity() {
 		c.rememberRemoteBlockedNegative(read.ID, key)
 		c.RemoteDataPathStats.LineEntryFullStalls++
 		if c.m1Composed() {
@@ -455,7 +455,7 @@ func (c *Comp) tryProcessRemoteReqFromL1(
 		}
 		return true, false
 	}
-	if c.remoteOutstandingReads >= c.remoteWaiterCapacity() {
+	if !c.relayActive && c.remoteOutstandingReads >= c.remoteWaiterCapacity() {
 		c.rememberRemoteBlockedNegative(read.ID, key)
 		c.RemoteDataPathStats.WaiterEntryFullStalls++
 		return true, false
@@ -874,10 +874,11 @@ func (c *Comp) newRemoteDemandEntry(
 	info interface{},
 ) *remoteLineEntry {
 	return &remoteLineEntry{
-		key:   key,
-		owner: dst,
-		state: remoteLineProbing,
-		info:  info,
+		key:        key,
+		owner:      dst,
+		state:      remoteLineProbing,
+		info:       info,
+		relayEntry: c.relayActive,
 	}
 }
 
@@ -1145,7 +1146,11 @@ func (c *Comp) sendRemoteEntryDirect(
 	if c.cmp != nil {
 		dst = c.cmpRoute(entry.owner, entry.key.lineAddr)
 	}
-	if c.m1Composed() && !c.m1CanSend(dst) {
+	// HMG: a region home forwards relayed misses from its relay table, not
+	// from its own request window (sharing the window deadlocks: region
+	// homes wait on each other's windows)
+	credit := c.m1Composed() && !entry.relayEntry
+	if credit && !c.m1CanSend(dst) {
 		return false
 	}
 	info := memtrace.WithL2RemoteInfo(
@@ -1167,7 +1172,7 @@ func (c *Comp) sendRemoteEntryDirect(
 	entry.state = remoteLineInflight
 	entry.fromRemote = true
 	c.remoteSingleInflight[req.ID] = entry
-	if c.m1Composed() {
+	if credit {
 		c.m1Acquire(now, dst, req.ID)
 	}
 	c.RemoteDataPathStats.SingleReadPackets++
@@ -1531,7 +1536,7 @@ func (c *Comp) processRemoteSingleRsp(
 			rsp.Meta().RecvTime)
 	}
 	c.m1UnindexLine(entry)
-	if c.m1Composed() {
+	if c.m1Composed() && !entry.relayEntry {
 		c.m1Release(now, rsp.GetRspTo())
 	}
 	delete(c.remoteSingleInflight, rsp.GetRspTo())
