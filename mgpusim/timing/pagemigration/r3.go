@@ -318,7 +318,7 @@ func (m *Manager) r3Sites(tot []float64, home uint64, seed uint64) []uint64 {
 func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 	a := u.a
 	c := &m.cfg.Adapt
-	if a == nil || a.fixed || a.preplacing || len(a.replicas) > 0 ||
+	if a == nil || a.fixed || a.preplacing || len(a.replicas) > 0 || a.robBusy() ||
 		u.phase != phaseIdle || !m.eligible(u, now) {
 		return
 	}

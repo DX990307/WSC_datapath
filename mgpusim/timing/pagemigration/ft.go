@@ -62,7 +62,7 @@ func (m *Manager) ftFirst(now sim.VTimeInSec, at Waker, dev uint64, u *unit,
 	page vm.Page) (vm.Page, bool) {
 	u.touched = true
 	a := m.adaptUnit(u)
-	if a.preplaced || a.preplacing || a.fixed || len(a.replicas) > 0 ||
+	if a.preplaced || a.preplacing || a.fixed || len(a.replicas) > 0 || a.robBusy() ||
 		u.phase != phaseIdle || !m.eligible(u, now) {
 		return page, true
 	}

@@ -196,8 +196,7 @@ func (m *Manager) robOpen(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Page,
 	m.AStats.Decided[actReplicate][readerBucket(r3Readers(a))]++
 	seq, kern, src := a.writeSeq, m.kernel, p.PAddr
 	m.deferAct(now, g, func(now sim.VTimeInSec) {
-		if a.writeSeq != seq || m.kernel != kern || u.phase != phaseIdle ||
-			m.homeOf(src) != home {
+		if a.writeSeq != seq || m.kernel != kern || !m.robSrcOK(u, src, home) {
 			a.robPend[g] = false
 			m.replBytes[g] -= ps
 			m.AStats.ReplicaAbort++
@@ -213,8 +212,7 @@ func (m *Manager) robOpen(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Page,
 			size:     ps,
 			done: func(now sim.VTimeInSec) {
 				a.robPend[g] = false
-				if a.writeSeq != seq || m.kernel != kern || u.phase != phaseIdle ||
-					m.homeOf(src) != home {
+				if a.writeSeq != seq || m.kernel != kern || !m.robSrcOK(u, src, home) {
 					m.retireFrame(f)
 					m.replBytes[g] -= ps
 					m.AStats.ReplicaAbort++
@@ -233,4 +231,28 @@ func (m *Manager) robOpen(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Page,
 			},
 		})
 	})
+}
+
+// robSrcOK: the page still lives in frame src at home (not moved, split or
+// being switched since the copy was decided).
+func (m *Manager) robSrcOK(u *unit, src, home uint64) bool {
+	if u.phase != phaseIdle {
+		return false
+	}
+	p, ok := m.pageTable.Find(u.key.pid, u.key.idx<<m.unitLog2)
+	if !ok || p.PAddr != src {
+		return false
+	}
+	h, uniform := m.pageHomes(p)
+	return uniform && h[0] == home
+}
+
+// robBusy: a rob copy of the page is being made.
+func (a *adaptState) robBusy() bool {
+	for _, b := range a.robPend {
+		if b {
+			return true
+		}
+	}
+	return false
 }
