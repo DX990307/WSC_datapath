@@ -3,8 +3,8 @@ package pagemigration
 import (
 	"fmt"
 	"log"
-	"os"
 	"math/bits"
+	"os"
 	"reflect"
 
 	"github.com/sarchlab/akita/v3/mem/mem"
