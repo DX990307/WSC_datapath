@@ -30,6 +30,9 @@ type LeaseTableConfig struct {
 	Entries      int  // pages tracked per GPM (LRU); <= 0 = unlimited
 	// MaxCount: counters of an entry are halved when their sum reaches it.
 	MaxCount float64
+	// LineBits: a re-fetch is detected by a per-entry bit per 64-B line
+	// (else by the requester's seen filter).
+	LineBits bool
 }
 
 // LeaseTableStats counts the table's work.
@@ -42,6 +45,7 @@ type LeaseTableStats struct {
 type leaseEntry struct {
 	page        uint64
 	first, reus float64
+	fetched     uint64 // lines of the page fetched before (64 x 64 B in 4 KiB)
 	el          *list.Element
 }
 
@@ -102,15 +106,23 @@ func (t *LeaseTable) bump(e *leaseEntry, first bool) {
 	}
 }
 
-// NoteFetch records a network fetch of line; refetch = the requester had
-// fetched the line before (its seen filter hit).
+// NoteFetch records a network fetch of line. With LineBits the entry's
+// bit vector tells whether the GPM fetched the line before (a re-fetch is a
+// re-use the L2 did not keep, across kernels too); otherwise refetch (the
+// requester's seen filter hit, cleared at kernel boundaries) does.
 func (t *LeaseTable) NoteFetch(line uint64, refetch bool) {
+	e := t.entry(line, true)
+	if t.cfg.LineBits {
+		bit := uint64(1) << ((line >> 6) & 63)
+		refetch = e.fetched&bit != 0
+		e.fetched |= bit
+	}
 	if refetch {
 		t.stats.Refetches++
 	} else {
 		t.stats.Fetches++
 	}
-	t.bump(t.entry(line, true), !refetch)
+	t.bump(e, !refetch)
 }
 
 // NoteHit records an L2 hit on a leased (remote) line.

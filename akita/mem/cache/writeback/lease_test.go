@@ -29,6 +29,14 @@ func TestLeaseTableReuse(t *testing.T) {
 	if tb.Reuse(0x1000, 0.5) != 0.5 || tb.Stats().Replacements != 1 {
 		t.Fatalf("LRU replacement expected")
 	}
+	// line bits: the second fetch of a line is a re-fetch
+	tb3 := NewLeaseTable(LeaseTableConfig{LineBits: true})
+	tb3.NoteFetch(0x7000, false)
+	tb3.NoteFetch(0x7000, false)
+	tb3.NoteFetch(0x7040, true)
+	if st := tb3.Stats(); st.Fetches != 2 || st.Refetches != 1 {
+		t.Fatalf("line bits: %+v", st)
+	}
 	// halving keeps the ratio
 	tb2 := NewLeaseTable(LeaseTableConfig{MaxCount: 8})
 	for i := 0; i < 100; i++ {

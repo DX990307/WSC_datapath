@@ -22,6 +22,9 @@ var leaseReuseFlag = flag.String("lease-reuse", "page",
 		"re-uses / fetches) or class (R4 b: class x insertion state).")
 var leaseTableFlag = flag.Int("lease-table", 4096,
 	"Lease: pages per GPM in the re-use table (LRU); <= 0 = unlimited.")
+var leaseLineBitsFlag = flag.Bool("lease-line-bits", false,
+	"Lease: re-fetches are detected by a bit per line in the page entry (across kernels) "+
+		"instead of the requester's seen filter.")
 var leaseBuyFlag = flag.Bool("lease-buy", true,
 	"Lease: lines of a page with a migration pending or in flight have no value "+
 		"(they may use an invalid way, never evict).")
@@ -37,7 +40,7 @@ func (b *R9NanoPlatformBuilder) wireLease(m *pagemigration.Manager) {
 		var t *writeback.LeaseTable
 		if *leaseReuseFlag == "page" {
 			t = writeback.NewLeaseTable(writeback.LeaseTableConfig{
-				Log2PageSize: 12, Entries: *leaseTableFlag,
+				Log2PageSize: 12, Entries: *leaseTableFlag, LineBits: *leaseLineBitsFlag,
 			})
 		}
 		var blocked func(uint64) bool
@@ -49,8 +52,8 @@ func (b *R9NanoPlatformBuilder) wireLease(m *pagemigration.Manager) {
 		}
 		gpu.pm.lease = t
 	}
-	fmt.Printf("[Config] lease: re-use %s, table %d pages/GPM, buy interplay %v\n",
-		*leaseReuseFlag, *leaseTableFlag, *leaseBuyFlag)
+	fmt.Printf("[Config] lease: re-use %s, table %d pages/GPM, line bits %v, buy interplay %v\n",
+		*leaseReuseFlag, *leaseTableFlag, *leaseLineBitsFlag, *leaseBuyFlag)
 }
 
 // reportLeaseStats writes the lease counters (summed over GPMs / slices).
