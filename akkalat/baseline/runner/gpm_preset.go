@@ -434,12 +434,58 @@ func lookupGPMPreset(name string, numMemoryBanks, l2CacheSizeMB int) gpmPreset {
 	return lookupGPMPresetKB(name, numMemoryBanks, l2CacheSizeMB, 0)
 }
 
+var gpmPresetDiagFlag = flag.String("gpm-preset-diag", "",
+	"Diagnostic only: comma-separated overrides of the selected -gpm-preset, "+
+		"sa=N (shader arrays), banks=N (L2 slices = memory controllers, 256 KiB each; "+
+		"pass matching -num-memory-banks and -l2-cache-size-kb), tlbsets=N, tlbmshr=N, "+
+		"tlbreq=N, gmmu=N (0 = historical value). Empty = no change.")
+
+// applyGPMPresetDiag applies -gpm-preset-diag to p.
+func applyGPMPresetDiag(p gpmPreset) gpmPreset {
+	if *gpmPresetDiagFlag == "" {
+		return p
+	}
+	for _, kv := range strings.Split(*gpmPresetDiagFlag, ",") {
+		var k string
+		var v int
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 {
+			panic("bad -gpm-preset-diag item " + kv)
+		}
+		k = parts[0]
+		if _, err := fmt.Sscan(parts[1], &v); err != nil {
+			panic("bad -gpm-preset-diag item " + kv)
+		}
+		switch k {
+		case "sa":
+			p.NumSA = v
+		case "banks":
+			p.NumMemoryBanks = v
+			p.L2CacheSizeMB = 0
+			p.L2CacheSizeKB = 256 * v
+		case "tlbsets":
+			p.L2TLBSets = v
+		case "tlbmshr":
+			p.L2TLBMSHR = v
+		case "tlbreq":
+			p.L2TLBReqPerCycle = v
+		case "gmmu":
+			p.GMMUInFlight = v
+		default:
+			panic("unknown -gpm-preset-diag key " + k)
+		}
+	}
+	fmt.Printf("[Config] DIAGNOSTIC -gpm-preset-diag=%s\n", *gpmPresetDiagFlag)
+	return p
+}
+
 // lookupGPMPresetKB is lookupGPMPreset with the -l2-cache-size-kb value.
 func lookupGPMPresetKB(name string, numMemoryBanks, l2CacheSizeMB, l2CacheSizeKB int) gpmPreset {
 	p, ok := gpmPresets[name]
 	if !ok {
 		panic(fmt.Sprintf("unknown -gpm-preset %q (choose from %s)", name, gpmPresetNames()))
 	}
+	p = applyGPMPresetDiag(p)
 	if p.NumMemoryBanks != 0 && p.NumMemoryBanks != numMemoryBanks {
 		panic(fmt.Sprintf("-gpm-preset=%s requires -num-memory-banks=%d, got %d",
 			name, p.NumMemoryBanks, numMemoryBanks))
@@ -518,7 +564,7 @@ func CUsPerGPM() int {
 	if !ok {
 		panic(fmt.Sprintf("unknown -gpm-preset %q (choose from %s)", *gpmPresetFlag, gpmPresetNames()))
 	}
-	return p.NumCU()
+	return applyGPMPresetDiag(p).NumCU()
 }
 
 var scaleNetworkFlag = flag.Bool("scale-network", false,
