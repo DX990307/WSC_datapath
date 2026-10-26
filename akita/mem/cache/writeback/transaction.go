@@ -57,6 +57,9 @@ type transaction struct {
 	adaptivePairLookupSet  [2]bool
 	writeBufferReady       bool
 	pairedDemandQueueEntry bool
+	// downwardCounted (Cache.BankDownwardFix): pullFromBuf counted this
+	// transaction in bankStage.downwardInflightTransCount.
+	downwardCounted bool
 }
 
 func (t transaction) accessReq() mem.AccessReq {

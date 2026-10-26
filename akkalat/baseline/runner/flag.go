@@ -122,6 +122,10 @@ var l2CacheSizeMBFlag = flag.Int("l2-cache-size-mb", 4,
 var l2CacheSizeKBFlag = flag.Int("l2-cache-size-kb", 0,
 	"Total L2 cache capacity per GPM in KiB; 0 (default) uses -l2-cache-size-mb. "+
 		"For capacities that are not whole MiB (mi200s: 5 slices x 256 KiB).")
+var l2BankDownwardFixFlag = flag.Bool("l2-bank-downward-fix", false,
+	"L2 (writeback) bank stage: decrement the downward in-flight count only for "+
+		"transactions that incremented it, so the lane reserved for write-buffer "+
+		"returns is kept (default off = original counting, which can deadlock).")
 var forceLocalDataAccessFlag = flag.Bool("force-local-data-access", false,
 	"Force L1V data-cache misses to use the requester's local L2/DRAM path. "+
 		"Address translation and non-L1V memory traffic remain unchanged.")

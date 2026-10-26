@@ -117,6 +117,14 @@ type Cache struct {
 	// FirstTouchProtect (R4): under cost replacement a first-touch remote
 	// fill may not evict a valid local line.
 	FirstTouchProtect bool
+	// BankDownwardFix (default off): count a bank-stage transaction as
+	// "downward" (on its way to the write buffer) only when pullFromBuf
+	// counted it. Without it, write hits decrement a counter they never
+	// incremented, the counter goes negative, and the lane the bank pipeline
+	// reserves for transactions coming up from the write buffer is lost; the
+	// write buffer and the bank can then wait on each other's full buffers
+	// (seen with many page-copy reads on one L2 slice, results_index/big).
+	BankDownwardFix bool
 	// FirstTouchDuel: decide FirstTouchProtect by set dueling.
 	FirstTouchDuel   bool
 	netFetchHook     func(now, reqTime sim.VTimeInSec, line uint64)

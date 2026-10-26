@@ -934,6 +934,7 @@ func (b *R9NanoGPUBuilder) buildL2Caches() {
 			b.numMemoryBank,
 			i,
 		).Build(cacheName)
+		l2.BankDownwardFix = *l2BankDownwardFixFlag
 		b.l2Caches = append(b.l2Caches, l2)
 		b.gpu.L2Caches = append(b.gpu.L2Caches, l2)
 		if b.remoteRetain != nil {

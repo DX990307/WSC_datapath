@@ -184,12 +184,22 @@ func (s *bankStage) pullFromBuf(now sim.VTimeInSec) bool {
 		switch t.action {
 		case bankEvict, bankEvictAndFetch, bankEvictAndWrite:
 			s.downwardInflightTransCount++
+			t.downwardCounted = true
 		}
 
 		return true
 	}
 
 	return false
+}
+
+// uncountDownward undoes pullFromBuf's downward count of trans (always
+// decremented unless Cache.BankDownwardFix, the original behavior).
+func (s *bankStage) uncountDownward(trans *transaction) {
+	if !s.cache.BankDownwardFix || trans.downwardCounted {
+		s.downwardInflightTransCount--
+	}
+	trans.downwardCounted = false
 }
 
 func (s *bankStage) finalizeTrans(now sim.VTimeInSec) bool {
@@ -319,7 +329,7 @@ func (s *bankStage) finalizeWriteHit(
 
 	s.removeTransaction(now, trans)
 	s.inflightTransCount--
-	s.downwardInflightTransCount--
+	s.uncountDownward(trans)
 
 	done := mem.WriteDoneRspBuilder{}.
 		WithSendTime(now).
@@ -502,7 +512,7 @@ func (s *bankStage) finalizeBankEviction(
 	delete(s.cache.evictingList, trans.evictingAddr)
 	s.cache.writeBufferBuffer.Push(trans)
 	s.inflightTransCount--
-	s.downwardInflightTransCount--
+	s.uncountDownward(trans)
 
 	return true
 }
