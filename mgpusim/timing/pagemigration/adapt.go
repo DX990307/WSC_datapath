@@ -209,6 +209,11 @@ type AdaptConfig struct {
 	R3BaseNS, R3HopNS, R3LinkBytesPerNS float64
 	FlatHops                            float64
 	R3Blind                             bool
+	// R3FlatCost (r3, ablation): the accumulated regret prices every remote
+	// access at the mesh-average round trip (local 0) and so do the regret
+	// differences between candidate homes: only local / remote, two levels
+	// (Jeong & Dubois style); action costs keep the real distances.
+	R3FlatCost bool
 	// FT (r3, round 5, ft.go): first touch inside the break-even rule;
 	// "" off, "always" (every first touch migrates, then R3), "predict"
 	// (buy at first touch by the expected-value test, else rent).

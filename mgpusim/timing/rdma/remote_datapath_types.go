@@ -232,6 +232,7 @@ type remoteWaiter struct {
 type remoteLineEntry struct {
 	key                     remoteLineKey
 	owner                   sim.Port
+	nearDst                 sim.Port // r5-distance A: where the oracle sent the read
 	state                   remoteLineState
 	waiters                 []remoteWaiter
 	data                    []byte

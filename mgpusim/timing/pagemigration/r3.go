@@ -93,6 +93,19 @@ func (m *Manager) r3RTT(g, h uint64) float64 {
 	return c.R3BaseNS + c.R3HopNS*m.r3Hops(g, h)
 }
 
+// r3Reg is the round trip that prices accesses in the regret: r3RTT, or
+// with R3FlatCost the mesh-average round trip for every remote pair.
+func (m *Manager) r3Reg(g, h uint64) float64 {
+	if !m.cfg.Adapt.R3FlatCost {
+		return m.r3RTT(g, h)
+	}
+	if g == h {
+		return 0
+	}
+	c := &m.cfg.Adapt
+	return c.R3BaseNS + c.R3HopNS*m.avgHops()
+}
+
 // r3Copy is the cost of copying bytes from a to b.
 func (m *Manager) r3Copy(a, b uint64, bytes float64) float64 {
 	if a == b {
@@ -146,7 +159,7 @@ func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr
 		// RTT(dev, here) where it is: count both, so a page pre-placed
 		// away from the GPM that reads it at its original home (wrong,
 		// RTT(dev, orig) = 0) is checked as surely as a right one
-		a.accOrig += m.r3RTT(dev, m.ownerOf(a.origPA)) + m.r3RTT(dev, m.homeOf(pAddr))
+		a.accOrig += m.r3Reg(dev, m.ownerOf(a.origPA)) + m.r3Reg(dev, m.homeOf(pAddr))
 		if a.accOrig >= m.r3Fixed() {
 			m.r3Check(u, a)
 		}
@@ -162,7 +175,7 @@ func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr
 		m.cmigMiss != nil {
 		m.cmigMiss[dev]++ // a fetch of a cmig page the pulled lines did not serve
 	}
-	a.acc += m.r3RTT(dev, m.homeOf(pAddr))
+	a.acc += m.r3Reg(dev, m.homeOf(pAddr))
 	if a.nextEval == 0 {
 		a.nextEval = m.r3First()
 	}
@@ -173,7 +186,7 @@ func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr
 
 // r3Uncount takes back an access served by an M3 replica.
 func (m *Manager) r3Uncount(a *adaptState, dev, pAddr uint64) {
-	a.acc -= m.r3RTT(dev, m.homeOf(pAddr))
+	a.acc -= m.r3Reg(dev, m.homeOf(pAddr))
 	if a.acc < 0 {
 		a.acc = 0
 	}
@@ -338,7 +351,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 		r := 0.0
 		for g, x := range w[b] {
 			if x > 0 {
-				r += x * (m.r3RTT(uint64(g), home[b]) - m.r3RTT(uint64(g), cnd))
+				r += x * (m.r3Reg(uint64(g), home[b]) - m.r3Reg(uint64(g), cnd))
 			}
 		}
 		return r
@@ -487,7 +500,15 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 						near, at = r, s
 					}
 				}
-				o.regret += x * (m.r3RTT(uint64(g), home[0]) - near)
+				if c.R3FlatCost {
+					fl := m.r3Reg(uint64(g), home[0])
+					for _, s := range sites {
+						fl = math.Min(fl, m.r3Reg(uint64(g), s))
+					}
+					o.regret += x * (m.r3Reg(uint64(g), home[0]) - fl)
+				} else {
+					o.regret += x * (m.r3RTT(uint64(g), home[0]) - near)
+				}
 				if at != home[0] {
 					used[at] = true
 				}
@@ -559,7 +580,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 				continue
 			}
 			ph := float64(m.cmigHit[g]+1) / float64(m.cmigHit[g]+m.cmigMiss[g]+2)
-			if r := x * m.r3RTT(uint64(g), home[0]) * ph; r > tr {
+			if r := x * m.r3Reg(uint64(g), home[0]) * ph; r > tr {
 				t, tr = uint64(g), r
 			}
 		}
@@ -816,7 +837,7 @@ func (m *Manager) r3Best(u *unit, a *adaptState, home [blocksPerPage]uint64) uin
 		for b := 0; b < blocksPerPage; b++ {
 			for g, x := range w[b] {
 				if x > 0 {
-					r += x * (m.r3RTT(uint64(g), home[b]) - m.r3RTT(uint64(g), c))
+					r += x * (m.r3Reg(uint64(g), home[b]) - m.r3Reg(uint64(g), c))
 				}
 			}
 		}

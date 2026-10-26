@@ -173,7 +173,7 @@ func (m *Manager) ftAccess(now sim.VTimeInSec, u *unit, a *adaptState, dev uint6
 	}
 	// checked once the accesses cost as much as the buy, counted at both
 	// the original home and the first toucher (moved or not: unbiased)
-	a.ftAcc += m.r3RTT(dev, a.ftOrig) + m.r3RTT(dev, a.ftG-1)
+	a.ftAcc += m.r3Reg(dev, a.ftOrig) + m.r3Reg(dev, a.ftG-1)
 	if a.ftAcc >= a.ftCost {
 		m.ftTest(now, u, a)
 	}
