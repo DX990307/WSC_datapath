@@ -707,6 +707,9 @@ func (m *Manager) stallWatch(now sim.VTimeInSec) {
 		return
 	}
 	m.stallReports++
+	if m.stallReports > 3 && m.cfg.StallReports == 0 {
+		return // keep running quietly (inspect it through the monitor)
+	}
 	fmt.Fprintf(os.Stderr, "PMSTALL report=%d now=%.9f active=%d queued_or_service=%d stuck=%d\n",
 		m.stallReports, float64(now), len(m.active), queued, len(stuck))
 	for i, u := range stuck {
@@ -726,8 +729,11 @@ func (m *Manager) stallWatch(now sim.VTimeInSec) {
 		}
 	}
 	for d, g := range m.gpms {
+		if g == nil || g.Engine == nil {
+			continue
+		}
 		e := g.Engine
-		if e == nil || !e.Busy() {
+		if !e.Busy() {
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "PMSTALL engine gpm=%d pending=%d urgent=%d pulling=%d inWindow=%d writes=%d writeChunks=%d reads=%d readOwners=%d l2Inflight=%d dramInflight=%d rsps=%d invals=%d remoteBuf=%d l2Buf=%d\n",
