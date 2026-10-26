@@ -724,7 +724,9 @@ func (ds *directoryStage) writeToBank(
 		block.PID != trans.write.PID {
 		ds.cache.obsL2Fill(block)
 	}
+	ds.cache.rcCoherence = block.IsValid && block.Tag == cachelineID
 	ds.cache.untrackRemoteReplica(block)
+	ds.cache.rcCoherence = false
 	ds.cache.untrackResidentBlock(block)
 	ds.cache.directory.Visit(block)
 	block.IsLocked = true

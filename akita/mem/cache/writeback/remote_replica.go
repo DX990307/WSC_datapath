@@ -172,6 +172,9 @@ func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocal
 		c.remoteReplicaStats.FillDisplacedLocalClean++
 	}
 	if replacedRemote {
+		if c.rc != nil {
+			c.rc.Gone(c.rcGPM, oldRecord.key.line, false)
+		}
 		delete(c.remoteReplicaBlocks, block)
 		c.unindexRemote(block, oldRecord.key.line)
 	}
@@ -225,6 +228,9 @@ func (c *Cache) writeRemoteFill(fill *mem.RemoteDataFill, line uint64, block *ca
 		}
 		c.indexRemote(block, line)
 	}
+	if c.rc != nil {
+		c.rc.Installed(c.rcGPM, line)
+	}
 	c.remoteReplicaStats.InstalledFills++
 	c.remoteReplicaStats.TwoTouchInstalledFills++
 	c.updateRemoteReplicaOccupancy()
@@ -261,6 +267,9 @@ func (c *Cache) installRemoteDataFillCost(fill *mem.RemoteDataFill, line uint64)
 		c.remoteReplicaStats.FillDisplacedLocalClean++
 	}
 	if replacedRemote {
+		if c.rc != nil {
+			c.rc.Gone(c.rcGPM, oldRecord.key.line, false)
+		}
 		delete(c.remoteReplicaBlocks, block)
 		c.unindexRemote(block, oldRecord.key.line)
 		c.recordRemoteReplicaRetirement(oldRecord)
@@ -340,6 +349,9 @@ func (c *Cache) untrackRemoteReplica(block *cachepkg.Block) {
 		return
 	}
 	c.recordRemoteReplicaRetirement(record)
+	if c.rc != nil {
+		c.rc.Gone(c.rcGPM, record.key.line, c.rcCoherence)
+	}
 	delete(c.remoteReplicaBlocks, block)
 	c.unindexRemote(block, record.key.line)
 	c.remoteReplicaStats.TrackedEvictions++
@@ -347,9 +359,11 @@ func (c *Cache) untrackRemoteReplica(block *cachepkg.Block) {
 }
 
 func (c *Cache) resetRemoteReplicas() {
+	c.rcCoherence = true
 	for block := range c.remoteReplicaBlocks {
 		c.untrackRemoteReplica(block)
 	}
+	c.rcCoherence = false
 }
 
 func (c *Cache) removeInflightTransaction(trans *transaction) {
@@ -449,7 +463,9 @@ func (c *Cache) InvalidateRemoteReplicas(now sim.VTimeInSec) int {
 	n := 0
 	for _, block := range blocks {
 		c.obsL2InvalidateBlock(block)
+		c.rcCoherence = true
 		c.untrackRemoteReplica(block)
+		c.rcCoherence = false
 		c.untrackResidentBlock(block)
 		block.IsValid = false
 		block.IsDirty = false

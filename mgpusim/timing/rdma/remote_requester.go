@@ -1036,6 +1036,9 @@ func (c *Comp) noteLegacyRemoteReqSent(req mem.AccessReq, dst sim.Port) {
 	for _, identity := range c.remoteIdentities(req, dst) {
 		c.remoteEpochs[identity]++
 		c.remoteUncacheable[identity] = true
+		if c.ReadClass != nil {
+			c.ReadClass.Uncacheable(c.ReadClassGPM, identity.lineAddr)
+		}
 		c.deleteRemoteSeen(identity)
 		if filter := c.requestFilterForAddress(identity.lineAddr); filter != nil {
 			resident := writeback.TypedFilterKey{

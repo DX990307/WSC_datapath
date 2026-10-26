@@ -164,6 +164,7 @@ func (r *Runner) Init() *Runner {
 
 	r.createUnifiedGPUs()
 	r.configureMagicCopyCoherence()
+	r.configureClsStats()
 	r.configureWGDistribution()
 
 	r.defineMetrics()

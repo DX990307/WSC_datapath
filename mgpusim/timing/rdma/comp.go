@@ -22,6 +22,11 @@ type transaction struct {
 // An Comp is a component that helps one GPU to access the memory on
 // another GPU
 type Comp struct {
+	// ReadClass (-l2-cls-stats, statistics only) classifies network fetches
+	// at the owner; ReadClassGPM is this engine's GPM.
+	ReadClass    *writeback.ReadClassifier
+	ReadClassGPM int
+
 	*sim.TickingComponent
 
 	ToOutside sim.Port
@@ -533,6 +538,7 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 					if !progress {
 						return madeProgress
 					}
+					c.readClassOwner(req)
 					madeProgress = true
 					continue
 				}
@@ -541,6 +547,7 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			if !ret {
 				return madeProgress
 			}
+			c.readClassOwner(req)
 			madeProgress = true
 		case mem.AccessRsp:
 			ret := c.processRspFromOutside(now, req)
@@ -1154,4 +1161,14 @@ func (c *Comp) traceInsideOutEnd(trans transaction) {
 func (c *Comp) traceOutsideInEnd(trans transaction) {
 	tracing.TraceReqFinalize(trans.toInside, c)
 	tracing.TraceReqComplete(trans.fromOutside, c)
+}
+
+// readClassOwner (statistics only) classifies a read that reached this owner.
+func (c *Comp) readClassOwner(req mem.AccessReq) {
+	if c.ReadClass == nil {
+		return
+	}
+	if r, ok := req.(*mem.ReadReq); ok {
+		c.ReadClass.OwnerRead(r.Meta().Src, r.Address, r.AccessByteSize)
+	}
 }

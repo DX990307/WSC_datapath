@@ -122,6 +122,9 @@ var l2CacheSizeMBFlag = flag.Int("l2-cache-size-mb", 4,
 var l2CacheSizeKBFlag = flag.Int("l2-cache-size-kb", 0,
 	"Total L2 cache capacity per GPM in KiB; 0 (default) uses -l2-cache-size-mb. "+
 		"For capacities that are not whole MiB (mi200s: 5 slices x 256 KiB).")
+var l2SizeSensitivityFlag = flag.Bool("l2-size-sensitivity", false,
+	"Allow -l2-cache-size-kb with a GPM preset that fixes the L2 size (capacity "+
+		"sensitivity: same slices and ways, fewer sets per slice).")
 var l2BankDownwardFixFlag = flag.Bool("l2-bank-downward-fix", false,
 	"L2 (writeback) bank stage: decrement the downward in-flight count only for "+
 		"transactions that incremented it, so the lane reserved for write-buffer "+
