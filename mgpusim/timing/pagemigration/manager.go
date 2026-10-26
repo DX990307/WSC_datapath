@@ -30,6 +30,8 @@ type GPM struct {
 	// L1I, L2TLB); the shootdown drops the migrating pages from them.
 	TLBs   []PageInvalidator
 	Engine *CopyEngine
+	// Dump (diagnostic, optional) describes the GPM's L2 slices.
+	Dump func() string
 	// HoldsLine (optional, used with Config.Check) reports whether any L2
 	// slice of the GPM holds the line at a physical address or has an MSHR
 	// for it (local lines and M3 remote replicas alike).
@@ -726,6 +728,17 @@ func (m *Manager) stallWatch(now sim.VTimeInSec) {
 			} else {
 				fmt.Fprintf(os.Stderr, "PMSTALL   page va=%#x pa=%#x dev=%d (no frame info)\n", p.VAddr, p.PAddr, p.DeviceID)
 			}
+		}
+	}
+	srcs := map[uint64]bool{}
+	for _, u := range stuck {
+		for _, p := range u.pages {
+			srcs[p.DeviceID] = true
+		}
+	}
+	for d := range srcs {
+		if g := m.gpms[d]; g != nil && g.Dump != nil && m.stallReports == 1 {
+			fmt.Fprintf(os.Stderr, "PMSTALL dump gpm=%d\n%s", d, g.Dump())
 		}
 	}
 	for d, g := range m.gpms {

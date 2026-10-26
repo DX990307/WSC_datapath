@@ -314,6 +314,13 @@ func (b *R9NanoPlatformBuilder) buildPageMigrationManager(
 			},
 		}
 		l2s := p.l2s
+		gpms[gpu.GPUID].Dump = func() string {
+			out := ""
+			for _, l2 := range l2s {
+				out += l2.DebugDump()
+			}
+			return out
+		}
 		gpms[gpu.GPUID].PullUse = func() (inst, used uint64) {
 			for _, l2 := range l2s {
 				i, u := l2.PullUse()
