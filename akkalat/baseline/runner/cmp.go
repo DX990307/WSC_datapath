@@ -40,6 +40,10 @@ var cmpFillLRUFlag = flag.Bool("cmp-fill-lru", true,
 	"Comparison designs: remote lines compete with local lines in the L2 under the "+
 		"normal replacement (no M3 protection / first-touch invalid-way rule).")
 
+var cmpInvalFreeFlag = flag.Bool("cmp-inval-free", false,
+	"Comparison designs, diagnostic: invalidations take effect at once and use no "+
+		"network (isolates the cost of the invalidation traffic).")
+
 func cmpCARVEOn() bool { return *cmpModeFlag == "carve" }
 
 // cmpRDCBytes is the RDC carve-out per GPM.
@@ -119,8 +123,10 @@ func (b *R9NanoPlatformBuilder) wireCmp(drv *driver.Driver) *writeback.CmpCohere
 		ports[int(gpu.GPUID)] = gpu.RDMAEngine.ToOutside
 		rdmas[int(gpu.GPUID)] = gpu.RDMAEngine
 	}
-	t.Send = func(now sim.VTimeInSec, from, to int, g uint64) {
-		rdmas[from].QueueCohInval(now, to, g)
+	if !*cmpInvalFreeFlag {
+		t.Send = func(now sim.VTimeInSec, from, to int, g uint64) {
+			rdmas[from].QueueCohInval(now, to, g)
+		}
 	}
 	for _, gpu := range b.gpus {
 		id := int(gpu.GPUID)
