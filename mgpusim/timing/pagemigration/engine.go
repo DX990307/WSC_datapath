@@ -1,7 +1,9 @@
 package pagemigration
 
 import (
+	"fmt"
 	"log"
+	"os"
 	"math/bits"
 	"reflect"
 
@@ -133,7 +135,15 @@ func (e *CopyEngine) Busy() bool {
 		len(e.readOwners) > 0 || len(e.rsps) > 0 || len(e.invals) > 0
 }
 
+func (e *CopyEngine) trace(now sim.VTimeInSec, pa uint64, format string, args ...interface{}) {
+	if e.cfg.TracePages == nil || !e.cfg.TracePages[pa>>12<<12] {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "PMTRACE %.9f %s pa=%#x "+format+"\n", append([]interface{}{float64(now), e.Name(), pa}, args...)...)
+}
+
 func (e *CopyEngine) enqueue(now sim.VTimeInSec, c *chunk) {
+	e.trace(now, c.srcPAddr, "enqueue urgent=%v src=%s pending=%d", c.urgent, c.src.Name(), len(e.pending))
 	if c.urgent {
 		e.urgentQ = append(e.urgentQ, c)
 	} else {
@@ -248,8 +258,10 @@ func (e *CopyEngine) sendPulls(now sim.VTimeInSec) bool {
 		req.Mask = c.mask
 		req.PID = c.pid
 		if e.remotePort.Send(req) != nil {
+			e.trace(now, c.srcPAddr, "pull send failed")
 			break
 		}
+		e.trace(now, c.srcPAddr, "pull sent id=%s", req.ID)
 		*q = (*q)[1:]
 		e.pulling[req.ID] = c
 		e.inWindow++
@@ -308,6 +320,7 @@ func (e *CopyEngine) recvRemote(now sim.VTimeInSec) bool {
 }
 
 func (e *CopyEngine) serve(now sim.VTimeInSec, req *PullReq) {
+	e.trace(now, req.PAddr, "serve id=%s from=%s reads=%d l2Inflight=%d", req.ID, req.Src.Name(), len(e.reads), e.l2Inflight)
 	n := int(req.Size / e.cfg.LineBytes)
 	if req.Mask != 0 {
 		n = bits.OnesCount64(req.Mask)
@@ -347,6 +360,7 @@ func (e *CopyEngine) land(now sim.VTimeInSec, rsp *PullRsp) {
 		log.Panicf("copy engine %s: unknown pull %s", e.Name(), rsp.RespondTo)
 	}
 	delete(e.pulling, rsp.RespondTo)
+	e.trace(now, c.srcPAddr, "land")
 	e.PulledBytes += uint64(len(rsp.Data))
 	e.landChunk(now, c, rsp.Data)
 }
@@ -397,6 +411,9 @@ func (e *CopyEngine) recvMem(now sim.VTimeInSec, port sim.Port) bool {
 			delete(e.readOwners, msg.RespondTo)
 			copy(lr.s.data[lr.offset:], msg.Data)
 			lr.s.linesLeft--
+			if lr.s.req != nil {
+				e.trace(now, lr.s.req.PAddr, "l2 rsp left=%d", lr.s.linesLeft)
+			}
 			if lr.s.linesLeft == 0 && lr.s.local != nil {
 				e.landChunk(now, lr.s.local, lr.s.data)
 			} else if lr.s.linesLeft == 0 {
@@ -416,6 +433,7 @@ func (e *CopyEngine) recvMem(now sim.VTimeInSec, port sim.Port) bool {
 			}
 			delete(e.writeChunks, msg.RespondTo)
 			c.linesLeft--
+			e.trace(now, c.srcPAddr, "write done left=%d", c.linesLeft)
 			if c.linesLeft == 0 {
 				e.inWindow--
 				e.inBytes -= c.size

@@ -52,6 +52,8 @@ var pmStallWatchFlag = flag.Int("pm-stall-watch-ns", 0,
 		"(0 = off); see -pm-stall-reports.")
 var pmStallReportsFlag = flag.Int("pm-stall-reports", 3,
 	"Page migration diagnostic: panic after this many -pm-stall-watch-ns reports (0 = never).")
+var pmTracePagesFlag = flag.String("pm-trace-pages", "",
+	"Page migration diagnostic: comma-separated physical page addresses whose copy chunks are traced.")
 var pmMaxMigrationsFlag = flag.Int("pm-max-migrations", 3,
 	"Page migration: a unit that migrated this many times is pinned "+
 		"(0 = unlimited; NVIDIA uvm_perf_thrashing_threshold default 3).")
@@ -125,6 +127,16 @@ func pageMigrationConfigFromFlags() pagemigration.Config {
 	c.MaxMigrations = *pmMaxMigrationsFlag
 	c.StallWatchNS = uint64(*pmStallWatchFlag)
 	c.StallReports = *pmStallReportsFlag
+	if *pmTracePagesFlag != "" {
+		c.TracePages = map[uint64]bool{}
+		for _, f := range strings.Split(*pmTracePagesFlag, ",") {
+			v, err := strconv.ParseUint(strings.TrimSpace(f), 0, 64)
+			if err != nil {
+				panic(err)
+			}
+			c.TracePages[v>>12<<12] = true
+		}
+	}
 	c.ChunkBytes = uint64(*pmChunkBytesFlag)
 	c.PullWindow = *pmPullWindowFlag
 	c.L2Window = *pmL2WindowFlag

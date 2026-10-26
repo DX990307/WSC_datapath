@@ -899,6 +899,9 @@ func (m *Manager) startCopy(now sim.VTimeInSec, u *unit) {
 		frame := m.allocFrame(u.dst)
 		u.newPAddrs = append(u.newPAddrs, frame)
 		src := m.gpms[p.DeviceID].Engine
+		if m.cfg.TracePages[p.PAddr] {
+			fmt.Fprintf(os.Stderr, "PMTRACE %.9f manager pa=%#x startCopy unit=%#x dst=%d src=%d\n", float64(now), p.PAddr, u.key.idx, u.dst, p.DeviceID)
+		}
 		for off := uint64(0); off < pageSize; off += m.cfg.ChunkBytes {
 			dstEngine.enqueue(now, &chunk{
 				u:        u,
@@ -914,6 +917,9 @@ func (m *Manager) startCopy(now sim.VTimeInSec, u *unit) {
 
 func (m *Manager) chunkDone(now sim.VTimeInSec, c *chunk) {
 	u := c.u
+	if m.cfg.TracePages[c.srcPAddr>>12<<12] {
+		fmt.Fprintf(os.Stderr, "PMTRACE %.9f manager pa=%#x chunkDone unit=%#x pending=%d phase=%d\n", float64(now), c.srcPAddr, u.key.idx, u.pendingChunks, u.phase)
+	}
 	u.pendingChunks--
 	if u.pendingChunks > 0 {
 		return

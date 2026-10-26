@@ -116,6 +116,9 @@ type Config struct {
 	// StallReports times (then panic so the run ends).
 	StallWatchNS uint64
 	StallReports int
+	// TracePages (diagnostic): physical page addresses (4 KB aligned) whose
+	// copy chunks are traced on stderr.
+	TracePages map[uint64]bool
 
 	// Check enables the expensive invariant checks (every L2 of every GPM is
 	// searched for lines of each new frame at allocation and at remap).
