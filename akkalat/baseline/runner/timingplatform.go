@@ -560,7 +560,8 @@ func (b R9NanoPlatformBuilder) Build(numMemoryBank int) *Platform {
 	pm := b.buildPageMigrationManager(pageTable)
 	holders := b.wireL2Res(pm, gpuDriver, remoteRetain)
 	b.wireNearestStat(pm, gpuDriver)
-	b.wireNearestOracle(gpuDriver)
+	b.wireNearestOracle(gpuDriver, pm)
+	b.wireNearestReal(gpuDriver, pm)
 
 	for _, gpu := range b.gpus {
 		gpu.MMUEngine = mmuComponent

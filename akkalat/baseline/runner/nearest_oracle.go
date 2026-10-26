@@ -9,6 +9,7 @@ import (
 	"github.com/sarchlab/akita/v3/sim"
 	"github.com/sarchlab/mgpusim/v3/driver"
 	"github.com/sarchlab/mgpusim/v3/timing/cp"
+	"github.com/sarchlab/mgpusim/v3/timing/pagemigration"
 	"github.com/sarchlab/mgpusim/v3/timing/rdma"
 )
 
@@ -19,7 +20,7 @@ var nearestOracleFlag = flag.Bool("nearest-oracle", false,
 		"the holder reads its L2 (lookup only) and forwards to the home on a miss.")
 
 // wireNearestOracle installs the nearest-copy oracle on every RDMA engine.
-func (b *R9NanoPlatformBuilder) wireNearestOracle(drv *driver.Driver) {
+func (b *R9NanoPlatformBuilder) wireNearestOracle(drv *driver.Driver, pm *pagemigration.Manager) {
 	if !*nearestOracleFlag {
 		return
 	}
@@ -65,6 +66,9 @@ func (b *R9NanoPlatformBuilder) wireNearestOracle(drv *driver.Driver) {
 		p.KernelLaunchHooks = append(p.KernelLaunchHooks, o.KernelBoundary)
 	}
 	drv.AddPhysicalWriteHook(o.NoteWrite)
+	if pm != nil && *pmAdaptR3ServedFlag {
+		o.Served = b.nearestServedHook(pm)
+	}
 }
 
 type nearestOracleWrites struct{ o *rdma.NearestOracle }

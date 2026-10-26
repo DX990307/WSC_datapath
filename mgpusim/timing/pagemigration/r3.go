@@ -176,6 +176,12 @@ func (m *Manager) r3Count(now sim.VTimeInSec, u *unit, a *adaptState, dev, pAddr
 		m.cmigMiss[dev]++ // a fetch of a cmig page the pulled lines did not serve
 	}
 	a.acc += m.r3Reg(dev, m.homeOf(pAddr))
+	if m.cfg.Adapt.Rob {
+		m.robCount(now, u, a, dev, pAddr)
+		if len(a.replicas) > 0 || a.fixed {
+			return
+		}
+	}
 	if a.nextEval == 0 {
 		a.nextEval = m.r3First()
 	}
@@ -189,6 +195,12 @@ func (m *Manager) r3Uncount(a *adaptState, dev, pAddr uint64) {
 	a.acc -= m.r3Reg(dev, m.homeOf(pAddr))
 	if a.acc < 0 {
 		a.acc = 0
+	}
+	if a.rob != nil && int(dev) < len(a.rob) {
+		a.rob[dev] -= m.r3RTT(dev, m.homeOf(pAddr))
+		if a.rob[dev] < 0 {
+			a.rob[dev] = 0
+		}
 	}
 }
 
@@ -354,6 +366,9 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 				r += x * (m.r3Reg(uint64(g), home[b]) - m.r3Reg(uint64(g), cnd))
 			}
 		}
+		if c.R3Served {
+			r -= a.nearSaveB[b] // the readers already save this by nearest reads
+		}
 		return r
 	}
 	// best page-level candidate (Blind: the GPM with the most accesses)
@@ -485,7 +500,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 			pick(o)
 		}
 	}
-	if c.Replicate && uniform && a.writeKernel != m.kernel {
+	if c.Replicate && !c.Rob && uniform && a.writeKernel != m.kernel {
 		sites := m.r3Sites(tot, home[0], p.PAddr>>m.log2PageSize)
 		if len(sites) > 0 {
 			o := opt{act: actReplicate}
@@ -506,6 +521,8 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 						fl = math.Min(fl, m.r3Reg(uint64(g), s))
 					}
 					o.regret += x * (m.r3Reg(uint64(g), home[0]) - fl)
+				} else if c.R3Served {
+					o.regret += math.Max(0, x*(m.r3RTT(uint64(g), home[0])-near)-a.served(g))
 				} else {
 					o.regret += x * (m.r3RTT(uint64(g), home[0]) - near)
 				}
@@ -580,7 +597,11 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 				continue
 			}
 			ph := float64(m.cmigHit[g]+1) / float64(m.cmigHit[g]+m.cmigMiss[g]+2)
-			if r := x * m.r3Reg(uint64(g), home[0]) * ph; r > tr {
+			r := x * m.r3Reg(uint64(g), home[0]) * ph
+			if c.R3Served {
+				r -= a.served(g)
+			}
+			if r > tr {
 				t, tr = uint64(g), r
 			}
 		}
@@ -612,6 +633,9 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 				a.bc[b][t] = 0
 			}
 		}
+		if int(t) < len(a.nearSave) {
+			a.nearSave[t] = 0
+		}
 		a.acc, a.nextEval = 0, 0
 		m.l2rDecide(now, a, p, home[0], l2rChosen)
 		return
@@ -626,6 +650,9 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 			for b := range a.bc {
 				a.bc[b][t] = 0
 			}
+		}
+		if int(t) < len(a.nearSave) {
+			a.nearSave[t] = 0
 		}
 		a.acc, a.nextEval = 0, 0
 		m.startCmig(now, u, a, p, home[0], t)
@@ -668,6 +695,7 @@ func (m *Manager) r3Evaluate(now sim.VTimeInSec, u *unit) {
 	}
 	a.n = 0
 	a.acc, a.nextEval = 0, 0
+	a.resetServed()
 	m.Stats.CounterTriggers++
 	m.AStats.MoveHoldModelNS += hold
 	a.wasMove = true

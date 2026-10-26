@@ -221,6 +221,7 @@ func (f homeWriteFanout) NoteWrite(now sim.VTimeInSec, addr, size uint64) {
 func (r *Runner) reportL2ResStats() {
 	r.reportNearestStats()
 	r.reportNearestOracle()
+	r.reportNearestReal()
 	if !*l2resCostReplFlag && *l2resHoldersFlag == 0 && !strings.Contains(*pmAdaptActionsFlag, "l2pull") {
 		return
 	}

@@ -181,3 +181,15 @@ func (c *Cache) OccupancyTimeAvg(end sim.VTimeInSec) (v, r, t float64) {
 	c.occSample(end, true)
 	return c.occSumV, c.occSumR, c.occSumT
 }
+
+// ReplicaObserver (isca27/nearest) is told when the slice installs a remote
+// (M3) replica line (reqTime = when the read that fetched it was opened) and
+// when one leaves the slice (coherence = a write epoch / invalidation, else
+// a replacement).
+type ReplicaObserver interface {
+	RemoteInstalled(reqTime sim.VTimeInSec, line uint64)
+	RemoteGone(line uint64, coherence bool)
+}
+
+// SetReplicaObserver attaches o (nil = off; timing-neutral by itself).
+func (c *Cache) SetReplicaObserver(o ReplicaObserver) { c.replObs = o }

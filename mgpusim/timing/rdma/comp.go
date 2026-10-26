@@ -118,6 +118,12 @@ type Comp struct {
 	nearest    *NearestOracle
 	nearProbes map[string]*mem.ReadReq // holder L2 lookup ID -> served request
 	nearFwd    map[string]*mem.ReadReq // forwarded read ID -> served request
+
+	// isca27/nearest: realistic nearest-holder lookup (nearest_real.go).
+	nearReal *NearestReal
+	nrProbes map[string]*nrProbe
+	nrFwd    map[string]*nrProbe
+	nrOut    []*NearNotice
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -206,6 +212,9 @@ func (c *Comp) Tick(now sim.VTimeInSec) bool {
 			madeProgress = c.t18OwnerSend(now) || madeProgress
 		}
 	}
+	if c.nearReal != nil && len(c.nrOut) > 0 {
+		madeProgress = c.nrSendNotices(now) || madeProgress
+	}
 	madeProgress = c.processFromL1(now) || madeProgress
 	madeProgress = c.processFromL2(now) || madeProgress
 	madeProgress = c.processFromOutside(now) || madeProgress
@@ -276,6 +285,13 @@ func (c *Comp) requesterOutstandingCount() int {
 }
 
 func (c *Comp) ownerOutstandingCount() int {
+	if c.nearReal != nil {
+		n := len(c.transactionsFromOutside) + c.remoteOwnerOccupancy() + c.nrLive()
+		if c.t18 != nil {
+			n += c.t18.ownerLive
+		}
+		return n
+	}
 	if c.nearest != nil {
 		n := len(c.transactionsFromOutside) + c.remoteOwnerOccupancy() + c.nearestLive()
 		if c.t18 != nil {
@@ -399,7 +415,8 @@ func (c *Comp) fullyDrained() bool {
 		len(c.transactionsFromInside) == 0 &&
 		!c.remoteDataPathHasPendingWork() &&
 		!c.t18HasPendingWork() &&
-		(c.nearest == nil || c.nearestLive() == 0)
+		(c.nearest == nil || c.nearestLive() == 0) &&
+		(c.nearReal == nil || !c.nrPending())
 }
 
 func (c *Comp) firstSeen(
@@ -478,6 +495,13 @@ func (c *Comp) processFromL2(now sim.VTimeInSec) bool {
 		}
 		switch req := req.(type) {
 		case mem.AccessRsp:
+			if lk, ok := req.(*mem.CacheLookupRsp); ok && c.nrProbes[lk.RespondTo] != nil {
+				if !c.nrProbeRsp(now, lk) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			if lk, ok := req.(*mem.CacheLookupRsp); ok && c.nearProbes[lk.RespondTo] != nil {
 				if !c.nearestProbeRsp(now, lk) {
 					return madeProgress
@@ -551,7 +575,20 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 				return madeProgress
 			}
 			madeProgress = true
+		case *NearNotice:
+			c.nearReal.notice(c, req)
+			c.ToOutside.Retrieve(now)
+			madeProgress = true
 		case mem.AccessReq:
+			if c.nearReal != nil {
+				if handled, progress := c.nrFromOutside(now, req); handled {
+					if !progress {
+						return madeProgress
+					}
+					madeProgress = true
+					continue
+				}
+			}
 			if c.nearest != nil && c.nearest.holderRq[req.Meta().ID] {
 				if !c.nearestServe(now, req.(*mem.ReadReq)) {
 					return madeProgress
@@ -577,6 +614,13 @@ func (c *Comp) processFromOutside(now sim.VTimeInSec) bool {
 			c.readClassOwner(req)
 			madeProgress = true
 		case mem.AccessRsp:
+			if d, ok := req.(*mem.DataReadyRsp); ok && c.nrFwd[d.RespondTo] != nil {
+				if !c.nrFwdRsp(now, d) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			if d, ok := req.(*mem.DataReadyRsp); ok && c.nearFwd[d.RespondTo] != nil {
 				if !c.nearestFwdRsp(now, d) {
 					return madeProgress
@@ -614,6 +658,9 @@ func (c *Comp) processReqFromL1(
 			c.RemoteDataPathStats.ObservedRemoteReads++
 		case *mem.WriteReq:
 			c.RemoteDataPathStats.ObservedRemoteWrites++
+			if c.nearReal != nil {
+				c.nearReal.selfWrite(c, req.GetAddress())
+			}
 		}
 		c.obsAdmit(req, dst)
 		if memtrace.PgclsEnabled() {

@@ -1147,6 +1147,14 @@ func (c *Comp) sendRemoteEntryDirect(
 		}
 		dst = entry.nearDst
 		redirected = dst != entry.owner
+	} else if c.nearReal != nil {
+		if entry.nearDst == nil {
+			entry.nearDst = entry.owner
+			if h, ok := c.nearReal.route(c, entry.key.lineAddr, entry.owner); ok {
+				entry.nearDst = h
+			}
+		}
+		dst = entry.nearDst
 	}
 	if c.m1Composed() && !c.m1CanSend(dst) {
 		return false
@@ -1165,9 +1173,13 @@ func (c *Comp) sendRemoteEntryDirect(
 	if err := c.ToOutside.Send(req); err != nil {
 		return false
 	}
+	if c.nearReal != nil {
+		c.nearReal.noteSent(c, req.ID, entry.key.lineAddr, entry.owner, dst)
+	}
 	if c.nearest != nil {
 		if redirected {
 			c.nearest.holderRq[req.ID] = true
+			c.nearest.noteRedirect(c, req.ID, entry.key.lineAddr, entry.owner, dst)
 		} else {
 			c.nearest.Stats.ServedByEngine[c.nearest.byPort[entry.owner]]++
 		}
@@ -1540,6 +1552,12 @@ func (c *Comp) processRemoteSingleRsp(
 	c.m1UnindexLine(entry)
 	if c.m1Composed() {
 		c.m1Release(now, rsp.GetRspTo())
+	}
+	if c.nearReal != nil {
+		c.nearReal.noteRsp(c, rsp.GetRspTo())
+	}
+	if c.nearest != nil && c.nearest.Served != nil {
+		c.nearest.noteRsp(rsp.GetRspTo())
 	}
 	delete(c.remoteSingleInflight, rsp.GetRspTo())
 	c.RemoteDataPathStats.NetworkResponseBytes += uint64(rsp.Meta().TrafficBytes)

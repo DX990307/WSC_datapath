@@ -110,6 +110,14 @@ var pmAdaptR3BlindFlag = flag.Bool("pm-adapt-r3-blind", false,
 	"P21 round 3 experiment: targets and replica sites ignore distance (GPM with most accesses, random sites).")
 var pmAdaptR3FlatCostFlag = flag.Bool("pm-adapt-r3-flatcost", false,
 	"P21 r3 ablation: the regret prices every remote access at the mesh-average round trip (local 0), also between candidate homes (two-level local/remote cost, Jeong & Dubois style); action costs keep real distances.")
+var pmAdaptR3ServedFlag = flag.Bool("pm-adapt-r3-served", false,
+	"isca27/nearest: the R3 regret counts the distance of the GPM that answered a read (nearest-holder lookup: -nearest or -nearest-oracle), not the home's.")
+var pmAdaptRobFlag = flag.Bool("pm-adapt-r3-rob", false,
+	"isca27/nearest B: rule-based whole-page replicas (per reader and page rent-or-buy: a copy at reader g once g's accrued RTT to the nearest copy reaches the R3 cost of one copy; write gate P(write) > 1/2) instead of the quadrant replicate action.")
+var pmAdaptRobFullSWFlag = flag.Bool("pm-adapt-rob-full-sw", false,
+	"isca27/nearest B: every rob copy's cost includes the full software latency (default: amortised over the driver batch with -pm-adapt-batch-sw).")
+var pmAdaptRobNoKeepFlag = flag.Bool("pm-adapt-rob-nokeep", false,
+	"isca27/nearest B: rob copies collapse at every kernel boundary like R3 replicas (default: copies of unwritten pages survive).")
 var pmAdaptFTFlag = flag.String("pm-adapt-ft", "",
 	"P21 round 5 (r3): first touch inside the break-even rule: always (every first "+
 		"vector access migrates the page to the accessing GPM through the fault path, "+
@@ -214,6 +222,10 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	a.R3Decrement = *pmAdaptR3DecFlag
 	a.R3Blind = *pmAdaptR3BlindFlag
 	a.R3FlatCost = *pmAdaptR3FlatCostFlag
+	a.R3Served = *pmAdaptR3ServedFlag
+	a.Rob = *pmAdaptRobFlag
+	a.RobFullSW = *pmAdaptRobFullSWFlag
+	a.RobKeep = !*pmAdaptRobNoKeepFlag
 	a.FT = *pmAdaptFTFlag
 	a.PreTouchCheck = *pmAdaptPreTouchFlag
 	a.HoldMeasured = *pmAdaptHoldMeasFlag
@@ -274,6 +286,13 @@ func (b *R9NanoPlatformBuilder) wireAdaptive(m *pagemigration.Manager) {
 	a := b.pageMigration.Adapt
 	if a.Rule == "grit" {
 		m.Storage = b.globalStorage // copies kept across kernels unless the host wrote the master
+	}
+	if a.Rob && a.RobKeep {
+		m.Storage = b.globalStorage
+	}
+	if a.Rob || a.R3Served {
+		fmt.Printf("[Config] isca27/nearest: r3-served=%v rob=%v rob-full-sw=%v rob-keep=%v\n",
+			a.R3Served, a.Rob, a.RobFullSW, a.Rob && a.RobKeep)
 	}
 	if a.ReplicaList != nil {
 		m.Storage = b.globalStorage
@@ -402,6 +421,15 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 		col("pa_grit_to_counter", float64(s.GritToCounter))
 		col("pa_grit_to_dup", float64(s.GritToDup))
 		col("pa_grit_adopted", float64(s.GritAdopted))
+	}
+	if a.Rob || a.R3Served {
+		col("pa_served_adj", float64(s.ServedAdj))
+		col("pa_served_save_ns", s.ServedSaveNS)
+		col("pa_rob_decided", float64(s.RobDecided))
+		col("pa_rob_copies", float64(s.RobCopies))
+		col("pa_rob_gated", float64(s.RobGated))
+		col("pa_rob_budget", float64(s.RobBudget))
+		col("pa_rob_kept", float64(s.RobKept))
 	}
 	col("pa_move_held_ns", s.MoveHeldNS)
 	col("pa_move_hold_model_ns", s.MoveHoldModelNS)

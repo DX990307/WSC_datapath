@@ -175,6 +175,9 @@ func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocal
 		if c.rc != nil {
 			c.rc.Gone(c.rcGPM, oldRecord.key.line, false)
 		}
+		if c.replObs != nil {
+			c.replObs.RemoteGone(oldRecord.key.line, false)
+		}
 		delete(c.remoteReplicaBlocks, block)
 		c.unindexRemote(block, oldRecord.key.line)
 	}
@@ -231,6 +234,9 @@ func (c *Cache) writeRemoteFill(fill *mem.RemoteDataFill, line uint64, block *ca
 	if c.rc != nil {
 		c.rc.Installed(c.rcGPM, line)
 	}
+	if c.replObs != nil {
+		c.replObs.RemoteInstalled(fill.ReqTime, line)
+	}
 	c.remoteReplicaStats.InstalledFills++
 	c.remoteReplicaStats.TwoTouchInstalledFills++
 	c.updateRemoteReplicaOccupancy()
@@ -269,6 +275,9 @@ func (c *Cache) installRemoteDataFillCost(fill *mem.RemoteDataFill, line uint64)
 	if replacedRemote {
 		if c.rc != nil {
 			c.rc.Gone(c.rcGPM, oldRecord.key.line, false)
+		}
+		if c.replObs != nil {
+			c.replObs.RemoteGone(oldRecord.key.line, false)
 		}
 		delete(c.remoteReplicaBlocks, block)
 		c.unindexRemote(block, oldRecord.key.line)
@@ -351,6 +360,9 @@ func (c *Cache) untrackRemoteReplica(block *cachepkg.Block) {
 	c.recordRemoteReplicaRetirement(record)
 	if c.rc != nil {
 		c.rc.Gone(c.rcGPM, record.key.line, c.rcCoherence)
+	}
+	if c.replObs != nil {
+		c.replObs.RemoteGone(record.key.line, c.rcCoherence)
 	}
 	delete(c.remoteReplicaBlocks, block)
 	c.unindexRemote(block, record.key.line)

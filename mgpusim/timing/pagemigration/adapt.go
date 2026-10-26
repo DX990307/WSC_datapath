@@ -214,6 +214,13 @@ type AdaptConfig struct {
 	// differences between candidate homes: only local / remote, two levels
 	// (Jeong & Dubois style); action costs keep the real distances.
 	R3FlatCost bool
+	// isca27/nearest (nearest_rob.go): R3Served makes the regret count the
+	// distance of the GPM that answered a read (nearest-holder lookup);
+	// Rob replaces the quadrant replicate action by per-reader rent-or-buy
+	// whole-page replicas (RobFullSW: each copy pays the full software
+	// latency in its cost even with BatchSW; RobKeep: copies of unwritten
+	// pages survive kernel boundaries).
+	R3Served, Rob, RobFullSW, RobKeep bool
 	// FT (r3, round 5, ft.go): first touch inside the break-even rule;
 	// "" off, "always" (every first touch migrates, then R3), "predict"
 	// (buy at first touch by the expected-value test, else rent).
@@ -388,6 +395,11 @@ type AdaptStats struct {
 	// GRIT baseline (grit.go)
 	GritFaults, GritTouchMoves, GritCounterMoves, GritDupFaults uint64
 	GritToCounter, GritToDup, GritAdopted                       uint64
+	// isca27/nearest
+	ServedAdj                                  uint64
+	ServedSaveNS                               float64
+	RobDecided, RobCopies, RobGated, RobBudget uint64
+	RobKept                                    uint64 // replicated pages kept at a kernel boundary
 }
 
 type adaptState struct {
@@ -463,6 +475,12 @@ type adaptState struct {
 	// diagnostics: first vector toucher + 1, R3 actions taken
 	firstG uint64
 	r3Acts int
+	// isca27/nearest: what each reader / block already saves by nearest-
+	// holder reads (R3Served); Rob accumulators and pending copies
+	nearSave  []float64
+	nearSaveB [blocksPerPage]float64
+	rob       []float64
+	robPend   []bool
 }
 
 type replica struct {
@@ -734,7 +752,8 @@ func (m *Manager) bufferOf(pid vm.PID, va uint64) (*buffer, int) {
 // miss with CountLocal) of GPM dev to pAddr of unit u.
 func (m *Manager) adaptCount(now sim.VTimeInSec, u *unit, dev, pAddr uint64, remote bool) {
 	a := m.adaptUnit(u)
-	if a.fixed || len(a.replicas) > 0 {
+	robRep := m.cfg.Adapt.Rob && len(a.replicas) > 0
+	if (a.fixed || len(a.replicas) > 0) && !robRep {
 		return
 	}
 	m.track(u, a)
@@ -769,6 +788,14 @@ func (m *Manager) adaptCount(now sim.VTimeInSec, u *unit, dev, pAddr uint64, rem
 	if m.cfg.Adapt.r3() {
 		if a.buf != nil {
 			a.buf.accesses++
+		}
+		if robRep {
+			// replicated (Rob): only the per-reader rent-or-buy runs
+			m.r3Kernel(a)
+			if remote {
+				m.robCount(now, u, a, dev, pAddr)
+			}
+			return
 		}
 		m.r3Count(now, u, a, dev, pAddr, remote)
 		return
@@ -1789,6 +1816,11 @@ func (m *Manager) collapse(now sim.VTimeInSec, u *unit, hold bool) {
 	a.replicas = nil
 	a.fixed = false
 	a.hotHandled = false
+	if a.rob != nil {
+		for i := range a.rob {
+			a.rob[i] = 0
+		}
+	}
 	delete(m.replicated, u)
 	if hold && m.cfg.ShootdownLatencyNS > 0 {
 		a.holdUntil = now + ns(m.cfg.ShootdownLatencyNS)
@@ -1828,6 +1860,11 @@ func (m *Manager) KernelBoundary(now sim.VTimeInSec) {
 		}
 		if m.cfg.Adapt.grit() && m.gritReplicasCurrent(u) {
 			continue // GRIT copies live until a write
+		}
+		if m.cfg.Adapt.Rob && m.cfg.Adapt.RobKeep && u.a.writeKernel < m.kernel-1 &&
+			m.gritReplicasCurrent(u) {
+			m.AStats.RobKept++
+			continue // Rob copies of unwritten pages live until a write
 		}
 		m.collapse(now, u, false)
 		u.a.hotHandled = false

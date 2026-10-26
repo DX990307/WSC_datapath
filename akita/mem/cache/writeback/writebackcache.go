@@ -122,6 +122,9 @@ type Cache struct {
 	rc                        *ReadClassifier
 	rcGPM                     int
 	rcCoherence               bool
+	// replObs (isca27/nearest): notified of every installed / dropped
+	// remote (M3) replica line; nil = off.
+	replObs ReplicaObserver
 	occOn                     bool
 	occLast                   sim.VTimeInSec
 	occV, occR, occT          int

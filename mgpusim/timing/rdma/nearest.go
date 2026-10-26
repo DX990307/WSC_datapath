@@ -32,7 +32,37 @@ type NearestOracle struct {
 	kernels  int
 	holderRq map[string]bool // network request IDs addressed to a holder
 
+	// Served (isca27/nearest, optional): a read redirected to a holder was
+	// answered over legs messages and hops hops (for the R5 regret).
+	Served  func(e int, line uint64, legs, hops int)
+	sentRec map[string]*nrSent
+
 	Stats NearestOracleStats
+}
+
+// noteRedirect records a read sent to holder g (for Served).
+func (o *NearestOracle) noteRedirect(r *Comp, id string, line uint64, home, dst sim.Port) {
+	if o.Served == nil {
+		return
+	}
+	if o.sentRec == nil {
+		o.sentRec = make(map[string]*nrSent)
+	}
+	o.sentRec[id] = &nrSent{r: o.index[r], home: o.byPort[home], via: o.byPort[dst], line: line}
+}
+
+// noteRsp closes the record of a redirected read when its data arrives.
+func (o *NearestOracle) noteRsp(id string) {
+	s := o.sentRec[id]
+	if s == nil {
+		return
+	}
+	delete(o.sentRec, id)
+	if s.missed {
+		o.Served(s.r, s.line, 4, 2*o.hops(s.r, s.via)+2*o.hops(s.via, s.home))
+	} else {
+		o.Served(s.r, s.line, 2, 2*o.hops(s.r, s.via))
+	}
 }
 
 // NearestOracleStats are the oracle's counters (platform-wide).
@@ -231,6 +261,9 @@ func (c *Comp) nearestProbeRsp(now sim.VTimeInSec, rsp *mem.CacheLookupRsp) bool
 		}
 		o.Stats.HolderMisses++
 		o.Stats.ServedByEngine[o.byPort[fwd.Dst]]++
+		if s := o.sentRec[req.ID]; s != nil {
+			s.missed = true
+		}
 		c.nearFwd[fwd.ID] = req
 	}
 	delete(c.nearProbes, rsp.RespondTo)
