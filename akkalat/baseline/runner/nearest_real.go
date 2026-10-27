@@ -127,6 +127,8 @@ func (r *Runner) reportNearestReal() {
 	col("hint_absent", float64(s.HintAbsent))
 	col("holder_hits", float64(s.HolderHits))
 	col("holder_misses", float64(s.HolderMisses))
+	col("holder_self_home", float64(s.HolderSelfHome))
+	col("peak_out_queue", float64(s.PeakOutQueue))
 	col("delegated", float64(s.Delegated))
 	col("install_notices", float64(s.InstallNotices))
 	col("evict_notices", float64(s.EvictNotices))

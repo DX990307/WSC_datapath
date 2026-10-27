@@ -75,6 +75,7 @@ type NearestRealStats struct {
 	HolderHits      uint64
 	HolderMisses    uint64
 	HolderSelfHome  uint64 // misses at a holder that had become the line's home
+	PeakOutQueue    uint64 // longest per-engine queue of lookup messages
 	Delegated       uint64 // A2 reads forwarded by the home
 	InstallNotices  uint64
 	EvictNotices    uint64
@@ -575,6 +576,9 @@ func (c *Comp) nrQueue(now sim.VTimeInSec, dst sim.Port, kind int, addr uint64, 
 		ReqTime: reqTime,
 	}
 	c.nrOut = append(c.nrOut, m)
+	if l := uint64(len(c.nrOut)); l > c.nearReal.Stats.PeakOutQueue {
+		c.nearReal.Stats.PeakOutQueue = l
+	}
 	c.TickLater(now)
 }
 
@@ -583,7 +587,7 @@ func (c *Comp) nrSendNotices(now sim.VTimeInSec) bool {
 	progress := false
 	for i := 0; i < c.effectivePipelineWidth() && len(c.nrOut) > 0; i++ {
 		m := c.nrOut[0]
-		m.SendTime = now
+		m.Meta().SendTime = now
 		if err := c.ToOutside.Send(m); err != nil {
 			return progress
 		}
@@ -663,9 +667,7 @@ func (c *Comp) nrFromOutside(now sim.VTimeInSec, req mem.AccessReq) (handled, pr
 		WithPID(read.PID).
 		WithInfo(read.Info).
 		Build()
-	if err := c.ToOutside.Send(fwd); err != nil {
-		return true, false
-	}
+	c.nrPush(now, fwd)
 	n.tasks[fwd.ID] = &nrTask{replyTo: read.Src, rspTo: read.ID}
 	s.via, s.delegated = g, true
 	n.Stats.Delegated++
@@ -720,9 +722,7 @@ func (c *Comp) nrProbeRsp(now sim.VTimeInSec, rsp *mem.CacheLookupRsp) bool {
 			WithRspTo(pr.t.rspTo).
 			WithData(append([]byte(nil), rsp.Data...)).
 			Build()
-		if err := c.ToOutside.Send(out); err != nil {
-			return false
-		}
+		c.nrPush(now, out)
 		n.Stats.HolderHits++
 	} else if home := c.RemoteRDMAAddressTable.Find(pr.req.Address); home == nil || home == c.ToOutside {
 		// the line's block moved here (R5 block home) since the read was
@@ -758,9 +758,7 @@ func (c *Comp) nrProbeRsp(now sim.VTimeInSec, rsp *mem.CacheLookupRsp) bool {
 			WithPID(pr.req.PID).
 			WithInfo(pr.req.Info).
 			Build()
-		if err := c.ToOutside.Send(fwd); err != nil {
-			return false
-		}
+		c.nrPush(now, fwd)
 		n.Stats.HolderMisses++
 		n.noDelegate[fwd.ID] = true
 		if s := n.sent[pr.t.rspTo]; s != nil {
@@ -783,9 +781,7 @@ func (c *Comp) nrFwdRsp(now sim.VTimeInSec, rsp *mem.DataReadyRsp) bool {
 		WithRspTo(pr.t.rspTo).
 		WithData(append([]byte(nil), rsp.Data...)).
 		Build()
-	if err := c.ToOutside.Send(out); err != nil {
-		return false
-	}
+	c.nrPush(now, out)
 	delete(c.nrFwd, rsp.RespondTo)
 	delete(c.nearReal.noDelegate, rsp.RespondTo)
 	c.ToOutside.Retrieve(now)
@@ -802,10 +798,20 @@ func (c *Comp) nrLocalRsp(now sim.VTimeInSec, rsp *mem.DataReadyRsp) bool {
 		WithRspTo(pr.t.rspTo).
 		WithData(append([]byte(nil), rsp.Data...)).
 		Build()
-	if err := c.ToOutside.Send(out); err != nil {
-		return false
-	}
+	c.nrPush(now, out)
 	delete(c.nrLocal, rsp.RespondTo)
 	c.ToL2.Retrieve(now)
 	return true
+}
+
+// nrPush queues a message of the lookup for sending: relays and forwards
+// never block this engine's input on its own output (a relay that waits for
+// the output while holding the input head can close a cycle through the
+// mesh); the queue is drained every cycle at the output's pace.
+func (c *Comp) nrPush(now sim.VTimeInSec, m sim.Msg) {
+	c.nrOut = append(c.nrOut, m)
+	if l := uint64(len(c.nrOut)); l > c.nearReal.Stats.PeakOutQueue {
+		c.nearReal.Stats.PeakOutQueue = l
+	}
+	c.TickLater(now)
 }

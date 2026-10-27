@@ -124,7 +124,7 @@ type Comp struct {
 	nrProbes map[string]*nrProbe
 	nrFwd    map[string]*nrProbe
 	nrLocal  map[string]*nrProbe
-	nrOut    []*NearNotice
+	nrOut    []sim.Msg
 }
 
 // SetLocalModuleFinder sets the table to lookup for local data.
@@ -287,7 +287,11 @@ func (c *Comp) requesterOutstandingCount() int {
 
 func (c *Comp) ownerOutstandingCount() int {
 	if c.nearReal != nil {
-		n := len(c.transactionsFromOutside) + c.remoteOwnerOccupancy() + c.nrLive()
+		// forwarded misses wait on the network, not on this owner: they
+		// hold no owner slot (else the input queue, whose head waits for a
+		// slot, can hold their responses: deadlock)
+		n := len(c.transactionsFromOutside) + c.remoteOwnerOccupancy() +
+			len(c.nrProbes) + len(c.nrLocal)
 		if c.t18 != nil {
 			n += c.t18.ownerLive
 		}
