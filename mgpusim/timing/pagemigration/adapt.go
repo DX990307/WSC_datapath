@@ -1580,6 +1580,7 @@ func (m *Manager) prePlaceInPlace(now sim.VTimeInSec, u *unit, a *adaptState, p 
 			size:     1 << log2Block,
 			done:     done,
 			pre:      a,
+			inPlace:  m.cfg.PrePlaceFix,
 		})
 		m.AStats.CopyBytes += 1 << log2Block
 	}

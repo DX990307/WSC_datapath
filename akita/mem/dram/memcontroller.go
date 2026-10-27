@@ -502,9 +502,11 @@ func (c *MemController) finalizeWriteTrans(
 	t *signal.Transaction,
 	i int,
 ) (done bool) {
-	err := c.storage.Write(t.InternalAddress, t.Write.Data)
-	if err != nil {
-		panic(err)
+	if !t.Write.TimingOnly {
+		err := c.storage.Write(t.InternalAddress, t.Write.Data)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	writeDone := mem.WriteDoneRspBuilder{}.

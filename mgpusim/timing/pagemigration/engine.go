@@ -34,6 +34,10 @@ type chunk struct {
 	// pid (R4): the PID the source reads its L2 with (the page's, so that
 	// dirty lines the L2 holds under it are seen; R3 migrations use 0).
 	pid vm.PID
+	// inPlace (PrePlaceFix): an in-place pre-placement copy to the same
+	// physical address; storage is global, so its DRAM writes only model
+	// timing and must not overwrite data written since the source read.
+	inPlace bool
 }
 
 // serving is one pull being served by the source engine.
@@ -388,6 +392,7 @@ func (e *CopyEngine) landChunk(now sim.VTimeInSec, c *chunk, data []byte) {
 			WithData(data[off : off+line]).
 			WithPID(0).
 			Build()
+		w.TimingOnly = c.inPlace
 		e.writes = append(e.writes, w)
 		e.writeChunks[w.ID] = c
 	}
