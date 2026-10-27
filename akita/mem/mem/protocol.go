@@ -295,6 +295,10 @@ type WriteReq struct {
 	PID                vm.PID
 	CanWaitForCoalesce bool
 	Info               interface{}
+
+	// TimingOnly (page-migration in-place copies): the memory controller
+	// models the write's timing but leaves its storage unchanged.
+	TimingOnly bool
 }
 
 // Meta returns the meta data attached to a request.

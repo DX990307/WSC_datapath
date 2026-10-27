@@ -497,3 +497,22 @@ func (c *Cache) InstallRemoteLine(
 	// evicted; dirty, locked and in-use lines never)
 	return c.installRemoteDataFillPolicy(fill, true)
 }
+
+// DropCleanLine (page-migration in-place pre-placement) invalidates the clean
+// line at address if the L2 holds it unlocked. It returns 1 if a line was
+// dropped, 0 if none was held, and -1 if the line is dirty or locked (kept).
+func (c *Cache) DropCleanLine(pid vm.PID, address uint64) int {
+	line, _ := getCacheLineID(address, c.log2BlockSize)
+	block := c.directory.Lookup(pid, line)
+	if block == nil {
+		return 0
+	}
+	if block.IsDirty || block.IsLocked {
+		return -1
+	}
+	c.obsL2InvalidateBlock(block)
+	c.untrackRemoteReplica(block)
+	c.untrackResidentBlock(block)
+	block.IsValid = false
+	return 1
+}
