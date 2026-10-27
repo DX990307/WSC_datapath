@@ -123,6 +123,12 @@ type Config struct {
 	// Check enables the expensive invariant checks (every L2 of every GPM is
 	// searched for lines of each new frame at allocation and at remap).
 	Check bool
+
+	// ShootdownInflightFix (default off): a shootdown also invalidates the
+	// TLBs of every GPM (not only those that issued an access to the page)
+	// and the translations of the page that are in flight in their MSHRs or
+	// being returned (see vm.ShootdownFix).
+	ShootdownInflightFix bool
 }
 
 // DefaultConfig returns the defaults (see README of results_index/pm for

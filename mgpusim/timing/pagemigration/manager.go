@@ -197,6 +197,7 @@ type Stats struct {
 	Pinned                                                    uint64 // units that reached MaxMigrations
 	ShootdownEvents                                           uint64
 	TLBEntriesDropped                                         uint64
+	TLBInflightInvalidated                                    uint64 // in-flight translations made stale (-tlb-shootdown-fix)
 	RemoteAccesses                                            uint64 // accesses that left an L1 for remote memory
 	RemoteReads                                               uint64
 	MigrationTimeSum                                          float64 // trigger to remap, seconds
@@ -830,6 +831,12 @@ func (m *Manager) invalidate(p vm.Page) {
 	if info := m.ppns[p.PAddr>>m.log2PageSize]; info != nil {
 		mask = info.devMask
 	}
+	fix := m.cfg.ShootdownInflightFix
+	if fix {
+		// a GPM may hold or be fetching the translation without having
+		// issued an access yet
+		mask = ^uint64(0)
+	}
 	for dev, g := range m.gpms {
 		if g == nil || mask&(1<<uint(dev)) == 0 {
 			continue
@@ -838,12 +845,30 @@ func (m *Manager) invalidate(p vm.Page) {
 			if t.InvalidatePage(p.PID, p.VAddr) {
 				m.Stats.TLBEntriesDropped++
 			}
+			if fix {
+				m.invalidateInflight(t, p)
+			}
 		}
 	}
 	for _, t := range m.iommuTLBs {
 		if t.InvalidatePage(p.PID, p.VAddr) {
 			m.Stats.TLBEntriesDropped++
 		}
+		if fix {
+			m.invalidateInflight(t, p)
+		}
+	}
+}
+
+// InflightInvalidator is a TLB that can make the in-flight translations of a
+// page stale (vm.ShootdownFix).
+type InflightInvalidator interface {
+	InvalidateInflight(pid vm.PID, vAddr uint64) int
+}
+
+func (m *Manager) invalidateInflight(t PageInvalidator, p vm.Page) {
+	if ii, ok := t.(InflightInvalidator); ok {
+		m.Stats.TLBInflightInvalidated += uint64(ii.InvalidateInflight(p.PID, p.VAddr))
 	}
 }
 
@@ -1088,3 +1113,6 @@ func (m *Manager) FrameUsage() (maxPerGPM, total, retired uint64) {
 	}
 	return
 }
+
+// ShootdownInflightFix reports whether -tlb-shootdown-fix is on.
+func (m *Manager) ShootdownInflightFix() bool { return m.cfg.ShootdownInflightFix }
