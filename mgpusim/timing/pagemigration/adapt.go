@@ -545,6 +545,9 @@ func (m *Manager) UsesBlockHomes() bool { return m.blockHome != nil }
 
 func (m *Manager) setBlockHome(blk, dev uint64) {
 	owner := blk << log2Block >> 33
+	if m.cfg.Check {
+		m.checkBlockHomeChange(blk, dev)
+	}
 	_, had := m.blockHome[blk]
 	if dev == owner {
 		if had {
@@ -2577,6 +2580,34 @@ func (m *Manager) dropPrePlacedLines(pAddr uint64, home, dst [blocksPerPage]uint
 				m.AStats.PreLinesDropped++
 			case -1:
 				m.AStats.PreLinesKept++
+			}
+		}
+	}
+}
+
+// checkBlockHomeChange (Config.Check; checks only) verifies, when the home of
+// a 1 KB block of a live frame changes, that no L2 of any GPM holds a PID-0
+// line of the block or has an MSHR for one: such a line would answer demand
+// accesses (PID 0) or requester-L2 probes for the block with stale data once
+// the block is served elsewhere. Blocks of retired frames are skipped (their
+// lines are unreachable).
+func (m *Manager) checkBlockHomeChange(blk, dev uint64) {
+	base := blk << log2Block
+	old, ok := m.blockHome[blk]
+	if !ok {
+		old = base >> 33
+	}
+	if old == dev {
+		return
+	}
+	if info := m.ppns[base>>m.log2PageSize]; info != nil && info.state == frameRetired {
+		return
+	}
+	for a := base; a < base+1<<log2Block; a += m.cfg.LineBytes {
+		for _, g := range m.gpms {
+			if g != nil && g.HoldsLine != nil && g.HoldsLine(a) {
+				m.violation("GPM %d caches line %#x of block %#x whose home changes %d -> %d",
+					g.DeviceID, a, base, old, dev)
 			}
 		}
 	}
