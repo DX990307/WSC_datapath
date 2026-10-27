@@ -17,7 +17,7 @@ var nearestModeFlag = flag.String("nearest", "",
 	"isca27/nearest A (realistic read from the nearest holder, see rdma/nearest_real.go): "+
 		"\"hint\" = A1 requester hint (the home's reply names the nearest holder of the page; "+
 		"used when closer than the home by more than the expected miss detour), "+
-		"\"fwd\" = A2 home forward (the home delegates the read to a holder). "+
+		"\"fwd\" = A2 home forward (the home delegates the read to a holder), \"hintfwd\" = both. "+
 		"Holders register with an install notice to the home.")
 var nearestHintEntriesFlag = flag.Int("nearest-hint-entries", 1024,
 	"isca27/nearest A1: hint table entries per GPM (FIFO; <= 0 unlimited).")
@@ -56,6 +56,8 @@ func (b *R9NanoPlatformBuilder) wireNearestReal(drv *driver.Driver, pm *pagemigr
 		mode = rdma.NearHint
 	case "fwd":
 		mode = rdma.NearFwd
+	case "hintfwd":
+		mode = rdma.NearHint | rdma.NearFwd
 	default:
 		log.Panicf("-nearest %q: want hint or fwd", *nearestModeFlag)
 	}

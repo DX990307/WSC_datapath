@@ -36,7 +36,9 @@ import (
 //     ignores hints for that page until the boundary (it reads its own
 //     writes from the home).
 //
-//   - A2 home forward (Mode NearFwd). The home delegates a read of a line
+//   - A2 home forward (Mode NearFwd; NearHint|NearFwd combines both: reads
+//     with a usable hint go to the holder, the others to the home, which may
+//     delegate them). The home delegates a read of a line
 //     that has holders (and was not written in this kernel) to the holder G
 //     minimising d(H,G)+d(G,R) when that path is at most FwdSlackHops longer
 //     than d(H,R): reader -> home -> holder -> reader. A holder miss
@@ -345,7 +347,7 @@ func (n *NearestReal) noteHintResult(r int, miss bool) {
 
 // route (requester, A1) picks where a single-line read of line goes.
 func (n *NearestReal) route(c *Comp, line uint64, home sim.Port) (sim.Port, bool) {
-	if n.Cfg.Mode != NearHint {
+	if n.Cfg.Mode&NearHint == 0 {
 		return nil, false
 	}
 	ri, ok := n.index[c]
@@ -462,8 +464,8 @@ func (n *NearestReal) homeRead(c *Comp, id string, line uint64, src sim.Port) in
 	if !ok {
 		return -1
 	}
-	switch n.Cfg.Mode {
-	case NearHint:
+	_, hinted := n.hintFor[id]
+	if n.Cfg.Mode&NearHint != 0 && !hinted {
 		p := n.page(line)
 		pg := n.pages[p]
 		best := -1
@@ -489,8 +491,8 @@ func (n *NearestReal) homeRead(c *Comp, id string, line uint64, src sim.Port) in
 			n.hintFor[id] = 0
 			n.Stats.HintsNone++
 		}
-		return -1
-	case NearFwd:
+	}
+	if n.Cfg.Mode&NearFwd != 0 {
 		if n.noDelegate[id] {
 			return -1
 		}
@@ -635,9 +637,6 @@ func (c *Comp) nrFromOutside(now sim.VTimeInSec, req mem.AccessReq) (handled, pr
 	}
 	s := n.sent[read.ID]
 	if s == nil || s.via >= 0 {
-		return false, false
-	}
-	if _, done := n.hintFor[read.ID]; done {
 		return false, false
 	}
 	g := n.homeRead(c, read.ID, read.Address, read.Src)
