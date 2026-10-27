@@ -123,6 +123,7 @@ type Comp struct {
 	nearReal *NearestReal
 	nrProbes map[string]*nrProbe
 	nrFwd    map[string]*nrProbe
+	nrLocal  map[string]*nrProbe
 	nrOut    []*NearNotice
 }
 
@@ -495,6 +496,13 @@ func (c *Comp) processFromL2(now sim.VTimeInSec) bool {
 		}
 		switch req := req.(type) {
 		case mem.AccessRsp:
+			if d, ok := req.(*mem.DataReadyRsp); ok && c.nrLocal[d.RespondTo] != nil {
+				if !c.nrLocalRsp(now, d) {
+					return madeProgress
+				}
+				madeProgress = true
+				continue
+			}
 			if lk, ok := req.(*mem.CacheLookupRsp); ok && c.nrProbes[lk.RespondTo] != nil {
 				if !c.nrProbeRsp(now, lk) {
 					return madeProgress

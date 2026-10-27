@@ -74,6 +74,7 @@ type NearestRealStats struct {
 	HintAbsent      uint64 // no hint for the page
 	HolderHits      uint64
 	HolderMisses    uint64
+	HolderSelfHome  uint64 // misses at a holder that had become the line's home
 	Delegated       uint64 // A2 reads forwarded by the home
 	InstallNotices  uint64
 	EvictNotices    uint64
@@ -620,7 +621,7 @@ func (c *Comp) RemoteGone(line uint64, coherence bool) {
 	c.nrQueue(c.Engine.CurrentTime(), home, nrEvict, line, 0)
 }
 
-func (c *Comp) nrLive() int { return len(c.nrProbes) + len(c.nrFwd) }
+func (c *Comp) nrLive() int { return len(c.nrProbes) + len(c.nrFwd) + len(c.nrLocal) }
 
 func (c *Comp) nrPending() bool { return c.nrLive() > 0 || len(c.nrOut) > 0 }
 
@@ -714,11 +715,35 @@ func (c *Comp) nrProbeRsp(now sim.VTimeInSec, rsp *mem.CacheLookupRsp) bool {
 			return false
 		}
 		n.Stats.HolderHits++
+	} else if home := c.RemoteRDMAAddressTable.Find(pr.req.Address); home == nil || home == c.ToOutside {
+		// the line's block moved here (R5 block home) since the read was
+		// sent: read it as its home, from the local L2
+		rd := mem.ReadReqBuilder{}.
+			WithSendTime(now).
+			WithSrc(c.ToL2).
+			WithDst(c.localModules.Find(pr.req.Address)).
+			WithAddress(pr.req.Address).
+			WithByteSize(pr.req.AccessByteSize).
+			WithPID(pr.req.PID).
+			WithInfo(pr.req.Info).
+			Build()
+		if err := c.ToL2.Send(rd); err != nil {
+			return false
+		}
+		n.Stats.HolderMisses++
+		n.Stats.HolderSelfHome++
+		if s := n.sent[pr.t.rspTo]; s != nil {
+			s.missed = true
+		}
+		if c.nrLocal == nil {
+			c.nrLocal = make(map[string]*nrProbe)
+		}
+		c.nrLocal[rd.ID] = pr
 	} else {
 		fwd := mem.ReadReqBuilder{}.
 			WithSendTime(now).
 			WithSrc(c.ToOutside).
-			WithDst(c.RemoteRDMAAddressTable.Find(pr.req.Address)).
+			WithDst(home).
 			WithAddress(pr.req.Address).
 			WithByteSize(pr.req.AccessByteSize).
 			WithPID(pr.req.PID).
@@ -755,5 +780,23 @@ func (c *Comp) nrFwdRsp(now sim.VTimeInSec, rsp *mem.DataReadyRsp) bool {
 	delete(c.nrFwd, rsp.RespondTo)
 	delete(c.nearReal.noDelegate, rsp.RespondTo)
 	c.ToOutside.Retrieve(now)
+	return true
+}
+
+// nrLocalRsp relays the data of a missed read this engine served as home.
+func (c *Comp) nrLocalRsp(now sim.VTimeInSec, rsp *mem.DataReadyRsp) bool {
+	pr := c.nrLocal[rsp.RespondTo]
+	out := mem.DataReadyRspBuilder{}.
+		WithSendTime(now).
+		WithSrc(c.ToOutside).
+		WithDst(pr.t.replyTo).
+		WithRspTo(pr.t.rspTo).
+		WithData(append([]byte(nil), rsp.Data...)).
+		Build()
+	if err := c.ToOutside.Send(out); err != nil {
+		return false
+	}
+	delete(c.nrLocal, rsp.RespondTo)
+	c.ToL2.Retrieve(now)
 	return true
 }
