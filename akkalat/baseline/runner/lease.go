@@ -31,6 +31,8 @@ var leaseEpisodesFlag = flag.Bool("lease-episodes", false,
 var leaseSymmetricFlag = flag.Bool("lease-symmetric", false,
 	"Lease: the page re-use is a multiplier (page / average page) of the class x state "+
 		"probability, applied to incoming and resident remote lines alike.")
+var leasePriorNFlag = flag.Float64("lease-prior-n", 2,
+	"Lease: weight of the prior (class rate / average page) in pseudo-events of the per-page re-use.")
 var leaseBuyFlag = flag.Bool("lease-buy", true,
 	"Lease: lines of a page with a migration pending or in flight have no value "+
 		"(they may use an invalid way, never evict).")
@@ -46,7 +48,7 @@ func (b *R9NanoPlatformBuilder) wireLease(m *pagemigration.Manager) {
 		var t *writeback.LeaseTable
 		if *leaseReuseFlag == "page" {
 			t = writeback.NewLeaseTable(writeback.LeaseTableConfig{
-				Log2PageSize: 12, Entries: *leaseTableFlag, LineBits: *leaseLineBitsFlag, Episodes: *leaseEpisodesFlag,
+				Log2PageSize: 12, Entries: *leaseTableFlag, LineBits: *leaseLineBitsFlag, Episodes: *leaseEpisodesFlag, PriorN: *leasePriorNFlag,
 			})
 		}
 		var blocked func(uint64) bool

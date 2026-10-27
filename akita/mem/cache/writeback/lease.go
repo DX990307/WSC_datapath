@@ -38,6 +38,8 @@ type LeaseTableConfig struct {
 	// of it; one count per episode, the same quantity as the victims'
 	// P(next event is a hit). Otherwise every hit counts.
 	Episodes bool
+	// PriorN: weight of the prior in pseudo-events (0 = 2, Laplace).
+	PriorN float64
 }
 
 // LeaseTableStats counts the table's work.
@@ -188,10 +190,14 @@ func (t *LeaseTable) Reuse(line uint64, prior float64) float64 {
 		t.stats.LookupMisses++
 		return prior
 	}
-	if t.cfg.Episodes { // first = episodes, reus = re-used episodes
-		return (e.reus + 2*prior) / (e.first + 2)
+	n := t.cfg.PriorN
+	if n <= 0 {
+		n = 2
 	}
-	return (e.reus + 2*prior) / (e.reus + e.first + 2)
+	if t.cfg.Episodes { // first = episodes, reus = re-used episodes
+		return (e.reus + n*prior) / (e.first + n)
+	}
+	return (e.reus + n*prior) / (e.reus + e.first + n)
 }
 
 // Multiplier (Symmetric) is the re-use of the page of line relative to the
