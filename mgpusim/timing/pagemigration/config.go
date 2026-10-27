@@ -129,6 +129,13 @@ type Config struct {
 	// and the translations of the page that are in flight in their MSHRs or
 	// being returned (see vm.ShootdownFix).
 	ShootdownInflightFix bool
+
+	// PrePlaceFix (default off): a pre-placement treats a page as touched
+	// as soon as any translator has sent a translation request for it (not
+	// only once an access was issued), gives up if that happens while the
+	// copy runs, and (with Check) verifies at its end that no L2 other than
+	// the old homes holds a line of the page.
+	PrePlaceFix bool
 }
 
 // DefaultConfig returns the defaults (see README of results_index/pm for

@@ -80,6 +80,12 @@ type MigrationHook interface {
 	Completed(now sim.VTimeInSec, pAddr uint64)
 }
 
+// TranslationNotifier is an optional MigrationHook extension: Translating is
+// called when the translator sends the translation request of an access.
+type TranslationNotifier interface {
+	Translating(now sim.VTimeInSec, pid vm.PID, vAddr uint64)
+}
+
 // MigrationHookRW is an optional extension of MigrationHook (ISCA27 P21):
 // when the installed hook implements it, ResolveRW is called instead of
 // Resolve and also tells whether the access is a write.
@@ -242,6 +248,9 @@ func (t *AddressTranslator) translate(now sim.VTimeInSec) bool {
 	err := t.translationPort.Send(transReq)
 	if err != nil {
 		return false
+	}
+	if n, ok := t.migrationHook.(TranslationNotifier); ok {
+		n.Translating(now, req.GetPID(), vAddr)
 	}
 	// fmt.Printf("%0.9f,%s,generateReq,%s,%d,%d,%d\n",
 	// 	float64(now), transReq.Src.Name(), transReq.TaskID,

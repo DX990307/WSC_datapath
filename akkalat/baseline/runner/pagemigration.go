@@ -72,6 +72,11 @@ var tlbShootdownFixFlag = flag.Bool("tlb-shootdown-fix", false,
 	"Page migration fix (default off): a shootdown also invalidates the TLBs of every GPM and "+
 		"the in-flight translations of the page (TLB MSHR misses, merged requests and fills "+
 		"being returned take the current page-table entry). Off = bit-identical to before.")
+var prePlaceFixFlag = flag.Bool("preplace-fix", false,
+	"Page migration fix (default off): a pre-placement counts a page as touched once any "+
+		"translator has requested its translation, and gives up if that happens while it copies.")
+var pmCorrectnessFixFlag = flag.Bool("pm-correctness-fix", false,
+	"Page migration correctness patch (default off) = -tlb-shootdown-fix + -preplace-fix.")
 var pmCheckFlag = flag.Bool("pm-check", false,
 	"Page migration: expensive invariant checks (every L2 of every GPM is "+
 		"searched for lines of each new frame at allocation and at remap; "+
@@ -145,7 +150,8 @@ func pageMigrationConfigFromFlags() pagemigration.Config {
 	c.PullWindow = netScaled(*pmPullWindowFlag)
 	c.L2Window = scaledPerGPM(*pmL2WindowFlag)
 	c.Check = *pmCheckFlag
-	c.ShootdownInflightFix = *tlbShootdownFixFlag
+	c.ShootdownInflightFix = *tlbShootdownFixFlag || *pmCorrectnessFixFlag
+	c.PrePlaceFix = *prePlaceFixFlag || *pmCorrectnessFixFlag
 	t, ok := pagemigration.ParseTarget(*pmTargetFlag)
 	if !ok {
 		panic(fmt.Sprintf("unknown -pm-target %q", *pmTargetFlag))
@@ -350,6 +356,9 @@ func (b *R9NanoPlatformBuilder) buildPageMigrationManager(
 	m := pagemigration.NewManager("PageMigrationManager", b.engine,
 		b.pageMigration, pageTable, b.log2PageSize, gpms,
 		[]pagemigration.PageInvalidator{b.IOMMUTLB})
+	if b.pageMigration.PrePlaceFix {
+		fmt.Printf("[Config] -preplace-fix on\n")
+	}
 	if b.pageMigration.ShootdownInflightFix {
 		type fixable interface {
 			EnableShootdownFix(func(vm.PID, uint64) (vm.Page, bool))
@@ -443,6 +452,9 @@ func (r *Runner) reportPageMigrationStats() {
 	col("pm_tlb_entries_invalidated", float64(s.TLBEntriesDropped))
 	if m.ShootdownInflightFix() {
 		col("pm_tlb_inflight_invalidated", float64(s.TLBInflightInvalidated))
+	}
+	if m.PrePlaceFix() {
+		col("pm_preplace_translated_pages", float64(m.TranslatedPages()))
 	}
 	col("pm_remote_accesses", float64(s.RemoteAccesses))
 	col("pm_remote_reads", float64(s.RemoteReads))

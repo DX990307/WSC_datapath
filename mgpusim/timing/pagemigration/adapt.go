@@ -1467,7 +1467,7 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 		return false
 	}
 	p, ok := m.pageTable.Find(u.key.pid, u.key.idx<<m.unitLog2)
-	if !ok || m.ppns[p.PAddr>>m.log2PageSize] != nil {
+	if !ok || m.pageTouched(p) {
 		return false
 	}
 	home, uniHome := m.pageHomes(p)
@@ -1501,7 +1501,7 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 	}
 	a.preplacing = true
 	m.deferAct(now, majority(dst), func(now sim.VTimeInSec) {
-		if m.ppns[p.PAddr>>m.log2PageSize] != nil || u.phase != phaseIdle {
+		if m.pageTouched(p) || u.phase != phaseIdle {
 			a.preplacing = false
 			m.preRelease(a)
 			m.AStats.PreLate++
@@ -1546,10 +1546,13 @@ func (m *Manager) prePlaceInPlace(now sim.VTimeInSec, u *unit, a *adaptState, p 
 		a.preplacing = false
 		a.preCopy = false
 		m.wake(now, u)
-		if m.ppns[ppn] != nil {
+		if m.ppns[ppn] != nil || (m.cfg.PrePlaceFix && m.pageTouched(p)) {
 			m.AStats.PreRaced++
 			m.preRelease(a)
 			return
+		}
+		if m.cfg.PrePlaceFix && m.cfg.Check {
+			m.checkPrePlaceLines(p.PAddr, home, dst)
 		}
 		for b := 0; b < blocksPerPage; b++ {
 			if home[b] != dst[b] {
@@ -1591,11 +1594,14 @@ func (m *Manager) prePlaceRemap(now sim.VTimeInSec, u *unit, a *adaptState, p vm
 		a.preplacing = false
 		a.preCopy = false
 		m.wake(now, u)
-		if m.ppns[ppn] != nil {
+		if m.ppns[ppn] != nil || (m.cfg.PrePlaceFix && m.pageTouched(p)) {
 			m.AStats.PreRaced++
 			m.preRelease(a)
 			m.retireFrame(frame)
 			return
+		}
+		if m.cfg.PrePlaceFix && m.cfg.Check {
+			m.checkNoCachedLines(frame, "pre-placement")
 		}
 		m.frameInfo(p).state = frameRetired
 		m.invalidate(p)
@@ -2494,4 +2500,24 @@ func distClass(d int) int {
 		k++
 	}
 	return k
+}
+
+// checkPrePlaceLines (PrePlaceFix with Check) verifies, when an in-place
+// pre-placement installs its block homes, that no L2 outside the old and new
+// homes of a block holds or fetches a line of it.
+func (m *Manager) checkPrePlaceLines(pAddr uint64, home, dst [blocksPerPage]uint64) {
+	for b := uint64(0); b < blocksPerPage; b++ {
+		base := pAddr + b<<log2Block
+		for a := base; a < base+1<<log2Block; a += m.cfg.LineBytes {
+			for _, g := range m.gpms {
+				if g == nil || g.HoldsLine == nil || g.DeviceID == home[b] || g.DeviceID == dst[b] {
+					continue
+				}
+				if g.HoldsLine(a) {
+					m.violation("GPM %d caches line %#x of pre-placed page %#x",
+						g.DeviceID, a, pAddr)
+				}
+			}
+		}
+	}
 }
