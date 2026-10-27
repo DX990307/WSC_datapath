@@ -109,6 +109,15 @@ func (f *CostVictimFinder) ScoreOf(tag uint64, r uint8) float64 {
 	return s
 }
 
+// Regret (lease ghost) turns one eviction of class c at state r into a hit:
+// a line evicted in that state was read again soon after.
+func (f *CostVictimFinder) Regret(c int, r uint8) {
+	if f.evict[c][r&3] >= 1 {
+		f.evict[c][r&3]--
+	}
+	f.hit[c][r&3]++
+}
+
 func (f *CostVictimFinder) count(ev *[2][4]float64, c int, r uint8) {
 	ev[c][r&3]++
 	f.events++

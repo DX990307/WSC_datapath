@@ -33,6 +33,9 @@ var leaseSymmetricFlag = flag.Bool("lease-symmetric", false,
 		"probability, applied to incoming and resident remote lines alike.")
 var leasePriorNFlag = flag.Float64("lease-prior-n", 2,
 	"Lease: weight of the prior (class rate / average page) in pseudo-events of the per-page re-use.")
+var leaseGhostFlag = flag.Bool("lease-ghost", false,
+	"Lease: a local line evicted by a remote fill and read again soon after (a ghost hit) "+
+		"counts as a hit of the local class at the state it was evicted in.")
 var leaseBuyFlag = flag.Bool("lease-buy", true,
 	"Lease: lines of a page with a migration pending or in flight have no value "+
 		"(they may use an invalid way, never evict).")
@@ -60,6 +63,9 @@ func (b *R9NanoPlatformBuilder) wireLease(m *pagemigration.Manager) {
 			if *leaseSymmetricFlag {
 				l2.SetLeaseSymmetric()
 			}
+			if *leaseGhostFlag {
+				l2.EnableLeaseGhost()
+			}
 		}
 		gpu.pm.lease = t
 	}
@@ -84,6 +90,7 @@ func (r *Runner) reportLeaseStats() {
 			s.BlockedDrops += x.BlockedDrops
 			s.ValueSum += x.ValueSum
 			s.ValueN += x.ValueN
+			s.GhostHits += x.GhostHits
 		}
 		if gpu.pm.lease != nil {
 			x := gpu.pm.lease.Stats()
@@ -100,6 +107,7 @@ func (r *Runner) reportLeaseStats() {
 	col("lease_blocked_fills", float64(s.BlockedFills))
 	col("lease_blocked_drops", float64(s.BlockedDrops))
 	col("lease_value_evals", float64(s.ValueN))
+	col("lease_ghost_hits", float64(s.GhostHits))
 	if s.ValueN > 0 {
 		col("lease_value_mean_ns", s.ValueSum/float64(s.ValueN))
 	}

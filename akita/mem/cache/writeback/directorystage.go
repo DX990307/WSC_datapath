@@ -435,6 +435,9 @@ func (ds *directoryStage) handleReadMiss(
 	if ds.cache.rc != nil && !trans.prefetch && !req.LookupOnly {
 		ds.cache.rcLocalReread(cacheLineID)
 	}
+	if ds.cache.leaseGhost != nil && !trans.prefetch && !req.LookupOnly {
+		ds.cache.leaseGhostMiss(cacheLineID)
+	}
 	victim := ds.cache.directory.FindVictim(cacheLineID)
 	if trans.prefetch {
 		if victim == nil {

@@ -267,6 +267,7 @@ func (c *Cache) installRemoteDataFillCost(fill *mem.RemoteDataFill, line uint64)
 		c.l2resStats.FillEvictLocal++
 		c.remoteReplicaStats.FillDisplacedLocalClean++
 		c.rcLocalEvicted(block.Tag)
+		c.leaseGhostAdd(block.Tag, block.RRPV)
 	}
 	if replacedRemote {
 		if c.rc != nil {

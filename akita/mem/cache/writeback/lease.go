@@ -2,6 +2,8 @@ package writeback
 
 import (
 	"container/list"
+
+	cachepkg "github.com/sarchlab/akita/v3/mem/cache"
 )
 
 // ISCA27 lease: whether a remote line is cached in the requester's L2
@@ -221,6 +223,7 @@ type LeaseStats struct {
 	ValueSum       float64
 	ValueN         uint64
 	DropsByValue   uint64
+	GhostHits      uint64 // local lines re-read after a remote fill evicted them
 	InstallsByEvic uint64
 }
 
@@ -281,4 +284,40 @@ func (c *Cache) leaseValue(line uint64, ins uint8) float64 {
 	c.leaseStats.ValueSum += v
 	c.leaseStats.ValueN++
 	return v
+}
+
+// Ghosts (-lease-ghost): local lines evicted by remote fills, with the
+// state they were evicted in; a later demand read miss of such a line turns
+// that eviction into a hit in the local class statistics, so the value of
+// local lines includes re-reads that only happen because they were evicted.
+// FIFO of at most as many entries as the slice has blocks.
+func (c *Cache) EnableLeaseGhost() {
+	c.leaseGhost = make(map[uint64]uint8)
+	n := 0
+	for _, set := range c.directory.(*cachepkg.DirectoryImpl).GetSets() {
+		n += len(set.Blocks)
+	}
+	c.leaseGhostCap = n
+}
+
+func (c *Cache) leaseGhostAdd(line uint64, rrpv uint8) {
+	if c.leaseGhost == nil {
+		return
+	}
+	if _, ok := c.leaseGhost[line]; !ok {
+		c.leaseGhostQ = append(c.leaseGhostQ, line)
+	}
+	c.leaseGhost[line] = rrpv
+	for len(c.leaseGhostQ) > c.leaseGhostCap {
+		delete(c.leaseGhost, c.leaseGhostQ[0])
+		c.leaseGhostQ = c.leaseGhostQ[1:]
+	}
+}
+
+func (c *Cache) leaseGhostMiss(line uint64) {
+	if r, ok := c.leaseGhost[line]; ok {
+		delete(c.leaseGhost, line)
+		c.costFinder.Regret(0, r)
+		c.leaseStats.GhostHits++
+	}
 }
