@@ -1,0 +1,5 @@
+{
+  "_description": "ISCA'27 scale model s = 1/4 with the network scaled too (user 10-26 eve): mi200_quarter.json plus -scale-network, which divides the wafer network and wafer-shared translation sizes by 4 in the simulator (link bandwidth, switch buffer flits, endpoint channels/buffers when set, RDMA pipeline width and max outstanding, T18 windows and tables, -pm-pull-window, IOMMU TLB sets, MMU walks in flight). The flags on the command line keep their full-scale values (e.g. -bandwidth=24 -rdma-max-outstanding=128); latencies, topology, clock, page size and the migration software / shootdown latencies are not scaled. Use as the last config, e.g. -config m3p_r3real.json,mi200_quarter_net.json.",
+  "extends": "mi200_quarter.json",
+  "scale-network": true
+}

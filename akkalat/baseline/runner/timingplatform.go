@@ -733,7 +733,7 @@ func (b R9NanoPlatformBuilder) createMMU(
 		WithFreq(1 * sim.GHz).
 		WithPageWalkingLatency(100).
 		WithLog2PageSize(b.log2PageSize).
-		WithMaxNumReqInFlight(256).
+		WithMaxNumReqInFlight(netScaled(256)).
 		WithPageTable(pageTable).
 		WithL2TLBTable(l2TLBTable).
 		WithWalkCoalescing(*mmuWalkCoalescing).
@@ -1004,7 +1004,7 @@ func (b *R9NanoPlatformBuilder) createIOMMUTLB(
 		WithEngine(b.engine).
 		WithFreq(1 * sim.GHz).
 		WithNumWays(32).
-		WithNumSets(64).
+		WithNumSets(netScaled(64)).
 		WithNumMSHREntry(64).
 		WithMSHREntryDepth(64).
 		WithNumReqPerCycle(32).

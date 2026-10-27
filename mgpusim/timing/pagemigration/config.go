@@ -123,6 +123,21 @@ type Config struct {
 	// Check enables the expensive invariant checks (every L2 of every GPM is
 	// searched for lines of each new frame at allocation and at remap).
 	Check bool
+
+	// ShootdownInflightFix (default off): a shootdown also invalidates the
+	// TLBs of every GPM (not only those that issued an access to the page)
+	// and the translations of the page that are in flight in their MSHRs or
+	// being returned (see vm.ShootdownFix).
+	ShootdownInflightFix bool
+
+	// PrePlaceFix (default off): a pre-placement treats a page as touched
+	// as soon as any translator has sent a translation request for it (not
+	// only once an access was issued), gives up if that happens while the
+	// copy runs, and (with Check) verifies at its end that no L2 other than
+	// the old homes holds a line of the page. Replication is not started
+	// (or is aborted) for a page whose blocks have different homes, since
+	// the copy reads the whole page through one home's L2.
+	PrePlaceFix bool
 }
 
 // DefaultConfig returns the defaults (see README of results_index/pm for

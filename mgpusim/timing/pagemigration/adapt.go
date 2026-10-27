@@ -349,6 +349,17 @@ type AdaptStats struct {
 	PreFallback  uint64 // pre-placed pages later moved by the counter
 	ReplicaOn    uint64
 	ReplicaAbort uint64
+
+	// ReplicaSplitSkip (PrePlaceFix): replications not started because the
+	// page's blocks have different homes
+	ReplicaSplitSkip uint64
+	// PreRepeatSkip (PrePlaceFix): pre-placements not started because the
+	// page was pre-placed before or has block homes
+	PreRepeatSkip uint64
+	// PreLinesDropped / PreLinesKept (PrePlaceFix): old-home L2 lines of
+	// in-place pre-placed blocks dropped / kept because dirty or locked
+	PreLinesDropped, PreLinesKept uint64
+
 	ReplicaWrite uint64 // collapses by a write
 	ReplicaKern  uint64 // collapses at a kernel boundary
 	ReplicaReads uint64 // reads redirected to a replica
@@ -1499,7 +1510,13 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 		return false
 	}
 	p, ok := m.pageTable.Find(u.key.pid, u.key.idx<<m.unitLog2)
-	if !ok || m.ppns[p.PAddr>>m.log2PageSize] != nil {
+	if !ok || m.pageTouched(p) {
+		return false
+	}
+	if m.cfg.PrePlaceFix && (a.preplaced || m.hasBlockHomes(p.PAddr)) {
+		// a second in-place move could bring a block back to an L2 that
+		// still holds clean lines of it from the first copy
+		m.AStats.PreRepeatSkip++
 		return false
 	}
 	home, uniHome := m.pageHomes(p)
@@ -1533,7 +1550,7 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 	}
 	a.preplacing = true
 	m.deferAct(now, majority(dst), func(now sim.VTimeInSec) {
-		if m.ppns[p.PAddr>>m.log2PageSize] != nil || u.phase != phaseIdle {
+		if m.pageTouched(p) || u.phase != phaseIdle {
 			a.preplacing = false
 			m.preRelease(a)
 			m.AStats.PreLate++
@@ -1578,10 +1595,19 @@ func (m *Manager) prePlaceInPlace(now sim.VTimeInSec, u *unit, a *adaptState, p 
 		a.preplacing = false
 		a.preCopy = false
 		m.wake(now, u)
-		if m.ppns[ppn] != nil {
+		if m.ppns[ppn] != nil || (m.cfg.PrePlaceFix && m.pageTouched(p)) {
 			m.AStats.PreRaced++
 			m.preRelease(a)
 			return
+		}
+		if m.cfg.PrePlaceFix {
+			// the copy read the moved blocks through their old homes'
+			// L2s; once the blocks live elsewhere, a clean line left there
+			// would answer the old home's requester-L2 probes for them
+			m.dropPrePlacedLines(p.PAddr, home, dst)
+			if m.cfg.Check {
+				m.checkPrePlaceLines(p.PAddr, home, dst)
+			}
 		}
 		for b := 0; b < blocksPerPage; b++ {
 			if home[b] != dst[b] {
@@ -1604,6 +1630,7 @@ func (m *Manager) prePlaceInPlace(now sim.VTimeInSec, u *unit, a *adaptState, p 
 			size:     1 << log2Block,
 			done:     done,
 			pre:      a,
+			inPlace:  m.cfg.PrePlaceFix,
 		})
 		m.AStats.CopyBytes += 1 << log2Block
 	}
@@ -1623,11 +1650,14 @@ func (m *Manager) prePlaceRemap(now sim.VTimeInSec, u *unit, a *adaptState, p vm
 		a.preplacing = false
 		a.preCopy = false
 		m.wake(now, u)
-		if m.ppns[ppn] != nil {
+		if m.ppns[ppn] != nil || (m.cfg.PrePlaceFix && m.pageTouched(p)) {
 			m.AStats.PreRaced++
 			m.preRelease(a)
 			m.retireFrame(frame)
 			return
+		}
+		if m.cfg.PrePlaceFix && m.cfg.Check {
+			m.checkNoCachedLines(frame, "pre-placement")
 		}
 		m.frameInfo(p).state = frameRetired
 		m.invalidate(p)
@@ -1703,6 +1733,14 @@ func (m *Manager) propagateHot(now sim.VTimeInSec, u *unit, a *adaptState, ch ch
 
 func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 	p vm.Page, home uint64, reps []uint64) {
+	if m.cfg.PrePlaceFix {
+		// the copy reads the whole page through one home's L2; with split
+		// block homes the other blocks' latest data may sit in other L2s
+		if _, uni := m.pageHomes(p); !uni || m.homeOf(p.PAddr) != home {
+			m.AStats.ReplicaSplitSkip++
+			return
+		}
+	}
 	a.fixed = true
 	a.preplacing = true
 	seq, kern := a.writeSeq, m.kernel
@@ -1731,7 +1769,12 @@ func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 			return
 		}
 		a.preplacing = false
-		if a.writeSeq != seq || m.kernel != kern || u.phase != phaseIdle {
+		splitNow := false
+		if m.cfg.PrePlaceFix {
+			_, uni := m.pageHomes(p)
+			splitNow = !uni || m.homeOf(p.PAddr) != home
+		}
+		if a.writeSeq != seq || m.kernel != kern || u.phase != phaseIdle || splitNow {
 			m.AStats.ReplicaAbort++
 			for _, r := range frames {
 				m.retireFrame(r.frame)
@@ -2536,4 +2579,47 @@ func distClass(d int) int {
 		k++
 	}
 	return k
+}
+
+// checkPrePlaceLines (PrePlaceFix with Check) verifies, when an in-place
+// pre-placement installs its block homes, that no L2 holds or fetches a line
+// of a moved block (the old home's lines were dropped).
+func (m *Manager) checkPrePlaceLines(pAddr uint64, home, dst [blocksPerPage]uint64) {
+	for b := uint64(0); b < blocksPerPage; b++ {
+		base := pAddr + b<<log2Block
+		for a := base; a < base+1<<log2Block; a += m.cfg.LineBytes {
+			for _, g := range m.gpms {
+				if g == nil || g.HoldsLine == nil || (g.DeviceID == home[b] && home[b] == dst[b]) {
+					continue
+				}
+				if g.HoldsLine(a) {
+					m.violation("GPM %d caches line %#x of pre-placed page %#x",
+						g.DeviceID, a, pAddr)
+				}
+			}
+		}
+	}
+}
+
+// dropPrePlacedLines (PrePlaceFix) drops the lines of the moved blocks of an
+// in-place pre-placement from their old homes' L2s.
+func (m *Manager) dropPrePlacedLines(pAddr uint64, home, dst [blocksPerPage]uint64) {
+	for b := uint64(0); b < blocksPerPage; b++ {
+		if home[b] == dst[b] {
+			continue
+		}
+		g := m.gpms[home[b]]
+		if g == nil || g.DropCleanLine == nil {
+			continue
+		}
+		base := pAddr + b<<log2Block
+		for a := base; a < base+1<<log2Block; a += m.cfg.LineBytes {
+			switch g.DropCleanLine(a) {
+			case 1:
+				m.AStats.PreLinesDropped++
+			case -1:
+				m.AStats.PreLinesKept++
+			}
+		}
+	}
 }

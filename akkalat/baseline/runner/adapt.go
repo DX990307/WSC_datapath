@@ -239,7 +239,7 @@ func adaptConfigFromFlags() pagemigration.AdaptConfig {
 	// switch latency and 4.1 ns of link and router pipeline in each direction
 	a.R3HopNS = 2 * (float64(*switchLatencyFlag) + 4.1)
 	a.R3BaseNS = 65.7
-	a.R3LinkBytesPerNS = float64(*bandwidthFlag * *networkFlitSizeFlag)
+	a.R3LinkBytesPerNS = float64(netScaled(*bandwidthFlag) * *networkFlitSizeFlag)
 	if *flatNetworkFlag {
 		a.FlatHops = -1 // the manager computes the average pair distance
 	}
@@ -372,6 +372,16 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 	col("pa_pre_fallback", float64(s.PreFallback))
 	col("pa_replica_on", float64(s.ReplicaOn))
 	col("pa_replica_abort", float64(s.ReplicaAbort))
+	if s.PreLinesDropped+s.PreLinesKept > 0 {
+		col("pa_pre_lines_dropped", float64(s.PreLinesDropped))
+		col("pa_pre_lines_kept", float64(s.PreLinesKept))
+	}
+	if s.PreRepeatSkip > 0 {
+		col("pa_pre_repeat_skip", float64(s.PreRepeatSkip))
+	}
+	if s.ReplicaSplitSkip > 0 {
+		col("pa_replica_split_skip", float64(s.ReplicaSplitSkip))
+	}
 	col("pa_replica_collapse_write", float64(s.ReplicaWrite))
 	col("pa_replica_collapse_kernel", float64(s.ReplicaKern))
 	col("pa_replica_reads", float64(s.ReplicaReads))

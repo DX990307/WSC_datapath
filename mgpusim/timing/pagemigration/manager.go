@@ -47,6 +47,9 @@ type GPM struct {
 		reqTime sim.VTimeInSec) bool
 	PullUse     func() (installed, used uint64)
 	VictimScore func() float64
+	// DropCleanLine (PrePlaceFix) invalidates a clean, unlocked line of the
+	// GPM's L2: 1 = dropped, 0 = not held, -1 = dirty or locked (kept).
+	DropCleanLine func(pAddr uint64) int
 }
 
 // phase is where a unit is in its migration (DESIGN.md 2.3):
@@ -197,6 +200,7 @@ type Stats struct {
 	Pinned                                                    uint64 // units that reached MaxMigrations
 	ShootdownEvents                                           uint64
 	TLBEntriesDropped                                         uint64
+	TLBInflightInvalidated                                    uint64 // in-flight translations made stale (-tlb-shootdown-fix)
 	RemoteAccesses                                            uint64 // accesses that left an L1 for remote memory
 	RemoteReads                                               uint64
 	MigrationTimeSum                                          float64 // trigger to remap, seconds
@@ -248,9 +252,10 @@ type Manager struct {
 	replicated   map[*unit]bool
 	holds        []*unit
 	toRetire     []uint64
-	replBytes    []uint64  // replica bytes per device (P21)
-	drainEMA     []float64 // recent drain time (ns) of migrations per home (P21)
-	bhCount      []int     // run-time block-home entries per frame owner (P21)
+	xlated       map[unitKey]bool // PrePlaceFix: pages any translator asked for
+	replBytes    []uint64         // replica bytes per device (P21)
+	drainEMA     []float64        // recent drain time (ns) of migrations per home (P21)
+	bhCount      []int            // run-time block-home entries per frame owner (P21)
 	trackLRU     []*list.List
 	deferred     []deferredAct
 	drvEnd       []sim.VTimeInSec // per GPM driver queue (P21 BatchSW)
@@ -446,6 +451,28 @@ func (h *atHook) Resolve(
 		}
 	}
 	return page, true
+}
+
+// Translating (PrePlaceFix) records that a translator started translating an
+// access to the page: the page counts as touched for pre-placement.
+func (h *atHook) Translating(now sim.VTimeInSec, pid vm.PID, vAddr uint64) {
+	m := h.m
+	if !m.cfg.PrePlaceFix {
+		return
+	}
+	if m.xlated == nil {
+		m.xlated = map[unitKey]bool{}
+	}
+	m.xlated[unitKey{pid, vAddr >> m.log2PageSize}] = true
+}
+
+// pageTouched reports whether page p was accessed, or (PrePlaceFix) is being
+// or was translated by any GPM.
+func (m *Manager) pageTouched(p vm.Page) bool {
+	if m.ppns[p.PAddr>>m.log2PageSize] != nil {
+		return true
+	}
+	return m.cfg.PrePlaceFix && m.xlated[unitKey{p.PID, p.VAddr >> m.log2PageSize}]
 }
 
 func (h *atHook) Issued(now sim.VTimeInSec, pid vm.PID, vAddr, pAddr uint64) {
@@ -830,6 +857,12 @@ func (m *Manager) invalidate(p vm.Page) {
 	if info := m.ppns[p.PAddr>>m.log2PageSize]; info != nil {
 		mask = info.devMask
 	}
+	fix := m.cfg.ShootdownInflightFix
+	if fix {
+		// a GPM may hold or be fetching the translation without having
+		// issued an access yet
+		mask = ^uint64(0)
+	}
 	for dev, g := range m.gpms {
 		if g == nil || mask&(1<<uint(dev)) == 0 {
 			continue
@@ -838,12 +871,30 @@ func (m *Manager) invalidate(p vm.Page) {
 			if t.InvalidatePage(p.PID, p.VAddr) {
 				m.Stats.TLBEntriesDropped++
 			}
+			if fix {
+				m.invalidateInflight(t, p)
+			}
 		}
 	}
 	for _, t := range m.iommuTLBs {
 		if t.InvalidatePage(p.PID, p.VAddr) {
 			m.Stats.TLBEntriesDropped++
 		}
+		if fix {
+			m.invalidateInflight(t, p)
+		}
+	}
+}
+
+// InflightInvalidator is a TLB that can make the in-flight translations of a
+// page stale (vm.ShootdownFix).
+type InflightInvalidator interface {
+	InvalidateInflight(pid vm.PID, vAddr uint64) int
+}
+
+func (m *Manager) invalidateInflight(t PageInvalidator, p vm.Page) {
+	if ii, ok := t.(InflightInvalidator); ok {
+		m.Stats.TLBInflightInvalidated += uint64(ii.InvalidateInflight(p.PID, p.VAddr))
 	}
 }
 
@@ -1088,3 +1139,12 @@ func (m *Manager) FrameUsage() (maxPerGPM, total, retired uint64) {
 	}
 	return
 }
+
+// ShootdownInflightFix reports whether -tlb-shootdown-fix is on.
+func (m *Manager) ShootdownInflightFix() bool { return m.cfg.ShootdownInflightFix }
+
+// PrePlaceFix reports whether the pre-placement fix is on.
+func (m *Manager) PrePlaceFix() bool { return m.cfg.PrePlaceFix }
+
+// TranslatedPages is the number of pages any translator asked for (PrePlaceFix).
+func (m *Manager) TranslatedPages() int { return len(m.xlated) }

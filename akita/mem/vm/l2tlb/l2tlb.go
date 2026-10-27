@@ -73,6 +73,9 @@ type L2TLB struct {
 	PageFinder mem.PageFinder
 
 	TimeConsumption map[uint64]TimeConsumption
+
+	// SD is the in-flight shootdown fix (default off), see vm.ShootdownFix.
+	SD vm.ShootdownFix
 }
 
 // Reset sets all the entries int he TLB to be invalid
@@ -473,7 +476,7 @@ func (tlb *L2TLB) processTranslation(now sim.VTimeInSec, req *vm.TranslationReq)
 }
 
 func (tlb *L2TLB) processRsp(now sim.VTimeInSec, rsp *vm.TranslationRsp, bottom bool) bool {
-	page := rsp.Page
+	page := tlb.SD.FixFill(rsp.Page)
 
 	// fmt.Printf("Received from %s VAddr %d\n", rsp.Src.Name(), page.VAddr)
 
@@ -635,4 +638,30 @@ func (tlb *L2TLB) InvalidatePage(pid vm.PID, vAddr uint64) bool {
 	// not allocated), so no stale key can later shadow a refilled entry.
 	set.Update(wayID, vm.Page{})
 	return true
+}
+
+// EnableShootdownFix turns on vm.ShootdownFix with the given page-table lookup.
+func (tlb *L2TLB) EnableShootdownFix(refresh func(pid vm.PID, vAddr uint64) (vm.Page, bool)) {
+	tlb.SD.Enable(refresh)
+}
+
+// InvalidateInflight marks the in-flight miss of the page stale and refreshes
+// the entries being returned (only with the shootdown fix on). It returns the
+// number of in-flight translations affected.
+func (tlb *L2TLB) InvalidateInflight(pid vm.PID, vAddr uint64) int {
+	if !tlb.SD.On {
+		return 0
+	}
+	n := 0
+	if tlb.mshr.IsEntryPresent(pid, vAddr) {
+		tlb.SD.Mark(pid, vAddr)
+		n++
+	}
+	for _, e := range tlb.respondingMSHREntry {
+		if e.pid == pid && e.vAddr == vAddr {
+			e.page = tlb.SD.Fresh(e.page)
+			n++
+		}
+	}
+	return n
 }
