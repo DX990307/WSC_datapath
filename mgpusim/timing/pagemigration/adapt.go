@@ -337,6 +337,9 @@ type AdaptStats struct {
 	PreFallback  uint64 // pre-placed pages later moved by the counter
 	ReplicaOn    uint64
 	ReplicaAbort uint64
+	// ReplicaSplitSkip (PrePlaceFix): replications not started because the
+	// page's blocks have different homes
+	ReplicaSplitSkip uint64
 	ReplicaWrite uint64 // collapses by a write
 	ReplicaKern  uint64 // collapses at a kernel boundary
 	ReplicaReads uint64 // reads redirected to a replica
@@ -1677,6 +1680,14 @@ func (m *Manager) propagateHot(now sim.VTimeInSec, u *unit, a *adaptState, ch ch
 
 func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 	p vm.Page, home uint64, reps []uint64) {
+	if m.cfg.PrePlaceFix {
+		// the copy reads the whole page through one home's L2; with split
+		// block homes the other blocks' latest data may sit in other L2s
+		if _, uni := m.pageHomes(p); !uni || m.homeOf(p.PAddr) != home {
+			m.AStats.ReplicaSplitSkip++
+			return
+		}
+	}
 	a.fixed = true
 	a.preplacing = true
 	seq, kern := a.writeSeq, m.kernel
@@ -1705,7 +1716,12 @@ func (m *Manager) startReplicate(now sim.VTimeInSec, u *unit, a *adaptState,
 			return
 		}
 		a.preplacing = false
-		if a.writeSeq != seq || m.kernel != kern || u.phase != phaseIdle {
+		splitNow := false
+		if m.cfg.PrePlaceFix {
+			_, uni := m.pageHomes(p)
+			splitNow = !uni || m.homeOf(p.PAddr) != home
+		}
+		if a.writeSeq != seq || m.kernel != kern || u.phase != phaseIdle || splitNow {
 			m.AStats.ReplicaAbort++
 			for _, r := range frames {
 				m.retireFrame(r.frame)

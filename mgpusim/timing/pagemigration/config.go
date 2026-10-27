@@ -134,7 +134,9 @@ type Config struct {
 	// as soon as any translator has sent a translation request for it (not
 	// only once an access was issued), gives up if that happens while the
 	// copy runs, and (with Check) verifies at its end that no L2 other than
-	// the old homes holds a line of the page.
+	// the old homes holds a line of the page. Replication is not started
+	// (or is aborted) for a page whose blocks have different homes, since
+	// the copy reads the whole page through one home's L2.
 	PrePlaceFix bool
 }
 

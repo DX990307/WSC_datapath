@@ -74,7 +74,8 @@ var tlbShootdownFixFlag = flag.Bool("tlb-shootdown-fix", false,
 		"being returned take the current page-table entry). Off = bit-identical to before.")
 var prePlaceFixFlag = flag.Bool("preplace-fix", false,
 	"Page migration fix (default off): a pre-placement counts a page as touched once any "+
-		"translator has requested its translation, and gives up if that happens while it copies.")
+		"translator has requested its translation, and gives up if that happens while it copies; "+
+		"replication skips pages whose blocks have different homes.")
 var pmCorrectnessFixFlag = flag.Bool("pm-correctness-fix", false,
 	"Page migration correctness patch (default off) = -tlb-shootdown-fix + -preplace-fix.")
 var pmCheckFlag = flag.Bool("pm-check", false,
