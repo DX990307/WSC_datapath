@@ -21,6 +21,8 @@ var nearestModeFlag = flag.String("nearest", "",
 		"Holders register with an install notice to the home.")
 var nearestHintEntriesFlag = flag.Int("nearest-hint-entries", 1024,
 	"isca27/nearest A1: hint table entries per GPM (FIFO; <= 0 unlimited).")
+var nearestHintMaskFlag = flag.Bool("nearest-hint-mask", false,
+	"isca27/nearest A1: the hint also carries the mask of the page's lines the holder holds (8 B); a read uses the hint only for a line in the mask.")
 var nearestEvictNoticeFlag = flag.Bool("nearest-evict-notice", false,
 	"isca27/nearest: holders also notify the home when they replace a line.")
 var nearestFwdSlackFlag = flag.Int("nearest-fwd-slack", 0,
@@ -70,6 +72,7 @@ func (b *R9NanoPlatformBuilder) wireNearestReal(drv *driver.Driver, pm *pagemigr
 	cfg := rdma.NearestRealConfig{
 		Mode:         mode,
 		HintEntries:  *nearestHintEntriesFlag,
+		HintMask:     *nearestHintMaskFlag,
 		EvictNotice:  *nearestEvictNoticeFlag,
 		FwdSlackHops: *nearestFwdSlackFlag,
 		// the R3 zero-load model (adapt.go)
@@ -103,8 +106,8 @@ func (b *R9NanoPlatformBuilder) wireNearestReal(drv *driver.Driver, pm *pagemigr
 	if pm != nil && *pmAdaptR3ServedFlag {
 		n.Served = b.nearestServedHook(pm)
 	}
-	fmt.Printf("[Config] isca27/nearest: mode=%s hint-entries=%d evict-notice=%v fwd-slack=%d base=%gns hop=%gns r3-served=%v\n",
-		*nearestModeFlag, cfg.HintEntries, cfg.EvictNotice, cfg.FwdSlackHops, cfg.BaseNS, cfg.HopNS,
+	fmt.Printf("[Config] isca27/nearest: mode=%s hint-mask=%v hint-entries=%d evict-notice=%v fwd-slack=%d base=%gns hop=%gns r3-served=%v\n",
+		*nearestModeFlag, cfg.HintMask, cfg.HintEntries, cfg.EvictNotice, cfg.FwdSlackHops, cfg.BaseNS, cfg.HopNS,
 		n.Served != nil)
 }
 
@@ -124,6 +127,7 @@ func (r *Runner) reportNearestReal() {
 	col("hints_none", float64(s.HintsNone))
 	col("hint_uses", float64(s.HintUses))
 	col("hint_skips", float64(s.HintSkips))
+	col("hint_mask_skips", float64(s.HintMaskSkips))
 	col("hint_absent", float64(s.HintAbsent))
 	col("holder_hits", float64(s.HolderHits))
 	col("holder_misses", float64(s.HolderMisses))

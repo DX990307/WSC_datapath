@@ -54,8 +54,12 @@ const (
 
 // NearestRealConfig configures the realistic nearest-holder lookup.
 type NearestRealConfig struct {
-	Mode         int
-	HintEntries  int  // per-GPM hint table entries (<= 0: unlimited)
+	Mode        int
+	HintEntries int // per-GPM hint table entries (<= 0: unlimited)
+	// HintMask: the hint also carries the 64-bit mask of the page's lines
+	// the holder holds (8 B more in the reply); a read uses the hint only
+	// for a line in the mask.
+	HintMask     bool
 	EvictNotice  bool // holders notify the home when they replace a line
 	FwdSlackHops int
 	BaseNS       float64 // R3 constants: RTT = BaseNS + HopNS * hops
@@ -71,6 +75,7 @@ type NearestRealStats struct {
 	HintsNone       uint64 // ... that carried "no holder"
 	HintUses        uint64 // reads sent to a hinted holder
 	HintSkips       uint64 // a hint existed but failed the cost test
+	HintMaskSkips   uint64 // a hint existed but the line was not in its mask
 	HintAbsent      uint64 // no hint for the page
 	HolderHits      uint64
 	HolderMisses    uint64
@@ -114,6 +119,7 @@ type nrPage struct {
 
 type nrHints struct {
 	m     map[uint64]int
+	mask  map[uint64]uint64
 	order []uint64
 }
 
@@ -156,6 +162,7 @@ type NearestReal struct {
 	tasks      map[string]*nrTask
 	sent       map[string]*nrSent
 	hintFor    map[string]int // read ID -> hinted holder + 1 (0: none)
+	hintMask   map[string]uint64
 	noDelegate map[string]bool
 
 	Stats NearestRealStats
@@ -202,6 +209,7 @@ func NewNearestReal(engines []*Comp, cfg NearestRealConfig) *NearestReal {
 		tasks:      make(map[string]*nrTask),
 		sent:       make(map[string]*nrSent),
 		hintFor:    make(map[string]int),
+		hintMask:   make(map[string]uint64),
 		noDelegate: make(map[string]bool),
 	}
 	if len(engines) > 128 {
@@ -304,7 +312,7 @@ func (n *NearestReal) NoteWrite(now sim.VTimeInSec, hi int, addr, size uint64) {
 
 func (h *nrHints) drop(page uint64) { delete(h.m, page) }
 
-func (n *NearestReal) setHint(r int, page uint64, g int) {
+func (n *NearestReal) setHint(r int, page uint64, g int, mask *uint64) {
 	h := &n.hints[r]
 	if _, ok := h.m[page]; !ok {
 		if c := n.Cfg.HintEntries; c > 0 {
@@ -329,6 +337,12 @@ func (n *NearestReal) setHint(r int, page uint64, g int) {
 		}
 	}
 	h.m[page] = g
+	if mask != nil {
+		if h.mask == nil {
+			h.mask = make(map[uint64]uint64)
+		}
+		h.mask[page] = *mask
+	}
 }
 
 // pmiss is reader r's Laplace estimate of a hint miss.
@@ -370,6 +384,12 @@ func (n *NearestReal) route(c *Comp, line uint64, home sim.Port) (sim.Port, bool
 		n.Stats.HintSkips++
 		return nil, false
 	}
+	if n.Cfg.HintMask {
+		if n.hints[ri].mask[p]&(1<<((line-p)/remoteLineBytes)) == 0 {
+			n.Stats.HintMaskSkips++
+			return nil, false
+		}
+	}
 	dRG, dRH, dGH := float64(n.hops(ri, g)), float64(n.hops(ri, hi)), float64(n.hops(g, hi))
 	b, h := n.Cfg.BaseNS, n.Cfg.HopNS
 	pm := n.pmiss(ri)
@@ -407,10 +427,15 @@ func (n *NearestReal) noteRsp(c *Comp, id string) {
 	delete(n.sent, id)
 	ri := s.r
 	if g, ok := n.hintFor[id]; ok {
+		defer delete(n.hintMask, id)
 		delete(n.hintFor, id)
 		p := n.page(s.line)
 		if g > 0 && !n.selfW[ri][p] {
-			n.setHint(ri, p, g-1)
+			var mk *uint64
+			if v, ok := n.hintMask[id]; ok {
+				mk = &v
+			}
+			n.setHint(ri, p, g-1, mk)
 		} else if g == 0 {
 			n.hints[ri].drop(p)
 		}
@@ -486,6 +511,15 @@ func (n *NearestReal) homeRead(c *Comp, id string, line uint64, src sim.Port) in
 			}
 		}
 		if best >= 0 {
+			if n.Cfg.HintMask {
+				var mk uint64
+				for i := uint64(0); i < n.Cfg.PageBytes/remoteLineBytes && i < 64; i++ {
+					if h, ok := n.lines[p+i*remoteLineBytes]; ok && h.has(best) {
+						mk |= 1 << i
+					}
+				}
+				n.hintMask[id] = mk
+			}
 			n.hintFor[id] = best + 1
 			pg.hinted.set(ri)
 			n.Stats.HintsGiven++
