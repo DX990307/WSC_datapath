@@ -636,6 +636,15 @@ func (c *Comp) nrFromOutside(now sim.VTimeInSec, req mem.AccessReq) (handled, pr
 	if t := n.tasks[read.ID]; t != nil {
 		return true, c.nrServe(now, read, t)
 	}
+	if n.noDelegate[read.ID] {
+		// a holder's forwarded miss: served by the plain owner path (never
+		// merged into a T18 multicast, which only T18 requesters decode)
+		if !c.processReqFromOutside(now, req) {
+			return true, false
+		}
+		c.readClassOwner(req)
+		return true, true
+	}
 	s := n.sent[read.ID]
 	if s == nil || s.via >= 0 {
 		return false, false
