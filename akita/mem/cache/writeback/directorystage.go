@@ -432,6 +432,9 @@ func (ds *directoryStage) handleReadMiss(
 		return false
 	}
 
+	if ds.cache.rc != nil && !trans.prefetch && !req.LookupOnly {
+		ds.cache.rcLocalReread(cacheLineID)
+	}
 	victim := ds.cache.directory.FindVictim(cacheLineID)
 	if trans.prefetch {
 		if victim == nil {

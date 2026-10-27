@@ -170,6 +170,7 @@ func (c *Cache) installRemoteDataFillPolicy(fill *mem.RemoteDataFill, evictLocal
 	}
 	if victimWasValid && !replacedRemote {
 		c.remoteReplicaStats.FillDisplacedLocalClean++
+		c.rcLocalEvicted(block.Tag)
 	}
 	if replacedRemote {
 		if c.rc != nil {
@@ -265,6 +266,7 @@ func (c *Cache) installRemoteDataFillCost(fill *mem.RemoteDataFill, line uint64)
 	default:
 		c.l2resStats.FillEvictLocal++
 		c.remoteReplicaStats.FillDisplacedLocalClean++
+		c.rcLocalEvicted(block.Tag)
 	}
 	if replacedRemote {
 		if c.rc != nil {

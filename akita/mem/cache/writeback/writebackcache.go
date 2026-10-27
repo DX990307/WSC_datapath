@@ -123,6 +123,8 @@ type Cache struct {
 	rc                        *ReadClassifier
 	rcGPM                     int
 	rcCoherence               bool
+	rcEvicted                 map[uint64]struct{}
+	RCLocal                   RCLocalStats
 	occOn                     bool
 	occLast                   sim.VTimeInSec
 	occV, occR, occT          int

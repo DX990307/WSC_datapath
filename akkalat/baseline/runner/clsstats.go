@@ -94,6 +94,15 @@ func (r *Runner) reportClsStats() {
 	col("cls_notadmitted", float64(s.NotAdmitted))
 	col("cls_resident", float64(s.Resident))
 	col("cls_unknown_src", float64(s.Unknown))
+	var le, lr float64
+	for _, l2s := range cls.l2s {
+		for _, l2 := range l2s {
+			le += float64(l2.RCLocal.Evicted)
+			lr += float64(l2.RCLocal.Reread)
+		}
+	}
+	col("cls_local_evicted_by_remote", le)
+	col("cls_local_reread_after_evict", lr)
 	var tv, tr, tt, ev, er, et float64
 	for _, l2s := range cls.l2s {
 		for _, l2 := range l2s {

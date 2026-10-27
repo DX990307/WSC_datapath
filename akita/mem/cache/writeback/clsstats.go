@@ -181,3 +181,26 @@ func (c *Cache) OccupancyTimeAvg(end sim.VTimeInSec) (v, r, t float64) {
 	c.occSample(end, true)
 	return c.occSumV, c.occSumR, c.occSumT
 }
+
+// rcLocalEvicted (statistics) notes a valid local line evicted by a remote
+// fill; rcLocalReread counts the first later demand read miss of such a line.
+func (c *Cache) rcLocalEvicted(line uint64) {
+	if c.rc == nil {
+		return
+	}
+	if c.rcEvicted == nil {
+		c.rcEvicted = make(map[uint64]struct{})
+	}
+	c.rcEvicted[line] = struct{}{}
+	c.RCLocal.Evicted++
+}
+
+func (c *Cache) rcLocalReread(line uint64) {
+	if _, ok := c.rcEvicted[line]; ok {
+		delete(c.rcEvicted, line)
+		c.RCLocal.Reread++
+	}
+}
+
+// RCLocalStats: local lines evicted by remote fills and re-read later.
+type RCLocalStats struct{ Evicted, Reread uint64 }
