@@ -47,6 +47,9 @@ type GPM struct {
 		reqTime sim.VTimeInSec) bool
 	PullUse     func() (installed, used uint64)
 	VictimScore func() float64
+	// DropCleanLine (PrePlaceFix) invalidates a clean, unlocked line of the
+	// GPM's L2: 1 = dropped, 0 = not held, -1 = dirty or locked (kept).
+	DropCleanLine func(pAddr uint64) int
 }
 
 // phase is where a unit is in its migration (DESIGN.md 2.3):

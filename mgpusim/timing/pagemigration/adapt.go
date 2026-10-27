@@ -344,6 +344,9 @@ type AdaptStats struct {
 	// PreRepeatSkip (PrePlaceFix): pre-placements not started because the
 	// page was pre-placed before or has block homes
 	PreRepeatSkip uint64
+	// PreLinesDropped / PreLinesKept (PrePlaceFix): old-home L2 lines of
+	// in-place pre-placed blocks dropped / kept because dirty or locked
+	PreLinesDropped, PreLinesKept uint64
 
 	ReplicaWrite uint64 // collapses by a write
 	ReplicaKern  uint64 // collapses at a kernel boundary
@@ -1565,8 +1568,14 @@ func (m *Manager) prePlaceInPlace(now sim.VTimeInSec, u *unit, a *adaptState, p 
 			m.preRelease(a)
 			return
 		}
-		if m.cfg.PrePlaceFix && m.cfg.Check {
-			m.checkPrePlaceLines(p.PAddr, home, dst)
+		if m.cfg.PrePlaceFix {
+			// the copy read the moved blocks through their old homes'
+			// L2s; once the blocks live elsewhere, a clean line left there
+			// would answer the old home's requester-L2 probes for them
+			m.dropPrePlacedLines(p.PAddr, home, dst)
+			if m.cfg.Check {
+				m.checkPrePlaceLines(p.PAddr, home, dst)
+			}
 		}
 		for b := 0; b < blocksPerPage; b++ {
 			if home[b] != dst[b] {
@@ -2531,20 +2540,43 @@ func distClass(d int) int {
 }
 
 // checkPrePlaceLines (PrePlaceFix with Check) verifies, when an in-place
-// pre-placement installs its block homes, that no L2 other than the block's
-// old home (whose L2 the copy read through) holds or fetches a line of it.
+// pre-placement installs its block homes, that no L2 holds or fetches a line
+// of a moved block (the old home's lines were dropped).
 func (m *Manager) checkPrePlaceLines(pAddr uint64, home, dst [blocksPerPage]uint64) {
 	for b := uint64(0); b < blocksPerPage; b++ {
 		base := pAddr + b<<log2Block
 		for a := base; a < base+1<<log2Block; a += m.cfg.LineBytes {
 			for _, g := range m.gpms {
-				if g == nil || g.HoldsLine == nil || g.DeviceID == home[b] {
+				if g == nil || g.HoldsLine == nil || (g.DeviceID == home[b] && home[b] == dst[b]) {
 					continue
 				}
 				if g.HoldsLine(a) {
 					m.violation("GPM %d caches line %#x of pre-placed page %#x",
 						g.DeviceID, a, pAddr)
 				}
+			}
+		}
+	}
+}
+
+// dropPrePlacedLines (PrePlaceFix) drops the lines of the moved blocks of an
+// in-place pre-placement from their old homes' L2s.
+func (m *Manager) dropPrePlacedLines(pAddr uint64, home, dst [blocksPerPage]uint64) {
+	for b := uint64(0); b < blocksPerPage; b++ {
+		if home[b] == dst[b] {
+			continue
+		}
+		g := m.gpms[home[b]]
+		if g == nil || g.DropCleanLine == nil {
+			continue
+		}
+		base := pAddr + b<<log2Block
+		for a := base; a < base+1<<log2Block; a += m.cfg.LineBytes {
+			switch g.DropCleanLine(a) {
+			case 1:
+				m.AStats.PreLinesDropped++
+			case -1:
+				m.AStats.PreLinesKept++
 			}
 		}
 	}
