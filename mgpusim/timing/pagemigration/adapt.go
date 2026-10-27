@@ -337,9 +337,11 @@ type AdaptStats struct {
 	PreFallback  uint64 // pre-placed pages later moved by the counter
 	ReplicaOn    uint64
 	ReplicaAbort uint64
+
 	// ReplicaSplitSkip (PrePlaceFix): replications not started because the
 	// page's blocks have different homes
 	ReplicaSplitSkip uint64
+
 	ReplicaWrite uint64 // collapses by a write
 	ReplicaKern  uint64 // collapses at a kernel boundary
 	ReplicaReads uint64 // reads redirected to a replica
