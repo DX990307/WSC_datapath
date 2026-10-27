@@ -1,0 +1,7 @@
+{
+  "_description": "ISCA'27 lease v4 (frozen 10-26): lease_r5.json with the per-page re-use measured as fetch episodes re-used before the next fetch (per-line bits in the page entry) and applied symmetrically as a page multiplier of the class x state re-use probability to incoming and resident remote lines. R5 flags (-pm-adapt-ft move -pm-adapt-hold-measured) on the command line. See isca27/results_index/lease/README.md.",
+  "extends": "lease_r5.json",
+  "lease-line-bits": true,
+  "lease-episodes": true,
+  "lease-symmetric": true
+}
