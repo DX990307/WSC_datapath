@@ -210,9 +210,9 @@ func (m *Manager) robOpen(now sim.VTimeInSec, u *unit, a *adaptState, p vm.Page,
 			srcPAddr: src,
 			dstPAddr: f,
 			size:     ps,
-			// read the home's L2 under the page's PID: dirty lines written
-			// in earlier kernels and still held there are copied too
-			pid: p.PID,
+			// PID 0 like the R3 replica copies: the home's L2 may still
+			// hold stale clean lines of blocks that moved away and back
+			// (reading under the page's PID copied them: FW -verify failed)
 			done: func(now sim.VTimeInSec) {
 				a.robPend[g] = false
 				if a.writeSeq != seq || m.kernel != kern || !m.robSrcOK(u, src, home) {
