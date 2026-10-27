@@ -341,6 +341,9 @@ type AdaptStats struct {
 	// ReplicaSplitSkip (PrePlaceFix): replications not started because the
 	// page's blocks have different homes
 	ReplicaSplitSkip uint64
+	// PreRepeatSkip (PrePlaceFix): pre-placements not started because the
+	// page was pre-placed before or has block homes
+	PreRepeatSkip uint64
 
 	ReplicaWrite uint64 // collapses by a write
 	ReplicaKern  uint64 // collapses at a kernel boundary
@@ -1475,6 +1478,12 @@ func (m *Manager) prePlace(now sim.VTimeInSec, u *unit, dst [blocksPerPage]uint6
 	if !ok || m.pageTouched(p) {
 		return false
 	}
+	if m.cfg.PrePlaceFix && (a.preplaced || m.hasBlockHomes(p.PAddr)) {
+		// a second in-place move could bring a block back to an L2 that
+		// still holds clean lines of it from the first copy
+		m.AStats.PreRepeatSkip++
+		return false
+	}
 	home, uniHome := m.pageHomes(p)
 	pending := 0
 	uniDst := true
@@ -2522,14 +2531,14 @@ func distClass(d int) int {
 }
 
 // checkPrePlaceLines (PrePlaceFix with Check) verifies, when an in-place
-// pre-placement installs its block homes, that no L2 outside the old and new
-// homes of a block holds or fetches a line of it.
+// pre-placement installs its block homes, that no L2 other than the block's
+// old home (whose L2 the copy read through) holds or fetches a line of it.
 func (m *Manager) checkPrePlaceLines(pAddr uint64, home, dst [blocksPerPage]uint64) {
 	for b := uint64(0); b < blocksPerPage; b++ {
 		base := pAddr + b<<log2Block
 		for a := base; a < base+1<<log2Block; a += m.cfg.LineBytes {
 			for _, g := range m.gpms {
-				if g == nil || g.HoldsLine == nil || g.DeviceID == home[b] || g.DeviceID == dst[b] {
+				if g == nil || g.HoldsLine == nil || g.DeviceID == home[b] {
 					continue
 				}
 				if g.HoldsLine(a) {

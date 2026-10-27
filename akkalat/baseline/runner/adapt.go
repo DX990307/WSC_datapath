@@ -350,6 +350,9 @@ func (r *Runner) reportAdaptStats(m *pagemigration.Manager) {
 	col("pa_pre_fallback", float64(s.PreFallback))
 	col("pa_replica_on", float64(s.ReplicaOn))
 	col("pa_replica_abort", float64(s.ReplicaAbort))
+	if s.PreRepeatSkip > 0 {
+		col("pa_pre_repeat_skip", float64(s.PreRepeatSkip))
+	}
 	if s.ReplicaSplitSkip > 0 {
 		col("pa_replica_split_skip", float64(s.ReplicaSplitSkip))
 	}
